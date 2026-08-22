@@ -177,7 +177,7 @@ containerd restart.
 The shim stores its incarnation and generation-bound metadata in the
 containerd-owned task bundle. Rehydration verifies namespace, task ID,
 generation, driver, and isolation against the host service and fails closed on
-any drift. Metadata schema v8 records the last allocated task exec sequence
+any drift. Metadata schema v9 records the last allocated task exec sequence
 and every current exec incarnation. It also retains the last completed init
 and exec stdin sequence, an optional in-flight sequence plus its exact bounded
 payload, the Open, Closing, or Closed state of each stdin stream, and the last
@@ -187,17 +187,26 @@ pending size, and the last committed size. Init and every exec also have an
 independent completed signal sequence plus one pending signal and the init-only `all`
 flag. The task record stores the last completed per-task control sequence, an
 optional in-flight Pause, Resume, or Update, and the last completed Update
-request digest. Schema-v1 records default input sequences, output cursors, and
-control state to empty. Schema-v2 records preserve output cursors, schema-v3
+request digest. A pending schema-v9 Update also retains its exact
+`LinuxResources` body and verifies that body against the canonical digest
+before replay. Rehydration replays pending Pause, Resume, and body-complete
+Update operations before accepting task work. A schema-v3 through schema-v8
+digest-only pending Update remains readable but is not guessed or dispatched;
+the first matching caller retry supplies the body, upgrades the journal, and
+uses the original operation identity. Schema-v1 records default input
+sequences, output cursors, and control state to empty. Schema-v2 records
+preserve output cursors, schema-v3
 adds the control journal, schema-v4 adds sequenced writes, schema-v5 adds
 durable stdin close state, schema-v6 adds durable terminal resize state,
-schema-v7 adds durable init and exec signal state, and schema-v8 adds exec
-incarnations. Schemas v1
+schema-v7 adds durable init and exec signal state, schema-v8 adds exec
+incarnations, and schema-v9 adds pending Update resource bodies. Schemas v1
 through v4 default stdin close state to Open. Schemas v1 through v5 default
 resize state to empty. Schemas v1 through v6 default signal state to empty,
 and schemas v1 through v7 default exec incarnations to zero. Incarnation zero
 preserves the legacy process and operation identity encoding. Every legacy
-schema is rewritten as schema v8 on the next metadata commit.
+schema is rewritten as schema v9 on the next metadata commit, except that a
+digest-only pending Update remains encoded as schema v8 until a matching
+caller retry supplies its resource body.
 
 Before dispatching Create, the shim separately commits a schema-v1 create
 intent containing the exact incarnation, isolation request, bundle, I/O shape,
@@ -444,7 +453,7 @@ a replacement can never be mistaken for the deleted task.
 
 The test is ignored because it is destructive: it requires root, restarts
 containerd repeatedly, sends `SIGKILL`, and creates temporary tasks and
-containers with an `a3s-r8-` prefix.
+containers with an `a3s-r9-` prefix.
 
 ```bash
 cargo test -p a3s-oci-containerd-shim \

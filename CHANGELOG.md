@@ -6,6 +6,19 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Durable containerd task-control replay during shim rehydration. Metadata
+  schema v9 persists the exact `LinuxResources` body beside a pending Update's
+  canonical digest, while Pause and Resume remain body-free. A replacement
+  shim now replays pending Pause, Resume, and body-complete Update operations
+  with the original sequence-bound SDK identity before accepting task work;
+  retryable errors keep recovery pending, terminal errors settle the sequence,
+  and response identity, generation, driver, isolation, and freezer drift fail
+  closed. Schema-v3 through schema-v8 digest-only pending Updates remain
+  readable and wait for a digest-matching caller retry to supply the body
+  before upgrading. Unit gates cover exact round trips, corruption, replay,
+  legacy migration, and failure semantics. The ignored real-containerd gate
+  now carries committed Pause, Resume, and PID-limit Update across three live
+  shim replacements; fresh-host retained evidence remains outstanding.
 - A real post-commit containerd Create fault gate. It stops the Host before
   dispatch, waits for the shim's complete create intent, stops that shim,
   submits the exact same public-SDK Create identity, and kills the shim only

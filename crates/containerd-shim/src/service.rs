@@ -701,6 +701,7 @@ impl Service {
                 },
             );
         }
+        control::replay_pending(&adapter, &mut task).await?;
         signal::replay_pending(&adapter, &mut task).await?;
         resize::replay_pending(&adapter, &mut task).await?;
         let mut pumps = Vec::new();
@@ -1752,6 +1753,11 @@ fn metadata_from_task(task: &TaskState) -> ShimMetadata {
         task.pending_control.clone(),
         task.last_update_digest.clone(),
     );
+    if task.pending_control.as_ref().is_some_and(|operation| {
+        operation.kind() == ControlOperationKind::Update && operation.resources().is_none()
+    }) {
+        metadata.preserve_legacy_pending_update_schema();
+    }
     metadata.set_stdin_state(
         task.stdin_sequence,
         task.pending_stdin_write.clone(),

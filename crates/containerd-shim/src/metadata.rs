@@ -14,14 +14,17 @@ use crate::adapter::TaskIdentity;
 use crate::contract::TASK_INCARNATION_BYTES;
 use crate::identity::IncarnationId;
 
+mod control;
 mod create_intent;
 
+pub(crate) use control::{update_request_digest, ControlOperationKind, PendingControlOperation};
 pub(crate) use create_intent::{NewShimCreateIntent, ShimCreateIntent};
 
 const METADATA_FILE_NAME: &str = "a3s-oci-shim-v1.json";
 const INCARNATION_FILE_NAME: &str = "a3s-oci-shim-incarnation-v1";
-const METADATA_SCHEMA_VERSION: u32 = 8;
+const METADATA_SCHEMA_VERSION: u32 = 9;
 const MIN_METADATA_SCHEMA_VERSION: u32 = 1;
+const CONTROL_RESOURCES_SCHEMA_VERSION: u32 = 9;
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
 const MAX_INCARNATION_BYTES: u64 = (TASK_INCARNATION_BYTES * 2) as u64;
 const MAX_PENDING_STDIN_BYTES: usize = 64 * 1024;
@@ -123,14 +126,6 @@ pub(crate) enum ExecStage {
     Starting,
     Started,
     Exited,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum ControlOperationKind {
-    Pause,
-    Resume,
-    Update,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,67 +256,6 @@ impl PendingStdinWrite {
             )));
         }
         Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PendingControlOperation {
-    sequence: u64,
-    kind: ControlOperationKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    request_digest: Option<String>,
-}
-
-impl PendingControlOperation {
-    pub(crate) fn new(
-        sequence: u64,
-        kind: ControlOperationKind,
-        request_digest: Option<String>,
-    ) -> Result<Self> {
-        let operation = Self {
-            sequence,
-            kind,
-            request_digest,
-        };
-        operation.validate()?;
-        Ok(operation)
-    }
-
-    pub(crate) fn sequence(&self) -> u64 {
-        self.sequence
-    }
-
-    pub(crate) fn kind(&self) -> ControlOperationKind {
-        self.kind
-    }
-
-    pub(crate) fn request_digest(&self) -> Option<&str> {
-        self.request_digest.as_deref()
-    }
-
-    fn validate(&self) -> Result<()> {
-        if self.sequence == 0 {
-            return Err(metadata_error(
-                "pending containerd control operation records sequence zero",
-            ));
-        }
-        match self.kind {
-            ControlOperationKind::Pause | ControlOperationKind::Resume
-                if self.request_digest.is_some() =>
-            {
-                Err(metadata_error(
-                    "Pause and Resume control operations must not record a request digest",
-                ))
-            }
-            ControlOperationKind::Update => validate_sha256_digest(
-                self.request_digest.as_deref().ok_or_else(|| {
-                    metadata_error("pending Update control operation omitted its request digest")
-                })?,
-                "pending Update request",
-            ),
-            ControlOperationKind::Pause | ControlOperationKind::Resume => Ok(()),
-        }
     }
 }
 
@@ -632,6 +566,11 @@ impl ShimMetadata {
         self.control_sequence
     }
 
+    #[cfg(test)]
+    pub(crate) fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
     pub(crate) fn pending_control(&self) -> Option<&PendingControlOperation> {
         self.pending_control.as_ref()
     }
@@ -682,6 +621,13 @@ impl ShimMetadata {
         self.control_sequence = sequence;
         self.pending_control = pending;
         self.last_update_digest = last_update_digest;
+    }
+
+    pub(crate) fn preserve_legacy_pending_update_schema(&mut self) {
+        debug_assert!(self.pending_control.as_ref().is_some_and(|operation| {
+            operation.kind() == ControlOperationKind::Update && operation.resources().is_none()
+        }));
+        self.schema_version = CONTROL_RESOURCES_SCHEMA_VERSION - 1;
     }
 
     pub(crate) fn set_stdin_state(
@@ -825,11 +771,12 @@ impl ShimMetadata {
             ));
         }
         if let Some(pending) = &self.pending_control {
-            pending.validate()?;
-            if self.control_sequence.checked_add(1) != Some(pending.sequence) {
+            pending.validate_for_schema(self.schema_version)?;
+            if self.control_sequence.checked_add(1) != Some(pending.sequence()) {
                 return Err(metadata_error(format!(
                     "pending containerd control sequence {} does not follow completed sequence {}",
-                    pending.sequence, self.control_sequence
+                    pending.sequence(),
+                    self.control_sequence
                 )));
             }
         }
@@ -1346,18 +1293,14 @@ mod tests {
         expected.schema_version = 3;
         let last_update = format!("sha256:{}", "1".repeat(64));
         let pending_update = format!("sha256:{}", "2".repeat(64));
-        expected.set_control_state(
-            4,
-            Some(
-                PendingControlOperation::new(
-                    5,
-                    ControlOperationKind::Update,
-                    Some(pending_update.clone()),
-                )
-                .expect("pending Update"),
-            ),
-            Some(last_update.clone()),
-        );
+        let pending_operation: PendingControlOperation =
+            serde_json::from_value(serde_json::json!({
+                "sequence": 5,
+                "kind": "update",
+                "request_digest": pending_update.clone(),
+            }))
+            .expect("legacy pending Update");
+        expected.set_control_state(4, Some(pending_operation), Some(last_update.clone()));
 
         expected.store().expect("store schema-v3 metadata");
         let loaded = ShimMetadata::load(&ShimMetadata::path(directory.path()))
@@ -1376,6 +1319,127 @@ mod tests {
         assert_eq!(loaded.last_update_digest(), Some(last_update.as_str()));
         assert_eq!(loaded.stdin_sequence(), 0);
         assert_eq!(loaded.pending_stdin_write(), None);
+    }
+
+    #[test]
+    fn schema_v9_metadata_round_trip_preserves_pending_update_resources() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut expected = metadata(directory.path());
+        let resources: a3s_oci_sdk::oci_spec::runtime::LinuxResources =
+            serde_json::from_value(serde_json::json!({
+                "unified": {
+                    "memory.high": "1048576",
+                    "memory.low": "0"
+                },
+                "pids": {"limit": 64}
+            }))
+            .expect("Linux resources");
+        let digest = update_request_digest(&resources).expect("Update digest");
+        expected.set_control_state(
+            4,
+            Some(
+                PendingControlOperation::new(
+                    5,
+                    ControlOperationKind::Update,
+                    Some(digest.clone()),
+                    Some(resources.clone()),
+                )
+                .expect("pending Update"),
+            ),
+            None,
+        );
+
+        expected.store().expect("store schema-v9 metadata");
+        let loaded = ShimMetadata::load(&ShimMetadata::path(directory.path()))
+            .expect("load schema-v9 metadata")
+            .expect("metadata exists");
+
+        assert_eq!(loaded.schema_version(), 9);
+        let pending = loaded.pending_control().expect("pending Update");
+        assert_eq!(pending.kind(), ControlOperationKind::Update);
+        assert_eq!(pending.request_digest(), Some(digest.as_str()));
+        assert_eq!(pending.resources(), Some(&resources));
+    }
+
+    #[test]
+    fn schema_v9_metadata_rejects_missing_mismatched_or_non_update_resources() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut expected = metadata(directory.path());
+        let resources: a3s_oci_sdk::oci_spec::runtime::LinuxResources =
+            serde_json::from_value(serde_json::json!({"pids": {"limit": 64}}))
+                .expect("Linux resources");
+        let digest = update_request_digest(&resources).expect("Update digest");
+        expected.set_control_state(
+            0,
+            Some(
+                PendingControlOperation::new(
+                    1,
+                    ControlOperationKind::Update,
+                    Some(digest),
+                    Some(resources),
+                )
+                .expect("pending Update"),
+            ),
+            None,
+        );
+        expected.store().expect("store valid schema-v9 metadata");
+        let path = ShimMetadata::path(directory.path());
+        let valid: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("read valid metadata"))
+                .expect("decode valid metadata");
+
+        let mut missing = valid.clone();
+        missing["pending_control"]
+            .as_object_mut()
+            .expect("pending control object")
+            .remove("resources");
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&missing).expect("encode missing resources metadata"),
+        )
+        .expect("write missing resources metadata");
+        let error = ShimMetadata::load(&path).expect_err("missing Update resources must fail");
+        assert!(error.message.contains("omitted its Linux resources"));
+
+        let mut mismatched = valid.clone();
+        mismatched["pending_control"]["request_digest"] =
+            serde_json::json!(format!("sha256:{}", "0".repeat(64)));
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&mismatched).expect("encode mismatched metadata"),
+        )
+        .expect("write mismatched metadata");
+        let error = ShimMetadata::load(&path).expect_err("mismatched Update digest must fail");
+        assert!(error
+            .message
+            .contains("does not match recorded request digest"));
+
+        let mut pause = valid.clone();
+        pause["pending_control"]["kind"] = serde_json::json!("pause");
+        pause["pending_control"]
+            .as_object_mut()
+            .expect("pending control object")
+            .remove("request_digest");
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&pause).expect("encode Pause resources metadata"),
+        )
+        .expect("write Pause resources metadata");
+        let error = ShimMetadata::load(&path).expect_err("Pause resources must fail");
+        assert!(error
+            .message
+            .contains("Pause and Resume control operations must not record Linux resources"));
+
+        let mut legacy_with_resources = valid;
+        legacy_with_resources["schema_version"] = serde_json::json!(8);
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&legacy_with_resources)
+                .expect("encode schema-v8 resources metadata"),
+        )
+        .expect("write schema-v8 resources metadata");
+        let error = ShimMetadata::load(&path).expect_err("schema-v8 resources must fail");
+        assert!(error.message.contains("cannot contain schema-v9"));
     }
 
     #[test]
@@ -1600,6 +1664,7 @@ mod tests {
     fn schema_v8_metadata_preserves_exec_incarnations_after_deletion() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let mut expected = metadata(directory.path());
+        expected.schema_version = 8;
         expected.set_exec_sequence(3);
         let process: Process = serde_json::from_value(serde_json::json!({
             "terminal": false,
@@ -1726,7 +1791,7 @@ mod tests {
         wrong_sequence.set_control_state(
             4,
             Some(
-                PendingControlOperation::new(6, ControlOperationKind::Pause, None)
+                PendingControlOperation::new(6, ControlOperationKind::Pause, None, None)
                     .expect("pending Pause"),
             ),
             None,

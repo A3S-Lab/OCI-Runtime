@@ -20,7 +20,7 @@ pub(crate) async fn runtime_client(config: &QualificationConfig) -> TestResult<R
     })
 }
 
-pub(super) fn containerd_operation_id(
+pub(crate) fn containerd_operation_id(
     namespace: &str,
     task_id: &str,
     incarnation: &str,
