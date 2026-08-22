@@ -6,6 +6,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- An exhaustive pinned OCI 1.3 JSON Schema release gate. The SDK now runs all
+  19 vendored configuration, State, and Features fixtures, including malformed
+  JSON and schema-invalid negatives, and SHA-256-binds the exact fixture paths
+  and bytes so any upstream suite drift requires review. A separate runtime
+  matrix validates the checked-in Native Linux, Linux KVM, macOS HVF, and
+  Windows WHPX configurations, each profile's generated Features document, and
+  its created, running, and stopped State documents through the real durable
+  Host Service boundary. This closes schema-suite compatibility only;
+  semantic, lifecycle, security, real-host, and packaged-artifact conformance
+  gates remain open.
 - A shared fail-closed `a3s.oci.linux-kvm-provenance.v1` contract for every
   retained Linux KVM entry, compatibility, lifecycle, recovery, and soak
   artifact. It requires a clean exact checkout and binds the Git object format,
