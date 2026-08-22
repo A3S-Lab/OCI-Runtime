@@ -6,6 +6,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- A shared fail-closed `a3s.oci.linux-kvm-provenance.v1` contract for every
+  retained Linux KVM entry, compatibility, lifecycle, recovery, and soak
+  artifact. It requires a clean exact checkout and binds the Git object format,
+  commit and tree, platform and architecture, Cargo and qualification profiles,
+  CLI and shim bytes, runtime manifest and selected runtime files, immutable
+  system-image manifest, `libkrun-kvm` driver, and `dedicated-vm` isolation.
+  Aggregate compatibility, lifecycle, recovery, and soak schemas advance to v2,
+  unavailable runners retain the same identity evidence with zero cases, and PR
+  artifacts name the merge commit that was actually checked out and built.
 - A separately scoped bounded Linux KVM soak for x86_64 and AArch64. The
   qualification-only `linux-kvm-bounded-soak-only-v1` Host Service runs 25
   fresh exact generations by default without promoting the public `probe-only`
@@ -13,7 +22,7 @@ All notable changes to A3S OCI Runtime are documented in this file.
   Create/Kill/Wait/Delete, Guest marker, unique shim/worker process identities,
   descriptor and endpoint restoration, bundle-handoff/runtime-share/recovery
   cleanup, console retention, and configured Guest `cgroupsPath` lifetime.
-  CI emits `a3s.oci.linux-kvm-soak-matrix.v1` on both architectures; a host
+  CI emits `a3s.oci.linux-kvm-soak-matrix.v2` on both architectures; a host
   without usable KVM records zero completed iterations and does not download
   Alpine. Fresh-host `available` reports remain outstanding.
 - A qualification-only Linux KVM owner-death and Host Service restart gate for

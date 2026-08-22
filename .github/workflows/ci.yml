@@ -146,6 +146,9 @@ jobs:
           retention-days: 14
       - run: cargo run -p a3s-oci-cli -- features
       - if: runner.os == 'Linux'
+        name: Linux KVM provenance contract
+        run: bash .github/scripts/linux-kvm-provenance-test.sh
+      - if: runner.os == 'Linux'
         name: KVM-independent dedicated-VM isolation preflight
         run: cargo test -p a3s-oci-runtime utility_vm_driver::tests
       - if: runner.os == 'Linux'
@@ -179,7 +182,7 @@ jobs:
         timeout-minutes: 15
         env:
           A3S_OCI_LINUX_KVM_RECOVERY_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-recovery.json
-          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
         run: bash .github/scripts/linux-kvm-recovery.sh
       - if: runner.os == 'Linux'
         name: Linux KVM bounded fresh-generation soak
@@ -187,7 +190,7 @@ jobs:
         env:
           A3S_OCI_LINUX_KVM_SOAK_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-soak.json
           A3S_OCI_LINUX_KVM_SOAK_ITERATIONS: 25
-          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
         run: bash .github/scripts/linux-kvm-soak.sh
       - if: runner.os == 'macOS'
         name: Hypervisor.framework VM object lifecycle
@@ -968,7 +971,7 @@ jobs:
         name: Stage Windows WHPX qualification binaries
         shell: pwsh
         env:
-          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
         run: |
           $stage = Join-Path $env:RUNNER_TEMP 'a3s-oci-windows-whpx-qualification'
           if (Test-Path -LiteralPath $stage) {
@@ -1111,14 +1114,14 @@ jobs:
         timeout-minutes: 15
         env:
           A3S_OCI_LINUX_KVM_RECOVERY_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-recovery.json
-          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
         run: bash .github/scripts/linux-kvm-recovery.sh
       - name: Linux KVM bounded fresh-generation soak
         timeout-minutes: 45
         env:
           A3S_OCI_LINUX_KVM_SOAK_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-soak.json
           A3S_OCI_LINUX_KVM_SOAK_ITERATIONS: 25
-          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
         run: bash .github/scripts/linux-kvm-soak.sh
       - name: Rootless generated-cgroup device boundary
         env:
@@ -1281,7 +1284,7 @@ jobs:
       - name: Stage static guest qualification artifacts
         shell: bash
         env:
-          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
         run: |
           stage="$RUNNER_TEMP/a3s-oci-guest-agents"
           test ! -e "$stage"

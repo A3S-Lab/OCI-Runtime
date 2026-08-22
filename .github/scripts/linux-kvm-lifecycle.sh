@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 : "${A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST:?set the exact Linux KVM system-image manifest}"
 
+source .github/scripts/lib/linux-kvm-provenance.sh
+
 if [[ "$(uname -s)" != "Linux" ]]; then
   printf 'Linux KVM lifecycle qualification requires a Linux host\n' >&2
   exit 2
@@ -49,6 +51,7 @@ binary_dir="$target_dir/$profile"
 source_cli="$binary_dir/a3s-oci"
 source_shim="$binary_dir/a3s-oci-krun-shim"
 source_runtime_dir="$binary_dir/a3s-oci-krun-runtime"
+runtime_assets_manifest="crates/krun/runtime/runtime-assets.json"
 
 temporary_root="${RUNNER_TEMP:-/tmp}"
 test -d "$temporary_root"
@@ -99,7 +102,25 @@ test -x "$source_cli"
 test -x "$source_shim"
 test -d "$source_runtime_dir"
 
-features="$($source_cli features)"
+binary_stage="$work/bin"
+mkdir "$binary_stage"
+chmod 0700 "$work" "$binary_stage"
+cp -p "$source_cli" "$binary_stage/a3s-oci"
+cp -p "$source_shim" "$binary_stage/a3s-oci-krun-shim"
+cp -a "$source_runtime_dir" "$binary_stage/a3s-oci-krun-runtime"
+cli="$binary_stage/a3s-oci"
+shim="$binary_stage/a3s-oci-krun-shim"
+runtime_dir="$binary_stage/a3s-oci-krun-runtime"
+
+provenance="$(
+  linux_kvm_provenance \
+    linux-kvm-lifecycle-16-case-v1 "$profile" \
+    "$cli" "$shim" "$runtime_dir" \
+    "$runtime_assets_manifest" \
+    "$A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST"
+)"
+
+features="$($cli features)"
 kvm_driver="$(
   jq --compact-output \
     '.drivers[] | select(.driver == "libkrun-kvm")' \
@@ -118,8 +139,9 @@ if [[ "$kvm_status" == "unavailable" ]]; then
     --arg manifest_sha256 "$manifest_sha256" \
     --arg reason "$reason" \
     --argjson kvm_driver "$kvm_driver" \
+    --argjson provenance "$provenance" \
     '{
-      schema_version: "a3s.oci.linux-kvm-lifecycle-matrix.v1",
+      schema_version: "a3s.oci.linux-kvm-lifecycle-matrix.v2",
       platform: "linux",
       architecture: $architecture,
       status: "unavailable",
@@ -127,14 +149,24 @@ if [[ "$kvm_status" == "unavailable" ]]; then
       expected_case_count: 16,
       case_count: 0,
       system_image_manifest_sha256: $manifest_sha256,
+      provenance: $provenance,
       kvm_driver: $kvm_driver,
       cases: [],
       reason: $reason
     }' | tee "$report_path"
   jq --exit-status \
-    '.schema_version == "a3s.oci.linux-kvm-lifecycle-matrix.v1"
+    '.schema_version == "a3s.oci.linux-kvm-lifecycle-matrix.v2"
      and .platform == "linux" and .status == "unavailable"
      and .kvm_required and .expected_case_count == 16 and .case_count == 0
+     and .provenance.schema_version == "a3s.oci.linux-kvm-provenance.v1"
+     and .provenance.platform == .platform
+     and .provenance.architecture == .architecture
+     and .provenance.qualification_profile == "linux-kvm-lifecycle-16-case-v1"
+     and .provenance.driver == "libkrun-kvm"
+     and .provenance.isolation == "dedicated-vm"
+     and .provenance.source_tree_clean
+     and .provenance.system_image_manifest_sha256
+       == .system_image_manifest_sha256
      and .kvm_driver.status == "unavailable"
      and .cases == [] and (.reason | length > 0)' \
     "$report_path" >/dev/null
@@ -149,19 +181,13 @@ bootstrap="$work/bootstrap"
 runtime_share="$work/runtime-share"
 console_directory="$work/consoles"
 case_report_directory="$work/case-reports"
-binary_stage="$work/bin"
 mkdir \
   "$bootstrap" "$runtime_share" "$console_directory" \
-  "$case_report_directory" "$binary_stage"
+  "$case_report_directory"
 mkdir "$runtime_share/run"
 chmod 0700 \
   "$work" "$bootstrap" "$runtime_share" "$runtime_share/run" \
   "$console_directory" "$case_report_directory" "$binary_stage"
-cp -p "$source_cli" "$binary_stage/a3s-oci"
-cp -p "$source_shim" "$binary_stage/a3s-oci-krun-shim"
-cp -a "$source_runtime_dir" "$binary_stage/a3s-oci-krun-runtime"
-cli="$binary_stage/a3s-oci"
-shim="$binary_stage/a3s-oci-krun-shim"
 
 alpine_archive="$work/$alpine_name"
 curl --fail --location --retry 3 --silent --show-error \
@@ -405,8 +431,9 @@ jq --slurp \
   --arg manifest_sha256 "$manifest_sha256" \
   --arg rootfs_archive_sha256 "$rootfs_archive_sha256" \
   --argjson kvm_driver "$kvm_driver" \
+  --argjson provenance "$provenance" \
   '{
-    schema_version: "a3s.oci.linux-kvm-lifecycle-matrix.v1",
+    schema_version: "a3s.oci.linux-kvm-lifecycle-matrix.v2",
     platform: "linux",
     architecture: $architecture,
     status: "available",
@@ -415,14 +442,24 @@ jq --slurp \
     case_count: length,
     system_image_manifest_sha256: $manifest_sha256,
     rootfs_archive_sha256: $rootfs_archive_sha256,
+    provenance: $provenance,
     kvm_driver: $kvm_driver,
     cases: .
   }' "$cases_path" | tee "$report_path"
 
 jq --exit-status \
-  '.schema_version == "a3s.oci.linux-kvm-lifecycle-matrix.v1"
+  '.schema_version == "a3s.oci.linux-kvm-lifecycle-matrix.v2"
    and .platform == "linux" and .status == "available"
    and .kvm_required and .expected_case_count == 16 and .case_count == 16
+   and .provenance.schema_version == "a3s.oci.linux-kvm-provenance.v1"
+   and .provenance.platform == .platform
+   and .provenance.architecture == .architecture
+   and .provenance.qualification_profile == "linux-kvm-lifecycle-16-case-v1"
+   and .provenance.driver == "libkrun-kvm"
+   and .provenance.isolation == "dedicated-vm"
+   and .provenance.source_tree_clean
+   and .provenance.system_image_manifest_sha256
+     == .system_image_manifest_sha256
    and .kvm_driver.status == "available"
    and ([.cases[] | select(.kind == "lifecycle")] | length) == 1
    and ([.cases[] | select(.kind == "multi-container")] | length) == 1

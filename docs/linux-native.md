@@ -191,8 +191,9 @@ the process-takeover libkrun call. Immediately before entry, that worker:
    `SO_PEERCRED` whose direct parent is the exact shim.
 
 Successful negotiation requires protocol version 10, the target architecture,
-and all 21 Agent operations. The outer
-`a3s.oci.agent-vm-smoke.v10` report binds that session to nested
+and all 21 Agent operations. The retained
+`a3s.oci.linux-kvm-agent-entry.v1` report wraps the raw
+`a3s.oci.agent-vm-smoke.v10` Host result and nested
 `a3s.oci.krun-agent-vm-smoke.v7` boot-asset and KVM evidence. The v7 addition
 records whether the qualification-only Linux post-probe failure was injected.
 Normal entry requires that field to be false. The Windows handle-reclamation
@@ -208,7 +209,19 @@ must open and pin the real KVM device, verify API version 12, set
 `kvm_post_probe_failure_injected=true`, and exit with status 2 before VM entry.
 The Host must never accept a bridge or negotiate the token, and endpoint,
 process, token-handoff, and runtime-share inventories must return exactly to
-baseline.
+baseline. That expected failure is retained separately as
+`a3s.oci.linux-kvm-post-probe-failure.v1`; unavailable hosts emit an explicit
+zero-case result instead of omitting the artifact.
+
+Both entry reports and every matrix below embed
+`a3s.oci.linux-kvm-provenance.v1`. The helper rejects a dirty checkout or a
+caller-supplied source revision that differs from `HEAD`, then binds the Git
+object format, exact commit and tree, Linux platform and target architecture,
+CLI and shim SHA-256, runtime-assets manifest and selected runtime bundle,
+immutable system-image manifest, Cargo profile, qualification profile,
+`libkrun-kvm` driver, and `dedicated-vm` isolation. It also verifies that the
+adjacent runtime directory contains exactly the manifest-declared files with
+the declared digests before any retained gate runs.
 
 The compatibility-drift gate uses the same Host, shim parent, direct worker,
 and cleanup path but stops before `/dev/kvm` is opened:
@@ -226,7 +239,7 @@ exported-kernel provenance mismatches are rejected during worker load. All 14
 cases require exit code 2, no KVM access, bridge, protocol negotiation, or VM
 entry, and exact endpoint, shim-process, token-handoff, and runtime-share
 inventory restoration. The report schema is
-`a3s.oci.linux-kvm-compatibility-drift.v1`. CI runs both entry contracts and
+`a3s.oci.linux-kvm-compatibility-drift.v2`. CI runs both entry contracts and
 this matrix on x86_64 and AArch64.
 
 The driver also has a KVM-independent isolation preflight on both Linux
@@ -257,7 +270,7 @@ isolation lifecycle, three no-delete interruption boundaries, and all 11
 protocol-v10 Host/Guest transport fault points. Each case must restore the
 Unix endpoint and shim-process inventories, leave `run` unchanged, keep the
 bootstrap empty, and remove markers plus token and recovery handoffs. The
-aggregate schema is `a3s.oci.linux-kvm-lifecycle-matrix.v1`.
+aggregate schema is `a3s.oci.linux-kvm-lifecycle-matrix.v2`.
 
 The recovery gate uses a separate qualification-only Host Service. The normal
 KVM candidate remains `probe-only` and cannot register with
@@ -280,7 +293,7 @@ Wait status before stopped-only Delete. Its descriptor inventory, bundle
 handoffs, runtime shares, recovery reports, endpoints, and service socket all
 return to their baselines. The nested runtime schema is
 `a3s.oci.linux-kvm-recovery-smoke.v1`; the retained aggregate is
-`a3s.oci.linux-kvm-recovery-matrix.v1`.
+`a3s.oci.linux-kvm-recovery-matrix.v2`.
 
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
@@ -301,7 +314,7 @@ The configured Guest `cgroupsPath` is retained with every wave and its lifetime
 is bounded by the reaped per-generation VM kernel. This is Guest-lifetime
 evidence, not a claim that the Host directly observed a Guest cgroup. The
 nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
-`a3s.oci.linux-kvm-soak-matrix.v1`.
+`a3s.oci.linux-kvm-soak-matrix.v2`.
 
 If KVM is unavailable, none of the lifecycle, recovery, or soak scripts
 downloads or unpacks the Alpine fixture. Lifecycle and recovery emit zero-case
