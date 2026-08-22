@@ -181,10 +181,10 @@ any drift. Metadata schema v8 records the last allocated task exec sequence
 and every current exec incarnation. It also retains the last completed init
 and exec stdin sequence, an optional in-flight sequence plus its exact bounded
 payload, the Open, Closing, or Closed state of each stdin stream, and the last
-output cursor only after the corresponding FIFO write succeeds. For each
-terminal process it records a separate completed resize sequence, one pending
-size, and the last committed size. Init and every exec also have an independent
-completed signal sequence plus one pending signal and the init-only `all`
+output byte cursor after each kernel-accepted FIFO prefix is durably committed.
+For each terminal process it records a separate completed resize sequence, one
+pending size, and the last committed size. Init and every exec also have an
+independent completed signal sequence plus one pending signal and the init-only `all`
 flag. The task record stores the last completed per-task control sequence, an
 optional in-flight Pause, Resume, or Update, and the last completed Update
 request digest. Schema-v1 records default input sequences, output cursors, and
@@ -321,6 +321,16 @@ completed CloseIO result without opening the FIFO or dispatching another SDK
 operation. The retained arm64 gate freezes the original shim in Closing,
 commits the Runtime effect while its response cannot be observed, replaces the
 shim, and requires one terminal EOF marker plus a successful repeated CloseIO.
+
+Output reads request at most 64 KiB from the SDK, require a contiguous global
+byte cursor, and reject empty data chunks, data-bearing EOF, cursor gaps, and
+frames after a stream's EOF. Non-terminal stdout and stderr retain separate
+FIFOs; terminal output accepts only the merged stdout PTY stream. After every
+kernel-accepted FIFO write, including a partial write, the shim durably commits
+the exact delivered prefix before attempting the suffix. Cancellation stops
+without advancing over unwritten bytes, and the SDK's partial-frame pagination
+lets a replacement resume at the first undelivered byte. A configured output
+FIFO without durable cursor persistence fails closed.
 
 ## Restart and cleanup contract
 

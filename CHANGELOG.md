@@ -6,6 +6,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Byte-exact containerd output cancellation and reconnect handling. The shim
+  now commits the durable output cursor after every kernel-accepted FIFO write
+  instead of after an entire SDK chunk, so cancellation preserves the exact
+  delivered prefix and a replacement resumes at the unwritten suffix. Output
+  endpoints fail closed without a durable cursor committer, and malformed,
+  gapped, or post-EOF SDK chunks are rejected. Together with the retained
+  bounded stdin, separate stdout/stderr, PTY, EOF, resize, exit-status,
+  reconnect, and real-host evidence, this closes the R7 process-I/O gate.
 - A code-owned containerd-to-SDK translation contract. Twenty-three exact
   Task and FIFO-pump routes collapse to the 18 public `a3s-oci-sdk` operations
   required by the shim; endpoint admission now derives directly from that
