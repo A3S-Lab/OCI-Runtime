@@ -83,6 +83,10 @@ impl RuntimeDriver for AgentLifecycleDriver {
         }
     }
 
+    fn linux_support(&self) -> Result<a3s_oci_sdk::OciLinuxSupport> {
+        a3s_oci_sdk::OciLinuxSupport::shared_executor()
+    }
+
     fn operations(&self) -> &[RuntimeOperation] {
         &DRIVER_OPERATIONS
     }

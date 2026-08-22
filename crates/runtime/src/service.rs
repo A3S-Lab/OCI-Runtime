@@ -10,9 +10,9 @@ use a3s_oci_sdk::{
     ContainerOperationRequest, ContainerRecord, ContainerStats, ContainerTarget, CreateRequest,
     DeleteRequest, Error, ErrorCode, EventBatch, EventsRequest, ExecRequest, ExitStatus, FileOp,
     FileRequest, FileResponse, FilesystemOp, FilesystemRequest, FilesystemResponse, KillRequest,
-    ListRequest, OciRuntimeService, OutputChunk, ProcessId, ProcessRecord, ProcessTarget,
-    ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result, RuntimeInfo,
-    RuntimeOperation, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
+    ListRequest, OciLinuxSupport, OciRuntimeService, OutputChunk, ProcessId, ProcessRecord,
+    ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result,
+    RuntimeInfo, RuntimeOperation, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
     UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
     MAX_FILE_TRANSFER_BYTES,
 };
@@ -279,6 +279,10 @@ impl HostRuntimeService {
         let registered = lifecycle
             .drivers
             .select(request.isolation.class(), "create")?;
+        lifecycle
+            .drivers
+            .linux_support()
+            .validate_spec(request.bundle.spec(), "create")?;
         registered
             .driver()
             .validate_create_bundle(&request.bundle)?;
@@ -488,7 +492,18 @@ impl OciRuntimeService for HostRuntimeService {
             .map_or_else(AttachmentCapabilities::base_v1, |lifecycle| {
                 lifecycle.drivers.attachment_capabilities().clone()
             });
-        let oci = feature_report::build(self.lifecycle.is_some(), hooks, &attachments)?;
+        let linux_support = self
+            .lifecycle
+            .as_deref()
+            .map_or_else(OciLinuxSupport::shared_executor, |lifecycle| {
+                Ok(lifecycle.drivers.linux_support().clone())
+            })?;
+        let oci = feature_report::build(
+            self.lifecycle.is_some(),
+            hooks,
+            &attachments,
+            &linux_support,
+        )?;
 
         let mut operations = BTreeSet::from([RuntimeOperation::Features]);
         if let Some(lifecycle) = &self.lifecycle {
@@ -693,6 +708,11 @@ impl OciRuntimeService for HostRuntimeService {
     async fn exec(&self, request: ExecRequest) -> Result<ProcessRecord> {
         let lifecycle = self.lifecycle("exec")?;
         lifecycle.ensure_operation(RuntimeOperation::Exec, "exec")?;
+        request.validate()?;
+        lifecycle
+            .drivers
+            .linux_support()
+            .validate_process(&request.process, "exec")?;
         let prepared = lifecycle.store.prepare_exec(&request).await?;
         let durable = match prepared {
             ProcessOperationPreparation::Replayed(record) => {
@@ -874,6 +894,11 @@ impl OciRuntimeService for HostRuntimeService {
     async fn update(&self, request: UpdateRequest) -> Result<ContainerRecord> {
         let lifecycle = self.lifecycle("update")?;
         lifecycle.ensure_operation(RuntimeOperation::Update, "update")?;
+        request.validate()?;
+        lifecycle
+            .drivers
+            .linux_support()
+            .validate_resources(&request.resources, "update")?;
         let record = match lifecycle.store.prepare_update(&request).await? {
             RecordOperationPreparation::Replayed(record) => {
                 return lifecycle

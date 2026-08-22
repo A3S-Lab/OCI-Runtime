@@ -790,6 +790,10 @@ impl RuntimeDriver for WhpxRuntimeDriver {
         self.capability.clone()
     }
 
+    fn linux_support(&self) -> Result<a3s_oci_sdk::OciLinuxSupport> {
+        a3s_oci_sdk::OciLinuxSupport::shared_executor()
+    }
+
     fn operations(&self) -> &[RuntimeOperation] {
         &AGENT_DRIVER_OPERATIONS
     }

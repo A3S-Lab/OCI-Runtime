@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use a3s_oci_core::{DriverCapability, DriverKind, IsolationClass};
 use a3s_oci_sdk::{
-    AttachmentCapabilities, ContainerRecord, Error, ErrorCode, OperationId, Result,
-    RuntimeOperation, ATTACHMENT_SCHEMA_V1,
+    AttachmentCapabilities, ContainerRecord, Error, ErrorCode, OciLinuxSupport, OperationId,
+    Result, RuntimeOperation, ATTACHMENT_SCHEMA_V1,
 };
 
 use crate::{OciHookPhase, RuntimeDriver};
@@ -56,6 +56,7 @@ pub(super) struct DriverRegistry {
     operations: BTreeSet<RuntimeOperation>,
     hooks: Vec<OciHookPhase>,
     attachments: AttachmentCapabilities,
+    linux_support: OciLinuxSupport,
 }
 
 impl DriverRegistry {
@@ -69,6 +70,7 @@ impl DriverRegistry {
         let mut entries = Vec::with_capacity(registrations.len());
         let mut common_operations = None;
         let mut common_hooks = None;
+        let mut common_linux_support = None;
         let mut attachment_capabilities = AttachmentCapabilities::base_v1();
 
         for registration in registrations {
@@ -121,6 +123,23 @@ impl DriverRegistry {
                 common_hooks = Some(hooks.clone());
             }
 
+            let linux_support = registration.driver.linux_support().map_err(|error| {
+                open_error(format!(
+                    "runtime driver {:?} returned an invalid Linux support profile: {error}",
+                    capability.driver
+                ))
+            })?;
+            if let Some(expected) = &common_linux_support {
+                if expected != &linux_support {
+                    return Err(open_error(format!(
+                        "runtime driver {:?} advertises a different Linux support profile",
+                        capability.driver
+                    )));
+                }
+            } else {
+                common_linux_support = Some(linux_support.clone());
+            }
+
             let attachments = registration.driver.attachment_capabilities();
             if !attachments.supports_schema(ATTACHMENT_SCHEMA_V1) {
                 return Err(open_error(format!(
@@ -142,12 +161,15 @@ impl DriverRegistry {
             .ok_or_else(|| open_error("driver registry did not retain an operation set"))?;
         let hooks = common_hooks
             .ok_or_else(|| open_error("driver registry did not retain an OCI hook set"))?;
+        let linux_support = common_linux_support
+            .ok_or_else(|| open_error("driver registry did not retain Linux support"))?;
         entries.sort_by_key(RegisteredDriver::kind);
         Ok(Self {
             entries,
             operations,
             hooks,
             attachments: attachment_capabilities,
+            linux_support,
         })
     }
 
@@ -246,6 +268,10 @@ impl DriverRegistry {
 
     pub(super) const fn attachment_capabilities(&self) -> &AttachmentCapabilities {
         &self.attachments
+    }
+
+    pub(super) const fn linux_support(&self) -> &OciLinuxSupport {
+        &self.linux_support
     }
 }
 

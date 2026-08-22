@@ -14,6 +14,7 @@ mod init;
 mod intel_rdt;
 mod io;
 mod io_priority;
+mod linux_support;
 mod memory_policy;
 mod mount;
 #[cfg(test)]
