@@ -20,6 +20,8 @@ use super::terminal;
 
 #[path = "rehydration/close.rs"]
 mod close;
+#[path = "rehydration/control.rs"]
+mod control;
 #[path = "rehydration/resize.rs"]
 mod resize;
 #[path = "rehydration/signal.rs"]
@@ -203,6 +205,17 @@ pub(crate) async fn qualify_manual_shim_rehydration(
     }
 
     finish_rehydrated_terminal_exec(config, &channel, &id, &mut terminal_exec).await?;
+    let (_, replacement) = control::qualify(
+        config,
+        &id,
+        &bundle,
+        &binary,
+        &bootstrap,
+        &identity,
+        started.pid,
+        replacement,
+    )
+    .await?;
     let (_, replacement) = signal::qualify(
         config,
         &id,
@@ -443,14 +456,14 @@ async fn finish_rehydrated_terminal_exec(
         qualification_error("rehydrated terminal stdin path has no bundle parent")
     })?;
     let restored_journal = read_exec_stdin_journal(bundle, exec_id).await?;
-    if restored_journal.schema_version != 8
+    if restored_journal.schema_version != 9
         || restored_journal.completed_sequence != 3
         || restored_journal.pending.is_some()
         || restored_journal.close_state != "open"
         || restored_journal.output_cursor == 0
     {
         return Err(qualification_error(format!(
-            "terminal stdin journal after manual shim rehydration was {restored_journal:?}; expected schema 8, completed sequence 3, no pending write, open stdin, and a nonzero output cursor"
+            "terminal stdin journal after manual shim rehydration was {restored_journal:?}; expected schema 9, completed sequence 3, no pending write, open stdin, and a nonzero output cursor"
         ))
         .into());
     }

@@ -19,7 +19,9 @@ mod controls;
 #[path = "faults/shared.rs"]
 mod shared;
 
-pub(crate) use shared::{containerd_exec_operation_id, containerd_process_id, runtime_client};
+pub(crate) use shared::{
+    containerd_exec_operation_id, containerd_operation_id, containerd_process_id, runtime_client,
+};
 
 const CREATE_INTENT_FILE_NAME: &str = "a3s-oci-shim-create-v1.json";
 

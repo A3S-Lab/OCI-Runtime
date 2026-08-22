@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use a3s_oci_sdk::oci_spec::runtime::{ContainerState, StateBuilder};
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, StateBuilder};
 use a3s_oci_sdk::{
     async_trait, ContainerOperationRequest, ContainerRecord, CreateRequest, DeleteRequest,
     Error as RuntimeError, ErrorCode, IsolationRequest, KillRequest, OciRuntimeService,
@@ -22,6 +22,7 @@ use crate::metadata::{ControlOperationKind, ShimMetadata};
 struct ControlCall {
     kind: &'static str,
     context: OperationContext,
+    resources: Option<LinuxResources>,
 }
 
 #[derive(Clone)]
@@ -34,7 +35,10 @@ struct PauseBarriers {
 struct ControlRuntime {
     record: Arc<StdMutex<ContainerRecord>>,
     calls: Arc<StdMutex<Vec<ControlCall>>>,
+    pause_errors: Arc<StdMutex<VecDeque<RuntimeError>>>,
+    resume_errors: Arc<StdMutex<VecDeque<RuntimeError>>>,
     update_errors: Arc<StdMutex<VecDeque<RuntimeError>>>,
+    update_records: Arc<StdMutex<VecDeque<ContainerRecord>>>,
     pause_barriers: Arc<StdMutex<Option<PauseBarriers>>>,
 }
 
@@ -43,7 +47,10 @@ impl ControlRuntime {
         Self {
             record: Arc::new(StdMutex::new(record)),
             calls: Arc::new(StdMutex::new(Vec::new())),
+            pause_errors: Arc::new(StdMutex::new(VecDeque::new())),
+            resume_errors: Arc::new(StdMutex::new(VecDeque::new())),
             update_errors: Arc::new(StdMutex::new(VecDeque::new())),
+            update_records: Arc::new(StdMutex::new(VecDeque::new())),
             pause_barriers: Arc::new(StdMutex::new(None)),
         }
     }
@@ -59,16 +66,43 @@ impl ControlRuntime {
             .push_back(error);
     }
 
+    fn push_pause_error(&self, error: RuntimeError) {
+        self.pause_errors
+            .lock()
+            .expect("Pause errors")
+            .push_back(error);
+    }
+
+    fn push_update_record(&self, record: ContainerRecord) {
+        self.update_records
+            .lock()
+            .expect("Update records")
+            .push_back(record);
+    }
+
+    fn push_resume_error(&self, error: RuntimeError) {
+        self.resume_errors
+            .lock()
+            .expect("Resume errors")
+            .push_back(error);
+    }
+
     fn block_first_pause(&self, entered: Arc<Barrier>, release: Arc<Barrier>) {
         *self.pause_barriers.lock().expect("Pause barriers") =
             Some(PauseBarriers { entered, release });
     }
 
-    fn record_call(&self, kind: &'static str, context: OperationContext) {
-        self.calls
-            .lock()
-            .expect("control calls")
-            .push(ControlCall { kind, context });
+    fn record_call(
+        &self,
+        kind: &'static str,
+        context: OperationContext,
+        resources: Option<LinuxResources>,
+    ) {
+        self.calls.lock().expect("control calls").push(ControlCall {
+            kind,
+            context,
+            resources,
+        });
     }
 
     fn current_record(&self) -> ContainerRecord {
@@ -112,11 +146,14 @@ impl OciRuntimeService for ControlRuntime {
         &self,
         request: ContainerOperationRequest,
     ) -> a3s_oci_sdk::Result<ContainerRecord> {
-        self.record_call("pause", request.context);
+        self.record_call("pause", request.context, None);
         let barriers = self.pause_barriers.lock().expect("Pause barriers").take();
         if let Some(barriers) = barriers {
             barriers.entered.wait().await;
             barriers.release.wait().await;
+        }
+        if let Some(error) = self.pause_errors.lock().expect("Pause errors").pop_front() {
+            return Err(error);
         }
         Ok(self.set_paused(true))
     }
@@ -125,12 +162,20 @@ impl OciRuntimeService for ControlRuntime {
         &self,
         request: ContainerOperationRequest,
     ) -> a3s_oci_sdk::Result<ContainerRecord> {
-        self.record_call("resume", request.context);
+        self.record_call("resume", request.context, None);
+        if let Some(error) = self
+            .resume_errors
+            .lock()
+            .expect("Resume errors")
+            .pop_front()
+        {
+            return Err(error);
+        }
         Ok(self.set_paused(false))
     }
 
     async fn update(&self, request: UpdateRequest) -> a3s_oci_sdk::Result<ContainerRecord> {
-        self.record_call("update", request.context);
+        self.record_call("update", request.context, Some(request.resources));
         if let Some(error) = self
             .update_errors
             .lock()
@@ -138,6 +183,14 @@ impl OciRuntimeService for ControlRuntime {
             .pop_front()
         {
             return Err(error);
+        }
+        if let Some(record) = self
+            .update_records
+            .lock()
+            .expect("Update records")
+            .pop_front()
+        {
+            return Ok(record);
         }
         Ok(self.current_record())
     }
@@ -213,7 +266,72 @@ async fn concurrent_duplicate_pause_dispatches_once() {
 }
 
 #[tokio::test]
-async fn pending_update_survives_reopen_and_reuses_the_same_operation_id() {
+async fn pending_pause_replays_during_reopen_with_the_same_operation_id() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let (service, runtime) = initialized_service(directory.path()).await;
+    runtime.push_pause_error(retryable_control_error("Pause response was lost"));
+
+    request_pause(&service)
+        .await
+        .expect_err("first Pause must retain a retryable pending operation");
+    let pending = load_metadata(directory.path());
+    assert_eq!(pending.control_sequence(), 0);
+    assert_eq!(
+        pending.pending_control().map(|operation| operation.kind()),
+        Some(ControlOperationKind::Pause)
+    );
+
+    let replacement = service_for_runtime(directory.path(), runtime.clone());
+    replacement
+        .restore_task("task-a")
+        .await
+        .expect("replay pending Pause while restoring metadata");
+    request_pause(&replacement)
+        .await
+        .expect("completed Pause must be idempotent");
+
+    let calls = runtime.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].context.operation_id, calls[1].context.operation_id);
+    assert!(calls.iter().all(|call| call.resources.is_none()));
+    let completed = load_metadata(directory.path());
+    assert_eq!(completed.control_sequence(), 1);
+    assert_eq!(completed.pending_control(), None);
+}
+
+#[tokio::test]
+async fn pending_resume_replays_during_reopen_with_the_same_operation_id() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let (service, runtime) = initialized_service(directory.path()).await;
+    request_pause(&service).await.expect("baseline Pause");
+    runtime.push_resume_error(retryable_control_error("Resume response was lost"));
+
+    request_resume(&service)
+        .await
+        .expect_err("first Resume must retain a retryable pending operation");
+    let replacement = service_for_runtime(directory.path(), runtime.clone());
+    replacement
+        .restore_task("task-a")
+        .await
+        .expect("replay pending Resume while restoring metadata");
+    request_resume(&replacement)
+        .await
+        .expect("completed Resume must be idempotent");
+
+    let calls = runtime.calls();
+    assert_eq!(
+        calls.iter().map(|call| call.kind).collect::<Vec<_>>(),
+        ["pause", "resume", "resume"]
+    );
+    assert_eq!(calls[1].context.operation_id, calls[2].context.operation_id);
+    assert!(calls.iter().all(|call| call.resources.is_none()));
+    let completed = load_metadata(directory.path());
+    assert_eq!(completed.control_sequence(), 2);
+    assert_eq!(completed.pending_control(), None);
+}
+
+#[tokio::test]
+async fn pending_update_replays_during_reopen_with_the_same_operation_id() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let (service, runtime) = initialized_service(directory.path()).await;
     runtime.push_update_error(
@@ -245,13 +363,13 @@ async fn pending_update_survives_reopen_and_reuses_the_same_operation_id() {
     replacement
         .restore_task("task-a")
         .await
-        .expect("restore pending Update metadata");
-    request_update(
-        &replacement,
-        br#"{"unified":{"memory.high":"1","memory.low":"0"}}"#,
-    )
-    .await
-    .expect("retry pending Update after reopen");
+        .expect("replay pending Update while restoring metadata");
+
+    let replayed = load_metadata(directory.path());
+    assert_eq!(replayed.control_sequence(), 1);
+    assert_eq!(replayed.pending_control(), None);
+    assert!(replayed.last_update_digest().is_some());
+
     request_update(
         &replacement,
         br#"{"unified":{"memory.low":"0","memory.high":"1"}}"#,
@@ -262,10 +380,138 @@ async fn pending_update_survives_reopen_and_reuses_the_same_operation_id() {
     let calls = runtime.calls();
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0].context.operation_id, calls[1].context.operation_id);
+    assert_eq!(calls[0].resources, calls[1].resources);
+}
+
+#[tokio::test]
+async fn legacy_schema_v8_pending_update_waits_for_matching_caller_resources() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let (service, runtime) = initialized_service(directory.path()).await;
+    runtime.push_update_error(retryable_control_error("Update response was lost"));
+    request_update(&service, br#"{"pids":{"limit":64}}"#)
+        .await
+        .expect_err("first Update must retain a retryable pending operation");
+
+    let path = ShimMetadata::path(directory.path());
+    let mut document: serde_json::Value = serde_json::from_slice(
+        &tokio::fs::read(&path)
+            .await
+            .expect("read schema-v9 task metadata"),
+    )
+    .expect("decode schema-v9 task metadata");
+    document["schema_version"] = serde_json::json!(8);
+    document["pending_control"]
+        .as_object_mut()
+        .expect("pending control object")
+        .remove("resources");
+    tokio::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&document).expect("encode schema-v8 task metadata"),
+    )
+    .await
+    .expect("write schema-v8 task metadata");
+
+    let replacement = service_for_runtime(directory.path(), runtime.clone());
+    replacement
+        .restore_task("task-a")
+        .await
+        .expect("restore legacy pending Update without guessing its resources");
+    assert_eq!(runtime.calls().len(), 1);
+    let deferred = load_metadata(directory.path());
+    assert_eq!(deferred.schema_version(), 8);
+    assert!(deferred
+        .pending_control()
+        .is_some_and(|operation| operation.resources().is_none()));
+
+    request_update(&replacement, br#"{"pids":{"limit":63}}"#)
+        .await
+        .expect_err("a different Update must not replace legacy pending resources");
+    assert_eq!(runtime.calls().len(), 1);
+    request_update(&replacement, br#"{"pids":{"limit":64}}"#)
+        .await
+        .expect("matching caller retry must supply and dispatch legacy resources");
+
+    let calls = runtime.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].context.operation_id, calls[1].context.operation_id);
+    assert_eq!(calls[0].resources, calls[1].resources);
+    let upgraded = load_metadata(directory.path());
+    assert_eq!(upgraded.schema_version(), 9);
+    assert_eq!(upgraded.control_sequence(), 1);
+    assert_eq!(upgraded.pending_control(), None);
+}
+
+#[tokio::test]
+async fn retryable_control_replay_failure_keeps_the_pending_operation() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let (service, runtime) = initialized_service(directory.path()).await;
+    runtime.push_update_error(retryable_control_error("first Update response was lost"));
+    runtime.push_update_error(retryable_control_error("Runtime is still unavailable"));
+    request_update(&service, br#"{"pids":{"limit":64}}"#)
+        .await
+        .expect_err("first Update must retain pending state");
+
+    let replacement = service_for_runtime(directory.path(), runtime.clone());
+    replacement
+        .restore_task("task-a")
+        .await
+        .expect_err("retryable replay failure must fail task restoration");
+
+    let calls = runtime.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].context.operation_id, calls[1].context.operation_id);
+    let pending = load_metadata(directory.path());
+    assert_eq!(pending.control_sequence(), 0);
+    assert!(pending.pending_control().is_some());
+}
+
+#[tokio::test]
+async fn terminal_control_replay_failure_settles_the_pending_sequence() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let (service, runtime) = initialized_service(directory.path()).await;
+    runtime.push_update_error(retryable_control_error("first Update response was lost"));
+    runtime.push_update_error(
+        RuntimeError::new(ErrorCode::InvalidArgument, "terminal resource rejection")
+            .for_operation("test-update"),
+    );
+    request_update(&service, br#"{"pids":{"limit":64}}"#)
+        .await
+        .expect_err("first Update must retain pending state");
+
+    let replacement = service_for_runtime(directory.path(), runtime.clone());
+    replacement
+        .restore_task("task-a")
+        .await
+        .expect("terminal replay failure must settle task restoration");
+
     let completed = load_metadata(directory.path());
     assert_eq!(completed.control_sequence(), 1);
     assert_eq!(completed.pending_control(), None);
-    assert!(completed.last_update_digest().is_some());
+    assert_eq!(completed.last_update_digest(), None);
+}
+
+#[tokio::test]
+async fn control_replay_rejects_runtime_target_or_freezer_drift() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let (service, runtime) = initialized_service(directory.path()).await;
+    runtime.push_update_error(retryable_control_error("first Update response was lost"));
+    request_update(&service, br#"{"pids":{"limit":64}}"#)
+        .await
+        .expect_err("first Update must retain pending state");
+    let drifted = record_with_paused_state(&runtime.current_record(), true);
+    runtime.push_update_record(drifted);
+
+    let replacement = service_for_runtime(directory.path(), runtime.clone());
+    let error = replacement
+        .restore_task("task-a")
+        .await
+        .expect_err("Update replay must reject freezer drift");
+    assert_eq!(error.code, ErrorCode::Conflict);
+    assert!(error.message.contains("freezer state"));
+
+    let pending = load_metadata(directory.path());
+    assert_eq!(pending.control_sequence(), 0);
+    assert!(pending.pending_control().is_some());
 }
 
 #[tokio::test]
@@ -307,7 +553,7 @@ async fn legacy_metadata_upgrades_to_current_schema_before_the_first_control() {
             .expect("read upgraded task metadata"),
     )
     .expect("decode upgraded task metadata");
-    assert_eq!(document["schema_version"], serde_json::json!(8));
+    assert_eq!(document["schema_version"], serde_json::json!(9));
 }
 
 #[tokio::test]
@@ -432,4 +678,10 @@ fn record_with_paused_state(record: &ContainerRecord, paused: bool) -> Container
     }
     record.state = builder.build().expect("rebuild paused test state");
     record
+}
+
+fn retryable_control_error(message: &str) -> RuntimeError {
+    RuntimeError::new(ErrorCode::Unavailable, message)
+        .for_operation("test-control")
+        .retryable(true)
 }

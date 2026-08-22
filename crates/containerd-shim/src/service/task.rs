@@ -643,7 +643,13 @@ impl Task for Service {
         let control_gate = self.task_snapshot(req.id()).await?.control_gate;
         let _control_guard = control_gate.lock().await;
         let Some(prepared) = self
-            .prepare_control(req.id(), &control_gate, ControlOperationKind::Pause, None)
+            .prepare_control(
+                req.id(),
+                &control_gate,
+                ControlOperationKind::Pause,
+                None,
+                None,
+            )
             .await?
         else {
             return Ok(api::Empty::new());
@@ -685,7 +691,13 @@ impl Task for Service {
         let control_gate = self.task_snapshot(req.id()).await?.control_gate;
         let _control_guard = control_gate.lock().await;
         let Some(prepared) = self
-            .prepare_control(req.id(), &control_gate, ControlOperationKind::Resume, None)
+            .prepare_control(
+                req.id(),
+                &control_gate,
+                ControlOperationKind::Resume,
+                None,
+                None,
+            )
             .await?
         else {
             return Ok(api::Empty::new());
@@ -763,6 +775,7 @@ impl Task for Service {
                 &control_gate,
                 ControlOperationKind::Update,
                 Some(digest),
+                Some(resources),
             )
             .await?
         else {
@@ -781,7 +794,15 @@ impl Task for Service {
                 &prepared.task.identity,
                 prepared.task.record.generation,
                 prepared.operation.sequence(),
-                resources,
+                prepared.operation.resources().cloned().ok_or_else(|| {
+                    runtime_error(
+                        RuntimeError::new(
+                            ErrorCode::FailedPrecondition,
+                            "prepared containerd Update omitted its persisted Linux resources",
+                        )
+                        .for_operation("containerd-update-dispatch"),
+                    )
+                })?,
             )
             .await
         {

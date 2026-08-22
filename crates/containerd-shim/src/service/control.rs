@@ -1,9 +1,9 @@
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources};
-use a3s_oci_sdk::{canonical_json_bytes, ContainerRecord};
+use a3s_oci_sdk::ContainerRecord;
 use containerd_shim::TtrpcResult;
-use sha2::{Digest, Sha256};
 
 use super::*;
+pub(super) use crate::metadata::update_request_digest;
 
 #[derive(Debug, Clone)]
 pub(super) struct PreparedControl {
@@ -18,6 +18,7 @@ impl Service {
         control_gate: &Arc<Mutex<()>>,
         kind: ControlOperationKind,
         request_digest: Option<String>,
+        resources: Option<LinuxResources>,
     ) -> TtrpcResult<Option<PreparedControl>> {
         let _guard = self.metadata_gate.lock().await;
         let mut state = self.state.lock().await;
@@ -44,9 +45,34 @@ impl Service {
                     ),
                 )));
             }
+            let operation = match resources {
+                Some(resources) => pending
+                    .with_update_resources(resources)
+                    .map_err(runtime_error)?,
+                None => pending.clone(),
+            };
+            if operation == pending {
+                return Ok(Some(PreparedControl {
+                    task: task.clone(),
+                    operation,
+                }));
+            }
+
+            task.pending_control = Some(operation.clone());
+            let snapshot = task.clone();
+            drop(state);
+            if let Err(error) = metadata_from_task(&snapshot).store() {
+                let mut state = self.state.lock().await;
+                if let Some(task) = state.tasks.get_mut(task_id) {
+                    if task.pending_control.as_ref() == Some(&operation) {
+                        task.pending_control = Some(pending);
+                    }
+                }
+                return Err(runtime_error(error));
+            }
             return Ok(Some(PreparedControl {
-                task: task.clone(),
-                operation: pending,
+                task: snapshot,
+                operation,
             }));
         }
 
@@ -63,8 +89,8 @@ impl Service {
                 .for_operation("containerd-control-prepare"),
             )
         })?;
-        let operation =
-            PendingControlOperation::new(sequence, kind, request_digest).map_err(runtime_error)?;
+        let operation = PendingControlOperation::new(sequence, kind, request_digest, resources)
+            .map_err(runtime_error)?;
         task.pending_control = Some(operation.clone());
         let snapshot = task.clone();
         drop(state);
@@ -169,15 +195,94 @@ impl Service {
     }
 }
 
-pub(super) fn update_request_digest(resources: &LinuxResources) -> Result<String, RuntimeError> {
-    let encoded = canonical_json_bytes(resources).map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::Internal,
-            format!("failed to encode containerd Update resources: {error}"),
-        )
-        .for_operation("containerd-update-digest")
-    })?;
-    Ok(format!("sha256:{:x}", Sha256::digest(encoded)))
+pub(super) async fn replay_pending(
+    adapter: &RuntimeAdapter,
+    task: &mut TaskState,
+) -> Result<(), RuntimeError> {
+    let Some(operation) = task.pending_control.clone() else {
+        return Ok(());
+    };
+    if operation.kind() == ControlOperationKind::Update && operation.resources().is_none() {
+        return Ok(());
+    }
+
+    let record = match dispatch(adapter, task, &operation).await {
+        Ok(record) => Some(record),
+        Err(error) if error.retryable => return Err(error),
+        Err(error) => {
+            log::warn!(
+                "settling terminal failure while replaying containerd {:?} control sequence {}: {error}",
+                operation.kind(),
+                operation.sequence()
+            );
+            None
+        }
+    };
+    complete_replayed(task, &operation, record)?;
+    metadata_from_task(task).store()
+}
+
+async fn dispatch(
+    adapter: &RuntimeAdapter,
+    task: &TaskState,
+    operation: &PendingControlOperation,
+) -> Result<ContainerRecord, RuntimeError> {
+    match operation.kind() {
+        ControlOperationKind::Pause => {
+            adapter
+                .pause(&task.identity, task.record.generation, operation.sequence())
+                .await
+        }
+        ControlOperationKind::Resume => {
+            adapter
+                .resume(&task.identity, task.record.generation, operation.sequence())
+                .await
+        }
+        ControlOperationKind::Update => {
+            let resources = operation.resources().cloned().ok_or_else(|| {
+                control_error(format!(
+                    "pending Update control sequence {} omitted its Linux resources",
+                    operation.sequence()
+                ))
+            })?;
+            adapter
+                .update(
+                    &task.identity,
+                    task.record.generation,
+                    operation.sequence(),
+                    resources,
+                )
+                .await
+        }
+    }
+}
+
+fn complete_replayed(
+    task: &mut TaskState,
+    operation: &PendingControlOperation,
+    record: Option<ContainerRecord>,
+) -> Result<(), RuntimeError> {
+    if task.pending_control.as_ref() != Some(operation)
+        || task.control_sequence.checked_add(1) != Some(operation.sequence())
+    {
+        return Err(control_error(format!(
+            "cannot commit replayed {:?} control sequence {} from completed sequence {}",
+            operation.kind(),
+            operation.sequence(),
+            task.control_sequence
+        )));
+    }
+    if let Some(record) = record {
+        validate_control_response_runtime(operation.kind(), &record)?;
+        validate_control_target_runtime(task, operation.kind(), &record)?;
+        task.record = record;
+        if operation.kind() == ControlOperationKind::Update {
+            task.last_update_digest = operation.request_digest().map(str::to_string);
+        }
+    }
+    task.control_sequence = operation.sequence();
+    task.pending_control = None;
+    Ok(())
 }
 
 fn control_already_applied(
@@ -196,33 +301,34 @@ fn validate_control_response(
     kind: ControlOperationKind,
     record: &ContainerRecord,
 ) -> TtrpcResult<()> {
+    validate_control_response_runtime(kind, record).map_err(runtime_error)
+}
+
+fn validate_control_response_runtime(
+    kind: ControlOperationKind,
+    record: &ContainerRecord,
+) -> Result<(), RuntimeError> {
     if record.state.status() != &ContainerState::Running {
-        return Err(runtime_error(
-            RuntimeError::new(
-                ErrorCode::FailedPrecondition,
-                format!(
-                    "containerd {kind:?} returned runtime status {} instead of running",
-                    record.state.status()
-                ),
-            )
-            .for_operation("containerd-control-complete"),
-        ));
+        return Err(RuntimeError::new(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "containerd {kind:?} returned runtime status {} instead of running",
+                record.state.status()
+            ),
+        )
+        .for_operation("containerd-control-complete"));
     }
     match kind {
-        ControlOperationKind::Pause if !record.is_paused() => Err(runtime_error(
-            RuntimeError::new(
-                ErrorCode::FailedPrecondition,
-                "containerd Pause returned an unpaused runtime record",
-            )
-            .for_operation("containerd-control-complete"),
-        )),
-        ControlOperationKind::Resume if record.is_paused() => Err(runtime_error(
-            RuntimeError::new(
-                ErrorCode::FailedPrecondition,
-                "containerd Resume returned a paused runtime record",
-            )
-            .for_operation("containerd-control-complete"),
-        )),
+        ControlOperationKind::Pause if !record.is_paused() => Err(RuntimeError::new(
+            ErrorCode::FailedPrecondition,
+            "containerd Pause returned an unpaused runtime record",
+        )
+        .for_operation("containerd-control-complete")),
+        ControlOperationKind::Resume if record.is_paused() => Err(RuntimeError::new(
+            ErrorCode::FailedPrecondition,
+            "containerd Resume returned a paused runtime record",
+        )
+        .for_operation("containerd-control-complete")),
         ControlOperationKind::Pause
         | ControlOperationKind::Resume
         | ControlOperationKind::Update => Ok(()),
@@ -234,13 +340,21 @@ fn validate_control_target(
     kind: ControlOperationKind,
     record: &ContainerRecord,
 ) -> TtrpcResult<()> {
+    validate_control_target_runtime(task, kind, record).map_err(runtime_error)
+}
+
+fn validate_control_target_runtime(
+    task: &TaskState,
+    kind: ControlOperationKind,
+    record: &ContainerRecord,
+) -> Result<(), RuntimeError> {
     if record.state.id() != task.identity.container_id.as_str()
         || record.generation != task.record.generation
         || record.driver != task.record.driver
         || record.isolation != task.record.isolation
         || (kind == ControlOperationKind::Update && record.is_paused() != task.record.is_paused())
     {
-        return Err(runtime_error(
+        return Err(
             RuntimeError::new(
                 ErrorCode::Conflict,
                 format!(
@@ -248,7 +362,12 @@ fn validate_control_target(
                 ),
             )
             .for_operation("containerd-control-complete"),
-        ));
+        );
     }
     Ok(())
+}
+
+fn control_error(message: impl Into<String>) -> RuntimeError {
+    RuntimeError::new(ErrorCode::FailedPrecondition, message)
+        .for_operation("containerd-control-replay")
 }

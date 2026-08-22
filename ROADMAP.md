@@ -2212,8 +2212,21 @@ two complete Pause/Resume cycles dispatch distinct mutations, identical
 completed retries do not dispatch twice, concurrent same-task controls are
 serialized, and an in-flight retry retains the same sequence across shim
 metadata reopen. Canonical JSON request fingerprints keep unordered resource
-maps stable across shim, host, and guest reconstruction. Runtime operation
-schema v2 records that encoding explicitly while retaining schema-v1 retry
+maps stable across shim, host, and guest reconstruction. Shim metadata schema
+v9 now persists the exact `LinuxResources` body beside every
+pending Update digest. Task rehydration automatically replays pending Pause,
+Resume, and body-complete Update operations with the original sequence-bound
+SDK identity before accepting new work. It preserves schema-v3 through
+schema-v8 digest-only pending Updates without guessing their resource body;
+the first digest-matching caller retry supplies that body, upgrades the journal,
+and dispatches the original identity. Retryable replay failures keep recovery
+pending, terminal failures settle the sequence, and successful responses must
+retain the exact container ID, generation, driver, isolation, and applicable
+freezer state. The ignored real-containerd replacement gate now exercises
+committed Pause, Resume, and PID-limit Update across three live shim owners;
+retained fresh-host evidence for that new gate is still required. Separately,
+Runtime operation schema v2 records the canonical request encoding explicitly
+while retaining schema-v1 retry
 validation with the legacy serializer. The August 14, 2026
 Ubuntu arm64/containerd 2.2.2 release build also freezes the Runtime before a
 terminal ResizePty, persists the next per-exec sequence and size, freezes the

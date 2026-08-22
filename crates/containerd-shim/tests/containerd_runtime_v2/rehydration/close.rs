@@ -164,7 +164,7 @@ async fn wait_for_close_state(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         let evidence = read_exec_stdin_journal(bundle, EXEC_ID).await?;
-        if evidence.schema_version == 8
+        if evidence.schema_version == 9
             && evidence.completed_sequence == stdin_sequence
             && evidence.pending.is_none()
             && evidence.close_state == expected
@@ -189,7 +189,7 @@ async fn wait_for_close_request(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         let evidence = read_exec_stdin_journal(bundle, EXEC_ID).await?;
-        if evidence.schema_version == 8
+        if evidence.schema_version == 9
             && evidence.completed_sequence == stdin_sequence
             && evidence.pending.is_none()
             && evidence.close_state == "closing"

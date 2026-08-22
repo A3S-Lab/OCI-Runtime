@@ -43,7 +43,7 @@ async fn real_containerd_runtime_v2_qualification() -> TestResult<()> {
         .duration_since(UNIX_EPOCH)
         .map_err(|error| qualification_error(format!("system clock precedes Unix epoch: {error}")))?
         .as_nanos();
-    let prefix = format!("a3s-r8-{}-{nonce:x}", std::process::id());
+    let prefix = format!("a3s-r9-{}-{nonce:x}", std::process::id());
     let lifecycle_id = format!("{prefix}-lifecycle");
     let result = qualify(&config, &prefix, &lifecycle_id).await;
     let cleanup = cleanup_exact(&config, &prefix).await;
