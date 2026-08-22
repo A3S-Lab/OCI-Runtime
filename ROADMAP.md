@@ -1976,8 +1976,19 @@ pass on supported x86_64 and aarch64 Linux hosts without KVM.
   accepted or rejected field to the zero-pending normative evidence ledger.
 - [ ] Complete Linux configuration enforcement and generate feature reporting
   from the same driver-specific support data used by validation and execution.
-- [ ] Complete applicable VM configuration semantics without executing
-  untrusted hypervisor, kernel, or firmware paths during validation.
+- [x] Complete applicable VM configuration semantics without executing
+  untrusted hypervisor, kernel, or firmware paths during validation. The
+  pinned gate freezes all 26 VM-related schema items and all 24 normative VM
+  requirements: four absolute runtime-path requirements are semantically
+  validated, while the remaining 20 requirements and every caller-provided
+  hypervisor, kernel, image, and hardware field are bound to the selected
+  driver's fail-closed runtime-owned-asset policy. Dedicated negative evidence
+  rejects NUL bytes in every executable VM path and parameter. The Host
+  Service rejects the complete schema-valid `vm` section before durable
+  generation reservation, bundle handoff, platform mutation, or mutating
+  driver dispatch. This closes bundle-supplied VM configuration semantics, not
+  utility-VM lifecycle, security, real-host, or packaged-artifact
+  qualification.
 - [x] Pass the pinned OCI JSON schema suites for config, state, and features
   using fixtures emitted by every advertised driver profile. The exhaustive
   SDK gate runs all 19 vendored positive, schema-negative, and malformed-JSON

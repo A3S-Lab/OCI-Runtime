@@ -150,7 +150,7 @@ fn seccomp_requirements_are_all_owner_bound() {
 }
 
 #[test]
-fn vm_requirements_are_all_owner_bound() {
+fn vm_requirements_have_the_exact_fail_closed_profile() {
     let manifest = checked_in_manifest();
     let requirements = manifest
         .items
@@ -159,10 +159,34 @@ fn vm_requirements_are_all_owner_bound() {
         .collect::<Vec<_>>();
 
     assert_eq!(requirements.len(), 24);
-    assert!(requirements.iter().all(|item| {
-        item.disposition != OciNormativeDisposition::PendingReview
-            && !item.rule_ids.is_empty()
-            && !item.test_ids.is_empty()
+    let validated_paths = requirements
+        .iter()
+        .filter(|item| item.disposition == OciNormativeDisposition::Validated)
+        .collect::<Vec<_>>();
+    assert_eq!(validated_paths.len(), 4);
+    assert!(validated_paths.iter().all(|item| {
+        item.owner == "sdk-semantic-validation"
+            && item.rule_ids == ["oci.vm.path.absolute"]
+            && item.test_ids
+                == [
+                    "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+                    "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
+                ]
+    }));
+
+    let runtime_owned = requirements
+        .iter()
+        .filter(|item| item.disposition == OciNormativeDisposition::Enforced)
+        .collect::<Vec<_>>();
+    assert_eq!(runtime_owned.len(), 20);
+    assert!(runtime_owned.iter().all(|item| {
+        item.owner == "vm-driver"
+            && item.rule_ids == ["oci.vm.configuration.runtime-owned"]
+            && item.test_ids
+                == [
+                    "schema::tests::validates_complete_vm_schema_shapes",
+                    "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch",
+                ]
     }));
 }
 

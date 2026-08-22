@@ -115,12 +115,15 @@ inherited-network profile proves the three safe defaults with sysfs absent.
 All 24 OCI VM configuration entries are owner-bound. The pinned schema accepts
 the complete hypervisor, kernel, image, and hardware shape, checks every
 required relationship and image format, and retains the four absolute-path
-rules in semantic validation. No current A3S driver executes bundle-selected
-VM launch material: the host rejects any caller-provided `vm` section after
-driver selection but before durable generation reservation, bundle handoff,
-hypervisor launch, or mutating driver dispatch. A future driver must explicitly
-replace that fail-closed default and validate and enforce every field it
-accepts.
+rules in semantic validation. A dedicated negative fixture rejects NUL bytes
+in all executable VM paths and hypervisor or kernel parameters. The scoped
+coverage gate freezes all 26 VM-related schema items as fail-closed and the
+normative split as four validated path requirements plus 20 runtime-owned
+controls. No current A3S driver executes bundle-selected VM launch material:
+the host rejects any caller-provided `vm` section after driver selection but
+before durable generation reservation, bundle handoff, hypervisor launch, or
+mutating driver dispatch. A future driver must explicitly replace that
+fail-closed default and validate and enforce every field it accepts.
 
 The Linux namespace, user-mapping, and time-offset review promotes 17 entries
 to enforced and leaves the two existing namespace path and uniqueness rules
