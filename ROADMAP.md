@@ -1981,9 +1981,10 @@ pass on supported x86_64 and aarch64 Linux hosts without KVM.
 - [x] Pass the pinned OCI JSON schema suites for config, state, and features
   using fixtures emitted by every advertised driver profile. The exhaustive
   SDK gate runs all 19 vendored positive, schema-negative, and malformed-JSON
-  cases and SHA-256-binds the exact fixture inventory and bytes. A separate
-  Host Service matrix validates the checked-in Native Linux, Linux KVM, macOS
-  HVF, and Windows WHPX configurations, each generated Features document, and
+  cases and SHA-256-binds the exact fixture inventory and canonical LF text. A
+  separate Host Service matrix validates the checked-in Native Linux, Linux
+  KVM, macOS HVF, and Windows WHPX configurations, each generated Features
+  document, and
   created, running, and stopped State documents. This closes schema
   compatibility only, not the remaining semantic, lifecycle, security, or
   release-artifact gates.

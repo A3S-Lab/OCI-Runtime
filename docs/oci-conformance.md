@@ -19,8 +19,8 @@ The validator applies one explicit in-memory compatibility correction for the
 release's single legacy `#definitions/uint32` fragment and fails compilation
 if that upstream condition changes. The suite gate enumerates all 19 vendored
 configuration, State, and Features fixtures and SHA-256-binds their sorted
-paths and exact bytes, so adding, removing, omitting, or changing a fixture
-requires an explicit review.
+paths and canonical LF text, so adding, removing, omitting, or changing a
+fixture requires an explicit review while CRLF checkout conversion is ignored.
 
 The 15 Markdown documents linked by the same release's `spec.md` table of
 contents are also vendored without modification. Their document digests and

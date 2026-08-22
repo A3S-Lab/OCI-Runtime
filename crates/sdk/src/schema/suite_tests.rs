@@ -189,17 +189,35 @@ fn assert_fixture_set_is_digest_bound() {
 
     let mut digest = Sha256::new();
     for case in cases {
+        let source = canonical_fixture_source(case.source);
         let path_length = u64::try_from(case.relative_path.len()).expect("fixture path length");
-        let source_length = u64::try_from(case.source.len()).expect("fixture source length");
+        let source_length = u64::try_from(source.len()).expect("fixture source length");
         digest.update(path_length.to_be_bytes());
         digest.update(case.relative_path.as_bytes());
         digest.update(source_length.to_be_bytes());
-        digest.update(case.source);
+        digest.update(source);
     }
     let actual = format!("sha256:{:x}", digest.finalize());
     assert_eq!(
         actual, UPSTREAM_FIXTURE_SET_SHA256,
         "pinned upstream fixture content changed"
+    );
+}
+
+fn canonical_fixture_source(source: &[u8]) -> Vec<u8> {
+    let source = std::str::from_utf8(source).expect("OCI schema fixture must be UTF-8");
+    source.replace("\r\n", "\n").into_bytes()
+}
+
+#[test]
+fn fixture_digest_is_independent_of_checkout_line_endings() {
+    assert_eq!(
+        canonical_fixture_source(b"first\r\nsecond\r\n"),
+        b"first\nsecond\n"
+    );
+    assert_eq!(
+        canonical_fixture_source(b"first\rsecond\n"),
+        b"first\rsecond\n"
     );
 }
 
