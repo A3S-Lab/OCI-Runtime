@@ -516,6 +516,17 @@ A3S_OCI_NATIVE_FOCUS=control-workload \
   bash .github/scripts/native-linux-smoke.sh
 ```
 
+The downstream A3S Box R17 Resources profile was qualified against OCI Runtime
+`e6b840b73a4e5c3bbfa72c2b5d6fd89104a60f9a` in Box PR
+[#180](https://github.com/A3S-Lab/Box/pull/180). It resolves the fixed control
+and workload children from the live Sandbox process, requires outer CPU,
+memory, and PID headroom plus the exact workload limits, observes CPU
+throttling, PID exhaustion, and a workload-only OOM, and then completes a fresh
+exec through the surviving control transport. The
+[required CI gate](https://github.com/A3S-Lab/Box/actions/runs/30416074539/job/90462773534)
+passed all advertised R17 profiles and compared the final process, cgroup,
+mount, provider-home, and runtime-state inventory with the clean baseline.
+
 When the host exposes the `hugetlb` controller, a kernel hugepage inventory entry,
 and its matching cgroup-v2 control, the wrapper selects the smallest available
 canonical page size and adds a zero-byte HugeTLB limit to the workload profile.

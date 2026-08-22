@@ -2028,9 +2028,18 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   restart on real native Linux and utility-VM drivers.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
-- [ ] Qualify the Box R17 resource profile against `control-workload-v1`,
+- [x] Qualify the Box R17 resource profile against `control-workload-v1`,
   including exact CPU/memory/PID enforcement, control-service survival under
-  workload OOM pressure, and zero leaked processes or cgroups.
+  workload OOM pressure, and zero leaked processes or cgroups. A3S Box PR
+  [#180](https://github.com/A3S-Lab/Box/pull/180) used OCI Runtime
+  `e6b840b73a4e5c3bbfa72c2b5d6fd89104a60f9a` to resolve the fixed control and
+  workload children, verify the derived outer headroom and exact workload
+  limits, observe real CPU throttling, PID exhaustion, and workload OOM, then
+  complete a post-OOM exec through the surviving control transport. Its
+  [required CI gate](https://github.com/A3S-Lab/Box/actions/runs/30416074539/job/90462773534)
+  passed all advertised R17 profiles in 67.20 seconds and required the final
+  process, cgroup, mount, provider-home, and runtime-state inventory to equal
+  the clean baseline.
 - [x] Remove external-runtime discovery, direct invocation, configuration, and
   fallback paths.
 - [ ] Remove Box's direct libkrun, VMM, guest-init, and containerd-shim paths
