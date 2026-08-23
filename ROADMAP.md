@@ -2184,7 +2184,15 @@ rootfs, process, shim, and caller-owned metadata checks freeze the ownership
 boundary. A post-commit Start boundary runs the exact stable Start
 identity while shim metadata still records Created, then kills the shim and
 proves bounded DeleteShim cleanup terminates and deletes that running exact
-generation. A separate post-commit Delete boundary removes the exact runtime
+generation. An additional ignored live-replacement gate suspends the Host with
+the shim Start request pending, commits the same incarnation-bound identity,
+kills the frozen shim before it can observe the response, and requires its
+replacement to adopt the exact Running record. A retry must return the original
+PID without changing generation, driver, isolation, configuration, or
+attachments. Unit coverage also binds a missing `Starting` exec to one
+incarnation-scoped Exec replay and an already-present process to zero replay;
+fresh-host evidence for the Start replacement gate remains outstanding. A
+separate post-commit Delete boundary removes the exact runtime
 generation before killing the shim, then proves DeleteShim treats only that
 generation's `NotFound` result plus a successful replay of its stable normal or
 force Delete identity as a completed remote effect. It then finishes local

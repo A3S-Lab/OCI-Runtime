@@ -22,6 +22,8 @@ use super::terminal;
 mod close;
 #[path = "rehydration/control.rs"]
 mod control;
+#[path = "rehydration/lifecycle.rs"]
+mod lifecycle;
 #[path = "rehydration/resize.rs"]
 mod resize;
 #[path = "rehydration/signal.rs"]
@@ -63,6 +65,8 @@ pub(crate) async fn qualify_manual_shim_rehydration(
     config: &QualificationConfig,
     prefix: &str,
 ) -> TestResult<()> {
+    lifecycle::qualify_committed_init_start(config, prefix).await?;
+
     let id = format!("{prefix}-shim-rehydrate");
     create_container(config, &id).await?;
     let channel = connect_ready(config).await?;

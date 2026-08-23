@@ -405,6 +405,21 @@ runtime reports that generation Running. DeleteShim must bound its kill/wait
 path, force-delete only that generation, and leave no process, runtime state,
 bundle, or shim while preserving containerd-owned metadata.
 
+The committed Start rehydration gate exercises the live-workload outcome
+instead of DeleteShim cleanup. It suspends the Host with an init Start request
+pending, freezes the original shim, commits that task incarnation's exact
+Start identity directly through the public SDK, and replaces the shim before
+the original response can be observed. Because init lifecycle state already
+has one authoritative owner, the replacement does not add a second shim-side
+Start journal. It reads the exact runtime generation, adopts its Running
+record, and must preserve the PID, driver, isolation, configuration digest,
+and attachments digest. A repeated containerd Start then joins the same Host
+operation and returns the original PID without another driver mutation. The
+matching unit boundary also proves the other side of exec recovery: a durable
+`Starting` exec absent from runtime process inventory is dispatched exactly
+once with its persisted incarnation, while an existing process is adopted
+without another Exec call.
+
 The post-commit Exec gate records the process as Added in shim metadata, then
 submits the exact stable Runtime Exec and verifies its generation-scoped
 process identity and live PID before killing the shim. DeleteShim must reap

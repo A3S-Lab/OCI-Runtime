@@ -6,6 +6,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Committed init-Start reconciliation through a live shim replacement. The
+  real-containerd gate suspends the Host with Start pending, freezes the
+  original shim, commits the exact incarnation-bound Start identity directly
+  through the public SDK, and replaces the shim before the original response
+  can be observed. Rehydration must adopt the Runtime's exact Running record,
+  preserve PID, generation, driver, isolation, and configuration digests, and
+  replay a containerd Start retry without a second lifecycle effect. Unit
+  gates separately prove that a committed init Start is adopted from exact
+  Runtime state and that a `Starting` exec missing from process inventory is
+  replayed once with its durable incarnation. The ignored real-host gate still
+  requires fresh retained Native Linux/containerd 2.2.2 evidence.
 - Durable containerd task-control replay during shim rehydration. Metadata
   schema v9 persists the exact `LinuxResources` body beside a pending Update's
   canonical digest, while Pause and Resume remain body-free. A replacement
