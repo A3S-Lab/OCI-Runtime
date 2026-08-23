@@ -19,6 +19,12 @@ directly without linking or initializing libkrun. The executor selects direct
 rootful mapping or helper-backed rootless mapping from its effective host
 identity.
 
+A process that omits a user-namespace request inherits the current user
+namespace, so container UID/GID values already identify the same host IDs and
+host translation is the identity function. Created and joined user namespaces
+still require explicit UID and GID mappings; the executor never invents a
+mapping for either boundary.
+
 ## Multi-container host owner
 
 The explicit development command below opens one long-lived Native Linux SDK
@@ -488,6 +494,13 @@ a child cgroup. A second otherwise equivalent profile adds `ro`; it requires
 the original ownership and a failed write. Both profiles run the complete
 Create/Start/Kill/Wait/Delete lifecycle and require empty executor and session
 state afterward.
+
+The cgroup authority root belongs to the host or delegation owner. When its
+`cpuset.cpus` or `cpuset.mems` value is empty, the executor requires the
+matching `.effective` value to be nonempty but does not write the authority
+root. Only Runtime-owned descendants copy those effective values before
+controller enablement. This preserves inheritance while preventing container
+creation from mutating a host-owned or delegated boundary.
 
 Run only these positive and read-only real-kernel profiles with:
 

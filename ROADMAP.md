@@ -2190,9 +2190,19 @@ kills the frozen shim before it can observe the response, and requires its
 replacement to adopt the exact Running record. A retry must return the original
 PID without changing generation, driver, isolation, configuration, or
 attachments. Unit coverage also binds a missing `Starting` exec to one
-incarnation-scoped Exec replay and an already-present process to zero replay;
-fresh-host evidence for the Start replacement gate remains outstanding. A
-second ignored live-replacement gate covers init Kill. It retains sequence 1
+incarnation-scoped Exec replay and an already-present process to zero replay.
+The August 24, 2026 three-pass Native Linux/containerd 2.2.2 matrix retains
+this init-Start replacement boundary. A second live-replacement gate covers
+exec Start. It durably advances schema-v9 exec incarnation 1 from Added to
+Starting before any Runtime adapter connection, freezes the original shim,
+commits that incarnation's exact Exec through the Runtime, and replaces the
+shim before the original response can be observed. The replacement must adopt
+the one existing process and PID, persist its exact Started record, return the
+same PID to a Start retry, expose exactly one matching Runtime inventory
+record, and delete the exec without stopping init. A focused unit gate also
+proves that Runtime connection failure cannot leave an accepted Exec Start in
+Added. The same August 24 three-pass matrix retains this boundary. A third
+live-replacement gate covers init Kill. It retains sequence 1
 `SIGSTOP` with `all=true`, freezes the original shim, commits the exact
 `kill-1` identity directly through the Runtime, and replaces that shim before
 the response can be observed. The replacement must preserve the incarnation,
@@ -2201,9 +2211,8 @@ operation, and prove both processes are stopped. Fresh sequences 2 through 4
 then prove `SIGCONT(all=true)`, `SIGSTOP(all=false)`, and
 `SIGCONT(all=false)` against the real `/proc` states, including that the
 init-only stop does not stop the exec. Unit coverage also proves that durable
-init exit evidence settles a pending terminal Kill without redispatch. Fresh
-Native Linux/containerd 2.2.2 evidence for this init-Kill replacement gate
-remains outstanding.
+init exit evidence settles a pending terminal Kill without redispatch. The
+August 24 three-pass matrix retains this boundary.
 A separate post-commit Delete boundary removes the exact runtime
 generation before killing the shim, then proves DeleteShim treats only that
 generation's `NotFound` result plus a successful replay of its stable normal or
@@ -2244,7 +2253,7 @@ pending, terminal failures settle the sequence, and successful responses must
 retain the exact container ID, generation, driver, isolation, and applicable
 freezer state. The ignored real-containerd replacement gate now exercises
 committed Pause, Resume, and PID-limit Update across three live shim owners;
-retained fresh-host evidence for that new gate is still required. Separately,
+the August 24 three-pass matrix retains that gate. Separately,
 Runtime operation schema v2 records the canonical request encoding explicitly
 while retaining schema-v1 retry
 validation with the legacy serializer. The August 14, 2026
@@ -2262,13 +2271,16 @@ sequence survives `DeleteProcess`; exit monitors are incarnation-bound so a
 late result cannot terminate or poison the replacement. The latest
 qualification also releases each Native Linux guest mutation record only
 after its Host result is durable, including every derived chunk identity for a
-stdin payload larger than the 4 MiB guest frame limit. Three complete 46.92,
-47.39, and 47.23-second matrices passed consecutively through Host PID 3605
-with installed shim SHA-256
-`a0e7dce493308ebea0b4642dd81a9e489109a8b3709f2a1ede62b015cc123482`.
-The matching Host and agent SHA-256 values were
-`f097da3529c47a06b32271550417ed810d698a2a6e385f122771c197b7de2b67`
-and `be0b13215c21a2312f8a3e8d79cc9a39ed1a4b07b539f3d557e0f4e168c3345a`.
+stdin payload larger than the 4 MiB guest frame limit. On August 24, 2026,
+three complete 71.60, 60.26, and 62.72-second matrices passed consecutively
+through Host PID 357031 with installed shim SHA-256
+`706e4bb02e6a678ea3f4366b367e34da1b787939afa4f6d5032164b99bf65225`.
+The matching Host, agent, qualification executable, and Cargo.lock SHA-256
+values were
+`b4a460c1c8424459f29a78d875907da577cf001d40a5f901a6456d0ac4dd7727`,
+`bde871360ee26ee3571e1e5a099be19db1355487f0b3c730197adf4f50e0d5a9`,
+`b4aee1202c5608873bee6a50692c67a9ab9a3ed6bc57a68643f3288eff748196`,
+and `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
 The qualification recreates the killed task ID with a new incarnation and
 generation and leaves no matching task, container, shim, agent child,
 workload process, bundle, live runtime record, prepared Host operation,

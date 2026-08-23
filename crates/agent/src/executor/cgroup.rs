@@ -118,7 +118,7 @@ impl CgroupHandle {
         let mut created = Vec::new();
         let create_path = (|| {
             for (index, component) in components.iter().enumerate() {
-                initialize_cpuset(&current)?;
+                prepare_parent_cpuset(&current, manager.authority_root())?;
                 enable_controllers(&current, controllers)?;
                 current.push(component.as_os_str());
                 let is_leaf = index + 1 == components.len();
@@ -622,6 +622,18 @@ fn available_controllers(path: &Path) -> Result<BTreeSet<String>> {
 }
 
 fn initialize_cpuset(path: &Path) -> Result<()> {
+    initialize_cpuset_values(path, true)
+}
+
+fn prepare_parent_cpuset(path: &Path, authority_root: &Path) -> Result<()> {
+    // The authority root belongs to the host or delegation owner. A cgroup
+    // namespace may expose its controls as writable while rejecting cpuset
+    // assignments at that boundary. Its effective values are sufficient for
+    // children to inherit; only runtime-owned descendants may be initialized.
+    initialize_cpuset_values(path, path != authority_root)
+}
+
+fn initialize_cpuset_values(path: &Path, write_empty: bool) -> Result<()> {
     for name in ["cpuset.cpus", "cpuset.mems"] {
         let destination = path.join(name);
         let Ok(current) = std::fs::read_to_string(&destination) else {
@@ -645,6 +657,9 @@ fn initialize_cpuset(path: &Path) -> Result<()> {
                 ErrorCode::FailedPrecondition,
                 format!("effective cpuset is empty at {}", effective_path.display()),
             ));
+        }
+        if !write_empty {
+            continue;
         }
         std::fs::write(&destination, effective.trim()).map_err(|error| {
             cgroup_error(
@@ -776,8 +791,53 @@ mod tests {
     use super::{
         apply_settings, cgroup_event_value, enable_controllers,
         install_control_workload_descriptors_from_pre_exec, open_cgroup_procs,
-        open_control_workload_membership, unified::UnifiedPlan, CgroupSetting,
+        open_control_workload_membership, prepare_parent_cpuset, unified::UnifiedPlan,
+        CgroupSetting,
     };
+
+    #[test]
+    fn authority_cpuset_is_validated_without_mutating_host_owned_values() {
+        let directory = tempfile::tempdir().expect("temporary cgroup authority");
+        for (name, effective) in [("cpuset.cpus", "0-3"), ("cpuset.mems", "0")] {
+            std::fs::write(directory.path().join(name), "").expect("empty authority cpuset");
+            std::fs::write(
+                directory.path().join(format!("{name}.effective")),
+                effective,
+            )
+            .expect("effective authority cpuset");
+        }
+
+        prepare_parent_cpuset(directory.path(), directory.path())
+            .expect("validate inherited authority cpuset");
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("cpuset.cpus"))
+                .expect("read authority CPUs"),
+            ""
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("cpuset.mems"))
+                .expect("read authority memory nodes"),
+            ""
+        );
+
+        let owned = directory.path().join("owned");
+        std::fs::create_dir(&owned).expect("runtime-owned cgroup");
+        for (name, effective) in [("cpuset.cpus", "0-3"), ("cpuset.mems", "0")] {
+            std::fs::write(owned.join(name), "").expect("empty owned cpuset");
+            std::fs::write(owned.join(format!("{name}.effective")), effective)
+                .expect("effective owned cpuset");
+        }
+
+        prepare_parent_cpuset(&owned, directory.path()).expect("initialize owned cpuset");
+        assert_eq!(
+            std::fs::read_to_string(owned.join("cpuset.cpus")).expect("read owned CPUs"),
+            "0-3"
+        );
+        assert_eq!(
+            std::fs::read_to_string(owned.join("cpuset.mems")).expect("read owned memory nodes"),
+            "0"
+        );
+    }
 
     #[test]
     fn reports_an_unavailable_cgroup_control_as_unsupported() {

@@ -22,6 +22,8 @@ use super::terminal;
 mod close;
 #[path = "rehydration/control.rs"]
 mod control;
+#[path = "rehydration/exec.rs"]
+mod exec;
 #[path = "rehydration/kill.rs"]
 mod kill;
 #[path = "rehydration/lifecycle.rs"]
@@ -68,6 +70,7 @@ pub(crate) async fn qualify_manual_shim_rehydration(
     prefix: &str,
 ) -> TestResult<()> {
     lifecycle::qualify_committed_init_start(config, prefix).await?;
+    exec::qualify_committed_exec_start(config, prefix).await?;
 
     let id = format!("{prefix}-shim-rehydrate");
     create_container(config, &id).await?;

@@ -300,11 +300,19 @@ impl NamespacePlan {
     }
 
     pub(super) fn host_uid(&self, container_id: u32) -> Option<u32> {
-        mapped_host_id(container_id, &self.uid_mappings)
+        if self.has_user() {
+            mapped_host_id(container_id, &self.uid_mappings)
+        } else {
+            Some(container_id)
+        }
     }
 
     pub(super) fn host_gid(&self, container_id: u32) -> Option<u32> {
-        mapped_host_id(container_id, &self.gid_mappings)
+        if self.has_user() {
+            mapped_host_id(container_id, &self.gid_mappings)
+        } else {
+            Some(container_id)
+        }
     }
 
     pub(super) fn resolve_joined_user_mappings(

@@ -57,7 +57,8 @@ pub(super) async fn qualify_committed_init_start(
         faults::SuspendedProcess::stop(host_pid, "committed-Start A3S OCI host service")?;
     let start_address = bootstrap.address.clone();
     let start_id = id.clone();
-    let mut start_call = tokio::spawn(async move { shim_start(&start_address, &start_id).await });
+    let mut start_call =
+        tokio::spawn(async move { shim_start(&start_address, &start_id, "").await });
     if tokio::time::timeout(Duration::from_millis(100), &mut start_call)
         .await
         .is_ok()
@@ -114,7 +115,7 @@ pub(super) async fn qualify_committed_init_start(
         .id()
         .ok_or_else(|| qualification_error("committed-Start replacement has no PID"))?;
     let channel = restart_containerd(config, "committed-Start-shim-rehydration").await?;
-    require_lost_start_response(start_call).await?;
+    require_lost_start_response(start_call, "init").await?;
 
     expect_process(
         &task_process(config, &channel, &id, "").await?,
@@ -259,7 +260,7 @@ async fn commit_runtime_start(
     }
 }
 
-async fn shim_start(address: &str, id: &str) -> TestResult<()> {
+pub(super) async fn shim_start(address: &str, id: &str, exec_id: &str) -> TestResult<()> {
     let client = containerd_shim_protos::ttrpc::asynchronous::Client::connect(address)
         .await
         .map_err(|error| {
@@ -270,6 +271,7 @@ async fn shim_start(address: &str, id: &str) -> TestResult<()> {
     let task = containerd_shim_protos::shim::shim_ttrpc_async::TaskClient::new(client);
     let mut request = containerd_shim_protos::api::StartRequest::new();
     request.set_id(id.to_string());
+    request.set_exec_id(exec_id.to_string());
     task.start(
         containerd_shim_protos::ttrpc::context::Context::default(),
         &request,
@@ -278,28 +280,29 @@ async fn shim_start(address: &str, id: &str) -> TestResult<()> {
     .map(drop)
     .map_err(|error| {
         qualification_error(format!(
-            "invoke Start through shim {address} for {id}: {error}"
+            "invoke Start through shim {address} for {id} exec {exec_id:?}: {error}"
         ))
         .into()
     })
 }
 
-async fn require_lost_start_response(
+pub(super) async fn require_lost_start_response(
     start_call: tokio::task::JoinHandle<TestResult<()>>,
+    process: &str,
 ) -> TestResult<()> {
     match tokio::time::timeout(Duration::from_secs(5), start_call).await {
         Ok(Ok(Err(_))) => Ok(()),
-        Ok(Ok(Ok(()))) => Err(qualification_error(
-            "original Start response survived after its frozen shim was killed",
-        )
-        .into()),
-        Ok(Err(error)) => Err(qualification_error(format!(
-            "original Start task failed before reporting its lost response: {error}"
+        Ok(Ok(Ok(()))) => Err(qualification_error(format!(
+            "original {process} Start response survived after its frozen shim was killed"
         ))
         .into()),
-        Err(_) => Err(qualification_error(
-            "original Start call did not observe shim replacement within 5 seconds",
-        )
+        Ok(Err(error)) => Err(qualification_error(format!(
+            "original {process} Start task failed before reporting its lost response: {error}"
+        ))
+        .into()),
+        Err(_) => Err(qualification_error(format!(
+            "original {process} Start call did not observe shim replacement within 5 seconds"
+        ))
         .into()),
     }
 }

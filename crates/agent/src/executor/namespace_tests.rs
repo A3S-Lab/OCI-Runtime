@@ -176,6 +176,18 @@ fn configured_user_mappings_preserve_exact_ranges_and_host_translation() {
 }
 
 #[test]
+fn inherited_user_namespace_preserves_host_identity_translation() {
+    let plan = NamespacePlan::from_linux(Some(&linux(serde_json::json!({}))), 0, 0, &[])
+        .expect("inherited user namespace plan");
+
+    assert!(!plan.has_user());
+    assert_eq!(plan.host_uid(0), Some(0));
+    assert_eq!(plan.host_uid(4_294), Some(4_294));
+    assert_eq!(plan.host_gid(0), Some(0));
+    assert_eq!(plan.host_gid(6_553), Some(6_553));
+}
+
+#[test]
 fn time_offset_plan_defaults_omitted_members_without_losing_signed_seconds() {
     let plan = NamespacePlan::from_linux(
         Some(&linux(serde_json::json!({
