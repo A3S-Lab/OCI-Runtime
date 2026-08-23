@@ -356,6 +356,29 @@ impl RuntimeAdapter {
             .await
     }
 
+    pub(crate) async fn poll_process_exit(
+        &self,
+        task: &TaskIdentity,
+        generation: a3s_oci_sdk::Generation,
+        exec: &ExecIdentity,
+    ) -> Result<Option<ExitStatus>> {
+        match self
+            .client
+            .wait_process(WaitProcessRequest {
+                process: ProcessTarget {
+                    container: ContainerTarget::exact(task.container_id.clone(), generation),
+                    process_id: task.process_id(exec)?,
+                },
+                timeout_ms: Some(0),
+            })
+            .await
+        {
+            Ok(exit) => Ok(Some(exit)),
+            Err(error) if error.code == ErrorCode::DeadlineExceeded => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     pub(crate) async fn stats(
         &self,
         task: &TaskIdentity,

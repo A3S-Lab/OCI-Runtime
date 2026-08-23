@@ -6,6 +6,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Committed terminal exec-SignalProcess settlement through a live shim
+  replacement. Before replaying a pending exec signal, rehydration performs an
+  exact zero-timeout WaitProcess. A durable Runtime exit moves the exec to
+  Exited, persists the first observation time, and settles the original signal
+  sequence without another SignalProcess; a live exec returns DeadlineExceeded
+  and continues through the existing identity-stable replay path. The
+  real-containerd gate freezes the Host and original shim with sequence 1
+  SIGTERM pending, commits both the exact `signal-1` effect and normal exec
+  exit, replaces the shim, and requires that replacement plus restarted
+  containerd Wait and DeleteProcess retain the same exit while init stays
+  Running at its original PID.
 - Committed terminal init-Kill settlement through a live shim replacement.
   Rehydration now reconciles an exact Runtime `Stopped` record before replaying
   pending controls or signals: when shim metadata has no init exit, it performs

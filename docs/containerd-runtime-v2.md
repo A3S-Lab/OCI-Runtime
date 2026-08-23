@@ -485,6 +485,15 @@ same operation identity, clear the pending record, retain the exec PID and
 generation, and continue with fresh sequences for
 `SIGCONT→SIGSTOP→SIGCONT`.
 
+The terminal SignalProcess variant commits sequence 1 SIGTERM and its exact
+normal exec exit before replacement. Rehydration performs a zero-timeout,
+exact-generation `WaitProcess` before signal replay. If the Runtime already
+retains the exit, the shim persists `Exited` plus the observation time and
+settles the sequence without another `SignalProcess`; if the exec remains live,
+`DeadlineExceeded` leaves the existing replay path unchanged. The replacement
+shim and restarted containerd must return the same exit while init remains
+Running, and `DeleteProcess` must retain that exit.
+
 The committed init-Kill rehydration gate retains sequence 1 SIGSTOP with
 `all=true`, commits its exact `kill-1` identity while the original shim cannot
 receive the response, and replaces that shim while the init and exec remain

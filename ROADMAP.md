@@ -2224,6 +2224,16 @@ sequence 1 without a second Kill. The replacement shim and the restarted
 containerd daemon must both return exit 42 from Wait, Delete must retain the
 same exit, and generation, driver, isolation, configuration, attachments, and
 shim ownership must not drift.
+A fifth live-replacement gate closes the terminal exec-SignalProcess outcome.
+It freezes the Host after schema-v9 exec sequence 1 `SIGTERM` is durable,
+freezes the original shim, resumes the Host, and commits both the exact
+`signal-1` request and normal exec exit before replacement. Rehydration probes
+the exact process with zero-timeout WaitProcess before signal replay, imports
+the Runtime's durable exit, persists Exited plus its observation time, and
+settles sequence 1 without a second SignalProcess. The replacement shim and
+restarted containerd must return the same exit, DeleteProcess must preserve it,
+and the original init PID, generation, identity, and shim ownership must remain
+live and unchanged.
 A separate post-commit Delete boundary removes the exact runtime
 generation before killing the shim, then proves DeleteShim treats only that
 generation's `NotFound` result plus a successful replay of its stable normal or

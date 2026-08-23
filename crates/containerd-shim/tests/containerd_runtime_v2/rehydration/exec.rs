@@ -9,6 +9,8 @@ use prost_types::Any;
 
 #[path = "exec/evidence.rs"]
 mod evidence;
+#[path = "exec/terminal_signal.rs"]
+mod terminal_signal;
 
 use super::{
     launch_replacement_while_containerd_suspended, lifecycle, load_bootstrap, load_shim_binary,
@@ -26,8 +28,8 @@ use crate::support::{
     STATUS_RUNNING,
 };
 
-const EXEC_ID: &str = "committed-exec";
-const EXEC_EXIT_STATUS: u32 = 29;
+pub(super) const EXEC_ID: &str = "committed-exec";
+pub(super) const EXEC_EXIT_STATUS: u32 = 29;
 
 pub(super) async fn qualify_committed_exec_start(
     config: &QualificationConfig,
@@ -172,7 +174,7 @@ pub(super) async fn qualify_committed_exec_start(
         };
     }
 
-    let mut replacement = replacement
+    let replacement = replacement
         .ok_or_else(|| qualification_error("committed-Exec relaunch omitted its child process"))?;
     let replacement_pid = replacement
         .id()
@@ -232,36 +234,18 @@ pub(super) async fn qualify_committed_exec_start(
     require_replacement_pid(config, &id, replacement_pid).await?;
     require_single_runtime_exec(config, &identity, &expected_target, &committed).await?;
 
-    TasksClient::new(channel.clone())
-        .kill(namespaced(
-            KillRequest {
-                container_id: id.clone(),
-                exec_id: EXEC_ID.to_string(),
-                signal: libc::SIGTERM as u32,
-                ..Default::default()
-            },
-            &config.namespace,
-        )?)
-        .await
-        .map_err(|error| rpc_error("kill committed-Exec process", error))?;
-    let exec_exit = TasksClient::new(channel.clone())
-        .wait(namespaced(
-            WaitRequest {
-                container_id: id.clone(),
-                exec_id: EXEC_ID.to_string(),
-            },
-            &config.namespace,
-        )?)
-        .await
-        .map_err(|error| rpc_error("wait committed-Exec process", error))?
-        .into_inner();
-    if exec_exit.exit_status != EXEC_EXIT_STATUS {
-        return Err(qualification_error(format!(
-            "committed-Exec process exited {}, expected {EXEC_EXIT_STATUS}",
-            exec_exit.exit_status
-        ))
-        .into());
-    }
+    let (channel, mut replacement) = terminal_signal::qualify(
+        config,
+        &id,
+        &bundle,
+        &binary,
+        &bootstrap,
+        &identity,
+        started.pid,
+        committed_pid,
+        replacement,
+    )
+    .await?;
     let deleted_exec = TasksClient::new(channel.clone())
         .delete_process(namespaced(
             DeleteProcessRequest {
