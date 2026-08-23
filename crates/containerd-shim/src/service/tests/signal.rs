@@ -39,6 +39,8 @@ struct SignalRuntime {
     record: Arc<StdMutex<ContainerRecord>>,
     durable_exit: Arc<StdMutex<Option<ExitStatus>>>,
     wait_calls: Arc<AtomicUsize>,
+    durable_exec_exits: Arc<StdMutex<Vec<(a3s_oci_sdk::ProcessTarget, ExitStatus)>>>,
+    wait_process_calls: Arc<AtomicUsize>,
     calls: Arc<StdMutex<Vec<SignalCall>>>,
     effects: Arc<StdMutex<BTreeMap<OperationId, String>>>,
     exec_targets: Arc<StdMutex<Vec<a3s_oci_sdk::ProcessTarget>>>,
@@ -53,6 +55,8 @@ impl SignalRuntime {
             record: Arc::new(StdMutex::new(record)),
             durable_exit: Arc::new(StdMutex::new(None)),
             wait_calls: Arc::new(AtomicUsize::new(0)),
+            durable_exec_exits: Arc::new(StdMutex::new(Vec::new())),
+            wait_process_calls: Arc::new(AtomicUsize::new(0)),
             calls: Arc::new(StdMutex::new(Vec::new())),
             effects: Arc::new(StdMutex::new(BTreeMap::new())),
             exec_targets: Arc::new(StdMutex::new(Vec::new())),
@@ -74,6 +78,10 @@ impl SignalRuntime {
         self.wait_calls.load(Ordering::SeqCst)
     }
 
+    fn wait_process_calls(&self) -> usize {
+        self.wait_process_calls.load(Ordering::SeqCst)
+    }
+
     fn retain_terminal_exit(&self, exit: ExitStatus) {
         let mut record = self.record.lock().expect("signal record");
         let mut builder = StateBuilder::default()
@@ -89,6 +97,19 @@ impl SignalRuntime {
         }
         record.state = builder.build().expect("stopped signal test state");
         *self.durable_exit.lock().expect("durable signal exit") = Some(exit);
+    }
+
+    fn retain_exec_terminal_exit(&self, exit: ExitStatus) {
+        let target = self
+            .exec_targets
+            .lock()
+            .expect("exec targets")
+            .pop()
+            .expect("one live exec target");
+        self.durable_exec_exits
+            .lock()
+            .expect("durable exec exits")
+            .push((target, exit));
     }
 
     fn fail_after_effect(&self, count: usize) {
@@ -262,8 +283,24 @@ impl OciRuntimeService for SignalRuntime {
         }
     }
 
-    async fn wait_process(&self, _request: WaitProcessRequest) -> a3s_oci_sdk::Result<ExitStatus> {
-        std::future::pending().await
+    async fn wait_process(&self, request: WaitProcessRequest) -> a3s_oci_sdk::Result<ExitStatus> {
+        self.wait_process_calls.fetch_add(1, Ordering::SeqCst);
+        let exit = self
+            .durable_exec_exits
+            .lock()
+            .expect("durable exec exits")
+            .iter()
+            .find(|(target, _)| target == &request.process)
+            .map(|(_, exit)| exit.clone());
+        match exit {
+            Some(exit) => Ok(exit),
+            None if request.timeout_ms == Some(0) => Err(RuntimeError::new(
+                ErrorCode::DeadlineExceeded,
+                "exec remains live",
+            )
+            .for_operation("test-wait-process")),
+            None => std::future::pending().await,
+        }
     }
 }
 
@@ -472,6 +509,61 @@ async fn pending_exec_signal_survives_reopen_and_replays_exactly_once() {
     let completed = load_metadata(directory.path());
     assert_eq!(completed.execs()[0].signal_sequence, 1);
     assert_eq!(completed.execs()[0].pending_signal, None);
+    replacement.stop_all_monitors().await;
+    replacement.stop_all_pumps().await;
+}
+
+#[tokio::test]
+async fn pending_exec_signal_with_durable_exit_settles_without_redispatch() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut task = running_task(directory.path());
+    add_exec(&mut task, "exec-a");
+    metadata_from_task(&task)
+        .store()
+        .expect("store task metadata");
+    let runtime = SignalRuntime::new(task.record.clone());
+    let service = service_for_runtime(directory.path(), runtime.clone());
+    service
+        .state
+        .lock()
+        .await
+        .tasks
+        .insert("task-a".to_string(), task);
+    runtime.fail_after_effect(1);
+
+    request_signal(&service, Some("exec-a"), libc::SIGKILL, false)
+        .await
+        .expect_err("lost terminal exec signal response must retain pending state");
+    let pending = load_metadata(directory.path());
+    assert_eq!(pending.execs()[0].signal_sequence, 0);
+    assert_eq!(
+        pending.execs()[0]
+            .pending_signal
+            .as_ref()
+            .map(|operation| (operation.sequence(), operation.signal().get())),
+        Some((1, libc::SIGKILL))
+    );
+    let exit = ExitStatus::signaled(libc::SIGKILL, false).expect("terminal exec signal exit");
+    assert_eq!(pending.execs()[0].exit, None);
+    runtime.retain_exec_terminal_exit(exit.clone());
+
+    let replacement = service_for_runtime(directory.path(), runtime.clone());
+    replacement
+        .restore_task("task-a")
+        .await
+        .expect("replacement settles exec signal from durable exit");
+
+    let calls = runtime.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].kind, "exec");
+    assert_eq!(calls[0].signal, libc::SIGKILL);
+    assert_eq!(runtime.effect_count(), 1);
+    assert_eq!(runtime.wait_process_calls(), 1);
+    let completed = load_metadata(directory.path());
+    assert_eq!(completed.execs()[0].signal_sequence, 1);
+    assert_eq!(completed.execs()[0].pending_signal, None);
+    assert_eq!(completed.execs()[0].stage, ExecStage::Exited);
+    assert_eq!(completed.execs()[0].exit, Some(exit));
     replacement.stop_all_monitors().await;
     replacement.stop_all_pumps().await;
 }

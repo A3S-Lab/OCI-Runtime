@@ -2224,6 +2224,16 @@ sequence 1 without a second Kill. The replacement shim and the restarted
 containerd daemon must both return exit 42 from Wait, Delete must retain the
 same exit, and generation, driver, isolation, configuration, attachments, and
 shim ownership must not drift.
+A fifth live-replacement gate closes the terminal exec-SignalProcess outcome.
+It freezes the Host after schema-v9 exec sequence 1 `SIGTERM` is durable,
+freezes the original shim, resumes the Host, and commits both the exact
+`signal-1` request and normal exec exit before replacement. Rehydration probes
+the exact process with zero-timeout WaitProcess before signal replay, imports
+the Runtime's durable exit, persists Exited plus its observation time, and
+settles sequence 1 without a second SignalProcess. The replacement shim and
+restarted containerd must return the same exit, DeleteProcess must preserve it,
+and the original init PID, generation, identity, and shim ownership must remain
+live and unchanged.
 A separate post-commit Delete boundary removes the exact runtime
 generation before killing the shim, then proves DeleteShim treats only that
 generation's `NotFound` result plus a successful replay of its stable normal or
@@ -2283,25 +2293,31 @@ late result cannot terminate or poison the replacement. The latest
 qualification also releases each Native Linux guest mutation record only
 after its Host result is durable, including every derived chunk identity for a
 stdin payload larger than the 4 MiB guest frame limit. On August 24, 2026,
-three complete 73.69, 63.38, and 62.19-second matrices passed consecutively
-through Host PID 405903 with installed shim SHA-256
-`00a2ffbf46b0db90c5112ffa9388212cbd2a4031cbd9a16762a852f0ce44202f`.
+source revision `ac2323424cbc34b6f175cbfda8ff9b9c5103901d` passed three complete
+68.837, 63.125, and 62.831-second matrices consecutively through unchanged
+Host PID 420621 with installed shim SHA-256
+`a7bcad743a4c495336b91a403e0f7b357e8dedac2c6dd3a98044d225938cf682`.
 The matching Host, agent, qualification executable, and Cargo.lock SHA-256
 values were
-`c4341f7f9a963115d4804d9ff5e7cacf6e94dcf2e21ee0e49acc6e056973a596`,
-`035eabf393834844b04375c4d79ff4c0ca50f3ebf09977fac36543f03b5f3ecb`,
-`f64c6c114fbfc0431ad69ec58746d9f5d728eed410af44f11ced6a89f15db903`,
+`8ddfc57e159632001bc7afe40f548876da2f04e81f9469bc5be8be9bb55be0ad`,
+`dac069562f4bca28cfac82fcf6b9638d2f5826cb09a0f9d96a04ecd9d01a4c24`,
+`e1e3e613ece5f3afecd7b20ca29e4fa8e3ea967a902188319d4dfaa2f1b77285`,
 and `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
-Every pass included committed terminal init-Kill replacement and returned its
-normal exit 42 through replacement-shim Wait plus restarted-containerd Wait
-and Delete. The qualification recreates the killed task ID with a new
-incarnation and generation and leaves no matching task, container, shim,
-agent child, workload process, bundle, live runtime record, prepared Host
-operation, session, marker, workload cgroup, or zombie. An independent audit
-also found zero matching mounts and Host children; completed operation records
-and generation fences remained only inside the dedicated test Runtime root.
-The original shim was restored and that Runtime root and the 5.6 GiB Linux
-build target were removed. The remaining R7 items stay open until the
+Every pass included both committed terminal init-Kill replacement with normal
+exit 42 and committed terminal exec-SignalProcess replacement with normal exit
+29. Replacement-shim Wait, restarted-containerd Wait, and Delete or
+DeleteProcess retained the exact exits while the terminal exec gate kept init
+Running at its original PID. The qualification recreates the killed task ID
+with a new incarnation and generation and leaves no matching task, container,
+shim, agent child, qualification process, workload process, bundle, live
+runtime record, prepared Host operation, session, marker, workload cgroup, or
+zombie. An independent audit also found zero matching mounts and Host children;
+completed operation records and generation fences remained only inside the
+dedicated test Runtime root. The original installed shim was restored at
+SHA-256
+`a0e7dce493308ebea0b4642dd81a9e489109a8b3709f2a1ede62b015cc123482`,
+and that Runtime root, the 1.2 GiB release target, checkout, and logs were
+removed. The remaining R7 items stay open until the
 remaining failure boundaries, every advertised driver profile, and the
 published release-artifact compatibility record pass.
 

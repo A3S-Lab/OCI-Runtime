@@ -6,6 +6,32 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Committed terminal exec-SignalProcess settlement through a live shim
+  replacement. Before replaying a pending exec signal, rehydration performs an
+  exact zero-timeout WaitProcess. A durable Runtime exit moves the exec to
+  Exited, persists the first observation time, and settles the original signal
+  sequence without another SignalProcess; a live exec returns DeadlineExceeded
+  and continues through the existing identity-stable replay path. The
+  real-containerd gate freezes the Host and original shim with sequence 1
+  SIGTERM pending, commits both the exact `signal-1` effect and normal exec
+  exit, replaces the shim, and requires that replacement plus restarted
+  containerd Wait and DeleteProcess retain the same exit while init stays
+  Running at its original PID. Source revision
+  `ac2323424cbc34b6f175cbfda8ff9b9c5103901d` passed three complete Ubuntu
+  arm64/containerd 2.2.2 matrices consecutively in 68.837, 63.125, and 62.831
+  seconds through unchanged Host PID 420621. Release Host, agent, shim,
+  qualification executable, and Cargo.lock SHA-256 values were
+  `8ddfc57e159632001bc7afe40f548876da2f04e81f9469bc5be8be9bb55be0ad`,
+  `dac069562f4bca28cfac82fcf6b9638d2f5826cb09a0f9d96a04ecd9d01a4c24`,
+  `a7bcad743a4c495336b91a403e0f7b357e8dedac2c6dd3a98044d225938cf682`,
+  `e1e3e613ece5f3afecd7b20ca29e4fa8e3ea967a902188319d4dfaa2f1b77285`,
+  and `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
+  Independent audits found no matching task, container, bundle, cgroup,
+  mount, live Runtime record, shim, agent, qualification, or Host-child
+  process and no zombie or prepared operation. The original installed shim
+  was restored at SHA-256
+  `a0e7dce493308ebea0b4642dd81a9e489109a8b3709f2a1ede62b015cc123482`;
+  the temporary Runtime root, release target, checkout, and logs were removed.
 - Committed terminal init-Kill settlement through a live shim replacement.
   Rehydration now reconciles an exact Runtime `Stopped` record before replaying
   pending controls or signals: when shim metadata has no init exit, it performs

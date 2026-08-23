@@ -703,6 +703,7 @@ impl Service {
             );
         }
         restore::recover_stopped_init_exit(&adapter, &mut task).await?;
+        restore::recover_pending_exec_signal_exits(&adapter, &mut task).await?;
         control::replay_pending(&adapter, &mut task).await?;
         signal::replay_pending(&adapter, &mut task).await?;
         resize::replay_pending(&adapter, &mut task).await?;
