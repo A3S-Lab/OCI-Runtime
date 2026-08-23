@@ -22,6 +22,8 @@ use super::terminal;
 mod close;
 #[path = "rehydration/control.rs"]
 mod control;
+#[path = "rehydration/kill.rs"]
+mod kill;
 #[path = "rehydration/lifecycle.rs"]
 mod lifecycle;
 #[path = "rehydration/resize.rs"]
@@ -217,6 +219,18 @@ pub(crate) async fn qualify_manual_shim_rehydration(
         &bootstrap,
         &identity,
         started.pid,
+        replacement,
+    )
+    .await?;
+    let (_, replacement) = kill::qualify(
+        config,
+        &id,
+        &bundle,
+        &binary,
+        &bootstrap,
+        &identity,
+        started.pid,
+        &terminal_exec,
         replacement,
     )
     .await?;
@@ -858,6 +872,39 @@ async fn wait_for_pid_exit(pid: u32, context: &str) -> TestResult<()> {
             .into());
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+async fn wait_for_process_stopped(pid: u32, expected: bool, context: &str) -> TestResult<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let status = tokio::fs::read_to_string(format!("/proc/{pid}/status"))
+            .await
+            .map_err(|error| {
+                qualification_error(format!(
+                    "read process {pid} status during {context}: {error}"
+                ))
+            })?;
+        let state = status
+            .lines()
+            .find_map(|line| line.strip_prefix("State:"))
+            .and_then(|value| value.trim().chars().next())
+            .ok_or_else(|| {
+                qualification_error(format!(
+                    "process {pid} status omitted State during {context}"
+                ))
+            })?;
+        let stopped = matches!(state, 'T' | 't');
+        if stopped == expected {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(qualification_error(format!(
+                "process {pid} state remained {state} during {context}; expected stopped={expected}"
+            ))
+            .into());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
 
