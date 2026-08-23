@@ -6,6 +6,29 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Committed terminal init-Kill settlement through a live shim replacement.
+  Rehydration now reconciles an exact Runtime `Stopped` record before replaying
+  pending controls or signals: when shim metadata has no init exit, it performs
+  one bounded exact-generation Wait, persists the Runtime's durable exit, and
+  then settles the pending signal sequence without issuing another Kill. The
+  real gate freezes the Host with sequence 1 `SIGTERM` durable in the shim,
+  freezes that shim, resumes the Host, commits the same `kill-1` request, and
+  replaces the shim after the workload exits 42 but before the original
+  response can be observed. The replacement preserves the generation, clears
+  the pending signal, serves shim and containerd Wait with exit 42, and permits
+  exact Delete cleanup. On August 24, 2026, three complete Ubuntu
+  arm64/containerd 2.2.2 matrices passed in 73.69, 63.38, and 62.19 seconds
+  through Host PID 405903. Release Host, agent, and shim SHA-256 values were
+  `c4341f7f9a963115d4804d9ff5e7cacf6e94dcf2e21ee0e49acc6e056973a596`,
+  `035eabf393834844b04375c4d79ff4c0ca50f3ebf09977fac36543f03b5f3ecb`,
+  and `00a2ffbf46b0db90c5112ffa9388212cbd2a4031cbd9a16762a852f0ce44202f`.
+  The qualification executable and Cargo lock SHA-256 values were
+  `f64c6c114fbfc0431ad69ec58746d9f5d728eed410af44f11ced6a89f15db903`
+  and `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
+  An independent audit found no matching task, container, bundle, cgroup,
+  mount, shim process, live Runtime container record, agent child, or Host
+  child; the original installed shim was restored and the temporary Runtime
+  root and 5.6 GiB Linux build target were removed.
 - Committed containerd exec-Start reconciliation through a live shim
   replacement. Exec Start now persists schema-v9 `Starting` metadata before
   any Runtime adapter connection, so a Host outage cannot leave an accepted

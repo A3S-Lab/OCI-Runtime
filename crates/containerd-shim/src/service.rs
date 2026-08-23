@@ -26,6 +26,7 @@ use crate::metadata::{
 
 mod control;
 mod resize;
+mod restore;
 mod signal;
 mod task;
 
@@ -701,6 +702,7 @@ impl Service {
                 },
             );
         }
+        restore::recover_stopped_init_exit(&adapter, &mut task).await?;
         control::replay_pending(&adapter, &mut task).await?;
         signal::replay_pending(&adapter, &mut task).await?;
         resize::replay_pending(&adapter, &mut task).await?;

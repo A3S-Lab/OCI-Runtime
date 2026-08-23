@@ -1,7 +1,9 @@
 use std::path::Path;
 use std::time::Duration;
 
-use a3s_oci_sdk::{ContainerTarget, Generation, KillRequest, OperationContext, Signal};
+use a3s_oci_sdk::{
+    ContainerRecord, ContainerTarget, Generation, KillRequest, OperationContext, Signal,
+};
 use serde::Deserialize;
 use tokio::process::Child;
 use tonic::transport::Channel;
@@ -181,7 +183,7 @@ pub(super) async fn qualify(
     Ok((channel, replacement))
 }
 
-async fn wait_for_pending_signal(
+pub(super) async fn wait_for_pending_signal(
     bundle: &Path,
     completed_sequence: u64,
     pending_sequence: u64,
@@ -278,14 +280,14 @@ async fn read_task_signal_journal(bundle: &Path) -> TestResult<SignalJournalEvid
     })
 }
 
-async fn commit_runtime_kill(
+pub(super) async fn commit_runtime_kill(
     config: &QualificationConfig,
     task_id: &str,
     identity: &RuntimeIdentity,
     sequence: u64,
     signal: i32,
     all: bool,
-) -> TestResult<()> {
+) -> TestResult<ContainerRecord> {
     let client = faults::runtime_client(config).await?;
     let request = KillRequest {
         context: OperationContext::new(faults::containerd_operation_id(
@@ -306,7 +308,7 @@ async fn commit_runtime_kill(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         match client.kill(request.clone()).await {
-            Ok(_) => return Ok(()),
+            Ok(record) => return Ok(record),
             Err(error) if error.retryable && tokio::time::Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
@@ -320,7 +322,7 @@ async fn commit_runtime_kill(
     }
 }
 
-async fn shim_kill(address: &str, id: &str, signal: i32, all: bool) -> TestResult<()> {
+pub(super) async fn shim_kill(address: &str, id: &str, signal: i32, all: bool) -> TestResult<()> {
     let client = containerd_shim_protos::ttrpc::asynchronous::Client::connect(address)
         .await
         .map_err(|error| {
@@ -347,7 +349,7 @@ async fn shim_kill(address: &str, id: &str, signal: i32, all: bool) -> TestResul
     Ok(())
 }
 
-async fn require_lost_kill_response(
+pub(super) async fn require_lost_kill_response(
     kill_call: tokio::task::JoinHandle<TestResult<()>>,
 ) -> TestResult<()> {
     match tokio::time::timeout(Duration::from_secs(5), kill_call).await {
@@ -367,7 +369,7 @@ async fn require_lost_kill_response(
     }
 }
 
-async fn wait_for_killed_child(child: &mut Child, context: &str) -> TestResult<()> {
+pub(super) async fn wait_for_killed_child(child: &mut Child, context: &str) -> TestResult<()> {
     match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => {

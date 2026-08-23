@@ -7,7 +7,7 @@ The shim is a development adapter. It does not make any runtime driver
 
 | containerd | Host | Runtime profile | Status | Retained gate |
 | --- | --- | --- | --- | --- |
-| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Three consecutive same-Host real lifecycle matrices with guest-journal reclamation, exec, deleted exec-ID reuse, FIFO/PTY I/O, repeated controls and signals, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed init-Start, exec-Start, init-Kill, Pause, Resume, Update, WriteStdin, CloseStdin, SignalProcess, and ResizePty rehydration, post-commit Create/Start/Kill/Delete/Exec/SignalProcess/control cleanup, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
+| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Three consecutive same-Host real lifecycle matrices with guest-journal reclamation, exec, deleted exec-ID reuse, FIFO/PTY I/O, repeated controls and signals, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed init-Start, exec-Start, live init-Kill, terminal init-Kill exit adoption, Pause, Resume, Update, WriteStdin, CloseStdin, SignalProcess, and ResizePty rehydration, post-commit Create/Start/Kill/Delete/Exec/SignalProcess/control cleanup, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
 | 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | Compatibility record pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
 | Any | Utility-VM profile | `dedicated-vm` | Not yet qualified through containerd | Driver-specific gate pending |
@@ -27,14 +27,14 @@ same. The contract also freezes the OCI Features, Process, LinuxResources, and
 versioned A3S CreateOptions type URLs consumed by those methods.
 
 The August 24, 2026 arm64 requalification used containerd 2.2.2 and Linux
-7.0.11-orbstack-00360-gc9bc4d96ac70. Three complete 71.60, 60.26, and
-62.72-second matrices ran consecutively through Host PID 357031. The
+7.0.11-orbstack-00360-gc9bc4d96ac70. Three complete 73.69, 63.38, and
+62.19-second matrices ran consecutively through Host PID 405903. The
 release-built shim SHA-256 was
-`706e4bb02e6a678ea3f4366b367e34da1b787939afa4f6d5032164b99bf65225`.
+`00a2ffbf46b0db90c5112ffa9388212cbd2a4031cbd9a16762a852f0ce44202f`.
 The Host CLI, agent, and qualification executable SHA-256 values were
-`b4a460c1c8424459f29a78d875907da577cf001d40a5f901a6456d0ac4dd7727`,
-`bde871360ee26ee3571e1e5a099be19db1355487f0b3c730197adf4f50e0d5a9`,
-and `b4aee1202c5608873bee6a50692c67a9ab9a3ed6bc57a68643f3288eff748196`.
+`c4341f7f9a963115d4804d9ff5e7cacf6e94dcf2e21ee0e49acc6e056973a596`,
+`035eabf393834844b04375c4d79ff4c0ca50f3ebf09977fac36543f03b5f3ecb`,
+and `f64c6c114fbfc0431ad69ec58746d9f5d728eed410af44f11ced6a89f15db903`.
 The Cargo lock SHA-256 was
 `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
 Every matrix ran an exec to exit 7, deleted it, reused the same containerd exec
@@ -49,11 +49,14 @@ suppressed an identical resize retry, and proved a real `A→B→A` PTY transiti
 with distinct identities. Each durable Native Linux Host outcome then released
 its guest replay record, including all derived identities for chunked stdin.
 The same matrices retained live replacement of committed init Start, exec
-Start, init Kill, Pause, Resume, and Update. An independent post-run audit
-reported zero tasks, containers, task bundles, workload cgroups, matching
-mounts, runtime task state, shim processes, agent children, and Host child
-processes; containerd remained active and the one expected Host service
-remained live.
+Start, live init Kill, terminal init Kill, Pause, Resume, and Update. An
+independent post-run audit reported zero tasks, containers, task bundles,
+workload cgroups, matching mounts, live Runtime container records, exact shim
+processes, agent children, and Host child processes; containerd remained
+active and the one expected Host service remained live. Completed global
+operation records and generation fences remained only inside the dedicated
+test Runtime root. After the audit, the original installed shim was restored
+and the Runtime root plus the 5.6 GiB Linux build target were removed.
 
 ## Runtime type and package layout
 
@@ -323,6 +326,17 @@ with `all=true`, SIGSTOP with `all=false`, and SIGCONT with `all=false`;
 unit boundary also proves that a pending terminal init signal is settled from
 durable exit evidence without redispatch. The August 24, 2026 three-pass
 Native Linux/containerd 2.2.2 matrix retains this boundary.
+
+The terminal init-Kill replacement gate covers the stopped outcome directly.
+It freezes the Host after schema-v9 sequence 1 `SIGTERM` is durable, freezes
+the original shim, resumes the Host, and commits the exact `kill-1` request.
+The workload trap exits 42, and the Runtime retains both its exact `Stopped`
+record and durable Wait result before the original shim can observe the Kill
+response. A replacement first imports that exit with one bounded
+exact-generation Wait, persists it, and then settles the pending signal
+without dispatching another Kill. It must retain the generation and exact shim
+ownership, serve exit 42 through its own Wait, and preserve exit 42 through
+the restarted containerd daemon's Wait and Delete calls.
 
 Init and exec terminal resize use separate durable sequences and process-local
 serialization gates. The shim stores the next sequence and exact dimensions

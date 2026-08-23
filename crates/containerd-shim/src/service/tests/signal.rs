@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use a3s_oci_sdk::oci_spec::runtime::Process;
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process, StateBuilder};
 use a3s_oci_sdk::{
     async_trait, ContainerRecord, CreateRequest, DeleteRequest, Error as RuntimeError, ErrorCode,
     ExecRequest, ExitStatus, IsolationRequest, KillRequest, OciRuntimeService, OperationContext,
@@ -36,7 +36,9 @@ struct SignalBarriers {
 
 #[derive(Clone)]
 struct SignalRuntime {
-    record: ContainerRecord,
+    record: Arc<StdMutex<ContainerRecord>>,
+    durable_exit: Arc<StdMutex<Option<ExitStatus>>>,
+    wait_calls: Arc<AtomicUsize>,
     calls: Arc<StdMutex<Vec<SignalCall>>>,
     effects: Arc<StdMutex<BTreeMap<OperationId, String>>>,
     exec_targets: Arc<StdMutex<Vec<a3s_oci_sdk::ProcessTarget>>>,
@@ -48,7 +50,9 @@ struct SignalRuntime {
 impl SignalRuntime {
     fn new(record: ContainerRecord) -> Self {
         Self {
-            record,
+            record: Arc::new(StdMutex::new(record)),
+            durable_exit: Arc::new(StdMutex::new(None)),
+            wait_calls: Arc::new(AtomicUsize::new(0)),
             calls: Arc::new(StdMutex::new(Vec::new())),
             effects: Arc::new(StdMutex::new(BTreeMap::new())),
             exec_targets: Arc::new(StdMutex::new(Vec::new())),
@@ -64,6 +68,27 @@ impl SignalRuntime {
 
     fn effect_count(&self) -> usize {
         self.effects.lock().expect("signal effects").len()
+    }
+
+    fn wait_calls(&self) -> usize {
+        self.wait_calls.load(Ordering::SeqCst)
+    }
+
+    fn retain_terminal_exit(&self, exit: ExitStatus) {
+        let mut record = self.record.lock().expect("signal record");
+        let mut builder = StateBuilder::default()
+            .version(record.state.version())
+            .id(record.state.id())
+            .status(ContainerState::Stopped)
+            .bundle(record.state.bundle().clone());
+        if let Some(pid) = record.state.pid() {
+            builder = builder.pid(*pid);
+        }
+        if let Some(annotations) = record.state.annotations() {
+            builder = builder.annotations(annotations.clone());
+        }
+        record.state = builder.build().expect("stopped signal test state");
+        *self.durable_exit.lock().expect("durable signal exit") = Some(exit);
     }
 
     fn fail_after_effect(&self, count: usize) {
@@ -134,15 +159,16 @@ impl OciRuntimeService for SignalRuntime {
     }
 
     async fn state(&self, request: StateRequest) -> a3s_oci_sdk::Result<ContainerRecord> {
-        if request.target.generation != Some(self.record.generation)
-            || request.target.id.as_str() != self.record.state.id()
+        let record = self.record.lock().expect("signal record");
+        if request.target.generation != Some(record.generation)
+            || request.target.id.as_str() != record.state.id()
         {
             return Err(
                 RuntimeError::new(ErrorCode::Conflict, "signal test target drift")
                     .for_operation("test-signal-state"),
             );
         }
-        Ok(self.record.clone())
+        Ok(record.clone())
     }
 
     async fn start(&self, _request: StartRequest) -> a3s_oci_sdk::Result<ContainerRecord> {
@@ -167,7 +193,7 @@ impl OciRuntimeService for SignalRuntime {
             fingerprint,
         )?;
         self.finish_effect().await?;
-        Ok(self.record.clone())
+        Ok(self.record.lock().expect("signal record").clone())
     }
 
     async fn delete(&self, _request: DeleteRequest) -> a3s_oci_sdk::Result<()> {
@@ -224,7 +250,16 @@ impl OciRuntimeService for SignalRuntime {
     }
 
     async fn wait(&self, _request: WaitRequest) -> a3s_oci_sdk::Result<ExitStatus> {
-        std::future::pending().await
+        self.wait_calls.fetch_add(1, Ordering::SeqCst);
+        let exit = self
+            .durable_exit
+            .lock()
+            .expect("durable signal exit")
+            .clone();
+        match exit {
+            Some(exit) => Ok(exit),
+            None => std::future::pending().await,
+        }
     }
 
     async fn wait_process(&self, _request: WaitProcessRequest) -> a3s_oci_sdk::Result<ExitStatus> {
@@ -359,7 +394,7 @@ async fn pending_task_signal_with_durable_exit_settles_without_redispatch() {
     request_signal(&service, None, libc::SIGKILL, true)
         .await
         .expect_err("lost terminal signal response must retain pending state");
-    let mut pending = load_metadata(directory.path());
+    let pending = load_metadata(directory.path());
     assert_eq!(pending.signal_sequence(), 0);
     assert_eq!(
         pending.pending_signal().map(|operation| (
@@ -370,8 +405,8 @@ async fn pending_task_signal_with_durable_exit_settles_without_redispatch() {
         Some((1, libc::SIGKILL, true))
     );
     let exit = ExitStatus::signaled(libc::SIGKILL, false).expect("terminal signal exit");
-    pending.set_exit(Some(exit.clone()), Some(1));
-    pending.store().expect("store durable terminal exit");
+    assert_eq!(pending.exit(), None);
+    runtime.retain_terminal_exit(exit.clone());
 
     let replacement = service_for_runtime(directory.path(), runtime.clone());
     replacement
@@ -384,6 +419,7 @@ async fn pending_task_signal_with_durable_exit_settles_without_redispatch() {
     assert_eq!(calls[0].signal, libc::SIGKILL);
     assert!(calls[0].all);
     assert_eq!(runtime.effect_count(), 1);
+    assert_eq!(runtime.wait_calls(), 1);
     let completed = load_metadata(directory.path());
     assert_eq!(completed.signal_sequence(), 1);
     assert_eq!(completed.pending_signal(), None);

@@ -2213,6 +2213,17 @@ then prove `SIGCONT(all=true)`, `SIGSTOP(all=false)`, and
 init-only stop does not stop the exec. Unit coverage also proves that durable
 init exit evidence settles a pending terminal Kill without redispatch. The
 August 24 three-pass matrix retains this boundary.
+A fourth live-replacement gate closes the terminal init-Kill outcome. It
+freezes the Host after schema-v9 sequence 1 `SIGTERM` is durable, freezes the
+original shim, resumes the Host, and commits that task incarnation's exact
+`kill-1` request. The workload exits 42 and the Runtime retains both its exact
+`Stopped` record and durable Wait result before the shim can observe the Kill
+response. Rehydration now imports that exit with one bounded exact-generation
+Wait before signal replay, persists the exit and observation time, and settles
+sequence 1 without a second Kill. The replacement shim and the restarted
+containerd daemon must both return exit 42 from Wait, Delete must retain the
+same exit, and generation, driver, isolation, configuration, attachments, and
+shim ownership must not drift.
 A separate post-commit Delete boundary removes the exact runtime
 generation before killing the shim, then proves DeleteShim treats only that
 generation's `NotFound` result plus a successful replay of its stable normal or
@@ -2272,21 +2283,27 @@ late result cannot terminate or poison the replacement. The latest
 qualification also releases each Native Linux guest mutation record only
 after its Host result is durable, including every derived chunk identity for a
 stdin payload larger than the 4 MiB guest frame limit. On August 24, 2026,
-three complete 71.60, 60.26, and 62.72-second matrices passed consecutively
-through Host PID 357031 with installed shim SHA-256
-`706e4bb02e6a678ea3f4366b367e34da1b787939afa4f6d5032164b99bf65225`.
+three complete 73.69, 63.38, and 62.19-second matrices passed consecutively
+through Host PID 405903 with installed shim SHA-256
+`00a2ffbf46b0db90c5112ffa9388212cbd2a4031cbd9a16762a852f0ce44202f`.
 The matching Host, agent, qualification executable, and Cargo.lock SHA-256
 values were
-`b4a460c1c8424459f29a78d875907da577cf001d40a5f901a6456d0ac4dd7727`,
-`bde871360ee26ee3571e1e5a099be19db1355487f0b3c730197adf4f50e0d5a9`,
-`b4aee1202c5608873bee6a50692c67a9ab9a3ed6bc57a68643f3288eff748196`,
+`c4341f7f9a963115d4804d9ff5e7cacf6e94dcf2e21ee0e49acc6e056973a596`,
+`035eabf393834844b04375c4d79ff4c0ca50f3ebf09977fac36543f03b5f3ecb`,
+`f64c6c114fbfc0431ad69ec58746d9f5d728eed410af44f11ced6a89f15db903`,
 and `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
-The qualification recreates the killed task ID with a new incarnation and
-generation and leaves no matching task, container, shim, agent child,
-workload process, bundle, live runtime record, prepared Host operation,
-session, marker, workload cgroup, or zombie. The remaining R7 items stay open
-until the remaining failure boundaries, every advertised driver profile, and
-the published release-artifact compatibility record pass.
+Every pass included committed terminal init-Kill replacement and returned its
+normal exit 42 through replacement-shim Wait plus restarted-containerd Wait
+and Delete. The qualification recreates the killed task ID with a new
+incarnation and generation and leaves no matching task, container, shim,
+agent child, workload process, bundle, live runtime record, prepared Host
+operation, session, marker, workload cgroup, or zombie. An independent audit
+also found zero matching mounts and Host children; completed operation records
+and generation fences remained only inside the dedicated test Runtime root.
+The original shim was restored and that Runtime root and the 5.6 GiB Linux
+build target were removed. The remaining R7 items stay open until the
+remaining failure boundaries, every advertised driver profile, and the
+published release-artifact compatibility record pass.
 
 Exit gate: containerd task, restart, I/O, and cleanup suites pass through the
 public SDK without the Box CLI, a direct VMM path, duplicate lifecycle state,
