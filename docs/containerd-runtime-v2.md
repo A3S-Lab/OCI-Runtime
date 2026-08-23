@@ -306,6 +306,19 @@ SIGCONT as sequences 2 through 4 and reads `/proc/<pid>/status` after every
 request to prove the actual workload transitions instead of journal-only
 success.
 
+The ignored init-Kill replacement gate covers the task-scoped half of the
+same contract. It freezes the Runtime with sequence 1 SIGSTOP and `all=true`
+pending, freezes the original shim, commits the exact `kill-1` Runtime request,
+and replaces the shim before that response can be observed. The replacement
+must join the operation without another signal effect, preserve the
+incarnation, generation, init PID, exec PID, and exact shim ownership, and
+prove both processes are stopped. Sequences 2 through 4 then deliver SIGCONT
+with `all=true`, SIGSTOP with `all=false`, and SIGCONT with `all=false`;
+`/proc/<pid>/status` must show fanout to both processes only for `all=true`. A
+unit boundary also proves that a pending terminal init signal is settled from
+durable exit evidence without redispatch. This ignored gate still requires
+fresh retained Native Linux/containerd 2.2.2 evidence.
+
 Init and exec terminal resize use separate durable sequences and process-local
 serialization gates. The shim stores the next sequence and exact dimensions
 before dispatch. Its SDK operation identity is derived from that sequence; the
@@ -440,6 +453,15 @@ the local journal can observe the response. The replacement must replay the
 same operation identity, clear the pending record, retain the exec PID and
 generation, and continue with fresh sequences for
 `SIGCONT→SIGSTOP→SIGCONT`.
+
+The committed init-Kill rehydration gate retains sequence 1 SIGSTOP with
+`all=true`, commits its exact `kill-1` identity while the original shim cannot
+receive the response, and replaces that shim while the init and exec remain
+live. It requires unchanged process and runtime identities, exact replacement
+shim ownership, and real stopped states for both processes. Subsequent
+sequence-bound signals prove `all=true` continue fanout and `all=false`
+init-only stop/continue isolation. This source gate remains provisional until
+fresh Native Linux/containerd 2.2.2 evidence is retained.
 
 The post-commit Kill gate submits the exact stable SIGSTOP mutation to a
 running generation, verifies that the runtime retains the same live PID, and

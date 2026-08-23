@@ -351,6 +351,48 @@ async fn pending_task_signal_survives_reopen_and_replays_exactly_once() {
 }
 
 #[tokio::test]
+async fn pending_task_signal_with_durable_exit_settles_without_redispatch() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let (service, runtime) = initialized_service(directory.path()).await;
+    runtime.fail_after_effect(1);
+
+    request_signal(&service, None, libc::SIGKILL, true)
+        .await
+        .expect_err("lost terminal signal response must retain pending state");
+    let mut pending = load_metadata(directory.path());
+    assert_eq!(pending.signal_sequence(), 0);
+    assert_eq!(
+        pending.pending_signal().map(|operation| (
+            operation.sequence(),
+            operation.signal().get(),
+            operation.all()
+        )),
+        Some((1, libc::SIGKILL, true))
+    );
+    let exit = ExitStatus::signaled(libc::SIGKILL, false).expect("terminal signal exit");
+    pending.set_exit(Some(exit.clone()), Some(1));
+    pending.store().expect("store durable terminal exit");
+
+    let replacement = service_for_runtime(directory.path(), runtime.clone());
+    replacement
+        .restore_task("task-a")
+        .await
+        .expect("replacement settles signal from durable exit");
+
+    let calls = runtime.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].signal, libc::SIGKILL);
+    assert!(calls[0].all);
+    assert_eq!(runtime.effect_count(), 1);
+    let completed = load_metadata(directory.path());
+    assert_eq!(completed.signal_sequence(), 1);
+    assert_eq!(completed.pending_signal(), None);
+    assert_eq!(completed.exit(), Some(&exit));
+    replacement.stop_all_monitors().await;
+    replacement.stop_all_pumps().await;
+}
+
+#[tokio::test]
 async fn pending_exec_signal_survives_reopen_and_replays_exactly_once() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let mut task = running_task(directory.path());

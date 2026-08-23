@@ -2192,7 +2192,19 @@ PID without changing generation, driver, isolation, configuration, or
 attachments. Unit coverage also binds a missing `Starting` exec to one
 incarnation-scoped Exec replay and an already-present process to zero replay;
 fresh-host evidence for the Start replacement gate remains outstanding. A
-separate post-commit Delete boundary removes the exact runtime
+second ignored live-replacement gate covers init Kill. It retains sequence 1
+`SIGSTOP` with `all=true`, freezes the original shim, commits the exact
+`kill-1` identity directly through the Runtime, and replaces that shim before
+the response can be observed. The replacement must preserve the incarnation,
+generation, init PID, exec PID, and exact shim ownership, join the committed
+operation, and prove both processes are stopped. Fresh sequences 2 through 4
+then prove `SIGCONT(all=true)`, `SIGSTOP(all=false)`, and
+`SIGCONT(all=false)` against the real `/proc` states, including that the
+init-only stop does not stop the exec. Unit coverage also proves that durable
+init exit evidence settles a pending terminal Kill without redispatch. Fresh
+Native Linux/containerd 2.2.2 evidence for this init-Kill replacement gate
+remains outstanding.
+A separate post-commit Delete boundary removes the exact runtime
 generation before killing the shim, then proves DeleteShim treats only that
 generation's `NotFound` result plus a successful replay of its stable normal or
 force Delete identity as a completed remote effect. It then finishes local

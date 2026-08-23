@@ -6,6 +6,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Durable init-Kill reconciliation through a live shim replacement. The
+  real-containerd gate persists sequence 1 `SIGSTOP` with `all=true`, freezes
+  the original shim, commits the exact incarnation-bound `kill-1` identity
+  directly through the public SDK, and replaces the shim before the original
+  response can be observed. Rehydration must join that operation without a
+  duplicate signal, preserve the generation plus init and exec PIDs, and prove
+  both real processes stopped. Fresh sequences then verify `all=true` continue
+  fanout and `all=false` init-only stop/continue isolation through `/proc`.
+  Unit coverage separately proves that durable terminal exit evidence settles
+  a pending init signal without redispatch. The ignored real-host gate still
+  requires fresh retained Native Linux/containerd 2.2.2 evidence.
 - Committed init-Start reconciliation through a live shim replacement. The
   real-containerd gate suspends the Host with Start pending, freezes the
   original shim, commits the exact incarnation-bound Start identity directly
