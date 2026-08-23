@@ -47,8 +47,7 @@ impl OciLinuxSupport {
                 operation,
             ));
         }
-        if resources.rdma().is_some() && !cgroup.is_some_and(|cgroup| *cgroup.rdma() == Some(true))
-        {
+        if resources.rdma().is_some() && cgroup.is_none_or(|cgroup| *cgroup.rdma() != Some(true)) {
             return Err(unsupported(
                 "linux.resources.rdma",
                 "the RDMA cgroup controller is not advertised",

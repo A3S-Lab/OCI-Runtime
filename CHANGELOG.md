@@ -6,6 +6,21 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Committed containerd exec-Start reconciliation through a live shim
+  replacement. Exec Start now persists schema-v9 `Starting` metadata before
+  any Runtime adapter connection, so a Host outage cannot leave an accepted
+  request indistinguishable from an untouched Added exec. The real-containerd
+  gate freezes the Host after exec incarnation 1 is Added, observes the exact
+  durable transition, freezes the original shim, commits the same
+  incarnation-bound Runtime Exec, and replaces the shim before the original
+  response can be observed. Rehydration adopts the one existing process and
+  PID without redispatch, a Start retry returns that PID, Runtime inventory
+  contains exactly one matching exec, and exec cleanup leaves init Running.
+  On August 24, 2026, three complete Ubuntu arm64/containerd 2.2.2 matrices
+  passed in 71.60, 60.26, and 62.72 seconds through one Host PID; the same
+  runs retained the committed init-Start, init-Kill, Pause, Resume, and Update
+  replacement gates and left zero matching task, container, bundle, cgroup,
+  mount, shim, agent child, or Runtime task-state residue.
 - Durable init-Kill reconciliation through a live shim replacement. The
   real-containerd gate persists sequence 1 `SIGSTOP` with `all=true`, freezes
   the original shim, commits the exact incarnation-bound `kill-1` identity
@@ -15,8 +30,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   both real processes stopped. Fresh sequences then verify `all=true` continue
   fanout and `all=false` init-only stop/continue isolation through `/proc`.
   Unit coverage separately proves that durable terminal exit evidence settles
-  a pending init signal without redispatch. The ignored real-host gate still
-  requires fresh retained Native Linux/containerd 2.2.2 evidence.
+  a pending init signal without redispatch. This boundary is retained by the
+  August 24, 2026 three-pass Native Linux/containerd 2.2.2 matrix.
 - Committed init-Start reconciliation through a live shim replacement. The
   real-containerd gate suspends the Host with Start pending, freezes the
   original shim, commits the exact incarnation-bound Start identity directly
@@ -26,8 +41,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   replay a containerd Start retry without a second lifecycle effect. Unit
   gates separately prove that a committed init Start is adopted from exact
   Runtime state and that a `Starting` exec missing from process inventory is
-  replayed once with its durable incarnation. The ignored real-host gate still
-  requires fresh retained Native Linux/containerd 2.2.2 evidence.
+  replayed once with its durable incarnation. This boundary is retained by
+  the August 24, 2026 three-pass Native Linux/containerd 2.2.2 matrix.
 - Durable containerd task-control replay during shim rehydration. Metadata
   schema v9 persists the exact `LinuxResources` body beside a pending Update's
   canonical digest, while Pause and Resume remain body-free. A replacement
@@ -39,8 +54,9 @@ All notable changes to A3S OCI Runtime are documented in this file.
   readable and wait for a digest-matching caller retry to supply the body
   before upgrading. Unit gates cover exact round trips, corruption, replay,
   legacy migration, and failure semantics. The ignored real-containerd gate
-  now carries committed Pause, Resume, and PID-limit Update across three live
-  shim replacements; fresh-host retained evidence remains outstanding.
+  carries committed Pause, Resume, and PID-limit Update across three live
+  shim replacements and is retained by the August 24, 2026 three-pass Native
+  Linux/containerd 2.2.2 matrix.
 - A real post-commit containerd Create fault gate. It stops the Host before
   dispatch, waits for the shim's complete create intent, stops that shim,
   submits the exact same public-SDK Create identity, and kills the shim only
@@ -921,6 +937,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Preserve identity UID/GID translation when an OCI process inherits the
+  current user namespace. Explicit mappings remain mandatory for created or
+  joined user namespaces, while a bundle with no user-namespace request now
+  treats container IDs as the same host IDs instead of rejecting ownership
+  preparation because empty mapping arrays contain no range.
+- Validate empty cpuset values at the host- or delegation-owned cgroup
+  authority root through `cpuset.cpus.effective` and
+  `cpuset.mems.effective` without writing that boundary. Runtime-owned
+  descendants still copy nonempty effective values before controller
+  enablement, avoiding permission failures without mutating host-owned state.
 - Validate a utility-VM bundle handoff completely before creating its exact
   `shares/<container>/<generation>` directory. Missing, symbolic-link,
   non-private, digest-drifted, rootfs-link, and absolute-bind sources now fail
