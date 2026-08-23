@@ -209,7 +209,7 @@ pub(super) async fn qualify_committed_init_start(
     wait_for_replacement_exit(&mut replacement).await
 }
 
-async fn exact_runtime_state(
+pub(super) async fn exact_runtime_state(
     config: &QualificationConfig,
     identity: &RuntimeIdentity,
 ) -> TestResult<ContainerRecord> {

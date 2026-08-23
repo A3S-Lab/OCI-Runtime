@@ -107,6 +107,14 @@ and `experimental` or `supported` readiness.
 | A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process and filesystem sessions; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; explicit Native Linux Sandbox production routing and real-host SDK composition pass, while default and cross-platform cutover remain open |
 | Retained evidence | Schema and normative locks, 189-pair authenticated protocol fault coverage, portable nine-stage Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host reopen with exact post-commit acknowledgement, real-HVF nine-stage Host/Guest Create plus two-stage Host shutdown interruption and cleanup, all nine real-HVF Create, State, Start, Kill, Delete, Wait, Exec, SignalProcess, WaitProcess, Pause, Resume, Processes, Update, Stats, ReadOutput, WriteStdin, CloseStdin, Resize, File, and Filesystem transitions through durable service reopen and VM/session-owner replacement, a real protocol-v10 Apple Silicon Guest boot, native Linux real-container with distinct exact init/exec capability, `NoNewPrivs`, rlimit, OOM-score, I/O-priority, scheduler, init personality, init NUMA memory policy, exec CPU-affinity, and namespaced-sysctl read-back, rootless default-device and device-policy gates, soak, owner-death safe-termination, and three consecutive same-Host live containerd 2.2 lifecycle/restart/I/O matrices with deleted exec-ID reuse, post-commit guest-journal reclamation, and committed init-Start, exec-Start, init-Kill, Pause, Resume, Update, WriteStdin, CloseStdin, SignalProcess, and ResizePty shim-replacement gates, fresh-VM HVF soak, fail-closed Linux KVM lifecycle/recovery/25-wave soak entries, and WHPX nominal plus owner-death/service-restart qualification |
 
+Shim restoration now reconciles an exact Runtime `Stopped` record before it
+replays a pending init signal. If local metadata has no exit, one bounded
+exact-generation Wait imports the Runtime's durable exit; the signal journal
+then advances without a second Kill. Three consecutive Ubuntu
+arm64/containerd 2.2.2 matrices on August 24, 2026 retained this terminal
+init-Kill boundary through one unchanged Host PID, including exit-42 shim and
+containerd Wait/Delete evidence and an independent zero-live-residue audit.
+
 OCI 1.3 `linux.netDevices` is implemented by the shared Linux executor. The
 runtime validates a bounded deterministic move plan, requires a separate
 network namespace, rejects exact target-name collisions, supports appended
@@ -714,6 +722,7 @@ The repository turns release claims into checked inventories:
 | OCI normative dispositions | 578 enforced · 51 validated · 12 conformant · 14 reviewed external · 0 pending review |
 | Registered durable commit fault stages | 741 |
 | Durable-state replacement qualification | macOS/Linux/Windows complete, including a real Linux bind mount and the Windows reparse-point matrix |
+| Live containerd terminal init-Kill rehydration | 3 / 3 consecutive same-Host Ubuntu arm64/containerd 2.2.2 matrices on August 24, 2026 |
 | Before/after `RuntimeDriver` fault boundaries | 44 |
 | Authenticated agent operation-stage fault pairs | 180 |
 | Portable Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host-service reopen pairs | 180 |
