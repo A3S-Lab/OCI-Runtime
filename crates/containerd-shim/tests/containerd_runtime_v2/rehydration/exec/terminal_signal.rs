@@ -10,7 +10,8 @@ use tokio::process::Child;
 use tonic::transport::Channel;
 
 use super::super::{
-    launch_replacement_while_containerd_suspended, stop_replacement, wait_for_pid_exit, Bootstrap,
+    kill::wait_for_killed_child, launch_replacement_while_containerd_suspended, stop_replacement,
+    wait_for_pid_exit, Bootstrap,
 };
 use super::{EXEC_EXIT_STATUS, EXEC_ID};
 use crate::api::{TasksClient, WaitRequest};
@@ -101,8 +102,8 @@ pub(super) async fn qualify(
     let mut replacement = None;
     let relaunch = async {
         suspended_shim.kill("committed terminal-SignalProcess original shim")?;
-        wait_for_pid_exit(
-            old_shim_pid,
+        wait_for_killed_child(
+            &mut old_replacement,
             "committed terminal-SignalProcess original shim",
         )
         .await?;
