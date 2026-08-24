@@ -6,6 +6,33 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Crash-stable containerd task Delete responses. A separate v1 receipt binds
+  the namespace, task incarnation, container identity, Runtime generation,
+  bundle, PID, exit status, and nanosecond exit time before the shim dispatches
+  the generation-fenced delete and removes its main metadata. Rehydration
+  discards the receipt when retained metadata and a live generation prove an
+  uncommitted intent. A metadata-free replacement validates the serving task
+  and replays the exact first response; after serving it, the replay-only shim
+  signals exit so containerd 2.2.3 cannot retain an unowned replacement. Task
+  restoration now publishes validated in-memory state before starting output
+  pumps, allowing immediately replayable output to commit its durable cursor
+  without racing a missing task. Partial pump-start failure stops every pump
+  already created before rollback. Unit gates cover receipt binding,
+  uncommitted-intent consumption, response replay through service reopen and
+  DeleteShim, replacement exit, and the output ordering race. Source revision
+  `97bb74e5df238f58a7dab913314d38c510ddea9b` passed three complete Ubuntu
+  24.04 x86_64/containerd 2.2.3 matrices consecutively in 105.07, 119.86, and
+  115.81 seconds through unchanged Host PID 2291109. Release CLI, agent, shim,
+  qualification executable, and Cargo.lock SHA-256 values were
+  `87265be5b6a6c3f27a68516b1e536ddf3ca0e031e82f43aa300c294575578f32`,
+  `19d53e9ae569cec3f096cb99d947e5ff73bfad2c502c6fd6f032a102fcaeee2a`,
+  `399ff8d64a735519048c281177fdba2dc5f7f40f85b0fce986b2b6e162490cb3`,
+  `7a9b03fe2f0d924513d612049d149591e11ada3e76b7afc0a574d24575a370f6`,
+  and `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
+  The qualification used a dedicated private containerd service and socket;
+  the system daemon remained active at PID 2485480. Independent audits after
+  every pass found no matching task, container, bundle, cgroup, mount, shim,
+  agent child, or qualification process.
 - Crash-stable containerd DeleteProcess responses. A separate v1 receipt
   journal stores the exact exec incarnation, PID, exit status, and nanosecond
   exit time under the task identity, Runtime generation, and bundle before the
