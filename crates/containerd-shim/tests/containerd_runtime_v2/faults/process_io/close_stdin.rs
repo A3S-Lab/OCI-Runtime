@@ -7,10 +7,11 @@ use a3s_oci_sdk::{
     WaitProcessRequest,
 };
 use prost_types::Any;
+use serde::Deserialize;
 
 use crate::api::{
-    CloseIORequest, ContainersClient, CreateTaskRequest, ExecProcessRequest, GetContainerRequest,
-    StartRequest, TasksClient,
+    ContainersClient, CreateTaskRequest, ExecProcessRequest, GetContainerRequest, StartRequest,
+    TasksClient,
 };
 use crate::support::*;
 use crate::terminal;
@@ -23,6 +24,14 @@ use super::{MetadataDocument, StdinCloseEvidence};
 
 const EXEC_ID: &str = "committed-close-stdin-exec";
 const EXEC_EXIT_STATUS: i32 = 29;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShimBootstrap {
+    version: u32,
+    address: String,
+    protocol: String,
+}
 
 pub(in super::super) async fn qualify_close_stdin_effect_committed_shim_sigkill(
     config: &QualificationConfig,
@@ -123,11 +132,12 @@ pub(in super::super) async fn qualify_close_stdin_effect_committed_shim_sigkill(
     }
 
     let identity = read_runtime_identity(config, &id).await?;
+    let shim_address = load_shim_address(&bundle).await?;
     let host_pid = super::super::find_runtime_host_pid(config).await?;
     let shim_pid = find_exact_shim_pid(config, &id).await?;
     let mut suspended_host =
         SuspendedProcess::stop(host_pid, "committed-close A3S OCI host service")?;
-    let mut close_call = spawn_close_io(&channel, config, &id);
+    let mut close_call = spawn_close_io(&shim_address, &id);
     wait_for_closing_stdin(&bundle, &mut close_call).await?;
     let suspended_shim = SuspendedProcess::stop(shim_pid, "committed-close shim")?;
     suspended_host.resume("committed-close A3S OCI host service")?;
@@ -190,28 +200,51 @@ pub(in super::super) async fn qualify_close_stdin_effect_committed_shim_sigkill(
     delete_container(config, &id).await
 }
 
-fn spawn_close_io(
-    channel: &tonic::transport::Channel,
-    config: &QualificationConfig,
-    id: &str,
-) -> tokio::task::JoinHandle<TestResult<()>> {
-    let channel = channel.clone();
-    let namespace = config.namespace.clone();
+fn spawn_close_io(address: &str, id: &str) -> tokio::task::JoinHandle<TestResult<()>> {
+    let address = address.to_string();
     let id = id.to_string();
     tokio::spawn(async move {
-        TasksClient::new(channel)
-            .close_io(namespaced(
-                CloseIORequest {
-                    container_id: id.clone(),
-                    exec_id: EXEC_ID.to_string(),
-                    stdin: true,
-                },
-                &namespace,
-            )?)
+        let client = containerd_shim_protos::ttrpc::asynchronous::Client::connect(&address)
             .await
-            .map_err(|error| rpc_error("close committed-close exec stdin", error))?;
+            .map_err(|error| {
+                qualification_error(format!(
+                    "connect committed-close shim at {address}: {error}"
+                ))
+            })?;
+        let task = containerd_shim_protos::shim::shim_ttrpc_async::TaskClient::new(client);
+        let mut request = containerd_shim_protos::api::CloseIORequest::new();
+        request.set_id(id.clone());
+        request.set_exec_id(EXEC_ID.to_string());
+        request.set_stdin(true);
+        task.close_io(
+            containerd_shim_protos::ttrpc::context::Context::default(),
+            &request,
+        )
+        .await
+        .map_err(|error| -> TestError {
+            qualification_error(format!(
+                "invoke CloseIO through shim {address} for {id}/{EXEC_ID}: {error}"
+            ))
+            .into()
+        })?;
         Ok(())
     })
+}
+
+async fn load_shim_address(bundle: &Path) -> TestResult<String> {
+    let bytes = tokio::fs::read(bundle.join("bootstrap.json"))
+        .await
+        .map_err(|error| qualification_error(format!("read shim bootstrap metadata: {error}")))?;
+    let bootstrap: ShimBootstrap = serde_json::from_slice(&bytes)
+        .map_err(|error| qualification_error(format!("decode shim bootstrap metadata: {error}")))?;
+    if bootstrap.version != 2 || bootstrap.protocol != "ttrpc" {
+        return Err(qualification_error(format!(
+            "shim bootstrap contract was version={} protocol={:?}; expected version 2 ttrpc",
+            bootstrap.version, bootstrap.protocol
+        ))
+        .into());
+    }
+    Ok(bootstrap.address)
 }
 
 async fn wait_for_closing_stdin(
