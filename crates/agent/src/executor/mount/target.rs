@@ -4,31 +4,9 @@ use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::Result;
 
-use super::{internal, invalid, permission_denied, resolve_bind_source_path, MountPlan};
+use super::{internal, invalid, permission_denied, MountPlan, MountTargetKind};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MountTargetKind {
-    Directory,
-    File,
-}
-
-pub(super) fn prepare(plan: &MountPlan, bundle_directory: &Path, rootfs: &Path) -> Result<PathBuf> {
-    let kind = if plan.bind {
-        let source = plan.source.as_deref().ok_or_else(|| {
-            invalid(format!(
-                "mounts[{}].source is required for bind and rbind mounts",
-                plan.index
-            ))
-        })?;
-        let source = resolve_bind_source_path(plan.index, bundle_directory, source)?;
-        if source.is_dir() {
-            MountTargetKind::Directory
-        } else {
-            MountTargetKind::File
-        }
-    } else {
-        MountTargetKind::Directory
-    };
+pub(super) fn prepare(plan: &MountPlan, rootfs: &Path, kind: MountTargetKind) -> Result<PathBuf> {
     ensure(plan.index, rootfs, &plan.destination, kind)
 }
 

@@ -114,7 +114,7 @@ runtime_dir="$binary_stage/a3s-oci-krun-runtime"
 
 provenance="$(
   linux_kvm_provenance \
-    linux-kvm-lifecycle-16-case-v1 "$profile" \
+    linux-kvm-lifecycle-17-case-v1 "$profile" \
     "$cli" "$shim" "$runtime_dir" \
     "$runtime_assets_manifest" \
     "$A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST"
@@ -146,7 +146,7 @@ if [[ "$kvm_status" == "unavailable" ]]; then
       architecture: $architecture,
       status: "unavailable",
       kvm_required: true,
-      expected_case_count: 16,
+      expected_case_count: 17,
       case_count: 0,
       system_image_manifest_sha256: $manifest_sha256,
       provenance: $provenance,
@@ -157,11 +157,11 @@ if [[ "$kvm_status" == "unavailable" ]]; then
   jq --exit-status \
     '.schema_version == "a3s.oci.linux-kvm-lifecycle-matrix.v2"
      and .platform == "linux" and .status == "unavailable"
-     and .kvm_required and .expected_case_count == 16 and .case_count == 0
+     and .kvm_required and .expected_case_count == 17 and .case_count == 0
      and .provenance.schema_version == "a3s.oci.linux-kvm-provenance.v1"
      and .provenance.platform == .platform
      and .provenance.architecture == .architecture
-     and .provenance.qualification_profile == "linux-kvm-lifecycle-16-case-v1"
+     and .provenance.qualification_profile == "linux-kvm-lifecycle-17-case-v1"
      and .provenance.driver == "libkrun-kvm"
      and .provenance.isolation == "dedicated-vm"
      and .provenance.source_tree_clean
@@ -238,6 +238,10 @@ assert_no_residue() {
   test "$process_after" = "$process_before"
   test "$runtime_after" = "$runtime_before"
   test -z "$(find "$bootstrap" -mindepth 1 -print -quit)"
+  test -z "$(
+    find "$runtime_share" -xdev \
+      -name '.a3s-oci-guest-isolation-*' -print -quit
+  )"
   test -z "$(
     find "$runtime_share" -xdev \
       \( -name '.a3s-oci-bootstrap-*' \
@@ -332,6 +336,33 @@ run_case() {
          and .pid_supervision.orphan_reaping_enforced
          and .guest_runtime_clean' "$case_report" >/dev/null
       ;;
+    guest-isolation)
+      jq --exit-status \
+        '.bundle_loaded and .separate_runtime_share
+         and .expected_case_count == 10 and (.cases | length) == 10
+         and [.cases[].name] == [
+           "bundle-system-directory",
+           "bundle-runtime-share-root",
+           "bundle-agent-state-root",
+           "absolute-rootfs",
+           "rootfs-symlink-escape",
+           "absolute-bind-source",
+           "relative-bind-traversal",
+           "bind-source-symlink-escape",
+           "file-intermediate-magic-link-escape",
+           "filesystem-intermediate-magic-link-escape"
+         ]
+         and all(.cases[];
+           .expected_error_code == "permission-denied"
+           and .request_rejected
+           and .observed_error_code == .expected_error_code
+           and .observed_error_operation == .expected_error_operation
+           and (.observed_error_retryable | not)
+           and .container_state_absent_after_case
+           and .canary_unchanged)
+         and .fixture_removed and .canary_removed
+         and .guest_runtime_clean' "$case_report" >/dev/null
+      ;;
     lifecycle-fault)
       jq --exit-status --arg boundary "$boundary" \
         '.bundle_loaded
@@ -382,6 +413,17 @@ run_case \
   --bundle-a "$bundle_a" \
   --bundle-b "$bundle_b" \
   --console "$console_directory/oci-vm-multi-container-smoke.log"
+
+run_case \
+  oci-vm-guest-isolation-smoke guest-isolation \
+  a3s.oci.oci-vm-guest-isolation.v1 "" \
+  oci-vm-guest-isolation-smoke \
+  --shim "$shim" \
+  --vm-rootfs "$bootstrap" \
+  --system-image-manifest "$A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST" \
+  --runtime-share "$runtime_share" \
+  --bundle "$bundle_a" \
+  --console "$console_directory/oci-vm-guest-isolation-smoke.log"
 
 for phase in after-create after-start after-kill; do
   run_case \
@@ -438,7 +480,7 @@ jq --slurp \
     architecture: $architecture,
     status: "available",
     kvm_required: true,
-    expected_case_count: 16,
+    expected_case_count: 17,
     case_count: length,
     system_image_manifest_sha256: $manifest_sha256,
     rootfs_archive_sha256: $rootfs_archive_sha256,
@@ -450,11 +492,11 @@ jq --slurp \
 jq --exit-status \
   '.schema_version == "a3s.oci.linux-kvm-lifecycle-matrix.v2"
    and .platform == "linux" and .status == "available"
-   and .kvm_required and .expected_case_count == 16 and .case_count == 16
+   and .kvm_required and .expected_case_count == 17 and .case_count == 17
    and .provenance.schema_version == "a3s.oci.linux-kvm-provenance.v1"
    and .provenance.platform == .platform
    and .provenance.architecture == .architecture
-   and .provenance.qualification_profile == "linux-kvm-lifecycle-16-case-v1"
+   and .provenance.qualification_profile == "linux-kvm-lifecycle-17-case-v1"
    and .provenance.driver == "libkrun-kvm"
    and .provenance.isolation == "dedicated-vm"
    and .provenance.source_tree_clean
@@ -463,6 +505,7 @@ jq --exit-status \
    and .kvm_driver.status == "available"
    and ([.cases[] | select(.kind == "lifecycle")] | length) == 1
    and ([.cases[] | select(.kind == "multi-container")] | length) == 1
+   and ([.cases[] | select(.kind == "guest-isolation")] | length) == 1
    and ([.cases[] | select(.kind == "lifecycle-fault")] | length) == 3
    and ([.cases[] | select(.kind == "transport-fault")] | length) == 11
    and ([.cases[] | select(
@@ -475,4 +518,4 @@ jq --exit-status \
      and .cleanup.markers_absent
      and .report.platform == "linux"
      and .report.status == "available"
-   )] | length) == 16' "$report_path" >/dev/null
+   )] | length) == 17' "$report_path" >/dev/null

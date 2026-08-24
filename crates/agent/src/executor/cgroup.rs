@@ -35,10 +35,12 @@ use setting::{CgroupSetting, CgroupSettingReadback};
 
 const CGROUP_EVENTS: &str = "cgroup.events";
 const CGROUP_FREEZE: &str = "cgroup.freeze";
+const CGROUP_KILL: &str = "cgroup.kill";
 const CGROUP_PROCS: &str = "cgroup.procs";
 const REQUIRED_CONTROLLERS: [&str; 4] = ["cpu", "cpuset", "memory", "pids"];
 const FREEZE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const FREEZE_TIMEOUT: Duration = Duration::from_secs(5);
+const TERMINATE_TIMEOUT: Duration = Duration::from_secs(5);
 const PROTECTED_CGROUP_DESCRIPTOR_MINIMUM: RawFd = 10;
 
 #[derive(Debug)]
@@ -67,6 +69,16 @@ impl Drop for DelegatedDeviceFilter {
             let _ = self.authority.remove(&self.key);
             self.active = false;
         }
+    }
+}
+
+impl DelegatedDeviceFilter {
+    fn cleanup(&mut self) -> Result<()> {
+        if self.active {
+            self.authority.remove(&self.key)?;
+            self.active = false;
+        }
+        Ok(())
     }
 }
 
@@ -147,8 +159,11 @@ impl CgroupHandle {
             }
             Ok(())
         })();
-        if let Err(error) = create_path {
-            cleanup_directories(&created);
+        if let Err(mut error) = create_path {
+            append_directory_cleanup_failures(
+                &mut error,
+                cleanup_directories_checked(&mut created),
+            );
             return Err(error);
         }
         let configured = (|| {
@@ -222,8 +237,11 @@ impl CgroupHandle {
                     delegated_device_filter,
                 }))
             }
-            Err(error) => {
-                cleanup_directories(&created);
+            Err(mut error) => {
+                append_directory_cleanup_failures(
+                    &mut error,
+                    cleanup_directories_checked(&mut created),
+                );
                 Err(error)
             }
         }
@@ -299,6 +317,96 @@ impl CgroupHandle {
 
     pub(super) fn recovery_paths(&self) -> (&Path, &[PathBuf]) {
         (&self.leaf, &self.created)
+    }
+
+    pub(super) async fn terminate_all(&self) -> Result<()> {
+        let kill_path = self.device_filter_path.join(CGROUP_KILL);
+        tokio::fs::write(&kill_path, b"1").await.map_err(|error| {
+            cgroup_error(
+                if error.kind() == std_io::ErrorKind::NotFound {
+                    ErrorCode::Unsupported
+                } else {
+                    ErrorCode::PermissionDenied
+                },
+                format!(
+                    "failed to terminate all processes in container cgroup {}: {error}",
+                    self.device_filter_path.display()
+                ),
+            )
+        })?;
+
+        let events_path = self.device_filter_path.join(CGROUP_EVENTS);
+        let deadline = tokio::time::Instant::now() + TERMINATE_TIMEOUT;
+        loop {
+            let events = tokio::fs::read_to_string(&events_path)
+                .await
+                .map_err(|error| {
+                    cgroup_error(
+                        ErrorCode::FailedPrecondition,
+                        format!(
+                            "failed to verify terminated container cgroup {}: {error}",
+                            events_path.display()
+                        ),
+                    )
+                })?;
+            match cgroup_event_value(&events, "populated") {
+                Some(0) => return Ok(()),
+                Some(_) => {}
+                None => {
+                    return Err(cgroup_error(
+                        ErrorCode::FailedPrecondition,
+                        format!(
+                            "container cgroup events omit the populated state: {}",
+                            events_path.display()
+                        ),
+                    ));
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(cgroup_error(
+                    ErrorCode::DeadlineExceeded,
+                    format!(
+                        "timed out waiting for container cgroup {} to become empty",
+                        self.device_filter_path.display()
+                    ),
+                )
+                .retryable(true));
+            }
+            tokio::time::sleep(FREEZE_POLL_INTERVAL).await;
+        }
+    }
+
+    /// Release device policy and remove every runtime-owned cgroup directory.
+    ///
+    /// Failed creates call this explicitly so a leaked descendant is returned
+    /// to the authenticated caller instead of being hidden by `Drop`.
+    pub(super) fn cleanup(&mut self) -> Result<()> {
+        let mut failures = Vec::new();
+        if let Some(filter) = self.delegated_device_filter.as_mut() {
+            if let Err(error) = filter.cleanup() {
+                failures.push(format!("failed to remove delegated device policy: {error}"));
+            }
+        }
+        if let Some(device_filter) = self.device_filter.as_ref() {
+            match self
+                .devices
+                .detach_loaded_cgroup_device_program(&self.device_filter_path, device_filter)
+            {
+                Ok(()) => self.device_filter = None,
+                Err(error) => {
+                    failures.push(format!("failed to detach cgroup device policy: {error}"));
+                }
+            }
+        }
+        failures.extend(cleanup_directories_checked(&mut self.created));
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(cgroup_error(
+                ErrorCode::Internal,
+                format!("failed to clean container cgroup: {}", failures.join("; ")),
+            ))
+        }
     }
 
     pub(super) async fn set_frozen(&self, frozen: bool) -> Result<()> {
@@ -744,6 +852,34 @@ fn cleanup_directories(paths: &[PathBuf]) {
     }
 }
 
+fn cleanup_directories_checked(paths: &mut Vec<PathBuf>) -> Vec<String> {
+    let mut failures = Vec::new();
+    let mut remaining = Vec::new();
+    for path in paths.iter().rev() {
+        match std::fs::remove_dir(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std_io::ErrorKind::NotFound => {}
+            Err(error) => {
+                failures.push(format!("failed to remove {}: {error}", path.display()));
+                remaining.push(path.clone());
+            }
+        }
+    }
+    remaining.reverse();
+    *paths = remaining;
+    failures
+}
+
+fn append_directory_cleanup_failures(error: &mut Error, failures: Vec<String>) {
+    if !failures.is_empty() {
+        error.message = format!(
+            "{}; failed-create cgroup cleanup: {}",
+            error.message,
+            failures.join("; ")
+        );
+    }
+}
+
 fn cleanup_cgroup_tree(root: &Path) -> Result<()> {
     fn remove_children(path: &Path) -> std_io::Result<()> {
         for entry in std::fs::read_dir(path)? {
@@ -789,7 +925,7 @@ mod tests {
     use a3s_oci_sdk::ErrorCode;
 
     use super::{
-        apply_settings, cgroup_event_value, enable_controllers,
+        apply_settings, cgroup_event_value, cleanup_directories_checked, enable_controllers,
         install_control_workload_descriptors_from_pre_exec, open_cgroup_procs,
         open_control_workload_membership, prepare_parent_cpuset, unified::UnifiedPlan,
         CgroupSetting,
@@ -979,5 +1115,21 @@ mod tests {
         assert!(error
             .message
             .contains("delegated cgroup v2 controller `pids` is unavailable"));
+    }
+
+    #[test]
+    fn checked_cleanup_retains_and_reports_nonempty_cgroup_directories() {
+        let temporary = tempfile::tempdir().expect("temporary cgroup cleanup");
+        let parent = temporary.path().join("parent");
+        let child = parent.join("child");
+        std::fs::create_dir_all(&child).expect("cgroup tree");
+        std::fs::write(child.join("cgroup.procs"), "1").expect("blocking cgroup member file");
+        let mut created = vec![parent.clone(), child.clone()];
+
+        let failures = cleanup_directories_checked(&mut created);
+
+        assert_eq!(created, vec![parent, child]);
+        assert_eq!(failures.len(), 2);
+        assert!(failures.iter().any(|failure| failure.contains("child")));
     }
 }

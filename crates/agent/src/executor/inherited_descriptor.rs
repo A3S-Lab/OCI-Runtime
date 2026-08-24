@@ -97,7 +97,7 @@ impl InheritedDescriptorPlan {
             .find(|target| reserved.contains(target))
         {
             return Err(descriptor_error(format!(
-                "inherited descriptor target {target} is reserved by the cgroup layout"
+                "inherited descriptor target {target} is reserved by the internal executor layout"
             )));
         }
         Ok(())
@@ -571,7 +571,7 @@ mod tests {
             .ensure_targets_available(&[6, 7])
             .expect_err("reserved target must fail")
             .message
-            .contains("reserved by the cgroup layout"));
+            .contains("reserved by the internal executor layout"));
     }
 
     #[test]

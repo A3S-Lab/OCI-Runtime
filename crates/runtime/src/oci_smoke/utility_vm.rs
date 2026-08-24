@@ -15,6 +15,14 @@ const MAX_MARKER_BYTES: u64 = 1_024;
 const GUEST_RUNTIME_PREFIX: &str = "a3s-oci-agent-";
 
 mod fault_cleanup;
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
+mod guest_isolation;
 pub(crate) mod lifecycle;
 mod multi_container;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -24,6 +32,32 @@ mod soak;
 mod transport_fault_cleanup;
 
 use lifecycle::{best_effort_delete, exercise};
+
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
+pub(super) async fn run_guest_isolation(
+    shim: &Path,
+    vm_rootfs: &Path,
+    system_image_manifest: Option<&Path>,
+    runtime_share: &Path,
+    bundle_directory: &Path,
+    console: &Path,
+) -> crate::OciVmGuestIsolationSmokeReport {
+    guest_isolation::run(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        runtime_share,
+        bundle_directory,
+        console,
+    )
+    .await
+}
 
 pub(super) async fn run_fault_cleanup(
     shim: &Path,

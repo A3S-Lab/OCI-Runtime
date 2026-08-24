@@ -1,10 +1,13 @@
 mod attributes;
 mod default_filesystem;
 mod idmap;
+mod scope;
 mod target;
 
 use std::ffi::CString;
+use std::fs::File;
 use std::io;
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -12,9 +15,11 @@ use a3s_oci_sdk::oci_spec::runtime::Mount;
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
 use super::namespace::{collect_mappings, IdmapPlan, NamespacePlan};
+use super::PinnedBundleDirectory;
 
 pub(super) use default_filesystem::DefaultFilesystemPlan;
 pub(super) use idmap::DetachedMountSources;
+pub(super) use scope::{validate_bundle_scoped_sources, validate_bundle_source_syntax};
 
 const MAX_MOUNTS: usize = 1_024;
 const MAX_MOUNT_STRING_BYTES: usize = 64 * 1_024;
@@ -44,6 +49,125 @@ pub(super) struct MountPlan {
     oci_cgroup_source: bool,
     oci_cgroup_destination: bool,
     oci_readonly_option: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MountTargetKind {
+    Directory,
+    File,
+}
+
+pub(super) struct BindSourceResolver<'a> {
+    bundle_directory: &'a Path,
+    pinned_bundle: Option<&'a PinnedBundleDirectory>,
+}
+
+#[derive(Debug)]
+pub(super) struct ResolvedBindSource {
+    path: PathBuf,
+    descriptor: Option<File>,
+    kind: MountTargetKind,
+}
+
+impl<'a> BindSourceResolver<'a> {
+    pub(super) const fn new(
+        bundle_directory: &'a Path,
+        pinned_bundle: Option<&'a PinnedBundleDirectory>,
+    ) -> Self {
+        Self {
+            bundle_directory,
+            pinned_bundle,
+        }
+    }
+
+    pub(super) fn resolve(
+        &self,
+        index: usize,
+        source: &Path,
+    ) -> Result<Option<ResolvedBindSource>> {
+        if let Some(bundle) = self.pinned_bundle {
+            let descriptor = bundle.open_relative(
+                source,
+                libc::O_PATH,
+                false,
+                &format!("mounts[{index}].source"),
+                "prepare-container-mounts",
+            )?;
+            return descriptor
+                .map(|descriptor| ResolvedBindSource::from_descriptor(index, descriptor))
+                .transpose();
+        }
+        let candidate = bind_source_candidate_path(self.bundle_directory, source);
+        let path = match candidate.canonicalize() {
+            Ok(path) => path,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(invalid(format!(
+                    "mounts[{index}].source does not resolve in the runtime namespace: {error}"
+                )));
+            }
+        };
+        let kind = if path.is_dir() {
+            MountTargetKind::Directory
+        } else {
+            MountTargetKind::File
+        };
+        Ok(Some(ResolvedBindSource {
+            path,
+            descriptor: None,
+            kind,
+        }))
+    }
+
+    pub(super) fn resolve_required(
+        &self,
+        index: usize,
+        source: &Path,
+    ) -> Result<ResolvedBindSource> {
+        self.resolve(index, source)?.ok_or_else(|| {
+            invalid(format!(
+                "mounts[{index}].source does not exist in the runtime namespace: {}",
+                bind_source_candidate_path(self.bundle_directory, source).display()
+            ))
+        })
+    }
+}
+
+impl ResolvedBindSource {
+    fn from_descriptor(index: usize, descriptor: File) -> Result<Self> {
+        let metadata = descriptor.metadata().map_err(|error| {
+            permission_denied(format!(
+                "failed to inspect descriptor-confined mounts[{index}].source: {error}"
+            ))
+        })?;
+        let kind = if metadata.is_dir() {
+            MountTargetKind::Directory
+        } else {
+            MountTargetKind::File
+        };
+        Ok(Self {
+            path: PathBuf::from(format!("/proc/self/fd/{}", descriptor.as_raw_fd())),
+            descriptor: Some(descriptor),
+            kind,
+        })
+    }
+
+    pub(super) const fn kind(&self) -> MountTargetKind {
+        self.kind
+    }
+
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn cstring(&self, index: usize) -> Result<CString> {
+        let source = path_cstring(index, "source", &self.path)?;
+        debug_assert!(self
+            .descriptor
+            .as_ref()
+            .is_none_or(|descriptor| descriptor.as_raw_fd() >= 0));
+        Ok(source)
+    }
 }
 
 pub(super) fn plan_all(
@@ -86,12 +210,12 @@ pub(super) fn validate_control_workload_cgroup_mount(plans: &[MountPlan]) -> Res
 
 pub(super) fn apply_all(
     plans: &[MountPlan],
-    bundle_directory: &Path,
     rootfs: &Path,
     detached_sources: &mut DetachedMountSources,
+    source_resolver: &BindSourceResolver<'_>,
 ) -> Result<()> {
     for plan in plans {
-        plan.apply(bundle_directory, rootfs, detached_sources)?;
+        plan.apply(rootfs, detached_sources, source_resolver)?;
     }
     detached_sources.ensure_consumed()
 }
@@ -412,35 +536,52 @@ impl MountPlan {
             && self.filesystem_type.as_deref() == Some("cgroup2")
     }
 
-    pub(super) fn prepare_target(&self, bundle_directory: &Path, rootfs: &Path) -> Result<PathBuf> {
-        target::prepare(self, bundle_directory, rootfs)
+    pub(super) fn prepare_target(&self, rootfs: &Path, kind: MountTargetKind) -> Result<PathBuf> {
+        target::prepare(self, rootfs, kind)
     }
 
     fn apply(
         &self,
-        bundle_directory: &Path,
         rootfs: &Path,
         detached_sources: &mut DetachedMountSources,
+        source_resolver: &BindSourceResolver<'_>,
     ) -> Result<()> {
-        let target = self.prepare_target(bundle_directory, rootfs)?;
-        let target = path_cstring(self.index, "destination", &target)?;
         let detached_bind = self.detached_bind && detached_sources.contains(self.index);
         let uses_detached_source = self.idmap.is_some() || detached_bind;
+        let bind_source = if self.bind && !uses_detached_source {
+            Some(source_resolver.resolve_required(
+                self.index,
+                self.source.as_deref().ok_or_else(|| {
+                    invalid(format!(
+                        "mounts[{}].source is required for a bind mount",
+                        self.index
+                    ))
+                })?,
+            )?)
+        } else {
+            None
+        };
+        let target_kind = bind_source.as_ref().map_or_else(
+            || {
+                detached_sources
+                    .source_kind(self.index)
+                    .unwrap_or(MountTargetKind::Directory)
+            },
+            ResolvedBindSource::kind,
+        );
+        let target = self.prepare_target(rootfs, target_kind)?;
+        let target = path_cstring(self.index, "destination", &target)?;
         let detached_destination = uses_detached_source
             .then(|| detached_sources.open_destination(self.index, &target))
             .transpose()?;
         let source = if uses_detached_source {
             None
+        } else if let Some(source) = bind_source.as_ref() {
+            Some(source.cstring(self.index)?)
         } else {
             self.source
                 .as_deref()
-                .map(|source| {
-                    if self.bind {
-                        resolve_bind_source(self.index, bundle_directory, source)
-                    } else {
-                        path_cstring(self.index, "source", source)
-                    }
-                })
+                .map(|source| path_cstring(self.index, "source", source))
                 .transpose()?
         };
         let filesystem_type = self
@@ -607,25 +748,6 @@ fn validate_option(index: usize, option: &str) -> Result<()> {
     } else {
         Ok(())
     }
-}
-
-fn resolve_bind_source(index: usize, bundle_directory: &Path, source: &Path) -> Result<CString> {
-    let source = resolve_bind_source_path(index, bundle_directory, source)?;
-    path_cstring(index, "source", &source)
-}
-
-fn resolve_bind_source_path(
-    index: usize,
-    bundle_directory: &Path,
-    source: &Path,
-) -> Result<PathBuf> {
-    let source = bind_source_candidate_path(bundle_directory, source);
-    let source = source.canonicalize().map_err(|error| {
-        invalid(format!(
-            "mounts[{index}].source does not resolve in the runtime namespace: {error}"
-        ))
-    })?;
-    Ok(source)
 }
 
 fn bind_source_candidate_path(bundle_directory: &Path, source: &Path) -> PathBuf {

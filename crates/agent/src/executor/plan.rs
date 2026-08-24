@@ -295,6 +295,7 @@ impl InitPlan {
             &mounts,
             namespaces.new_mount(),
             sysfs_mount_allowed,
+            default_devpts_gid(&namespaces, process_plan.gid),
         );
         let cgroup_ownership = CgroupOwnershipPlan::from_mounts(&mounts, &namespaces);
         if cgroup.uses_control_workload_layout() {
@@ -376,13 +377,33 @@ impl InitPlan {
         &mut self,
         rootless_effective_uid: Option<u32>,
     ) -> Result<()> {
+        self.resolve_joined_user_namespace()?;
         if !self.cgroup_ownership.requested() {
             return Ok(());
         }
-        self.namespaces
-            .resolve_joined_user_mappings(self.uid, self.gid, &self.additional_gids)?;
         self.cgroup_ownership
             .resolve(self.uid, &self.namespaces, rootless_effective_uid)
+    }
+
+    pub(super) fn resolve_joined_user_namespace(&mut self) -> Result<()> {
+        self.namespaces
+            .resolve_joined_user_mappings(self.uid, self.gid, &self.additional_gids)?;
+        let sysfs_mount_allowed = !self.namespaces.has_user() || self.namespaces.new_network();
+        self.default_filesystems = DefaultFilesystemPlan::from_configured(
+            &self.mounts,
+            self.namespaces.new_mount(),
+            sysfs_mount_allowed,
+            default_devpts_gid(&self.namespaces, self.gid),
+        );
+        Ok(())
+    }
+}
+
+fn default_devpts_gid(namespaces: &NamespacePlan, process_gid: u32) -> u32 {
+    if namespaces.has_user() && namespaces.host_gid(5).is_none() {
+        process_gid
+    } else {
+        5
     }
 }
 
