@@ -12,6 +12,7 @@ use containerd_shim::TtrpcContext;
 use containerd_shim_protos::shim_async::Task;
 
 mod control;
+mod delete_shim_io;
 mod delete_shim_paused;
 mod lifecycle;
 mod resize;

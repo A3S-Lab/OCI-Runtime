@@ -2280,7 +2280,17 @@ verify the real paused state or applied `pids.max`, then kill the shim and prove
 the same bounded cleanup converges without leaked cgroups or processes. Paused
 cleanup uses the exact force Delete operation so the runtime thaws and stops
 the generation as one cleanup operation instead of waiting on a frozen
-terminal signal. Repeated controls now use a monotonically increasing durable
+terminal signal. The post-commit `WriteStdin` boundary stops the Host until a
+non-terminal exec durably retains incarnation 1, pending sequence 1, and the
+exact stdin bytes in schema-v9 metadata. It then stops the shim, resumes the
+Host, and commits the same exec-scoped `write-stdin-1` identity directly
+through the public SDK. One input must produce exec exit 23 without changing
+the live init PID or generation. Shim `SIGKILL` then drives DeleteShim without
+redispatching the locally pending bytes; exact-generation Kill and force
+Delete must remove both processes, the bundle, cgroup, mounts, and shim state
+while preserving caller-owned container metadata. The remaining
+process-I/O forced-cleanup boundaries are `CloseStdin` and `ResizePty`.
+Repeated controls now use a monotonically increasing durable
 sequence instead of one fixed operation identity: two different Updates and
 two complete Pause/Resume cycles dispatch distinct mutations, identical
 completed retries do not dispatch twice, concurrent same-task controls are
@@ -2321,29 +2331,27 @@ after its Host result is durable, including every derived chunk identity for a
 stdin payload larger than the 4 MiB guest frame limit.
 
 On August 24, 2026, source revision
-`97bb74e5df238f58a7dab913314d38c510ddea9b` passed three complete Ubuntu
-24.04 x86_64/containerd 2.2.3 matrices consecutively in 105.07, 119.86, and
-115.81 seconds through unchanged Host PID 2291109. The installed shim
+`a3865075d8ced661447a85196e17136379535fa7` passed three complete Ubuntu
+24.04 x86_64/containerd 2.2.3 matrices consecutively in 89.96, 93.40, and
+94.55 seconds through unchanged Host PID 2504484. The release-built shim
 SHA-256 was
-`399ff8d64a735519048c281177fdba2dc5f7f40f85b0fce986b2b6e162490cb3`.
+`ca14a7d28f3b95656b831006c22e2e88561c272a19c48aab19b43d6592ca652c`.
 The matching CLI, agent, qualification executable, and Cargo.lock SHA-256
 values were
-`87265be5b6a6c3f27a68516b1e536ddf3ca0e031e82f43aa300c294575578f32`,
-`19d53e9ae569cec3f096cb99d947e5ff73bfad2c502c6fd6f032a102fcaeee2a`,
-`7a9b03fe2f0d924513d612049d149591e11ada3e76b7afc0a574d24575a370f6`,
+`80d0b69686c73516fc3a507f2545af77b405918584176bdb0a96ab3bcf067102`,
+`68219e592a061b9dba7f491d54716354195cd8f8005fa792ab367681dda5352e`,
+`c560b1d92d4e786a026fd2c8002bcb0330c06d620304a08c5df4951ebdaf9ce4`,
 and `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
 Every pass retained committed terminal init-Kill and exec-SignalProcess exits,
-exact DeleteProcess response replay, and the new task Delete receipt through a
-manual replacement plus containerd restart. The replacement returned the
-first task Delete PID, status, and nanosecond timestamp exactly, then exited
-instead of surviving as an unowned process. The qualification ran only
-against a dedicated private containerd service and socket; the system daemon
+exact DeleteProcess and task Delete response replay, and the post-commit
+`WriteStdin` cleanup boundary. The qualification ran only against a dedicated
+private containerd root, state, socket, and systemd unit; the production daemon
 remained active at PID 2485480. Independent audits after every pass found zero
-matching task, container, shim, agent child, qualification process, workload
-process, bundle, cgroup, mount, or private runtime-v2 task-state residue. The
-remaining R7 items stay open until the
-remaining failure boundaries, every advertised driver profile, and the
-published release-artifact compatibility record pass.
+matching task, container, shim, agent or Host child, qualification process,
+workload process, bundle, live Runtime record, cgroup, mount, zombie, or
+prepared operation. The remaining R7 items stay open until the two remaining
+process-I/O forced-cleanup boundaries, every advertised driver profile, and
+the published release-artifact compatibility record pass.
 
 Exit gate: containerd task, restart, I/O, and cleanup suites pass through the
 public SDK without the Box CLI, a direct VMM path, duplicate lifecycle state,
