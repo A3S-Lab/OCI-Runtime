@@ -32,6 +32,8 @@ mod lifecycle;
 mod resize;
 #[path = "rehydration/signal.rs"]
 mod signal;
+#[path = "rehydration/task_delete.rs"]
+mod task_delete;
 #[path = "rehydration/terminal_kill.rs"]
 mod terminal_kill;
 
@@ -74,6 +76,7 @@ pub(crate) async fn qualify_manual_shim_rehydration(
     lifecycle::qualify_committed_init_start(config, prefix).await?;
     exec::qualify_committed_exec_start(config, prefix).await?;
     terminal_kill::qualify_committed_terminal_init_kill(config, prefix).await?;
+    task_delete::qualify(config, prefix).await?;
 
     let id = format!("{prefix}-shim-rehydrate");
     create_container(config, &id).await?;

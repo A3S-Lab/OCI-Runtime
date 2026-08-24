@@ -5,6 +5,8 @@ use containerd_shim_protos::shim_async::Task;
 
 use crate::contract::{OCI_LINUX_RESOURCES_TYPE_URL, OCI_PROCESS_TYPE_URL};
 
+#[path = "task/delete.rs"]
+mod delete;
 #[path = "task/start.rs"]
 mod start;
 
@@ -233,6 +235,12 @@ impl Task for Service {
             )
             .await;
             return Err(error);
+        }
+        if let Err(error) = TaskDeleteReceipt::remove(&bundle) {
+            log::warn!(
+                "task {task_id} committed generation {} but retained a stale task Delete receipt: {error}",
+                record.generation.0
+            );
         }
         if let Err(error) = ShimCreateIntent::remove(&bundle) {
             log::warn!(
@@ -760,42 +768,7 @@ impl Task for Service {
                 .map(|(response, _)| response)
                 .map_err(runtime_error);
         }
-        let state = self.state.lock().await;
-        let task = state
-            .tasks
-            .get(&task_id)
-            .ok_or_else(|| ttrpc_not_found(format!("unknown task {task_id}")))?;
-        let snapshot = task.clone();
-        drop(state);
-        let adapter = self.adapter().await.map_err(runtime_error)?;
-        // Stop all FIFO readers before reserving delete so no new stdin/EOF
-        // mutation can race the runtime's active-process gate. Already-issued
-        // mutations remain cancellation-safe and delete retries the same
-        // durable identity until those claims finish or the bounded deadline
-        // expires.
-        self.stop_task_pumps(&task_id).await;
-        adapter
-            .delete(&snapshot.identity, snapshot.record.generation, false)
-            .await
-            .map_err(runtime_error)?;
-        self.stop_task_monitors(&task_id).await;
-        ShimCreateIntent::remove(&snapshot.bundle).map_err(runtime_error)?;
-        if snapshot.rootfs_mounted {
-            Self::unmount_rootfs(snapshot.bundle.join("rootfs")).await?;
-        }
-        ShimMetadata::remove(&snapshot.bundle).map_err(runtime_error)?;
-        ExecDeleteJournal::remove(&snapshot.bundle).map_err(runtime_error)?;
-        self.state.lock().await.tasks.remove(&task_id);
-        let mut response = api::DeleteResponse::new();
-        let pid = record_pid(&snapshot.record);
-        let code = snapshot.exit.as_ref().map_or(0, adapter::exit_code);
-        let exited_at = snapshot.exited_at.unwrap_or(SystemTime::now());
-        response.set_pid(pid);
-        response.set_exit_status(code);
-        response.set_exited_at(timestamp_from(exited_at));
-        self.publish_delete(&task_id, None, pid, code, exited_at)
-            .await;
-        Ok(response)
+        self.delete_task(task_id).await
     }
 
     async fn pids(

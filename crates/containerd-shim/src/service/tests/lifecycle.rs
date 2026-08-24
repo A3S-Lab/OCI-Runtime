@@ -249,6 +249,7 @@ async fn exec_wait_can_arrive_before_start_and_completes_from_the_recorded_exit(
                 record: task.record.clone(),
                 processes: Arc::new(std::sync::Mutex::new(Vec::new())),
                 exec_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                output: None,
             }),
             IsolationRequest::SharedHostKernel,
         )
@@ -316,6 +317,7 @@ async fn rehydration_reuses_a_starting_exec_already_in_runtime_inventory() {
             record: task.record.clone(),
             processes: Arc::new(std::sync::Mutex::new(Vec::new())),
             exec_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            output: None,
         }),
         IsolationRequest::SharedHostKernel,
     )
@@ -410,6 +412,312 @@ async fn rehydration_fails_closed_when_runtime_generation_drifts() {
     assert!(error.message.contains("no longer matches"));
     assert!(service.state.lock().await.tasks.is_empty());
     assert!(service.monitors.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn rehydration_publishes_task_before_output_replay_can_commit() {
+    use std::io::Read as _;
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let stdout = directory.path().join("stdout");
+    let stdout_c = std::ffi::CString::new(stdout.as_os_str().as_bytes())
+        .expect("output FIFO path without NUL");
+    let result = unsafe { libc::mkfifo(stdout_c.as_ptr(), 0o600) };
+    assert_eq!(
+        result,
+        0,
+        "create output FIFO: {}",
+        std::io::Error::last_os_error()
+    );
+    let mut reader = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(&stdout)
+        .expect("open output FIFO reader");
+    let mut task = task_state(directory.path());
+    task.rootfs_mounted = false;
+    task.stdin.clear();
+    task.stdout = stdout.to_string_lossy().into_owned();
+    task.stderr.clear();
+    task.terminal = true;
+    task.exit = None;
+    task.exited_at = None;
+    metadata_from_task(&task)
+        .store()
+        .expect("store running task metadata");
+    let output = b"output-ready-before-restore".to_vec();
+    let adapter = RuntimeAdapter::from_client(
+        a3s_oci_sdk::RuntimeClient::new(RecoveryService {
+            record: task.record.clone(),
+            processes: Arc::new(std::sync::Mutex::new(Vec::new())),
+            exec_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            output: Some(output.clone()),
+        }),
+        IsolationRequest::SharedHostKernel,
+    );
+    let service = recovery_service_instance(directory.path(), adapter);
+
+    service
+        .restore_task("task-a")
+        .await
+        .expect("restore task with immediately replayable output");
+
+    let expected_cursor = u64::try_from(output.len()).expect("test output length");
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let metadata = ShimMetadata::load(&ShimMetadata::path(directory.path()))
+                .expect("load replayed task metadata")
+                .expect("replayed task metadata");
+            if metadata.output_cursor() == expected_cursor {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("restored output cursor commit deadline");
+    let mut actual = vec![0_u8; output.len()];
+    let read = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            match reader.read(&mut actual) {
+                Ok(0) => panic!("restored output FIFO reached early EOF"),
+                Ok(read) => break read,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("read restored output FIFO: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("restored output FIFO read deadline");
+    assert_eq!(read, output.len());
+    assert_eq!(actual, output);
+    assert_eq!(
+        service
+            .task_snapshot("task-a")
+            .await
+            .expect("restored task")
+            .output_cursor,
+        expected_cursor
+    );
+    service.stop_all_monitors().await;
+    service.stop_all_pumps().await;
+}
+
+#[tokio::test]
+async fn task_delete_response_replays_after_service_reopen_and_delete_shim() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut task = task_state(directory.path());
+    task.rootfs_mounted = false;
+    task.exited_at = Some(SystemTime::UNIX_EPOCH + Duration::new(10, 123_456_789));
+    metadata_from_task(&task)
+        .store()
+        .expect("store stopped task metadata");
+    let runtime = DeletedRuntimeService {
+        calls: Arc::new(std::sync::Mutex::new(DeletedRuntimeCalls::default())),
+        confirmed_delete_mode: Some(DeleteMode::StoppedOnly),
+    };
+    let adapter = RuntimeAdapter::from_client(
+        a3s_oci_sdk::RuntimeClient::new(runtime),
+        IsolationRequest::SharedHostKernel,
+    );
+    let service = recovery_service_instance(directory.path(), adapter);
+    service
+        .state
+        .lock()
+        .await
+        .tasks
+        .insert("task-a".to_string(), task.clone());
+
+    let mut request = api::DeleteRequest::new();
+    request.set_id("task-a".to_string());
+    let first = Task::delete(&service, &ttrpc_context(), request)
+        .await
+        .expect("delete task before response loss");
+
+    assert_eq!(first.pid(), 4242);
+    assert_eq!(first.exit_status(), 42);
+    assert_eq!(first.exited_at().seconds, 10);
+    assert_eq!(first.exited_at().nanos, 123_456_789);
+    assert!(!ShimMetadata::path(directory.path()).exists());
+
+    let (replacement_adapter, _) = recovery_service(&task, Vec::new());
+    let mut replacement = recovery_service_instance(directory.path(), replacement_adapter);
+    replacement
+        .restore_task("task-a")
+        .await
+        .expect("restore after task delete response loss");
+    let mut replacement_waiter = replacement.clone();
+    let replacement_exit = tokio::spawn(async move {
+        Shim::wait(&mut replacement_waiter).await;
+    });
+
+    let mut retry = api::DeleteRequest::new();
+    retry.set_id("task-a".to_string());
+    let replayed = Task::delete(&replacement, &ttrpc_context(), retry)
+        .await
+        .expect("replay durable task delete response");
+    assert_eq!(replayed.pid(), first.pid());
+    assert_eq!(replayed.exit_status(), first.exit_status());
+    assert_eq!(replayed.exited_at(), first.exited_at());
+    tokio::time::timeout(Duration::from_secs(1), replacement_exit)
+        .await
+        .expect("replay-only shim must signal exit after returning task Delete")
+        .expect("replacement exit waiter");
+
+    let cleanup = replacement
+        .delete_shim()
+        .await
+        .expect("replay task delete response from DeleteShim");
+    assert_eq!(cleanup.pid(), first.pid());
+    assert_eq!(cleanup.exit_status(), first.exit_status());
+    assert_eq!(cleanup.exited_at(), first.exited_at());
+}
+
+#[tokio::test]
+async fn uncommitted_task_delete_intent_is_discarded_when_runtime_state_remains() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut task = task_state(directory.path());
+    task.rootfs_mounted = false;
+    metadata_from_task(&task)
+        .store()
+        .expect("store stopped task metadata");
+    TaskDeleteReceipt::new(
+        directory.path(),
+        &task.identity,
+        task.record.generation,
+        4242,
+        42,
+        10_000_000_000,
+    )
+    .expect("prepared task delete receipt")
+    .store()
+    .expect("store prepared task delete receipt");
+    let (adapter, _) = recovery_service(&task, Vec::new());
+    let service = recovery_service_instance(directory.path(), adapter);
+
+    service
+        .restore_task("task-a")
+        .await
+        .expect("restore task whose delete did not commit");
+
+    assert!(service
+        .task_snapshot("task-a")
+        .await
+        .expect("restored task")
+        .exit
+        .is_some());
+    assert!(
+        !TaskDeleteReceipt::path(directory.path()).exists(),
+        "a live exact Runtime generation makes the prepared task delete receipt uncommitted"
+    );
+    service.stop_all_monitors().await;
+    service.stop_all_pumps().await;
+}
+
+#[tokio::test]
+async fn delete_shim_replays_committed_task_delete_receipt_before_metadata_cleanup() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut task = task_state(directory.path());
+    task.rootfs_mounted = false;
+    task.exited_at = Some(SystemTime::UNIX_EPOCH + Duration::new(10, 987_654_321));
+    metadata_from_task(&task)
+        .store()
+        .expect("store stopped task metadata");
+    TaskDeleteReceipt::new(
+        directory.path(),
+        &task.identity,
+        task.record.generation,
+        4242,
+        42,
+        10_987_654_321,
+    )
+    .expect("committed task delete receipt")
+    .store()
+    .expect("store committed task delete receipt");
+    let runtime = DeletedRuntimeService {
+        calls: Arc::new(std::sync::Mutex::new(DeletedRuntimeCalls::default())),
+        confirmed_delete_mode: Some(DeleteMode::StoppedOnly),
+    };
+    let adapter = RuntimeAdapter::from_client(
+        a3s_oci_sdk::RuntimeClient::new(runtime),
+        IsolationRequest::SharedHostKernel,
+    );
+    let mut service = recovery_service_instance(directory.path(), adapter);
+
+    let response = service
+        .delete_shim()
+        .await
+        .expect("finish committed task delete cleanup");
+
+    assert_eq!(response.pid(), 4242);
+    assert_eq!(response.exit_status(), 42);
+    assert_eq!(response.exited_at().seconds, 10);
+    assert_eq!(response.exited_at().nanos, 987_654_321);
+    assert!(!ShimMetadata::path(directory.path()).exists());
+    assert!(TaskDeleteReceipt::path(directory.path()).exists());
+}
+
+#[tokio::test]
+async fn durable_new_task_generation_consumes_stale_task_delete_receipt() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let bundle = std::fs::canonicalize(directory.path()).expect("canonical bundle");
+    std::fs::write(
+        bundle.join("config.json"),
+        include_str!("../../../../../fixtures/native-linux/config.json"),
+    )
+    .expect("write OCI config");
+    let incarnation = ShimMetadata::load_or_create_incarnation(&bundle).expect("task incarnation");
+    let identity =
+        TaskIdentity::with_incarnation("k8s.io", "task-a", incarnation).expect("task identity");
+    TaskDeleteReceipt::new(&bundle, &identity, Generation(6), 3131, 17, 17_000_000_000)
+        .expect("stale task delete receipt")
+        .store()
+        .expect("store stale task delete receipt");
+    let state = StateBuilder::default()
+        .version("1.3.0")
+        .id(identity.container_id.as_str())
+        .status(ContainerState::Created)
+        .pid(4242)
+        .bundle(&bundle)
+        .build()
+        .expect("created OCI state");
+    let record = ContainerRecord {
+        state,
+        generation: Generation(7),
+        driver: DriverKind::NativeLinux,
+        isolation: IsolationClass::SharedHostKernel,
+        config_digest: "0".repeat(64),
+        attachments_digest: None,
+    };
+    let adapter = RuntimeAdapter::from_client(
+        a3s_oci_sdk::RuntimeClient::new(CreateIntentCleanupService {
+            record,
+            calls: Arc::new(std::sync::Mutex::new(CreateIntentCleanupCalls::default())),
+            retryable_create_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }),
+        IsolationRequest::SharedHostKernel,
+    );
+    let service = recovery_service_instance(&bundle, adapter);
+    let mut request = api::CreateTaskRequest::new();
+    request.set_id("task-a".to_string());
+    request.set_bundle(bundle.to_string_lossy().into_owned());
+
+    let response = Task::create(&service, &ttrpc_context(), request)
+        .await
+        .expect("create replacement task generation");
+
+    assert_eq!(response.pid(), 4242);
+    assert!(ShimMetadata::path(&bundle).exists());
+    assert!(
+        !TaskDeleteReceipt::path(&bundle).exists(),
+        "the new generation must consume the prior task Delete receipt only after metadata commit"
+    );
+    service.stop_all_monitors().await;
+    service.stop_all_pumps().await;
 }
 
 #[tokio::test]
