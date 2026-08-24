@@ -1,21 +1,22 @@
 use super::*;
 
 #[derive(Default)]
-struct CommittedWriteCleanupCalls {
+struct CommittedIoCleanupCalls {
     states: Vec<StateRequest>,
     writes: usize,
+    closes: usize,
     kills: Vec<RuntimeKillRequest>,
     deletes: Vec<RuntimeDeleteRequest>,
 }
 
 #[derive(Clone)]
-struct CommittedWriteCleanupService {
+struct CommittedIoCleanupService {
     record: ContainerRecord,
-    calls: Arc<std::sync::Mutex<CommittedWriteCleanupCalls>>,
+    calls: Arc<std::sync::Mutex<CommittedIoCleanupCalls>>,
 }
 
 #[async_trait]
-impl OciRuntimeService for CommittedWriteCleanupService {
+impl OciRuntimeService for CommittedIoCleanupService {
     async fn features(&self) -> a3s_oci_sdk::Result<a3s_oci_sdk::RuntimeInfo> {
         Err(RuntimeError::unsupported("test-features"))
     }
@@ -36,7 +37,7 @@ impl OciRuntimeService for CommittedWriteCleanupService {
         }
         self.calls
             .lock()
-            .expect("committed-write cleanup calls")
+            .expect("committed-I/O cleanup calls")
             .states
             .push(request);
         Ok(self.record.clone())
@@ -52,7 +53,7 @@ impl OciRuntimeService for CommittedWriteCleanupService {
     async fn kill(&self, request: RuntimeKillRequest) -> a3s_oci_sdk::Result<ContainerRecord> {
         self.calls
             .lock()
-            .expect("committed-write cleanup calls")
+            .expect("committed-I/O cleanup calls")
             .kills
             .push(request);
         Ok(self.record.clone())
@@ -61,7 +62,7 @@ impl OciRuntimeService for CommittedWriteCleanupService {
     async fn delete(&self, request: RuntimeDeleteRequest) -> a3s_oci_sdk::Result<()> {
         self.calls
             .lock()
-            .expect("committed-write cleanup calls")
+            .expect("committed-I/O cleanup calls")
             .deletes
             .push(request);
         Ok(())
@@ -77,8 +78,19 @@ impl OciRuntimeService for CommittedWriteCleanupService {
     ) -> a3s_oci_sdk::Result<()> {
         self.calls
             .lock()
-            .expect("committed-write cleanup calls")
+            .expect("committed-I/O cleanup calls")
             .writes += 1;
+        Ok(())
+    }
+
+    async fn close_stdin(
+        &self,
+        _request: a3s_oci_sdk::CloseStdinRequest,
+    ) -> a3s_oci_sdk::Result<()> {
+        self.calls
+            .lock()
+            .expect("committed-I/O cleanup calls")
+            .closes += 1;
         Ok(())
     }
 }
@@ -97,12 +109,12 @@ async fn delete_shim_does_not_replay_a_committed_pending_stdin_write() {
         .store()
         .expect("store pending stdin metadata");
 
-    let calls = Arc::new(std::sync::Mutex::new(CommittedWriteCleanupCalls {
+    let calls = Arc::new(std::sync::Mutex::new(CommittedIoCleanupCalls {
         writes: 1,
-        ..CommittedWriteCleanupCalls::default()
+        ..CommittedIoCleanupCalls::default()
     }));
     let adapter = RuntimeAdapter::from_client(
-        a3s_oci_sdk::RuntimeClient::new(CommittedWriteCleanupService {
+        a3s_oci_sdk::RuntimeClient::new(CommittedIoCleanupService {
             record: task.record.clone(),
             calls: calls.clone(),
         }),
@@ -118,8 +130,54 @@ async fn delete_shim_does_not_replay_a_committed_pending_stdin_write() {
     assert_eq!(response.pid(), 4242);
     assert_eq!(response.exit_status(), 137);
     assert!(!ShimMetadata::path(directory.path()).exists());
-    let calls = calls.lock().expect("committed-write cleanup calls");
+    let calls = calls.lock().expect("committed-I/O cleanup calls");
     assert_eq!(calls.writes, 1, "DeleteShim replayed committed stdin");
+    assert_eq!(calls.closes, 0);
+    assert_eq!(calls.states.len(), 1);
+    assert_eq!(calls.kills.len(), 1);
+    assert_eq!(calls.kills[0].target.generation, Some(Generation(7)));
+    assert_eq!(calls.kills[0].signal.get(), 9);
+    assert!(calls.kills[0].all);
+    assert_eq!(calls.deletes.len(), 1);
+    assert_eq!(calls.deletes[0].target.generation, Some(Generation(7)));
+    assert_eq!(calls.deletes[0].mode, DeleteMode::Force);
+}
+
+#[tokio::test]
+async fn delete_shim_does_not_replay_a_committed_pending_stdin_close() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut task = task_state(directory.path());
+    task.rootfs_mounted = false;
+    task.exit = None;
+    task.stdin_close_state = StdinCloseState::Closing;
+    metadata_from_task(&task)
+        .store()
+        .expect("store pending stdin close metadata");
+
+    let calls = Arc::new(std::sync::Mutex::new(CommittedIoCleanupCalls {
+        closes: 1,
+        ..CommittedIoCleanupCalls::default()
+    }));
+    let adapter = RuntimeAdapter::from_client(
+        a3s_oci_sdk::RuntimeClient::new(CommittedIoCleanupService {
+            record: task.record.clone(),
+            calls: calls.clone(),
+        }),
+        IsolationRequest::SharedHostKernel,
+    );
+    let mut service = recovery_service_instance(directory.path(), adapter);
+
+    let response = service
+        .delete_shim()
+        .await
+        .expect("clean exact generation after committed stdin close");
+
+    assert_eq!(response.pid(), 4242);
+    assert_eq!(response.exit_status(), 137);
+    assert!(!ShimMetadata::path(directory.path()).exists());
+    let calls = calls.lock().expect("committed-I/O cleanup calls");
+    assert_eq!(calls.writes, 0);
+    assert_eq!(calls.closes, 1, "DeleteShim replayed committed stdin close");
     assert_eq!(calls.states.len(), 1);
     assert_eq!(calls.kills.len(), 1);
     assert_eq!(calls.kills[0].target.generation, Some(Generation(7)));

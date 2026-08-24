@@ -201,6 +201,16 @@ pub(crate) struct ExecProcessRequest {
 }
 
 #[derive(Clone, PartialEq, Message)]
+pub(crate) struct CloseIORequest {
+    #[prost(string, tag = "1")]
+    pub(crate) container_id: String,
+    #[prost(string, tag = "2")]
+    pub(crate) exec_id: String,
+    #[prost(bool, tag = "3")]
+    pub(crate) stdin: bool,
+}
+
+#[derive(Clone, PartialEq, Message)]
 pub(crate) struct ResizePtyRequest {
     #[prost(string, tag = "1")]
     pub(crate) container_id: String,
@@ -417,6 +427,12 @@ impl TasksClient {
         ExecProcessRequest,
         Empty,
         "/containerd.services.tasks.v1.Tasks/Exec"
+    );
+    unary_method!(
+        close_io,
+        CloseIORequest,
+        Empty,
+        "/containerd.services.tasks.v1.Tasks/CloseIO"
     );
     unary_method!(
         resize_pty,
