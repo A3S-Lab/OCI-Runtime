@@ -2234,6 +2234,17 @@ settles sequence 1 without a second SignalProcess. The replacement shim and
 restarted containerd must return the same exit, DeleteProcess must preserve it,
 and the original init PID, generation, identity, and shim ownership must remain
 live and unchanged.
+A sixth response-loss gate closes DeleteProcess replay after the exec has
+already been removed from schema-v9 metadata. The shim first stores a separate
+task-identity-, generation-, and bundle-bound receipt containing the exec
+incarnation, PID, exit status, and nanosecond exit time. The main metadata entry
+is then the commit marker: a present exec makes the receipt an uncommitted
+intent that rehydration discards, while an absent exec makes it replayable. The
+real gate verifies that receipt, suspends containerd, kills and reaps the shim,
+launches its replacement from the same bundle, restarts containerd, and
+requires a retry to return the exact first response without disturbing init.
+A new durable incarnation of the same exec ID consumes its old receipt; task
+Delete and DeleteShim remove the journal.
 A separate post-commit Delete boundary removes the exact runtime
 generation before killing the shim, then proves DeleteShim treats only that
 generation's `NotFound` result plus a successful replay of its stable normal or
@@ -2289,29 +2300,33 @@ The latest gate also runs one exec to exit 7, deletes it, reuses the same
 containerd exec ID, restarts containerd while the replacement is Added, and
 requires exit 23 from a fresh SDK process identity. Its durable per-task exec
 sequence survives `DeleteProcess`; exit monitors are incarnation-bound so a
-late result cannot terminate or poison the replacement. The latest
+late result cannot terminate or poison the replacement. The old DeleteProcess
+receipt is removed only after the new incarnation is durable, so neither a
+crash nor a failed receipt cleanup can expose it as the current exec. The latest
 qualification also releases each Native Linux guest mutation record only
 after its Host result is durable, including every derived chunk identity for a
 stdin payload larger than the 4 MiB guest frame limit. On August 24, 2026,
-source revision `ac2323424cbc34b6f175cbfda8ff9b9c5103901d` passed three complete
-68.837, 63.125, and 62.831-second matrices consecutively through unchanged
-Host PID 420621 with installed shim SHA-256
-`a7bcad743a4c495336b91a403e0f7b357e8dedac2c6dd3a98044d225938cf682`.
+source revision `5a6d5f2d817d5951929c2394dff57ef925dd5822` passed three complete
+65.15, 66.76, and 64.11-second matrices consecutively through unchanged Host
+PID 436920 with installed shim SHA-256
+`801c6ebd6bb6a41f1049dbd64d6ae60165a0914254edb953b2eaf633c6c368f2`.
 The matching Host, agent, qualification executable, and Cargo.lock SHA-256
 values were
-`8ddfc57e159632001bc7afe40f548876da2f04e81f9469bc5be8be9bb55be0ad`,
-`dac069562f4bca28cfac82fcf6b9638d2f5826cb09a0f9d96a04ecd9d01a4c24`,
-`e1e3e613ece5f3afecd7b20ca29e4fa8e3ea967a902188319d4dfaa2f1b77285`,
+`53bf14d72adb347b35d19f936bf91d15adcc3cce65aa88f63886746f07f5ddb2`,
+`28dad74972b28b400a9e5e9f9b38ba59aeaf6662532dfefc7dd5527ff17d6b48`,
+`fa3a513bf2f5aba01a511bc953dcfc5cb1bb05080fbd58bb993d9a0a44a10363`,
 and `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
 Every pass included both committed terminal init-Kill replacement with normal
 exit 42 and committed terminal exec-SignalProcess replacement with normal exit
-29. Replacement-shim Wait, restarted-containerd Wait, and Delete or
-DeleteProcess retained the exact exits while the terminal exec gate kept init
-Running at its original PID. The qualification recreates the killed task ID
+29. Replacement-shim Wait and restarted-containerd Wait retained the exact
+exits; the first and replayed DeleteProcess responses retained the same PID,
+status, and exit timestamp while the terminal exec gate kept init Running at
+its original PID. The qualification recreates the killed task ID
 with a new incarnation and generation and leaves no matching task, container,
 shim, agent child, qualification process, workload process, bundle, live
 runtime record, prepared Host operation, session, marker, workload cgroup, or
-zombie. An independent audit also found zero matching mounts and Host children;
+zombie. Independent audits after every pass also found zero matching mounts and
+Host children;
 completed operation records and generation fences remained only inside the
 dedicated test Runtime root. The original installed shim was restored at
 SHA-256

@@ -6,6 +6,34 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Crash-stable containerd DeleteProcess responses. A separate v1 receipt
+  journal stores the exact exec incarnation, PID, exit status, and nanosecond
+  exit time under the task identity, Runtime generation, and bundle before the
+  shim removes that exec from schema-v9 metadata. The main metadata entry is
+  the commit marker: rehydration discards an intent while the exec remains and
+  replays the receipt after the exec is absent. A new durable incarnation of
+  the same exec ID consumes the old receipt, and full task Delete or DeleteShim
+  removes the journal. Unit gates cover response replay after service reopen,
+  uncommitted-intent reconciliation, and receipt removal during exec-ID reuse.
+  The real-containerd gate verifies the exact receipt, suspends containerd,
+  kills and reaps the current shim, launches its replacement from the same
+  bundle, restarts containerd, and requires a retry to reproduce the first
+  response field-for-field while init stays Running. Source
+  revision `5a6d5f2d817d5951929c2394dff57ef925dd5822` passed three complete
+  Ubuntu arm64/containerd 2.2.2 matrices consecutively in 65.15, 66.76, and
+  64.11 seconds through unchanged Host PID 436920. Release Host, agent, shim,
+  qualification executable, and Cargo.lock SHA-256 values were
+  `53bf14d72adb347b35d19f936bf91d15adcc3cce65aa88f63886746f07f5ddb2`,
+  `28dad74972b28b400a9e5e9f9b38ba59aeaf6662532dfefc7dd5527ff17d6b48`,
+  `801c6ebd6bb6a41f1049dbd64d6ae60165a0914254edb953b2eaf633c6c368f2`,
+  `fa3a513bf2f5aba01a511bc953dcfc5cb1bb05080fbd58bb993d9a0a44a10363`,
+  and `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
+  Independent audits after every pass found no matching task, container,
+  bundle, cgroup, mount, live Runtime record, shim, agent, qualification, or
+  Host-child process and no zombie or prepared operation. The original
+  installed shim was restored at SHA-256
+  `a0e7dce493308ebea0b4642dd81a9e489109a8b3709f2a1ede62b015cc123482`;
+  the temporary Runtime root, release target, checkout, and logs were removed.
 - Committed terminal exec-SignalProcess settlement through a live shim
   replacement. Before replaying a pending exec signal, rehydration performs an
   exact zero-timeout WaitProcess. A durable Runtime exit moves the exec to

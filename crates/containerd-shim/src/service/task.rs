@@ -356,6 +356,10 @@ impl Task for Service {
                 "exec {exec_id} already exists"
             )));
         }
+        let mut delete_journal =
+            ExecDeleteJournal::load_or_new(&task.bundle, &task.identity, task.record.generation)
+                .map_err(runtime_error)?;
+        let removed_delete_receipt = delete_journal.remove_receipt(&exec_id);
         let incarnation = task.exec_sequence.checked_add(1).ok_or_else(|| {
             runtime_error(
                 RuntimeError::new(
@@ -375,6 +379,13 @@ impl Task for Service {
         task.exec_sequence = incarnation;
         task.execs.insert(exec_id.clone(), exec);
         drop(state);
+        if removed_delete_receipt {
+            if let Err(error) = delete_journal.store() {
+                log::warn!(
+                    "exec {exec_id} committed incarnation {incarnation} but retained its stale DeleteProcess receipt: {error}"
+                );
+            }
+        }
         self.publish_exec_added(&task_id, &exec_id).await;
         Ok(api::Empty::new())
     }
@@ -664,8 +675,19 @@ impl Task for Service {
                 .tasks
                 .get(&task_id)
                 .ok_or_else(|| ttrpc_not_found(format!("unknown task {task_id}")))?;
+            let mut delete_journal = ExecDeleteJournal::load_or_new(
+                &task.bundle,
+                &task.identity,
+                task.record.generation,
+            )
+            .map_err(runtime_error)?;
             let Some(exec) = task.execs.get(&exec_id) else {
-                return Err(ttrpc_not_found(format!("unknown exec {exec_id}")));
+                let receipt = delete_journal
+                    .receipt(&exec_id)
+                    .ok_or_else(|| ttrpc_not_found(format!("unknown exec {exec_id}")))?;
+                return exec_delete_response(receipt)
+                    .map(|(response, _)| response)
+                    .map_err(runtime_error);
             };
             if exec.record.is_some() && exec.exit.is_none() {
                 return Err(ttrpc::Error::RpcStatus(ttrpc::get_status(
@@ -674,12 +696,6 @@ impl Task for Service {
                 )));
             }
             let exec = exec.clone();
-            let mut persisted = task.clone();
-            persisted.execs.remove(&exec_id);
-            metadata_from_task(&persisted)
-                .store()
-                .map_err(runtime_error)?;
-            let mut response = api::DeleteResponse::new();
             let pid = exec
                 .record
                 .as_ref()
@@ -687,8 +703,38 @@ impl Task for Service {
                 .unwrap_or(0);
             let code = exec.exit.as_ref().map_or(0, adapter::exit_code);
             let exited_at = exec.exited_at.unwrap_or(SystemTime::now());
-            response.set_pid(pid);
-            response.set_exit_status(code);
+            // A retained entry for an exec that is still present in the main
+            // metadata is only a pre-commit intent. Replace it from the current
+            // terminal record; an absent exec is the commit marker that turns
+            // the same journal entry into a replayable response.
+            delete_journal.remove_receipt(&exec_id);
+            let receipt = ExecDeleteReceipt::new(
+                exec_id.clone(),
+                exec.incarnation,
+                pid,
+                code,
+                system_time_to_unix_nanos(exited_at).ok_or_else(|| {
+                    runtime_error(
+                        RuntimeError::new(
+                            ErrorCode::FailedPrecondition,
+                            format!(
+                                "containerd exec {exec_id} records an unrepresentable exit time"
+                            ),
+                        )
+                        .for_operation("containerd-delete-process-prepare"),
+                    )
+                })?,
+            )
+            .map_err(runtime_error)?;
+            delete_journal
+                .insert(receipt.clone())
+                .map_err(runtime_error)?;
+            delete_journal.store().map_err(runtime_error)?;
+            let mut persisted = task.clone();
+            persisted.execs.remove(&exec_id);
+            metadata_from_task(&persisted)
+                .store()
+                .map_err(runtime_error)?;
             state
                 .tasks
                 .get_mut(&task_id)
@@ -710,8 +756,9 @@ impl Task for Service {
             self.stop_process_monitor(&task_id, Some(&exec_id)).await;
             self.publish_delete(&task_id, Some(&exec_id), pid, code, exited_at)
                 .await;
-            response.set_exited_at(timestamp_from(exited_at));
-            return Ok(response);
+            return exec_delete_response(&receipt)
+                .map(|(response, _)| response)
+                .map_err(runtime_error);
         }
         let state = self.state.lock().await;
         let task = state
@@ -737,6 +784,7 @@ impl Task for Service {
             Self::unmount_rootfs(snapshot.bundle.join("rootfs")).await?;
         }
         ShimMetadata::remove(&snapshot.bundle).map_err(runtime_error)?;
+        ExecDeleteJournal::remove(&snapshot.bundle).map_err(runtime_error)?;
         self.state.lock().await.tasks.remove(&task_id);
         let mut response = api::DeleteResponse::new();
         let pid = record_pid(&snapshot.record);
