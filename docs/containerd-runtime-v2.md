@@ -7,7 +7,7 @@ The shim is a development adapter. It does not make any runtime driver
 
 | containerd | Host | Runtime profile | Status | Retained gate |
 | --- | --- | --- | --- | --- |
-| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Three consecutive same-Host real lifecycle matrices with guest-journal reclamation, exec, deleted exec-ID reuse, FIFO/PTY I/O, repeated controls and signals, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed init-Start, exec-Start, live init-Kill, terminal init-Kill and exec-SignalProcess exit adoption, Pause, Resume, Update, WriteStdin, CloseStdin, SignalProcess, and ResizePty rehydration, post-commit Create/Start/Kill/Delete/Exec/SignalProcess/control cleanup, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
+| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Three consecutive same-Host real lifecycle matrices with guest-journal reclamation, exec, deleted exec-ID reuse, exact `DeleteProcess` response replay, FIFO/PTY I/O, repeated controls and signals, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed init-Start, exec-Start, live init-Kill, terminal init-Kill and exec-SignalProcess exit adoption, Pause, Resume, Update, WriteStdin, CloseStdin, SignalProcess, and ResizePty rehydration, post-commit Create/Start/Kill/Delete/Exec/SignalProcess/control cleanup, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
 | 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | Compatibility record pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
 | Any | Utility-VM profile | `dedicated-vm` | Not yet qualified through containerd | Driver-specific gate pending |
@@ -27,15 +27,15 @@ same. The contract also freezes the OCI Features, Process, LinuxResources, and
 versioned A3S CreateOptions type URLs consumed by those methods.
 
 The August 24, 2026 arm64 requalification used source revision
-`ac2323424cbc34b6f175cbfda8ff9b9c5103901d`, containerd 2.2.2, and Linux
-7.0.11-orbstack-00360-gc9bc4d96ac70. Three complete 68.837, 63.125, and
-62.831-second matrices ran consecutively through unchanged Host PID 420621.
+`5a6d5f2d817d5951929c2394dff57ef925dd5822`, containerd 2.2.2, and Linux
+7.0.11-orbstack-00360-gc9bc4d96ac70. Three complete 65.15, 66.76, and
+64.11-second matrices ran consecutively through unchanged Host PID 436920.
 The release-built shim SHA-256 was
-`a7bcad743a4c495336b91a403e0f7b357e8dedac2c6dd3a98044d225938cf682`.
+`801c6ebd6bb6a41f1049dbd64d6ae60165a0914254edb953b2eaf633c6c368f2`.
 The Host CLI, agent, and qualification executable SHA-256 values were
-`8ddfc57e159632001bc7afe40f548876da2f04e81f9469bc5be8be9bb55be0ad`,
-`dac069562f4bca28cfac82fcf6b9638d2f5826cb09a0f9d96a04ecd9d01a4c24`,
-and `e1e3e613ece5f3afecd7b20ca29e4fa8e3ea967a902188319d4dfaa2f1b77285`.
+`53bf14d72adb347b35d19f936bf91d15adcc3cce65aa88f63886746f07f5ddb2`,
+`28dad74972b28b400a9e5e9f9b38ba59aeaf6662532dfefc7dd5527ff17d6b48`,
+and `fa3a513bf2f5aba01a511bc953dcfc5cb1bb05080fbd58bb993d9a0a44a10363`.
 The Cargo.lock SHA-256 was
 `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
 Every matrix ran an exec to exit 7, deleted it, reused the same containerd exec
@@ -53,14 +53,17 @@ The same matrices retained live replacement of committed init Start, exec
 Start, live init Kill, terminal init Kill, terminal exec SignalProcess, Pause,
 Resume, and Update. For terminal exec SignalProcess, every pass committed exact
 sequence 1 SIGTERM and normal exit 29 while the original shim could not observe
-the response. Replacement-shim and restarted-containerd Wait plus
-DeleteProcess returned exit 29 without another SignalProcess, while init stayed
-Running at its original PID. An independent post-run audit reported zero tasks,
-containers, task bundles, workload cgroups, matching mounts, live Runtime
-container records, exact shim, agent, or qualification processes, Host child
-processes, zombies, and prepared operations; containerd remained active and
-the one expected Host service remained live. Completed global operation records
-and generation fences remained only inside the dedicated test Runtime root.
+the response. Replacement-shim and restarted-containerd Wait returned exit 29
+without another SignalProcess. The first DeleteProcess then retained a durable
+identity- and generation-bound receipt; after another shim replacement and
+containerd restart, a retry returned the identical PID, exit status, and
+nanosecond exit timestamp while init stayed Running at its original PID.
+Independent audits after every pass reported zero tasks, containers, task
+bundles, workload cgroups, matching mounts, live Runtime container records,
+exact shim, agent, or qualification processes, Host child processes, zombies,
+and prepared operations; containerd remained active and the one expected Host
+service remained live. Completed global operation records and generation fences
+remained only inside the dedicated test Runtime root.
 After the audit, the original installed shim was restored at SHA-256
 `a0e7dce493308ebea0b4642dd81a9e489109a8b3709f2a1ede62b015cc123482`,
 and the Runtime root, 1.2 GiB release target, checkout, and logs were removed.
@@ -187,6 +190,16 @@ containerd exec ID therefore produces a different SDK process identity and a
 fresh set of exec-scoped mutation identities, including after shim or
 containerd restart.
 
+DeleteProcess response durability is separate from schema-v9 task metadata.
+Before removing a stopped exec from that metadata, the shim atomically writes
+`a3s-oci-shim-exec-delete-v1.json` with the task identity, Runtime generation,
+bundle, exec incarnation, PID, exit status, and nanosecond exit time. Presence
+of the exec in main metadata means the receipt is only a pre-commit intent and
+rehydration discards it. Absence of the exec is the commit marker, so a
+replacement can replay the exact response. A new exec with the same ID first
+commits its fresh incarnation to main metadata and then consumes the old
+receipt; task Delete and DeleteShim remove the entire journal.
+
 The shim stores its incarnation and generation-bound metadata in the
 containerd-owned task bundle. Rehydration verifies namespace, task ID,
 generation, driver, and isolation against the host service and fails closed on
@@ -260,7 +273,7 @@ union.
 | State | Exact-generation `state` or process inventory plus durable exit evidence |
 | Wait | `wait` or `wait_process` |
 | Kill | `kill` for init, `signal_process` for exec |
-| Delete / DeleteProcess | Stopped lifecycle `delete`, or durable removal of the current exec while retaining its allocation sequence |
+| Delete / DeleteProcess | Stopped lifecycle `delete`, or durable removal of the current exec while retaining its allocation sequence and an exact replayable response receipt |
 | Exec | Decode the OCI `Process` and durably allocate a fresh incarnation; defer the SDK `exec` call until Start |
 | ResizePty | Exact-process `resize` |
 | CloseIO | Drain the FIFO and call `close_stdin` once |
@@ -393,6 +406,14 @@ then requires a new SDK process identity and exit 23 from the replacement.
 The deleted incarnation must not replay its Exec operation or publish a late
 exit into the replacement.
 
+The DeleteProcess response gate verifies the exact receipt after deleting a
+normally exited exec, suspends containerd, kills and reaps the current shim,
+launches its replacement from the same bundle, and restarts containerd. A
+direct retry through the replacement must return the first response's exact
+PID, status, seconds, and nanoseconds. The receipt must remain bound to the
+same task incarnation and Runtime generation, while the init process and
+replacement-shim ownership remain unchanged.
+
 The gate also suspends containerd, kills the live shim, starts a replacement
 shim from the same bundle and socket, kills the suspended daemon, and restarts
 containerd. A live terminal exec must retain its workload PID, incarnation,
@@ -499,7 +520,8 @@ retains the exit, the shim persists `Exited` plus the observation time and
 settles the sequence without another `SignalProcess`; if the exec remains live,
 `DeadlineExceeded` leaves the existing replay path unchanged. The replacement
 shim and restarted containerd must return the same exit while init remains
-Running, and `DeleteProcess` must retain that exit.
+Running. DeleteProcess must retain that exit and its response receipt must
+survive the subsequent replacement boundary described above.
 
 The committed init-Kill rehydration gate retains sequence 1 SIGSTOP with
 `all=true`, commits its exact `kill-1` identity while the original shim cannot
