@@ -37,6 +37,7 @@ struct MetadataDocument {
 struct ExecStdinEvidence {
     exec_id: String,
     incarnation: u64,
+    #[serde(default)]
     stdin_sequence: u64,
     pending_stdin_write: Option<PendingStdinEvidence>,
 }
@@ -45,6 +46,25 @@ struct ExecStdinEvidence {
 struct PendingStdinEvidence {
     sequence: u64,
     data: Vec<u8>,
+}
+
+#[test]
+fn pending_write_evidence_defaults_an_omitted_zero_stdin_sequence() {
+    let document: MetadataDocument = serde_json::from_value(serde_json::json!({
+        "schema_version": 9,
+        "exec_sequence": 1,
+        "execs": [{
+            "exec_id": EXEC_ID,
+            "incarnation": 1,
+            "pending_stdin_write": {
+                "sequence": 1,
+                "data": COMMITTED_STDIN
+            }
+        }]
+    }))
+    .expect("decode metadata that elides a zero stdin sequence");
+
+    assert_eq!(document.execs[0].stdin_sequence, 0);
 }
 
 pub(super) async fn qualify_write_stdin_effect_committed_shim_sigkill(
