@@ -22,7 +22,8 @@ mod process_io;
 mod shared;
 
 pub(crate) use shared::{
-    containerd_exec_operation_id, containerd_operation_id, containerd_process_id, runtime_client,
+    containerd_exec_operation_id, containerd_operation_id, containerd_process_id,
+    load_shim_address, runtime_client,
 };
 
 const CREATE_INTENT_FILE_NAME: &str = "a3s-oci-shim-create-v1.json";
@@ -105,6 +106,7 @@ pub(crate) async fn qualify_shim_sigkill(
     controls::qualify_update_effect_committed_shim_sigkill(config, prefix).await?;
     process_io::qualify_write_stdin_effect_committed_shim_sigkill(config, prefix).await?;
     process_io::qualify_close_stdin_effect_committed_shim_sigkill(config, prefix).await?;
+    process_io::qualify_resize_effect_committed_shim_sigkill(config, prefix).await?;
     for stage in [
         PartialShimStage::InitCreated,
         PartialShimStage::ExecAdded,

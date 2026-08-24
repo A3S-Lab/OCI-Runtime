@@ -5,6 +5,7 @@ struct CommittedIoCleanupCalls {
     states: Vec<StateRequest>,
     writes: usize,
     closes: usize,
+    resizes: usize,
     kills: Vec<RuntimeKillRequest>,
     deletes: Vec<RuntimeDeleteRequest>,
 }
@@ -93,6 +94,14 @@ impl OciRuntimeService for CommittedIoCleanupService {
             .closes += 1;
         Ok(())
     }
+
+    async fn resize(&self, _request: a3s_oci_sdk::ResizeRequest) -> a3s_oci_sdk::Result<()> {
+        self.calls
+            .lock()
+            .expect("committed-I/O cleanup calls")
+            .resizes += 1;
+        Ok(())
+    }
 }
 
 #[tokio::test]
@@ -133,6 +142,7 @@ async fn delete_shim_does_not_replay_a_committed_pending_stdin_write() {
     let calls = calls.lock().expect("committed-I/O cleanup calls");
     assert_eq!(calls.writes, 1, "DeleteShim replayed committed stdin");
     assert_eq!(calls.closes, 0);
+    assert_eq!(calls.resizes, 0);
     assert_eq!(calls.states.len(), 1);
     assert_eq!(calls.kills.len(), 1);
     assert_eq!(calls.kills[0].target.generation, Some(Generation(7)));
@@ -178,6 +188,63 @@ async fn delete_shim_does_not_replay_a_committed_pending_stdin_close() {
     let calls = calls.lock().expect("committed-I/O cleanup calls");
     assert_eq!(calls.writes, 0);
     assert_eq!(calls.closes, 1, "DeleteShim replayed committed stdin close");
+    assert_eq!(calls.resizes, 0);
+    assert_eq!(calls.states.len(), 1);
+    assert_eq!(calls.kills.len(), 1);
+    assert_eq!(calls.kills[0].target.generation, Some(Generation(7)));
+    assert_eq!(calls.kills[0].signal.get(), 9);
+    assert!(calls.kills[0].all);
+    assert_eq!(calls.deletes.len(), 1);
+    assert_eq!(calls.deletes[0].target.generation, Some(Generation(7)));
+    assert_eq!(calls.deletes[0].mode, DeleteMode::Force);
+}
+
+#[tokio::test]
+async fn delete_shim_does_not_replay_a_committed_pending_resize() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut task = task_state(directory.path());
+    task.rootfs_mounted = false;
+    task.exit = None;
+    task.terminal = true;
+    task.pending_resize = Some(
+        PendingResize::new(
+            1,
+            TerminalSize {
+                width: 166,
+                height: 52,
+            },
+        )
+        .expect("bounded pending terminal resize"),
+    );
+    metadata_from_task(&task)
+        .store()
+        .expect("store pending terminal resize metadata");
+
+    let calls = Arc::new(std::sync::Mutex::new(CommittedIoCleanupCalls {
+        resizes: 1,
+        ..CommittedIoCleanupCalls::default()
+    }));
+    let adapter = RuntimeAdapter::from_client(
+        a3s_oci_sdk::RuntimeClient::new(CommittedIoCleanupService {
+            record: task.record.clone(),
+            calls: calls.clone(),
+        }),
+        IsolationRequest::SharedHostKernel,
+    );
+    let mut service = recovery_service_instance(directory.path(), adapter);
+
+    let response = service
+        .delete_shim()
+        .await
+        .expect("clean exact generation after committed terminal resize");
+
+    assert_eq!(response.pid(), 4242);
+    assert_eq!(response.exit_status(), 137);
+    assert!(!ShimMetadata::path(directory.path()).exists());
+    let calls = calls.lock().expect("committed-I/O cleanup calls");
+    assert_eq!(calls.writes, 0);
+    assert_eq!(calls.closes, 0);
+    assert_eq!(calls.resizes, 1, "DeleteShim replayed committed resize");
     assert_eq!(calls.states.len(), 1);
     assert_eq!(calls.kills.len(), 1);
     assert_eq!(calls.kills[0].target.generation, Some(Generation(7)));

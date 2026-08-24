@@ -1,12 +1,16 @@
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::time::Duration;
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    CloseStdinRequest, ContainerTarget, Generation, OperationContext, ProcessTarget, StateRequest,
-    WaitProcessRequest,
+    ContainerTarget, Generation, OperationContext, ProcessTarget, ResizeRequest, StateRequest,
+    TerminalSize,
 };
 use prost_types::Any;
+use serde::Deserialize;
+use tokio::io::AsyncBufReadExt;
 
 use crate::api::{
     ContainersClient, CreateTaskRequest, ExecProcessRequest, GetContainerRequest, StartRequest,
@@ -19,16 +23,41 @@ use super::super::{
     containerd_exec_operation_id, containerd_process_id, find_exact_shim_pid, load_shim_address,
     runtime_client, wait_for_runtime_absence, wait_for_shim_cleanup, SuspendedProcess,
 };
-use super::{MetadataDocument, StdinCloseEvidence};
 
-const EXEC_ID: &str = "committed-close-stdin-exec";
-const EXEC_EXIT_STATUS: i32 = 29;
+const EXEC_ID: &str = "committed-resize-exec";
+const COMMITTED_SIZE: TerminalSize = TerminalSize {
+    width: 166,
+    height: 52,
+};
 
-pub(in super::super) async fn qualify_close_stdin_effect_committed_shim_sigkill(
+#[derive(Debug, Deserialize)]
+struct MetadataDocument {
+    schema_version: u64,
+    exec_sequence: u64,
+    execs: Vec<ExecResizeEvidence>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExecResizeEvidence {
+    exec_id: String,
+    incarnation: u64,
+    #[serde(default)]
+    resize_sequence: u64,
+    pending_resize: Option<PendingResizeEvidence>,
+    terminal_size: Option<TerminalSize>,
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+struct PendingResizeEvidence {
+    sequence: u64,
+    size: TerminalSize,
+}
+
+pub(in super::super) async fn qualify_resize_effect_committed_shim_sigkill(
     config: &QualificationConfig,
     prefix: &str,
 ) -> TestResult<()> {
-    let id = format!("{prefix}-shim-kill-close-stdin-committed");
+    let id = format!("{prefix}-shim-kill-resize-committed");
     create_container(config, &id).await?;
     let channel = connect_ready(config).await?;
     let rootfs = task_rootfs(config, &channel, &id).await?;
@@ -41,7 +70,7 @@ pub(in super::super) async fn qualify_close_stdin_effect_committed_shim_sigkill(
             &config.namespace,
         )?)
         .await
-        .map_err(|error| rpc_error("create committed-close task", error))?
+        .map_err(|error| rpc_error("create committed-resize task", error))?
         .into_inner();
     let started = TasksClient::new(channel.clone())
         .start(namespaced(
@@ -52,36 +81,31 @@ pub(in super::super) async fn qualify_close_stdin_effect_committed_shim_sigkill(
             &config.namespace,
         )?)
         .await
-        .map_err(|error| rpc_error("start committed-close task", error))?
+        .map_err(|error| rpc_error("start committed-resize task", error))?
         .into_inner();
     if created.pid == 0 || started.pid != created.pid {
         return Err(qualification_error(format!(
-            "committed-close task PIDs were create={} and start={}; expected one stable nonzero PID",
+            "committed-resize task PIDs were create={} and start={}; expected one stable nonzero PID",
             created.pid, started.pid
         ))
         .into());
     }
 
     let bundle = config.bundle(&id);
-    let stdin_path = bundle.join("committed-close-stdin-exec.stdin");
-    terminal::create_fifo(&stdin_path).await?;
-    let stdin = tokio::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&stdin_path)
-        .await
-        .map_err(|error| {
-            qualification_error(format!("open committed-close FIFO for read/write: {error}"))
-        })?;
+    let stdout_path = bundle.join("committed-resize-exec.stdout");
+    terminal::create_fifo(&stdout_path).await?;
     let spec = serde_json::json!({
-        "terminal": false,
+        "terminal": true,
         "user": {"uid": 0, "gid": 0},
         "args": [
             "/bin/sh",
             "-c",
-            "if IFS= read -r line; then exit 91; fi; exit 29"
+            "trap '' WINCH; printf 'resize-ready\\n'; while :; do sleep 1; done"
         ],
-        "env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
+        "env": [
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "TERM=xterm"
+        ],
         "cwd": "/",
         "noNewPrivileges": true
     });
@@ -90,11 +114,14 @@ pub(in super::super) async fn qualify_close_stdin_effect_committed_shim_sigkill(
             ExecProcessRequest {
                 container_id: id.clone(),
                 exec_id: EXEC_ID.to_string(),
-                stdin: stdin_path.to_string_lossy().into_owned(),
+                stdout: stdout_path.to_string_lossy().into_owned(),
+                terminal: true,
                 spec: Some(Any {
                     type_url: crate::PROCESS_SPEC_TYPE.to_string(),
                     value: serde_json::to_vec(&spec).map_err(|error| {
-                        qualification_error(format!("encode committed-close exec process: {error}"))
+                        qualification_error(format!(
+                            "encode committed-resize terminal process: {error}"
+                        ))
                     })?,
                 }),
                 ..Default::default()
@@ -102,7 +129,7 @@ pub(in super::super) async fn qualify_close_stdin_effect_committed_shim_sigkill(
             &config.namespace,
         )?)
         .await
-        .map_err(|error| rpc_error("add committed-close exec", error))?;
+        .map_err(|error| rpc_error("add committed-resize exec", error))?;
     let exec = TasksClient::new(channel.clone())
         .start(namespaced(
             StartRequest {
@@ -112,37 +139,36 @@ pub(in super::super) async fn qualify_close_stdin_effect_committed_shim_sigkill(
             &config.namespace,
         )?)
         .await
-        .map_err(|error| rpc_error("start committed-close exec", error))?
+        .map_err(|error| rpc_error("start committed-resize exec", error))?
         .into_inner();
     if exec.pid == 0 || exec.pid == started.pid {
         return Err(qualification_error(format!(
-            "committed-close exec PID {} must be nonzero and distinct from init PID {}",
+            "committed-resize exec PID {} must be nonzero and distinct from init PID {}",
             exec.pid, started.pid
         ))
         .into());
     }
+    let mut output =
+        tokio::io::BufReader::new(tokio::fs::File::open(&stdout_path).await.map_err(|error| {
+            qualification_error(format!("open committed-resize terminal output: {error}"))
+        })?)
+        .lines();
+    terminal::expect_line(&mut output, "resize-ready", "committed-resize exec startup").await?;
 
     let identity = read_runtime_identity(config, &id).await?;
     let shim_address = load_shim_address(&bundle).await?;
     let host_pid = super::super::find_runtime_host_pid(config).await?;
     let shim_pid = find_exact_shim_pid(config, &id).await?;
     let mut suspended_host =
-        SuspendedProcess::stop(host_pid, "committed-close A3S OCI host service")?;
-    let mut close_call = spawn_close_io(&shim_address, &id);
-    wait_for_closing_stdin(&bundle, &mut close_call).await?;
-    let suspended_shim = SuspendedProcess::stop(shim_pid, "committed-close shim")?;
-    suspended_host.resume("committed-close A3S OCI host service")?;
+        SuspendedProcess::stop(host_pid, "committed-resize A3S OCI host service")?;
+    let mut resize_call = spawn_resize(&shim_address, &id);
+    wait_for_pending_resize(&bundle, &mut resize_call).await?;
+    let suspended_shim = SuspendedProcess::stop(shim_pid, "committed-resize shim")?;
+    suspended_host.resume("committed-resize A3S OCI host service")?;
 
     let process = exact_process_target(config, &id, &identity)?;
-    commit_runtime_close(config, &id, &identity, &process).await?;
-    let exit = wait_runtime_process(config, process).await?;
-    if exit.exit_code != Some(EXEC_EXIT_STATUS) || exit.signal.is_some() || exit.oom_killed {
-        return Err(qualification_error(format!(
-            "committed Runtime CloseStdin produced exitCode={:?}, signal={:?}, oomKilled={}; expected exit {EXEC_EXIT_STATUS}",
-            exit.exit_code, exit.signal, exit.oom_killed
-        ))
-        .into());
-    }
+    commit_runtime_resize(config, &id, &identity, &process).await?;
+    wait_for_terminal_size(exec.pid, COMMITTED_SIZE).await?;
     let init = runtime_client(config)
         .await?
         .state(StateRequest {
@@ -154,7 +180,7 @@ pub(in super::super) async fn qualify_close_stdin_effect_committed_shim_sigkill(
         .await
         .map_err(|error| {
             qualification_error(format!(
-                "read init state after committed Runtime CloseStdin: {error}"
+                "read init state after committed Runtime ResizePty: {error}"
             ))
         })?;
     if init.generation != Generation(identity.generation)
@@ -162,7 +188,7 @@ pub(in super::super) async fn qualify_close_stdin_effect_committed_shim_sigkill(
         || init.state.pid().and_then(|pid| u32::try_from(pid).ok()) != Some(started.pid)
     {
         return Err(qualification_error(format!(
-            "committed Runtime CloseStdin changed init generation, state, or PID: generation={}, status={}, pid={:?}",
+            "committed Runtime ResizePty changed init generation, state, or PID: generation={}, status={}, pid={:?}",
             init.generation.0,
             init.state.status(),
             init.state.pid()
@@ -170,9 +196,9 @@ pub(in super::super) async fn qualify_close_stdin_effect_committed_shim_sigkill(
         .into());
     }
 
-    suspended_shim.kill("committed-close shim")?;
-    drop(stdin);
-    let lost_close_response = expect_lost_close_response(&mut close_call).await;
+    suspended_shim.kill("committed-resize shim")?;
+    drop(output);
+    let lost_resize_response = expect_lost_resize_response(&mut resize_call).await;
     wait_for_shim_cleanup(config, &channel, &id, shim_pid, &[started.pid, exec.pid]).await?;
     wait_for_runtime_absence(config, identity.container_id).await?;
     ContainersClient::new(channel)
@@ -183,15 +209,15 @@ pub(in super::super) async fn qualify_close_stdin_effect_committed_shim_sigkill(
         .await
         .map_err(|error| {
             rpc_error(
-                "read caller-owned metadata after committed Runtime CloseStdin and shim SIGKILL",
+                "read caller-owned metadata after committed Runtime ResizePty and shim SIGKILL",
                 error,
             )
         })?;
-    lost_close_response?;
+    lost_resize_response?;
     delete_container(config, &id).await
 }
 
-fn spawn_close_io(address: &str, id: &str) -> tokio::task::JoinHandle<TestResult<()>> {
+fn spawn_resize(address: &str, id: &str) -> tokio::task::JoinHandle<TestResult<()>> {
     let address = address.to_string();
     let id = id.to_string();
     tokio::spawn(async move {
@@ -199,22 +225,23 @@ fn spawn_close_io(address: &str, id: &str) -> tokio::task::JoinHandle<TestResult
             .await
             .map_err(|error| {
                 qualification_error(format!(
-                    "connect committed-close shim at {address}: {error}"
+                    "connect committed-resize shim at {address}: {error}"
                 ))
             })?;
         let task = containerd_shim_protos::shim::shim_ttrpc_async::TaskClient::new(client);
-        let mut request = containerd_shim_protos::api::CloseIORequest::new();
+        let mut request = containerd_shim_protos::api::ResizePtyRequest::new();
         request.set_id(id.clone());
         request.set_exec_id(EXEC_ID.to_string());
-        request.set_stdin(true);
-        task.close_io(
+        request.set_width(u32::from(COMMITTED_SIZE.width));
+        request.set_height(u32::from(COMMITTED_SIZE.height));
+        task.resize_pty(
             containerd_shim_protos::ttrpc::context::Context::default(),
             &request,
         )
         .await
         .map_err(|error| -> TestError {
             qualification_error(format!(
-                "invoke CloseIO through shim {address} for {id}/{EXEC_ID}: {error}"
+                "invoke ResizePty through shim {address} for {id}/{EXEC_ID}: {error}"
             ))
             .into()
         })?;
@@ -222,9 +249,9 @@ fn spawn_close_io(address: &str, id: &str) -> tokio::task::JoinHandle<TestResult
     })
 }
 
-async fn wait_for_closing_stdin(
+async fn wait_for_pending_resize(
     bundle: &Path,
-    close_call: &mut tokio::task::JoinHandle<TestResult<()>>,
+    resize_call: &mut tokio::task::JoinHandle<TestResult<()>>,
 ) -> TestResult<()> {
     let path = bundle.join("a3s-oci-shim-v1.json");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
@@ -243,30 +270,34 @@ async fn wait_for_closing_stdin(
         if document.schema_version == 9
             && document.exec_sequence == 1
             && exec.incarnation == 1
-            && exec.stdin_sequence == 0
-            && exec.pending_stdin_write.is_none()
-            && exec.stdin_close_state == StdinCloseEvidence::Closing
+            && exec.resize_sequence == 0
+            && exec.pending_resize
+                == Some(PendingResizeEvidence {
+                    sequence: 1,
+                    size: COMMITTED_SIZE,
+                })
+            && exec.terminal_size.is_none()
         {
             return Ok(());
         }
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             return Err(qualification_error(format!(
-                "committed CloseStdin did not retain schema-9 exec incarnation 1 and closing stdin before reaching the suspended Runtime: {exec:?}"
+                "committed ResizePty did not retain schema-9 exec incarnation 1 and pending sequence 1 before reaching the suspended Runtime: {exec:?}"
             ))
             .into());
         }
         tokio::select! {
-            result = &mut *close_call => {
+            result = &mut *resize_call => {
                 return match result {
                     Ok(Ok(())) => Err(qualification_error(
-                        "CloseIO returned before its durable close reached the suspended Runtime",
+                        "ResizePty returned before its durable resize reached the suspended Runtime",
                     ).into()),
                     Ok(Err(error)) => Err(qualification_error(format!(
-                        "CloseIO failed before its durable close reached the suspended Runtime: {error}"
+                        "ResizePty failed before its durable resize reached the suspended Runtime: {error}"
                     )).into()),
                     Err(error) => Err(qualification_error(format!(
-                        "CloseIO task failed before its durable close reached the suspended Runtime: {error}"
+                        "ResizePty task failed before its durable resize reached the suspended Runtime: {error}"
                     )).into()),
                 };
             }
@@ -275,34 +306,35 @@ async fn wait_for_closing_stdin(
     }
 }
 
-async fn commit_runtime_close(
+async fn commit_runtime_resize(
     config: &QualificationConfig,
     task_id: &str,
     identity: &RuntimeIdentity,
     process: &ProcessTarget,
 ) -> TestResult<()> {
     let client = runtime_client(config).await?;
-    let request = CloseStdinRequest {
+    let request = ResizeRequest {
         context: OperationContext::new(containerd_exec_operation_id(
             &config.namespace,
             task_id,
             &identity.incarnation,
             EXEC_ID,
             1,
-            "close-stdin",
+            "resize-1",
         )?),
         process: process.clone(),
+        size: COMMITTED_SIZE,
     };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
-        match client.close_stdin(request.clone()).await {
+        match client.resize(request.clone()).await {
             Ok(()) => return Ok(()),
             Err(error) if error.retryable && tokio::time::Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             Err(error) => {
                 return Err(qualification_error(format!(
-                    "commit exact Runtime CloseStdin before shim death: {error}"
+                    "commit exact Runtime ResizePty before shim death: {error}"
                 ))
                 .into());
             }
@@ -310,50 +342,74 @@ async fn commit_runtime_close(
     }
 }
 
-async fn wait_runtime_process(
-    config: &QualificationConfig,
-    process: ProcessTarget,
-) -> TestResult<a3s_oci_sdk::ExitStatus> {
-    let client = runtime_client(config).await?;
-    let request = WaitProcessRequest {
-        process,
-        timeout_ms: Some(2_000),
-    };
+async fn wait_for_terminal_size(pid: u32, expected: TerminalSize) -> TestResult<()> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
-        match client.wait_process(request.clone()).await {
-            Ok(exit) => return Ok(exit),
-            Err(error) if error.retryable && tokio::time::Instant::now() < deadline => {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            Err(error) => {
+        match terminal_size(pid) {
+            Ok(actual) if actual == expected => return Ok(()),
+            Ok(actual) if tokio::time::Instant::now() >= deadline => {
                 return Err(qualification_error(format!(
-                    "observe committed Runtime CloseStdin effect: {error}"
+                    "committed ResizePty left exec PID {pid} at {}x{}; expected {}x{}",
+                    actual.width, actual.height, expected.width, expected.height
                 ))
                 .into());
             }
+            Err(error) if tokio::time::Instant::now() >= deadline => return Err(error),
+            Ok(_) | Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
         }
     }
 }
 
-async fn expect_lost_close_response(
-    close_call: &mut tokio::task::JoinHandle<TestResult<()>>,
+fn terminal_size(pid: u32) -> TestResult<TerminalSize> {
+    let path = format!("/proc/{pid}/fd/0");
+    let descriptor = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&path)
+        .map_err(|error| {
+            qualification_error(format!(
+                "open terminal descriptor {path} for committed resize verification: {error}"
+            ))
+        })?;
+    let mut size = libc::winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: `size` is valid writable storage and `descriptor` remains open
+    // for the duration of the TIOCGWINSZ call.
+    if unsafe { libc::ioctl(descriptor.as_raw_fd(), libc::TIOCGWINSZ, &mut size) } < 0 {
+        return Err(qualification_error(format!(
+            "read terminal dimensions from {path}: {}",
+            std::io::Error::last_os_error()
+        ))
+        .into());
+    }
+    Ok(TerminalSize {
+        width: size.ws_col,
+        height: size.ws_row,
+    })
+}
+
+async fn expect_lost_resize_response(
+    resize_call: &mut tokio::task::JoinHandle<TestResult<()>>,
 ) -> TestResult<()> {
-    match tokio::time::timeout(Duration::from_secs(5), &mut *close_call).await {
+    match tokio::time::timeout(Duration::from_secs(5), &mut *resize_call).await {
         Ok(Ok(Err(_))) => Ok(()),
         Ok(Ok(Ok(()))) => Err(qualification_error(
-            "original CloseIO response survived after its frozen shim was killed",
+            "original ResizePty response survived after its frozen shim was killed",
         )
         .into()),
         Ok(Err(error)) => Err(qualification_error(format!(
-            "original CloseIO task failed before reporting its lost response: {error}"
+            "original ResizePty task failed before reporting its lost response: {error}"
         ))
         .into()),
         Err(_) => {
-            close_call.abort();
-            let _ = close_call.await;
+            resize_call.abort();
+            let _ = resize_call.await;
             Err(qualification_error(
-                "original CloseIO call did not observe shim death within 5 seconds",
+                "original ResizePty call did not observe shim death within 5 seconds",
             )
             .into())
         }

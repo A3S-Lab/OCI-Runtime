@@ -1,7 +1,41 @@
+use std::path::Path;
+
 use a3s_oci_sdk::{LocalIpcEndpoint, OperationId, ProcessId, RuntimeClient};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::support::{qualification_error, QualificationConfig, TestResult};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShimBootstrap {
+    version: u32,
+    address: String,
+    protocol: String,
+}
+
+pub(crate) async fn load_shim_address(bundle: &Path) -> TestResult<String> {
+    let bytes = tokio::fs::read(bundle.join("bootstrap.json"))
+        .await
+        .map_err(|error| qualification_error(format!("read shim bootstrap metadata: {error}")))?;
+    let bootstrap: ShimBootstrap = serde_json::from_slice(&bytes)
+        .map_err(|error| qualification_error(format!("decode shim bootstrap metadata: {error}")))?;
+    if bootstrap.version != 2 || bootstrap.protocol != "ttrpc" {
+        return Err(qualification_error(format!(
+            "shim bootstrap contract was version={} protocol={:?}; expected version 2 ttrpc",
+            bootstrap.version, bootstrap.protocol
+        ))
+        .into());
+    }
+    let socket = bootstrap
+        .address
+        .strip_prefix("unix://")
+        .ok_or_else(|| qualification_error("shim bootstrap address is not a unix:// URI"))?;
+    if !Path::new(socket).is_absolute() {
+        return Err(qualification_error("shim bootstrap socket path is not absolute").into());
+    }
+    Ok(bootstrap.address)
+}
 
 pub(crate) async fn runtime_client(config: &QualificationConfig) -> TestResult<RuntimeClient> {
     let endpoint =

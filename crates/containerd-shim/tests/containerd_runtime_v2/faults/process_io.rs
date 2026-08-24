@@ -24,8 +24,11 @@ use super::{
 
 #[path = "process_io/close_stdin.rs"]
 mod close_stdin;
+#[path = "process_io/resize.rs"]
+mod resize;
 
 pub(super) use close_stdin::qualify_close_stdin_effect_committed_shim_sigkill;
+pub(super) use resize::qualify_resize_effect_committed_shim_sigkill;
 
 const EXEC_ID: &str = "committed-stdin-exec";
 const COMMITTED_STDIN: &[u8] = b"committed-before-cleanup\n";
