@@ -594,6 +594,21 @@ retains containerd-owned container metadata. A focused unit boundary begins
 with one recorded Runtime close and asserts that DeleteShim leaves the close
 count unchanged while fencing Kill and force Delete to that generation.
 
+The post-commit `ResizePty` gate creates a terminal exec, stops the Host, sends
+the resize through the shim's ttrpc address from its validated
+`bootstrap.json`, and requires schema-v9 metadata to retain exec incarnation 1
+with pending sequence 1 at 166x52. With the shim also stopped, the gate resumes
+the Host and submits the same incarnation-bound `resize-1` identity and exact
+process target directly through the public SDK. It verifies the live PTY size
+through `/proc/<pid>/fd/0` and `TIOCGWINSZ`, kills the shim, and requires the
+original ttrpc response to be lost. DeleteShim must not replay the locally
+pending resize; it kills and force-deletes only the exact task generation,
+clears shim metadata and the bundle, and retains containerd-owned container
+metadata. A focused unit boundary begins with one recorded Runtime resize and
+asserts that DeleteShim leaves the resize count unchanged while fencing Kill
+and force Delete to that generation. The gate passes non-destructive CI, but
+its destructive three-pass real-host qualification record remains open.
+
 The committed SignalProcess rehydration gate instead keeps the exec alive. It
 persists sequence 1 SIGSTOP, freezes the original shim and Runtime, commits the
 exact signal directly to the Runtime, then kills and replaces the shim before
@@ -681,9 +696,9 @@ suite to restart containerd.
 - qualify the supported containerd version range from exact release packages;
 - publish signed or checksummed shim, host-service, agent, and driver assets;
 - retain a machine-readable compatibility record;
-- close the remaining post-commit process-I/O forced-cleanup boundary for
-  `ResizePty`; Native Linux lifecycle mutations, `WriteStdin`, and
-  `CloseStdin` are qualified at this boundary;
+- retain a three-pass real-host record for the implemented post-commit
+  `ResizePty` forced-cleanup gate; Native Linux lifecycle mutations,
+  `WriteStdin`, and `CloseStdin` are already qualified at this boundary;
 - run the same suite for every driver profile advertised through containerd;
 - complete OCI conformance, security review, upgrade/rollback, and release
   soak gates.

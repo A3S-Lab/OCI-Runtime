@@ -6,6 +6,20 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Committed containerd `ResizePty` cleanup after shim death. A focused
+  DeleteShim boundary starts with one already committed terminal resize and
+  schema-v9 metadata that still records the pending size, then proves cleanup
+  never dispatches a second resize and fences both Kill and force Delete to
+  the exact Runtime generation. The ignored real-containerd gate creates a
+  terminal exec, stops the Host, sends `ResizePty` through the shim's validated
+  ttrpc endpoint, and requires exec incarnation 1 to retain pending sequence 1
+  at 166x52. It then stops the shim, resumes the Host, and commits the same
+  `resize-1` operation directly through the public SDK. The gate verifies the
+  live PTY dimensions through `TIOCGWINSZ`, kills the shim, requires the
+  original response to be lost, and checks exact-generation cleanup without
+  removing caller-owned container metadata. Unit, Linux, musl, macOS, and
+  Windows CI coverage passes. The destructive three-pass real-host
+  qualification record remains open and is not claimed by this change.
 - Committed containerd `CloseStdin` cleanup after shim death. A focused
   DeleteShim boundary starts with one already committed stdin close and
   schema-v9 metadata that still records Closing, then proves cleanup never
