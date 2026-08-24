@@ -2245,6 +2245,19 @@ launches its replacement from the same bundle, restarts containerd, and
 requires a retry to return the exact first response without disturbing init.
 A new durable incarnation of the same exec ID consumes its old receipt; task
 Delete and DeleteShim remove the journal.
+A seventh response-loss gate closes task Delete replay after the task has been
+removed from schema-v9 metadata. Before dispatch, the shim writes a separate
+v1 receipt bound to the namespace, task incarnation, container identity,
+Runtime generation, bundle, PID, status, and nanosecond exit time. Retained
+metadata plus a live generation proves that receipt is an uncommitted intent;
+after committed removal, a metadata-free replacement validates the serving
+task and returns the first response exactly. The replay-only replacement then
+signals its own exit so containerd leak cleanup cannot retain it as an unowned
+process. Rehydration also publishes a validated task before starting output
+pumps, closing the race in which immediately available output reached its
+durable cursor committer before the task existed in memory. A deterministic
+FIFO unit gate freezes that ordering, and pump-start rollback stops every
+already-created pump.
 A separate post-commit Delete boundary removes the exact runtime
 generation before killing the shim, then proves DeleteShim treats only that
 generation's `NotFound` result plus a successful replay of its stable normal or
@@ -2296,43 +2309,39 @@ its local journal can observe the response. The replacement replays the same
 sequence without a second terminal effect, commits the observed size,
 suppresses an identical retry, and proves that `A→B→A` allocates fresh
 identities and restores the real PTY to A instead of replaying the first A.
-The latest gate also runs one exec to exit 7, deletes it, reuses the same
+The exec-reuse gate also runs one exec to exit 7, deletes it, reuses the same
 containerd exec ID, restarts containerd while the replacement is Added, and
 requires exit 23 from a fresh SDK process identity. Its durable per-task exec
 sequence survives `DeleteProcess`; exit monitors are incarnation-bound so a
 late result cannot terminate or poison the replacement. The old DeleteProcess
 receipt is removed only after the new incarnation is durable, so neither a
-crash nor a failed receipt cleanup can expose it as the current exec. The latest
+crash nor a failed receipt cleanup can expose it as the current exec. The
 qualification also releases each Native Linux guest mutation record only
 after its Host result is durable, including every derived chunk identity for a
-stdin payload larger than the 4 MiB guest frame limit. On August 24, 2026,
-source revision `5a6d5f2d817d5951929c2394dff57ef925dd5822` passed three complete
-65.15, 66.76, and 64.11-second matrices consecutively through unchanged Host
-PID 436920 with installed shim SHA-256
-`801c6ebd6bb6a41f1049dbd64d6ae60165a0914254edb953b2eaf633c6c368f2`.
-The matching Host, agent, qualification executable, and Cargo.lock SHA-256
+stdin payload larger than the 4 MiB guest frame limit.
+
+On August 24, 2026, source revision
+`97bb74e5df238f58a7dab913314d38c510ddea9b` passed three complete Ubuntu
+24.04 x86_64/containerd 2.2.3 matrices consecutively in 105.07, 119.86, and
+115.81 seconds through unchanged Host PID 2291109. The installed shim
+SHA-256 was
+`399ff8d64a735519048c281177fdba2dc5f7f40f85b0fce986b2b6e162490cb3`.
+The matching CLI, agent, qualification executable, and Cargo.lock SHA-256
 values were
-`53bf14d72adb347b35d19f936bf91d15adcc3cce65aa88f63886746f07f5ddb2`,
-`28dad74972b28b400a9e5e9f9b38ba59aeaf6662532dfefc7dd5527ff17d6b48`,
-`fa3a513bf2f5aba01a511bc953dcfc5cb1bb05080fbd58bb993d9a0a44a10363`,
+`87265be5b6a6c3f27a68516b1e536ddf3ca0e031e82f43aa300c294575578f32`,
+`19d53e9ae569cec3f096cb99d947e5ff73bfad2c502c6fd6f032a102fcaeee2a`,
+`7a9b03fe2f0d924513d612049d149591e11ada3e76b7afc0a574d24575a370f6`,
 and `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
-Every pass included both committed terminal init-Kill replacement with normal
-exit 42 and committed terminal exec-SignalProcess replacement with normal exit
-29. Replacement-shim Wait and restarted-containerd Wait retained the exact
-exits; the first and replayed DeleteProcess responses retained the same PID,
-status, and exit timestamp while the terminal exec gate kept init Running at
-its original PID. The qualification recreates the killed task ID
-with a new incarnation and generation and leaves no matching task, container,
-shim, agent child, qualification process, workload process, bundle, live
-runtime record, prepared Host operation, session, marker, workload cgroup, or
-zombie. Independent audits after every pass also found zero matching mounts and
-Host children;
-completed operation records and generation fences remained only inside the
-dedicated test Runtime root. The original installed shim was restored at
-SHA-256
-`a0e7dce493308ebea0b4642dd81a9e489109a8b3709f2a1ede62b015cc123482`,
-and that Runtime root, the 1.2 GiB release target, checkout, and logs were
-removed. The remaining R7 items stay open until the
+Every pass retained committed terminal init-Kill and exec-SignalProcess exits,
+exact DeleteProcess response replay, and the new task Delete receipt through a
+manual replacement plus containerd restart. The replacement returned the
+first task Delete PID, status, and nanosecond timestamp exactly, then exited
+instead of surviving as an unowned process. The qualification ran only
+against a dedicated private containerd service and socket; the system daemon
+remained active at PID 2485480. Independent audits after every pass found zero
+matching task, container, shim, agent child, qualification process, workload
+process, bundle, cgroup, mount, or private runtime-v2 task-state residue. The
+remaining R7 items stay open until the
 remaining failure boundaries, every advertised driver profile, and the
 published release-artifact compatibility record pass.
 

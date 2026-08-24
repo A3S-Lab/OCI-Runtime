@@ -5,7 +5,8 @@ use a3s_oci_sdk::oci_spec::runtime::{
 use a3s_oci_sdk::{
     async_trait, CreateRequest, DeleteMode, DeleteRequest as RuntimeDeleteRequest, DriverKind,
     ExecRequest, Generation, IsolationClass, KillRequest as RuntimeKillRequest, OciRuntimeService,
-    ProcessesRequest, StateRequest, WaitProcessRequest, WaitRequest,
+    OutputChunk, OutputStream, ProcessesRequest, ReadOutputRequest, StateRequest,
+    WaitProcessRequest, WaitRequest,
 };
 use containerd_shim::TtrpcContext;
 use containerd_shim_protos::shim_async::Task;
@@ -21,6 +22,7 @@ struct RecoveryService {
     record: ContainerRecord,
     processes: Arc<std::sync::Mutex<Vec<ProcessRecord>>>,
     exec_calls: Arc<std::sync::atomic::AtomicUsize>,
+    output: Option<Vec<u8>>,
 }
 
 #[derive(Default)]
@@ -256,6 +258,43 @@ impl OciRuntimeService for RecoveryService {
     async fn wait_process(&self, _request: WaitProcessRequest) -> a3s_oci_sdk::Result<ExitStatus> {
         std::future::pending().await
     }
+
+    async fn read_output(
+        &self,
+        request: ReadOutputRequest,
+    ) -> a3s_oci_sdk::Result<Vec<OutputChunk>> {
+        let Some(output) = &self.output else {
+            return std::future::pending().await;
+        };
+        let start = usize::try_from(request.after_sequence).map_err(|_| {
+            RuntimeError::new(
+                ErrorCode::ResourceExhausted,
+                "test output cursor does not fit usize",
+            )
+        })?;
+        if start == output.len() {
+            return std::future::pending().await;
+        }
+        if start > output.len() {
+            return Err(RuntimeError::new(
+                ErrorCode::Conflict,
+                "test output cursor advanced beyond the available bytes",
+            ));
+        }
+        let max_bytes = usize::try_from(request.max_bytes).map_err(|_| {
+            RuntimeError::new(
+                ErrorCode::ResourceExhausted,
+                "test output byte limit does not fit usize",
+            )
+        })?;
+        let end = start.saturating_add(max_bytes).min(output.len());
+        Ok(vec![OutputChunk {
+            sequence: u64::try_from(end).expect("bounded test output cursor"),
+            stream: OutputStream::Stdout,
+            data: output[start..end].to_vec(),
+            eof: false,
+        }])
+    }
 }
 
 fn task_state(bundle: &Path) -> TaskState {
@@ -315,6 +354,7 @@ fn recovery_service(
         record: task.record.clone(),
         processes: Arc::new(std::sync::Mutex::new(processes)),
         exec_calls: exec_calls.clone(),
+        output: None,
     };
     (
         RuntimeAdapter::from_client(

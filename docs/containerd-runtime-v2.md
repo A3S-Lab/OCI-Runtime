@@ -26,6 +26,30 @@ Unimplemented; Create requests containing checkpoint restore fields do the
 same. The contract also freezes the OCI Features, Process, LinuxResources, and
 versioned A3S CreateOptions type URLs consumed by those methods.
 
+An additional August 24, 2026 x86_64 regression qualification used source revision
+`97bb74e5df238f58a7dab913314d38c510ddea9b`, containerd 2.2.3, Ubuntu
+24.04, and Linux 6.8.0-49-generic. Three complete 105.07, 119.86, and
+115.81-second matrices ran consecutively through unchanged Host PID 2291109.
+The release-built shim SHA-256 was
+`399ff8d64a735519048c281177fdba2dc5f7f40f85b0fce986b2b6e162490cb3`.
+The CLI, agent, and qualification executable SHA-256 values were
+`87265be5b6a6c3f27a68516b1e536ddf3ca0e031e82f43aa300c294575578f32`,
+`19d53e9ae569cec3f096cb99d947e5ff73bfad2c502c6fd6f032a102fcaeee2a`,
+and `7a9b03fe2f0d924513d612049d149591e11ada3e76b7afc0a574d24575a370f6`.
+The Cargo.lock SHA-256 was
+`c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
+Each matrix retained the full 2.2.2 lifecycle/restart/I/O suite and the new
+task Delete receipt across direct response loss, manual shim replacement, and
+containerd restart. The replacement returned the first PID, status, seconds,
+and nanoseconds exactly, and the replay-only shim exited afterward. The suite
+used a dedicated private containerd root, state directory, socket, and systemd
+unit. The production containerd service was never restarted and remained at
+PID 2485480. Independent audits after every pass reported zero tasks,
+containers, task bundles, workload cgroups, matching mounts, shim processes,
+agent children, qualification processes, or private runtime-v2 task-state
+residue. This source-build evidence does not extend contract v1's advertised
+2.2.2 compatibility claim; the 2.2.3 published-artifact record remains open.
+
 The August 24, 2026 arm64 requalification used source revision
 `5a6d5f2d817d5951929c2394dff57ef925dd5822`, containerd 2.2.2, and Linux
 7.0.11-orbstack-00360-gc9bc4d96ac70. Three complete 65.15, 66.76, and
@@ -199,6 +223,18 @@ rehydration discards it. Absence of the exec is the commit marker, so a
 replacement can replay the exact response. A new exec with the same ID first
 commits its fresh incarnation to main metadata and then consumes the old
 receipt; task Delete and DeleteShim remove the entire journal.
+
+Task Delete response durability uses a separate
+`a3s-oci-shim-task-delete-v1.json` receipt. Before dispatching Runtime delete,
+the shim records the namespace, task ID and incarnation, derived container
+identity, exact Runtime generation, bundle, PID, exit status, and nanosecond
+exit time. Retained main metadata plus a live exact generation proves the
+receipt is only an uncommitted intent and rehydration removes it. After task
+removal, a metadata-free replacement validates the serving namespace, task
+ID, and bundle and can reproduce the first Delete response exactly. The
+replay-only service signals its `ExitSignal` after returning that response;
+without this transition, containerd 2.2.3 can consume the response while the
+manually launched replacement survives indefinitely as an unowned shim.
 
 The shim stores its incarnation and generation-bound metadata in the
 containerd-owned task bundle. Rehydration verifies namespace, task ID,
@@ -393,6 +429,15 @@ without advancing over unwritten bytes, and the SDK's partial-frame pagination
 lets a replacement resume at the first undelivered byte. A configured output
 FIFO without durable cursor persistence fails closed.
 
+During restoration, output replay can begin immediately when a pump is
+created. The shim therefore persists and publishes the validated task into its
+in-memory map before it starts init or exec pumps. The first delivered bytes
+can then advance the durable cursor against that exact task instead of racing
+a missing entry. A deterministic FIFO test supplies output before restoration
+starts and requires the metadata cursor, in-memory cursor, and FIFO bytes to
+converge. If a later exec pump cannot be created, restoration stops every pump
+already started before removing the published task.
+
 ## Restart and cleanup contract
 
 The real gate restarts containerd while init is Created, Running, and Stopped;
@@ -413,6 +458,16 @@ direct retry through the replacement must return the first response's exact
 PID, status, seconds, and nanoseconds. The receipt must remain bound to the
 same task incarnation and Runtime generation, while the init process and
 replacement-shim ownership remain unchanged.
+
+The task Delete response gate stops a workload normally, invokes Task Delete
+directly so containerd cannot observe the response, and verifies the exact v1
+receipt after main shim metadata has disappeared. With containerd suspended,
+it kills and reaps the original shim, launches a replacement against the same
+bundle and socket, and requires a direct retry to return the original PID,
+status, seconds, and nanoseconds. Restarted containerd must then consume the
+same response through Task Delete or DeleteShim, remove the bundle, and leave
+no task state. The manually launched replacement must exit within its bounded
+deadline after serving the response.
 
 The gate also suspends containerd, kills the live shim, starts a replacement
 shim from the same bundle and socket, kills the suspended daemon, and restarts
@@ -569,13 +624,19 @@ cargo test -p a3s-oci-containerd-shim \
 sudo env \
   A3S_OCI_CONTAINERD_QUALIFY=1 \
   A3S_OCI_CONTAINERD_ALLOW_RESTART=1 \
+  A3S_OCI_CONTAINERD_SOCKET=/run/containerd/containerd.sock \
+  CONTAINERD_ADDRESS=/run/containerd/containerd.sock \
   ./target/debug/deps/containerd_runtime_v2-<hash> \
   --ignored --exact real_containerd_runtime_v2_qualification --nocapture
 ```
 
 The host service must already be running and the selected shim binary must be
 installed where containerd can resolve it. Cleanup is prefix-scoped and the
-test fails if any matching task or container remains.
+test fails if any matching task or container remains. For an isolated daemon,
+set both `A3S_OCI_CONTAINERD_SOCKET` and `CONTAINERD_ADDRESS` to its socket:
+the gRPC/ttrpc clients consume the former, while spawned `ctr` commands inherit
+the latter. Also set `A3S_OCI_CONTAINERD_SERVICE` to the isolated systemd unit
+before allowing the suite to restart containerd.
 
 ## Open release gates
 
