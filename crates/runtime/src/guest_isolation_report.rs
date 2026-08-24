@@ -38,6 +38,14 @@ pub struct OciVmGuestIsolationCaseEvidence {
 }
 
 impl OciVmGuestIsolationCaseEvidence {
+    #[cfg(any(
+        test,
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    ))]
     pub(crate) fn initial(
         name: impl Into<String>,
         expected_error_operation: impl Into<String>,
