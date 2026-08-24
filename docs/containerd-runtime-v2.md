@@ -26,29 +26,31 @@ Unimplemented; Create requests containing checkpoint restore fields do the
 same. The contract also freezes the OCI Features, Process, LinuxResources, and
 versioned A3S CreateOptions type URLs consumed by those methods.
 
-An additional August 24, 2026 x86_64 regression qualification used source revision
-`97bb74e5df238f58a7dab913314d38c510ddea9b`, containerd 2.2.3, Ubuntu
-24.04, and Linux 6.8.0-49-generic. Three complete 105.07, 119.86, and
-115.81-second matrices ran consecutively through unchanged Host PID 2291109.
+The latest August 24, 2026 x86_64 regression qualification used source
+revision `a3865075d8ced661447a85196e17136379535fa7`, containerd 2.2.3,
+Ubuntu 24.04, and Linux 6.8.0-49-generic. Three complete 89.96, 93.40, and
+94.55-second matrices ran consecutively through unchanged Host PID 2504484.
 The release-built shim SHA-256 was
-`399ff8d64a735519048c281177fdba2dc5f7f40f85b0fce986b2b6e162490cb3`.
+`ca14a7d28f3b95656b831006c22e2e88561c272a19c48aab19b43d6592ca652c`.
 The CLI, agent, and qualification executable SHA-256 values were
-`87265be5b6a6c3f27a68516b1e536ddf3ca0e031e82f43aa300c294575578f32`,
-`19d53e9ae569cec3f096cb99d947e5ff73bfad2c502c6fd6f032a102fcaeee2a`,
-and `7a9b03fe2f0d924513d612049d149591e11ada3e76b7afc0a574d24575a370f6`.
+`80d0b69686c73516fc3a507f2545af77b405918584176bdb0a96ab3bcf067102`,
+`68219e592a061b9dba7f491d54716354195cd8f8005fa792ab367681dda5352e`,
+and `c560b1d92d4e786a026fd2c8002bcb0330c06d620304a08c5df4951ebdaf9ce4`.
 The Cargo.lock SHA-256 was
 `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
-Each matrix retained the full 2.2.2 lifecycle/restart/I/O suite and the new
-task Delete receipt across direct response loss, manual shim replacement, and
-containerd restart. The replacement returned the first PID, status, seconds,
-and nanoseconds exactly, and the replay-only shim exited afterward. The suite
-used a dedicated private containerd root, state directory, socket, and systemd
-unit. The production containerd service was never restarted and remained at
-PID 2485480. Independent audits after every pass reported zero tasks,
-containers, task bundles, workload cgroups, matching mounts, shim processes,
-agent children, qualification processes, or private runtime-v2 task-state
-residue. This source-build evidence does not extend contract v1's advertised
-2.2.2 compatibility claim; the 2.2.3 published-artifact record remains open.
+Each matrix retained the full 2.2.2 lifecycle/restart/I/O suite, exact task
+Delete response replay, and the committed `WriteStdin` shim-death cleanup
+boundary. That boundary committed the original exec-scoped operation while
+schema-v9 shim metadata still retained its pending bytes, observed one exec
+exit 23 without changing init, and then removed only the exact Runtime
+generation after shim `SIGKILL`. The suite used a dedicated private containerd
+root, state directory, socket, and systemd unit. The production containerd
+service was never restarted and remained at PID 2485480. Independent audits
+after every pass reported zero tasks, containers, task bundles, live Runtime
+records, workload cgroups, matching mounts, shim processes, agent children,
+qualification processes, Host children, zombies, or prepared operations. This
+source-build evidence does not extend contract v1's advertised 2.2.2
+compatibility claim; the 2.2.3 published-artifact record remains open.
 
 The August 24, 2026 arm64 requalification used source revision
 `5a6d5f2d817d5951929c2394dff57ef925dd5822`, containerd 2.2.2, and Linux
@@ -560,6 +562,22 @@ original PID before killing the stopped shim. DeleteShim must then remove the
 terminal exec, live init, exact generation, task bundle, and shim without
 touching containerd-owned metadata.
 
+The post-commit `WriteStdin` gate creates a non-terminal exec that exits 23
+only after receiving `committed-before-cleanup`. It stops the Host before the
+shim can dispatch those bytes, then requires schema-v9 metadata to retain exec
+incarnation 1, pending sequence 1, and the exact byte payload while the
+committed stdin sequence is still canonically omitted as zero. With the shim
+also stopped, the gate resumes the Host and submits the same
+incarnation-bound `write-stdin-1` identity and exact process target directly
+through the public SDK. The exec must exit 23 from that one write while init
+remains Running at its original PID and generation. After shim `SIGKILL`,
+DeleteShim must not redispatch the locally pending bytes; it kills and
+force-deletes only the exact task generation, clears shim metadata and the
+bundle, and retains containerd-owned container metadata. A focused unit
+boundary begins with one recorded Runtime write and asserts that DeleteShim
+leaves the write count unchanged while fencing Kill and force Delete to that
+generation.
+
 The committed SignalProcess rehydration gate instead keeps the exec alive. It
 persists sequence 1 SIGSTOP, freezes the original shim and Runtime, commits the
 exact signal directly to the Runtime, then kills and replaces the shim before
@@ -635,17 +653,21 @@ installed where containerd can resolve it. Cleanup is prefix-scoped and the
 test fails if any matching task or container remains. For an isolated daemon,
 set both `A3S_OCI_CONTAINERD_SOCKET` and `CONTAINERD_ADDRESS` to its socket:
 the gRPC/ttrpc clients consume the former, while spawned `ctr` commands inherit
-the latter. Also set `A3S_OCI_CONTAINERD_SERVICE` to the isolated systemd unit
-before allowing the suite to restart containerd.
+the latter. Set `A3S_OCI_CONTAINERD_TTRPC_ADDRESS` to that daemon's ttrpc
+socket, `A3S_OCI_CONTAINERD_STATE_ROOT` to its private
+`io.containerd.runtime.v2.task` state directory,
+`A3S_OCI_RUNTIME_ENDPOINT` to the selected Host service socket, and
+`A3S_OCI_CONTAINERD_SERVICE` to the isolated systemd unit before allowing the
+suite to restart containerd.
 
 ## Open release gates
 
 - qualify the supported containerd version range from exact release packages;
 - publish signed or checksummed shim, host-service, agent, and driver assets;
 - retain a machine-readable compatibility record;
-- extend forced cleanup from the qualified in-flight and post-commit Create,
-  Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update boundaries to every
-  remaining lifecycle and process-I/O mutation boundary;
+- close the remaining post-commit process-I/O forced-cleanup boundaries for
+  `CloseStdin` and `ResizePty`; Native Linux lifecycle mutations and
+  `WriteStdin` are qualified at this boundary;
 - run the same suite for every driver profile advertised through containerd;
 - complete OCI conformance, security review, upgrade/rollback, and release
   soak gates.

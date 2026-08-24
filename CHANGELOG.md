@@ -6,6 +6,35 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Committed containerd `WriteStdin` cleanup after shim death. A focused
+  DeleteShim boundary starts with one already committed stdin write and
+  schema-v9 metadata that still retains the pending bytes, then proves cleanup
+  never dispatches a second write and fences both Kill and force Delete to the
+  exact Runtime generation. The real-containerd gate creates a non-terminal
+  exec, stops the Host until exec incarnation 1 durably retains sequence 1 and
+  the exact pending bytes, stops the shim, and commits the same
+  `write-stdin-1` operation directly through the public SDK. The exec must exit
+  23 from that one input while init stays Running at its original PID and
+  generation. After shim `SIGKILL`, containerd leak cleanup must remove the
+  exec, init, exact Runtime generation, shim metadata, bundle, cgroup, and
+  mounts while retaining caller-owned container metadata. Qualification
+  decoding now accepts schema-v9's canonical omission of a zero committed
+  stdin sequence, with a Linux regression test for that exact document shape.
+  Source revision `a3865075d8ced661447a85196e17136379535fa7` passed three
+  complete Ubuntu 24.04 x86_64/containerd 2.2.3 matrices consecutively in
+  89.96, 93.40, and 94.55 seconds through unchanged Host PID 2504484.
+  Release CLI, agent, shim, qualification executable, and Cargo.lock SHA-256
+  values were
+  `80d0b69686c73516fc3a507f2545af77b405918584176bdb0a96ab3bcf067102`,
+  `68219e592a061b9dba7f491d54716354195cd8f8005fa792ab367681dda5352e`,
+  `ca14a7d28f3b95656b831006c22e2e88561c272a19c48aab19b43d6592ca652c`,
+  `c560b1d92d4e786a026fd2c8002bcb0330c06d620304a08c5df4951ebdaf9ce4`,
+  and `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
+  The qualification used a dedicated private containerd root, state, socket,
+  and systemd unit; the production daemon remained active at PID 2485480.
+  Independent audits after every pass found no matching task, container,
+  bundle, live Runtime record, cgroup, mount, shim, agent child, qualification
+  process, Host child, zombie, or prepared operation.
 - Crash-stable containerd task Delete responses. A separate v1 receipt binds
   the namespace, task incarnation, container identity, Runtime generation,
   bundle, PID, exit status, and nanosecond exit time before the shim dispatches
