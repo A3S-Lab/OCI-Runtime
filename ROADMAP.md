@@ -2299,8 +2299,18 @@ normal exec exit 29 without changing the live init PID or generation. Shim
 close; exact-generation Kill and force Delete remove both processes, the
 bundle, cgroup, mounts, and shim state while preserving caller-owned container
 metadata. A focused unit boundary begins with one recorded close and proves
-cleanup leaves that call count unchanged. The only remaining process-I/O
-forced-cleanup boundary is `ResizePty`.
+cleanup leaves that call count unchanged. The post-commit `ResizePty` boundary
+creates a terminal exec, stops the Host, sends the resize through the shim's
+validated ttrpc endpoint, and requires schema-v9 metadata to retain exec
+incarnation 1 with pending sequence 1 at 166x52. It then stops the shim,
+resumes the Host, and commits the same incarnation-bound `resize-1` identity
+directly through the public SDK. The gate verifies the live PTY size through
+`TIOCGWINSZ`, kills the shim, requires the original response to be lost, and
+drives exact-generation DeleteShim cleanup without a second resize. A focused
+unit boundary begins with one recorded Runtime resize and proves cleanup
+leaves that call count unchanged. The implementation gate and all
+non-destructive CI targets pass; its destructive three-pass real-host record
+remains open.
 
 Repeated controls now use a monotonically increasing durable
 sequence instead of one fixed operation identity: two different Updates and
@@ -2361,9 +2371,10 @@ against a dedicated private containerd root, state, socket, and systemd unit;
 the production daemon remained active at PID 2485480. Independent audits after
 the probe and every pass found zero matching task, container, shim,
 qualification process, workload process, bundle, live Runtime record, cgroup,
-or snapshot. The remaining R7 items stay open until the `ResizePty`
-process-I/O forced-cleanup boundary, every advertised driver profile, and the
-published release-artifact compatibility record pass.
+or snapshot. The remaining R7 items stay open until the implemented
+`ResizePty` process-I/O forced-cleanup gate retains its three-pass real-host
+record, every advertised driver profile passes, and the published
+release-artifact compatibility record is complete.
 
 Exit gate: containerd task, restart, I/O, and cleanup suites pass through the
 public SDK without the Box CLI, a direct VMM path, duplicate lifecycle state,

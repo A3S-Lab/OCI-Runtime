@@ -168,8 +168,27 @@ a second close; it removes the exact Runtime generation, workload processes,
 bundle, cgroup, and shim state while preserving caller-owned container
 metadata. The focused unit boundary starts with one recorded Runtime close and
 proves cleanup leaves that count unchanged while fencing Kill and force Delete
-to the exact generation. The only remaining process-I/O forced-cleanup
-boundary is `ResizePty`.
+to the exact generation.
+
+Post-commit `ResizePty` forced cleanup now has the matching automated
+boundary. The ignored real-containerd gate creates a terminal exec, stops the
+Host, sends `ResizePty` through the shim's validated ttrpc endpoint, and
+requires schema-v9 metadata to retain exec incarnation 1 with pending sequence
+1 at 166x52. It then stops the shim, resumes the Host, and commits the same
+incarnation-bound `resize-1` identity directly through the public SDK. The
+gate reads the live PTY dimensions through `/proc/<pid>/fd/0` and
+`TIOCGWINSZ`, then kills the shim and requires the original response to be
+lost. DeleteShim must not dispatch a second resize; it removes only the exact
+Runtime generation, workload processes, bundle, cgroup, and shim state while
+preserving caller-owned container metadata. The focused unit boundary begins
+with one recorded Runtime resize and proves cleanup leaves that count
+unchanged while fencing Kill and force Delete to the exact generation.
+
+All non-destructive CI targets pass with this gate, including Linux, musl,
+macOS, Windows, and Native Linux arm64 coverage. The destructive three-pass
+real-host qualification has not been retained yet, so R7 remains open and the
+latest x86_64 evidence below continues to describe the preceding
+`CloseStdin` revision.
 
 Source revision `9726719e5a66156cd61f8be36ca00998bbcfc871` passed three
 complete Ubuntu 24.04 x86_64/containerd 2.2.3 matrices consecutively in
@@ -834,6 +853,7 @@ The repository turns release claims into checked inventories:
 | Live containerd task Delete response replay | 3 / 3 consecutive same-Host Ubuntu x86_64/containerd 2.2.3 matrices on August 24, 2026 |
 | Post-commit containerd `WriteStdin` forced cleanup | 3 / 3 consecutive same-Host Ubuntu x86_64/containerd 2.2.3 matrices on August 24, 2026 |
 | Post-commit containerd `CloseStdin` forced cleanup | 3 / 3 consecutive same-Host Ubuntu x86_64/containerd 2.2.3 matrices on August 24, 2026 |
+| Post-commit containerd `ResizePty` forced cleanup | Automated gate implemented; 3-pass real-host qualification pending |
 | Before/after `RuntimeDriver` fault boundaries | 44 |
 | Authenticated agent operation-stage fault pairs | 180 |
 | Portable Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host-service reopen pairs | 180 |
