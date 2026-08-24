@@ -7,6 +7,8 @@ use a3s_oci_sdk::{
 };
 use prost_types::Any;
 
+#[path = "exec/delete_process.rs"]
+mod delete_process;
 #[path = "exec/evidence.rs"]
 mod evidence;
 #[path = "exec/terminal_signal.rs"]
@@ -264,6 +266,18 @@ pub(super) async fn qualify_committed_exec_start(
         ))
         .into());
     }
+    let (channel, next_replacement) = delete_process::qualify(
+        config,
+        &id,
+        &bundle,
+        &binary,
+        &bootstrap,
+        &identity,
+        &deleted_exec,
+        replacement,
+    )
+    .await?;
+    replacement = next_replacement;
     expect_process(
         &task_process(config, &channel, &id, "").await?,
         STATUS_RUNNING,

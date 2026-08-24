@@ -19,9 +19,9 @@ use crate::adapter::{self, ExecIdentity, RuntimeAdapter, TaskIdentity};
 use crate::contract::{DEFAULT_UNIX_ENDPOINT, LEGACY_RUNTIME_ENDPOINT_ENV, RUNTIME_ENDPOINT_ENV};
 use crate::io::{self, ProcessIoEndpoints, ProcessPumps};
 use crate::metadata::{
-    ControlOperationKind, ExecMetadata, ExecStage, NewShimCreateIntent, NewShimMetadata,
-    PendingControlOperation, PendingResize, PendingSignal, PendingStdinWrite, ShimCreateIntent,
-    ShimMetadata, StdinCloseState,
+    ControlOperationKind, ExecDeleteJournal, ExecDeleteReceipt, ExecMetadata, ExecStage,
+    NewShimCreateIntent, NewShimMetadata, PendingControlOperation, PendingResize, PendingSignal,
+    PendingStdinWrite, ShimCreateIntent, ShimMetadata, StdinCloseState,
 };
 
 mod control;
@@ -626,6 +626,15 @@ impl Service {
                 ),
             )
             .for_operation("containerd-shim-rehydrate"));
+        }
+        let mut delete_journal =
+            ExecDeleteJournal::load_or_new(metadata.bundle(), &identity, metadata.generation())?;
+        let mut delete_journal_changed = false;
+        for exec in metadata.execs() {
+            delete_journal_changed |= delete_journal.remove_receipt(&exec.exec_id);
+        }
+        if delete_journal_changed {
+            delete_journal.store()?;
         }
         let adapter = self.adapter().await?;
         let record = adapter
@@ -1572,6 +1581,8 @@ impl Shim for Service {
             }
             ShimMetadata::remove(metadata.bundle())
                 .map_err(|error| Error::Other(error.to_string()))?;
+            ExecDeleteJournal::remove(metadata.bundle())
+                .map_err(|error| Error::Other(error.to_string()))?;
             response.set_pid(pid);
             response.set_exit_status(exit.as_ref().map_or(137, adapter::exit_code));
             response.set_exited_at(timestamp_from(
@@ -1625,10 +1636,14 @@ impl Shim for Service {
                     .await
                     .map_err(Error::from)?;
             }
+            ExecDeleteJournal::remove(intent.bundle())
+                .map_err(|error| Error::Other(error.to_string()))?;
             response.set_pid(pid);
             response.set_exit_status(exit.as_ref().map_or(137, adapter::exit_code));
             response.set_exited_at(timestamp_now());
         } else {
+            ExecDeleteJournal::remove(&self.bundle)
+                .map_err(|error| Error::Other(error.to_string()))?;
             response.set_exited_at(timestamp_now());
         }
         Ok(response)
@@ -1735,6 +1750,27 @@ fn system_time_from_unix_nanos(nanos: u128) -> Option<SystemTime> {
 fn system_time_to_unix_nanos(time: SystemTime) -> Option<u128> {
     let duration = time.duration_since(SystemTime::UNIX_EPOCH).ok()?;
     Some(u128::from(duration.as_secs()) * 1_000_000_000 + u128::from(duration.subsec_nanos()))
+}
+
+fn exec_delete_response(
+    receipt: &ExecDeleteReceipt,
+) -> Result<(api::DeleteResponse, SystemTime), RuntimeError> {
+    let exited_at =
+        system_time_from_unix_nanos(receipt.exited_at_unix_nanos()).ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "containerd exec {} delete receipt records an unrepresentable exit time",
+                    receipt.exec_id()
+                ),
+            )
+            .for_operation("containerd-delete-process-replay")
+        })?;
+    let mut response = api::DeleteResponse::new();
+    response.set_pid(receipt.pid());
+    response.set_exit_status(receipt.exit_status());
+    response.set_exited_at(timestamp_from(exited_at));
+    Ok((response, exited_at))
 }
 
 fn metadata_from_task(task: &TaskState) -> ShimMetadata {

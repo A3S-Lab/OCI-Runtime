@@ -16,9 +16,11 @@ use crate::identity::IncarnationId;
 
 mod control;
 mod create_intent;
+mod exec_delete;
 
 pub(crate) use control::{update_request_digest, ControlOperationKind, PendingControlOperation};
 pub(crate) use create_intent::{NewShimCreateIntent, ShimCreateIntent};
+pub(crate) use exec_delete::{ExecDeleteJournal, ExecDeleteReceipt};
 
 const METADATA_FILE_NAME: &str = "a3s-oci-shim-v1.json";
 const INCARNATION_FILE_NAME: &str = "a3s-oci-shim-incarnation-v1";

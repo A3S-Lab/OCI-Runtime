@@ -413,6 +413,152 @@ async fn rehydration_fails_closed_when_runtime_generation_drifts() {
 }
 
 #[tokio::test]
+async fn exec_delete_response_replays_after_service_reopen() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let task = task_state(directory.path());
+    metadata_from_task(&task)
+        .store()
+        .expect("store initial task metadata");
+    let (adapter, _) = recovery_service(&task, Vec::new());
+    let service = recovery_service_instance(directory.path(), adapter);
+    service
+        .state
+        .lock()
+        .await
+        .tasks
+        .insert("task-a".to_string(), task.clone());
+
+    Task::exec(&service, &ttrpc_context(), exec_request("exec-a"))
+        .await
+        .expect("allocate exec incarnation");
+    {
+        let mut state = service.state.lock().await;
+        let exec = state
+            .tasks
+            .get_mut("task-a")
+            .expect("task")
+            .execs
+            .get_mut("exec-a")
+            .expect("exec");
+        exec.stage = ExecStage::Exited;
+        exec.exit = Some(ExitStatus::exited(23).expect("exec exit"));
+        exec.exited_at = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(23));
+    }
+    service
+        .persist_task("task-a")
+        .await
+        .expect("persist exec exit");
+
+    let mut request = api::DeleteRequest::new();
+    request.set_id("task-a".to_string());
+    request.set_exec_id("exec-a".to_string());
+    let first = Task::delete(&service, &ttrpc_context(), request)
+        .await
+        .expect("delete exec before response loss");
+
+    let (replacement_adapter, _) = recovery_service(&task, Vec::new());
+    let replacement = recovery_service_instance(directory.path(), replacement_adapter);
+    replacement
+        .restore_task("task-a")
+        .await
+        .expect("restore task after exec delete response loss");
+
+    let mut retry = api::DeleteRequest::new();
+    retry.set_id("task-a".to_string());
+    retry.set_exec_id("exec-a".to_string());
+    let replayed = Task::delete(&replacement, &ttrpc_context(), retry)
+        .await
+        .expect("replay durable exec delete response");
+
+    assert_eq!(replayed.pid(), first.pid());
+    assert_eq!(replayed.exit_status(), 23);
+    assert_eq!(replayed.exit_status(), first.exit_status());
+    assert_eq!(replayed.exited_at(), first.exited_at());
+    replacement.stop_all_monitors().await;
+    replacement.stop_all_pumps().await;
+}
+
+#[tokio::test]
+async fn uncommitted_exec_delete_intent_is_discarded_on_service_reopen() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let task = task_state(directory.path());
+    let (adapter, _) = recovery_service(&task, Vec::new());
+    let service = recovery_service_instance(directory.path(), adapter);
+    service
+        .state
+        .lock()
+        .await
+        .tasks
+        .insert("task-a".to_string(), task.clone());
+
+    Task::exec(&service, &ttrpc_context(), exec_request("exec-a"))
+        .await
+        .expect("allocate exec incarnation");
+    {
+        let mut state = service.state.lock().await;
+        let exec = state
+            .tasks
+            .get_mut("task-a")
+            .expect("task")
+            .execs
+            .get_mut("exec-a")
+            .expect("exec");
+        exec.stage = ExecStage::Exited;
+        exec.exit = Some(ExitStatus::exited(19).expect("exec exit"));
+        exec.exited_at = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(19));
+    }
+    service
+        .persist_task("task-a")
+        .await
+        .expect("persist exec exit");
+    let snapshot = service
+        .task_snapshot("task-a")
+        .await
+        .expect("task snapshot");
+    let mut journal = ExecDeleteJournal::load_or_new(
+        directory.path(),
+        &snapshot.identity,
+        snapshot.record.generation,
+    )
+    .expect("new exec delete journal");
+    journal
+        .insert(
+            ExecDeleteReceipt::new(
+                "exec-a".to_string(),
+                snapshot.execs["exec-a"].incarnation,
+                0,
+                19,
+                19_000_000_000,
+            )
+            .expect("prepared delete receipt"),
+        )
+        .expect("insert prepared delete receipt");
+    journal.store().expect("store prepared delete receipt");
+
+    let (replacement_adapter, _) = recovery_service(&task, Vec::new());
+    let replacement = recovery_service_instance(directory.path(), replacement_adapter);
+    replacement
+        .restore_task("task-a")
+        .await
+        .expect("restore task with uncommitted delete intent");
+
+    assert!(replacement
+        .task_snapshot("task-a")
+        .await
+        .expect("restored task")
+        .execs
+        .contains_key("exec-a"));
+    assert!(
+        ExecDeleteJournal::load(directory.path())
+            .expect("load reconciled delete journal")
+            .is_none(),
+        "a delete intent must not become a receipt while its exec remains durable"
+    );
+    replacement.stop_all_monitors().await;
+    replacement.stop_all_pumps().await;
+}
+
+#[tokio::test]
 async fn deleted_exec_id_reuse_allocates_durable_incarnation_across_restarts() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let task = task_state(directory.path());
@@ -472,6 +618,19 @@ async fn deleted_exec_id_reuse_allocates_durable_incarnation_across_restarts() {
         .expect("metadata exists");
     assert!(deleted_metadata.execs().is_empty());
     assert_eq!(deleted_metadata.exec_sequence(), 1);
+    let delete_journal = ExecDeleteJournal::load_or_new(
+        directory.path(),
+        &deleted.identity,
+        deleted.record.generation,
+    )
+    .expect("load first exec delete receipt");
+    assert_eq!(
+        delete_journal
+            .receipt("exec-a")
+            .expect("first exec delete receipt")
+            .incarnation(),
+        1
+    );
 
     Task::exec(&service, &ttrpc_context(), exec_request("exec-a"))
         .await
@@ -482,6 +641,12 @@ async fn deleted_exec_id_reuse_allocates_durable_incarnation_across_restarts() {
         .expect("task after exec reuse");
     assert_eq!(reused.exec_sequence, 2);
     assert_eq!(reused.execs["exec-a"].incarnation, 2);
+    assert!(
+        ExecDeleteJournal::load(directory.path())
+            .expect("load delete journal after exec reuse")
+            .is_none(),
+        "a new exec incarnation must consume the prior DeleteProcess receipt"
+    );
     let reused_process = crate::identity::process_id("k8s.io", "task-a", "exec-a", 2)
         .expect("reused process identity");
     assert_ne!(first_process, reused_process);
