@@ -104,6 +104,7 @@ pub(crate) async fn qualify_shim_sigkill(
     controls::qualify_resume_effect_committed_shim_sigkill(config, prefix).await?;
     controls::qualify_update_effect_committed_shim_sigkill(config, prefix).await?;
     process_io::qualify_write_stdin_effect_committed_shim_sigkill(config, prefix).await?;
+    process_io::qualify_close_stdin_effect_committed_shim_sigkill(config, prefix).await?;
     for stage in [
         PartialShimStage::InitCreated,
         PartialShimStage::ExecAdded,

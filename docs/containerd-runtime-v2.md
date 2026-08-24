@@ -27,30 +27,31 @@ same. The contract also freezes the OCI Features, Process, LinuxResources, and
 versioned A3S CreateOptions type URLs consumed by those methods.
 
 The latest August 24, 2026 x86_64 regression qualification used source
-revision `a3865075d8ced661447a85196e17136379535fa7`, containerd 2.2.3,
-Ubuntu 24.04, and Linux 6.8.0-49-generic. Three complete 89.96, 93.40, and
-94.55-second matrices ran consecutively through unchanged Host PID 2504484.
+revision `9726719e5a66156cd61f8be36ca00998bbcfc871`, containerd 2.2.3,
+Ubuntu 24.04, and Linux 6.8.0-49-generic. Three complete 117.37, 119.36, and
+118.94-second matrices ran consecutively through unchanged Host PID 2678296.
 The release-built shim SHA-256 was
-`ca14a7d28f3b95656b831006c22e2e88561c272a19c48aab19b43d6592ca652c`.
+`99bacac7a308e4830ca55101ef8148a511526722cf9006d8a37ef9cba89dbf50`.
 The CLI, agent, and qualification executable SHA-256 values were
 `80d0b69686c73516fc3a507f2545af77b405918584176bdb0a96ab3bcf067102`,
 `68219e592a061b9dba7f491d54716354195cd8f8005fa792ab367681dda5352e`,
-and `c560b1d92d4e786a026fd2c8002bcb0330c06d620304a08c5df4951ebdaf9ce4`.
+and `3e752abc8ada3b8e3dae9d86e370feb7d17bf04c2245f13888d52ba7537b2fd2`.
 The Cargo.lock SHA-256 was
 `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
 Each matrix retained the full 2.2.2 lifecycle/restart/I/O suite, exact task
-Delete response replay, and the committed `WriteStdin` shim-death cleanup
-boundary. That boundary committed the original exec-scoped operation while
-schema-v9 shim metadata still retained its pending bytes, observed one exec
-exit 23 without changing init, and then removed only the exact Runtime
-generation after shim `SIGKILL`. The suite used a dedicated private containerd
-root, state directory, socket, and systemd unit. The production containerd
-service was never restarted and remained at PID 2485480. Independent audits
-after every pass reported zero tasks, containers, task bundles, live Runtime
-records, workload cgroups, matching mounts, shim processes, agent children,
-qualification processes, Host children, zombies, or prepared operations. This
-source-build evidence does not extend contract v1's advertised 2.2.2
-compatibility claim; the 2.2.3 published-artifact record remains open.
+Delete response replay, and the committed `WriteStdin` and `CloseStdin`
+shim-death cleanup boundaries. The close boundary delivered `CloseIO` through
+the task shim's advertised ttrpc endpoint, retained Closing in schema-v9
+metadata, committed the same exec-scoped close directly to the Runtime,
+observed normal exec exit 29 without changing init, and then removed only the
+exact Runtime generation after shim `SIGKILL`. The suite used a dedicated
+private containerd root, state directory, socket, and systemd unit. The
+production containerd service was never restarted and remained at PID
+2485480. Independent audits after the probe and every pass reported zero
+tasks, containers, task bundles, live Runtime records, workload cgroups,
+qualification snapshots, shim processes, qualification processes, or workload
+processes. This source-build evidence does not extend contract v1's advertised
+2.2.2 compatibility claim; the 2.2.3 published-artifact record remains open.
 
 The August 24, 2026 arm64 requalification used source revision
 `5a6d5f2d817d5951929c2394dff57ef925dd5822`, containerd 2.2.2, and Linux
@@ -578,6 +579,21 @@ boundary begins with one recorded Runtime write and asserts that DeleteShim
 leaves the write count unchanged while fencing Kill and force Delete to that
 generation.
 
+The post-commit `CloseStdin` gate creates a non-terminal exec that exits 29
+only after stdin reaches EOF. It stops the Host, invokes `CloseIO` through the
+task shim's ttrpc address from its validated `bootstrap.json`, and requires
+schema-v9 metadata to retain exec incarnation 1, a canonically omitted zero
+stdin sequence, no pending write, and Closing before the request can reach the
+Runtime. With the shim also stopped, the gate resumes the Host and submits the
+same incarnation-bound `close-stdin-1` identity and exact process target
+directly through the public SDK. The exec must exit 29 from that one EOF while
+init remains Running at its original PID and generation. After shim `SIGKILL`,
+DeleteShim must not replay the locally pending close; it kills and force-deletes
+only the exact task generation, clears shim metadata and the bundle, and
+retains containerd-owned container metadata. A focused unit boundary begins
+with one recorded Runtime close and asserts that DeleteShim leaves the close
+count unchanged while fencing Kill and force Delete to that generation.
+
 The committed SignalProcess rehydration gate instead keeps the exec alive. It
 persists sequence 1 SIGSTOP, freezes the original shim and Runtime, commits the
 exact signal directly to the Runtime, then kills and replaces the shim before
@@ -665,9 +681,9 @@ suite to restart containerd.
 - qualify the supported containerd version range from exact release packages;
 - publish signed or checksummed shim, host-service, agent, and driver assets;
 - retain a machine-readable compatibility record;
-- close the remaining post-commit process-I/O forced-cleanup boundaries for
-  `CloseStdin` and `ResizePty`; Native Linux lifecycle mutations and
-  `WriteStdin` are qualified at this boundary;
+- close the remaining post-commit process-I/O forced-cleanup boundary for
+  `ResizePty`; Native Linux lifecycle mutations, `WriteStdin`, and
+  `CloseStdin` are qualified at this boundary;
 - run the same suite for every driver profile advertised through containerd;
 - complete OCI conformance, security review, upgrade/rollback, and release
   soak gates.

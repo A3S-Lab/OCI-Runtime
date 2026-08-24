@@ -3,12 +3,11 @@ use std::time::Duration;
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerTarget, Generation, OperationContext, ProcessTarget, StateRequest, WaitProcessRequest,
-    WriteStdinRequest,
+    CloseStdinRequest, ContainerTarget, Generation, OperationContext, ProcessTarget, StateRequest,
+    WaitProcessRequest,
 };
 use prost_types::Any;
 use serde::Deserialize;
-use tokio::io::AsyncWriteExt;
 
 use crate::api::{
     ContainersClient, CreateTaskRequest, ExecProcessRequest, GetContainerRequest, StartRequest,
@@ -17,81 +16,28 @@ use crate::api::{
 use crate::support::*;
 use crate::terminal;
 
-use super::shared::{containerd_exec_operation_id, containerd_process_id, runtime_client};
-use super::{
-    find_exact_shim_pid, wait_for_runtime_absence, wait_for_shim_cleanup, SuspendedProcess,
+use super::super::{
+    containerd_exec_operation_id, containerd_process_id, find_exact_shim_pid, runtime_client,
+    wait_for_runtime_absence, wait_for_shim_cleanup, SuspendedProcess,
 };
+use super::{MetadataDocument, StdinCloseEvidence};
 
-#[path = "process_io/close_stdin.rs"]
-mod close_stdin;
+const EXEC_ID: &str = "committed-close-stdin-exec";
+const EXEC_EXIT_STATUS: i32 = 29;
 
-pub(super) use close_stdin::qualify_close_stdin_effect_committed_shim_sigkill;
-
-const EXEC_ID: &str = "committed-stdin-exec";
-const COMMITTED_STDIN: &[u8] = b"committed-before-cleanup\n";
-const EXEC_EXIT_STATUS: i32 = 23;
-
-#[derive(Debug, Deserialize)]
-struct MetadataDocument {
-    schema_version: u64,
-    exec_sequence: u64,
-    execs: Vec<ExecStdinEvidence>,
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShimBootstrap {
+    version: u32,
+    address: String,
+    protocol: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct ExecStdinEvidence {
-    exec_id: String,
-    incarnation: u64,
-    #[serde(default)]
-    stdin_sequence: u64,
-    pending_stdin_write: Option<PendingStdinEvidence>,
-    #[serde(default)]
-    stdin_close_state: StdinCloseEvidence,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum StdinCloseEvidence {
-    #[default]
-    Open,
-    Closing,
-    Closed,
-}
-
-#[derive(Debug, PartialEq, Eq, Deserialize)]
-struct PendingStdinEvidence {
-    sequence: u64,
-    data: Vec<u8>,
-}
-
-#[test]
-fn pending_write_evidence_defaults_an_omitted_zero_stdin_sequence() {
-    let document: MetadataDocument = serde_json::from_value(serde_json::json!({
-        "schema_version": 9,
-        "exec_sequence": 1,
-        "execs": [{
-            "exec_id": EXEC_ID,
-            "incarnation": 1,
-            "pending_stdin_write": {
-                "sequence": 1,
-                "data": COMMITTED_STDIN
-            }
-        }]
-    }))
-    .expect("decode metadata that elides a zero stdin sequence");
-
-    assert_eq!(document.execs[0].stdin_sequence, 0);
-    assert_eq!(
-        document.execs[0].stdin_close_state,
-        StdinCloseEvidence::Open
-    );
-}
-
-pub(super) async fn qualify_write_stdin_effect_committed_shim_sigkill(
+pub(in super::super) async fn qualify_close_stdin_effect_committed_shim_sigkill(
     config: &QualificationConfig,
     prefix: &str,
 ) -> TestResult<()> {
-    let id = format!("{prefix}-shim-kill-write-stdin-committed");
+    let id = format!("{prefix}-shim-kill-close-stdin-committed");
     create_container(config, &id).await?;
     let channel = connect_ready(config).await?;
     let rootfs = task_rootfs(config, &channel, &id).await?;
@@ -104,7 +50,7 @@ pub(super) async fn qualify_write_stdin_effect_committed_shim_sigkill(
             &config.namespace,
         )?)
         .await
-        .map_err(|error| rpc_error("create committed-stdin task", error))?
+        .map_err(|error| rpc_error("create committed-close task", error))?
         .into_inner();
     let started = TasksClient::new(channel.clone())
         .start(namespaced(
@@ -115,26 +61,26 @@ pub(super) async fn qualify_write_stdin_effect_committed_shim_sigkill(
             &config.namespace,
         )?)
         .await
-        .map_err(|error| rpc_error("start committed-stdin task", error))?
+        .map_err(|error| rpc_error("start committed-close task", error))?
         .into_inner();
     if created.pid == 0 || started.pid != created.pid {
         return Err(qualification_error(format!(
-            "committed-stdin task PIDs were create={} and start={}; expected one stable nonzero PID",
+            "committed-close task PIDs were create={} and start={}; expected one stable nonzero PID",
             created.pid, started.pid
         ))
         .into());
     }
 
     let bundle = config.bundle(&id);
-    let stdin_path = bundle.join("committed-stdin-exec.stdin");
+    let stdin_path = bundle.join("committed-close-stdin-exec.stdin");
     terminal::create_fifo(&stdin_path).await?;
-    let mut stdin = tokio::fs::OpenOptions::new()
+    let stdin = tokio::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(&stdin_path)
         .await
         .map_err(|error| {
-            qualification_error(format!("open committed-stdin FIFO for read/write: {error}"))
+            qualification_error(format!("open committed-close FIFO for read/write: {error}"))
         })?;
     let spec = serde_json::json!({
         "terminal": false,
@@ -142,7 +88,7 @@ pub(super) async fn qualify_write_stdin_effect_committed_shim_sigkill(
         "args": [
             "/bin/sh",
             "-c",
-            "IFS= read -r line; [ \"$line\" = committed-before-cleanup ] || exit 91; exit 23"
+            "if IFS= read -r line; then exit 91; fi; exit 29"
         ],
         "env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
         "cwd": "/",
@@ -157,7 +103,7 @@ pub(super) async fn qualify_write_stdin_effect_committed_shim_sigkill(
                 spec: Some(Any {
                     type_url: crate::PROCESS_SPEC_TYPE.to_string(),
                     value: serde_json::to_vec(&spec).map_err(|error| {
-                        qualification_error(format!("encode committed-stdin exec process: {error}"))
+                        qualification_error(format!("encode committed-close exec process: {error}"))
                     })?,
                 }),
                 ..Default::default()
@@ -165,7 +111,7 @@ pub(super) async fn qualify_write_stdin_effect_committed_shim_sigkill(
             &config.namespace,
         )?)
         .await
-        .map_err(|error| rpc_error("add committed-stdin exec", error))?;
+        .map_err(|error| rpc_error("add committed-close exec", error))?;
     let exec = TasksClient::new(channel.clone())
         .start(namespaced(
             StartRequest {
@@ -175,39 +121,33 @@ pub(super) async fn qualify_write_stdin_effect_committed_shim_sigkill(
             &config.namespace,
         )?)
         .await
-        .map_err(|error| rpc_error("start committed-stdin exec", error))?
+        .map_err(|error| rpc_error("start committed-close exec", error))?
         .into_inner();
     if exec.pid == 0 || exec.pid == started.pid {
         return Err(qualification_error(format!(
-            "committed-stdin exec PID {} must be nonzero and distinct from init PID {}",
+            "committed-close exec PID {} must be nonzero and distinct from init PID {}",
             exec.pid, started.pid
         ))
         .into());
     }
 
     let identity = read_runtime_identity(config, &id).await?;
-    let host_pid = super::find_runtime_host_pid(config).await?;
+    let shim_address = load_shim_address(&bundle).await?;
+    let host_pid = super::super::find_runtime_host_pid(config).await?;
     let shim_pid = find_exact_shim_pid(config, &id).await?;
     let mut suspended_host =
-        SuspendedProcess::stop(host_pid, "committed-stdin A3S OCI host service")?;
-    stdin
-        .write_all(COMMITTED_STDIN)
-        .await
-        .map_err(|error| qualification_error(format!("write committed-stdin FIFO: {error}")))?;
-    stdin
-        .flush()
-        .await
-        .map_err(|error| qualification_error(format!("flush committed-stdin FIFO: {error}")))?;
-    wait_for_pending_write(&bundle).await?;
-    let suspended_shim = SuspendedProcess::stop(shim_pid, "committed-stdin shim")?;
-    suspended_host.resume("committed-stdin A3S OCI host service")?;
+        SuspendedProcess::stop(host_pid, "committed-close A3S OCI host service")?;
+    let mut close_call = spawn_close_io(&shim_address, &id);
+    wait_for_closing_stdin(&bundle, &mut close_call).await?;
+    let suspended_shim = SuspendedProcess::stop(shim_pid, "committed-close shim")?;
+    suspended_host.resume("committed-close A3S OCI host service")?;
 
     let process = exact_process_target(config, &id, &identity)?;
-    commit_runtime_write(config, &id, &identity, &process).await?;
+    commit_runtime_close(config, &id, &identity, &process).await?;
     let exit = wait_runtime_process(config, process).await?;
     if exit.exit_code != Some(EXEC_EXIT_STATUS) || exit.signal.is_some() || exit.oom_killed {
         return Err(qualification_error(format!(
-            "committed Runtime WriteStdin produced exitCode={:?}, signal={:?}, oomKilled={}; expected exit {EXEC_EXIT_STATUS}",
+            "committed Runtime CloseStdin produced exitCode={:?}, signal={:?}, oomKilled={}; expected exit {EXEC_EXIT_STATUS}",
             exit.exit_code, exit.signal, exit.oom_killed
         ))
         .into());
@@ -223,7 +163,7 @@ pub(super) async fn qualify_write_stdin_effect_committed_shim_sigkill(
         .await
         .map_err(|error| {
             qualification_error(format!(
-                "read init state after committed Runtime WriteStdin: {error}"
+                "read init state after committed Runtime CloseStdin: {error}"
             ))
         })?;
     if init.generation != Generation(identity.generation)
@@ -231,7 +171,7 @@ pub(super) async fn qualify_write_stdin_effect_committed_shim_sigkill(
         || init.state.pid().and_then(|pid| u32::try_from(pid).ok()) != Some(started.pid)
     {
         return Err(qualification_error(format!(
-            "committed Runtime WriteStdin changed init generation, state, or PID: generation={}, status={}, pid={:?}",
+            "committed Runtime CloseStdin changed init generation, state, or PID: generation={}, status={}, pid={:?}",
             init.generation.0,
             init.state.status(),
             init.state.pid()
@@ -239,8 +179,9 @@ pub(super) async fn qualify_write_stdin_effect_committed_shim_sigkill(
         .into());
     }
 
-    suspended_shim.kill("committed-stdin shim")?;
+    suspended_shim.kill("committed-close shim")?;
     drop(stdin);
+    let lost_close_response = expect_lost_close_response(&mut close_call).await;
     wait_for_shim_cleanup(config, &channel, &id, shim_pid, &[started.pid, exec.pid]).await?;
     wait_for_runtime_absence(config, identity.container_id).await?;
     ContainersClient::new(channel)
@@ -251,14 +192,65 @@ pub(super) async fn qualify_write_stdin_effect_committed_shim_sigkill(
         .await
         .map_err(|error| {
             rpc_error(
-                "read caller-owned metadata after committed Runtime WriteStdin and shim SIGKILL",
+                "read caller-owned metadata after committed Runtime CloseStdin and shim SIGKILL",
                 error,
             )
         })?;
+    lost_close_response?;
     delete_container(config, &id).await
 }
 
-async fn wait_for_pending_write(bundle: &Path) -> TestResult<()> {
+fn spawn_close_io(address: &str, id: &str) -> tokio::task::JoinHandle<TestResult<()>> {
+    let address = address.to_string();
+    let id = id.to_string();
+    tokio::spawn(async move {
+        let client = containerd_shim_protos::ttrpc::asynchronous::Client::connect(&address)
+            .await
+            .map_err(|error| {
+                qualification_error(format!(
+                    "connect committed-close shim at {address}: {error}"
+                ))
+            })?;
+        let task = containerd_shim_protos::shim::shim_ttrpc_async::TaskClient::new(client);
+        let mut request = containerd_shim_protos::api::CloseIORequest::new();
+        request.set_id(id.clone());
+        request.set_exec_id(EXEC_ID.to_string());
+        request.set_stdin(true);
+        task.close_io(
+            containerd_shim_protos::ttrpc::context::Context::default(),
+            &request,
+        )
+        .await
+        .map_err(|error| -> TestError {
+            qualification_error(format!(
+                "invoke CloseIO through shim {address} for {id}/{EXEC_ID}: {error}"
+            ))
+            .into()
+        })?;
+        Ok(())
+    })
+}
+
+async fn load_shim_address(bundle: &Path) -> TestResult<String> {
+    let bytes = tokio::fs::read(bundle.join("bootstrap.json"))
+        .await
+        .map_err(|error| qualification_error(format!("read shim bootstrap metadata: {error}")))?;
+    let bootstrap: ShimBootstrap = serde_json::from_slice(&bytes)
+        .map_err(|error| qualification_error(format!("decode shim bootstrap metadata: {error}")))?;
+    if bootstrap.version != 2 || bootstrap.protocol != "ttrpc" {
+        return Err(qualification_error(format!(
+            "shim bootstrap contract was version={} protocol={:?}; expected version 2 ttrpc",
+            bootstrap.version, bootstrap.protocol
+        ))
+        .into());
+    }
+    Ok(bootstrap.address)
+}
+
+async fn wait_for_closing_stdin(
+    bundle: &Path,
+    close_call: &mut tokio::task::JoinHandle<TestResult<()>>,
+) -> TestResult<()> {
     let path = bundle.join("a3s-oci-shim-v1.json");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
@@ -277,53 +269,65 @@ async fn wait_for_pending_write(bundle: &Path) -> TestResult<()> {
             && document.exec_sequence == 1
             && exec.incarnation == 1
             && exec.stdin_sequence == 0
-            && exec.pending_stdin_write.as_ref()
-                == Some(&PendingStdinEvidence {
-                    sequence: 1,
-                    data: COMMITTED_STDIN.to_vec(),
-                })
+            && exec.pending_stdin_write.is_none()
+            && exec.stdin_close_state == StdinCloseEvidence::Closing
         {
             return Ok(());
         }
-        if tokio::time::Instant::now() >= deadline {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
             return Err(qualification_error(format!(
-                "committed WriteStdin did not retain schema-9 exec incarnation 1, sequence 1, and exact pending bytes before reaching the suspended Runtime: {exec:?}"
+                "committed CloseStdin did not retain schema-9 exec incarnation 1 and closing stdin before reaching the suspended Runtime: {exec:?}"
             ))
             .into());
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::select! {
+            result = &mut *close_call => {
+                return match result {
+                    Ok(Ok(())) => Err(qualification_error(
+                        "CloseIO returned before its durable close reached the suspended Runtime",
+                    ).into()),
+                    Ok(Err(error)) => Err(qualification_error(format!(
+                        "CloseIO failed before its durable close reached the suspended Runtime: {error}"
+                    )).into()),
+                    Err(error) => Err(qualification_error(format!(
+                        "CloseIO task failed before its durable close reached the suspended Runtime: {error}"
+                    )).into()),
+                };
+            }
+            () = tokio::time::sleep(Duration::from_millis(10).min(remaining)) => {}
+        }
     }
 }
 
-async fn commit_runtime_write(
+async fn commit_runtime_close(
     config: &QualificationConfig,
     task_id: &str,
     identity: &RuntimeIdentity,
     process: &ProcessTarget,
 ) -> TestResult<()> {
     let client = runtime_client(config).await?;
-    let request = WriteStdinRequest {
+    let request = CloseStdinRequest {
         context: OperationContext::new(containerd_exec_operation_id(
             &config.namespace,
             task_id,
             &identity.incarnation,
             EXEC_ID,
             1,
-            "write-stdin-1",
+            "close-stdin",
         )?),
         process: process.clone(),
-        data: COMMITTED_STDIN.to_vec(),
     };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
-        match client.write_stdin(request.clone()).await {
+        match client.close_stdin(request.clone()).await {
             Ok(()) => return Ok(()),
             Err(error) if error.retryable && tokio::time::Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             Err(error) => {
                 return Err(qualification_error(format!(
-                    "commit exact Runtime WriteStdin before shim death: {error}"
+                    "commit exact Runtime CloseStdin before shim death: {error}"
                 ))
                 .into());
             }
@@ -349,10 +353,34 @@ async fn wait_runtime_process(
             }
             Err(error) => {
                 return Err(qualification_error(format!(
-                    "observe committed Runtime WriteStdin effect: {error}"
+                    "observe committed Runtime CloseStdin effect: {error}"
                 ))
                 .into());
             }
+        }
+    }
+}
+
+async fn expect_lost_close_response(
+    close_call: &mut tokio::task::JoinHandle<TestResult<()>>,
+) -> TestResult<()> {
+    match tokio::time::timeout(Duration::from_secs(5), &mut *close_call).await {
+        Ok(Ok(Err(_))) => Ok(()),
+        Ok(Ok(Ok(()))) => Err(qualification_error(
+            "original CloseIO response survived after its frozen shim was killed",
+        )
+        .into()),
+        Ok(Err(error)) => Err(qualification_error(format!(
+            "original CloseIO task failed before reporting its lost response: {error}"
+        ))
+        .into()),
+        Err(_) => {
+            close_call.abort();
+            let _ = close_call.await;
+            Err(qualification_error(
+                "original CloseIO call did not observe shim death within 5 seconds",
+            )
+            .into())
         }
     }
 }

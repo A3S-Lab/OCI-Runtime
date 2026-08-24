@@ -2288,8 +2288,20 @@ through the public SDK. One input must produce exec exit 23 without changing
 the live init PID or generation. Shim `SIGKILL` then drives DeleteShim without
 redispatching the locally pending bytes; exact-generation Kill and force
 Delete must remove both processes, the bundle, cgroup, mounts, and shim state
-while preserving caller-owned container metadata. The remaining
-process-I/O forced-cleanup boundaries are `CloseStdin` and `ResizePty`.
+while preserving caller-owned container metadata. The post-commit
+`CloseStdin` boundary stops the Host, sends `CloseIO` directly to the task
+shim's advertised ttrpc endpoint, and waits for schema-v9 metadata to retain
+exec incarnation 1, stdin state Closing, and no pending write. It then stops
+the shim, resumes the Host, and commits the same incarnation-bound
+`close-stdin-1` identity directly through the public SDK. EOF must produce
+normal exec exit 29 without changing the live init PID or generation. Shim
+`SIGKILL` then drives DeleteShim without redispatching the locally pending
+close; exact-generation Kill and force Delete remove both processes, the
+bundle, cgroup, mounts, and shim state while preserving caller-owned container
+metadata. A focused unit boundary begins with one recorded close and proves
+cleanup leaves that call count unchanged. The only remaining process-I/O
+forced-cleanup boundary is `ResizePty`.
+
 Repeated controls now use a monotonically increasing durable
 sequence instead of one fixed operation identity: two different Updates and
 two complete Pause/Resume cycles dispatch distinct mutations, identical
@@ -2331,27 +2343,27 @@ after its Host result is durable, including every derived chunk identity for a
 stdin payload larger than the 4 MiB guest frame limit.
 
 On August 24, 2026, source revision
-`a3865075d8ced661447a85196e17136379535fa7` passed three complete Ubuntu
-24.04 x86_64/containerd 2.2.3 matrices consecutively in 89.96, 93.40, and
-94.55 seconds through unchanged Host PID 2504484. The release-built shim
+`9726719e5a66156cd61f8be36ca00998bbcfc871` passed three complete Ubuntu
+24.04 x86_64/containerd 2.2.3 matrices consecutively in 117.37, 119.36, and
+118.94 seconds through unchanged Host PID 2678296. The release-built shim
 SHA-256 was
-`ca14a7d28f3b95656b831006c22e2e88561c272a19c48aab19b43d6592ca652c`.
+`99bacac7a308e4830ca55101ef8148a511526722cf9006d8a37ef9cba89dbf50`.
 The matching CLI, agent, qualification executable, and Cargo.lock SHA-256
 values were
 `80d0b69686c73516fc3a507f2545af77b405918584176bdb0a96ab3bcf067102`,
 `68219e592a061b9dba7f491d54716354195cd8f8005fa792ab367681dda5352e`,
-`c560b1d92d4e786a026fd2c8002bcb0330c06d620304a08c5df4951ebdaf9ce4`,
+`3e752abc8ada3b8e3dae9d86e370feb7d17bf04c2245f13888d52ba7537b2fd2`,
 and `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
 Every pass retained committed terminal init-Kill and exec-SignalProcess exits,
 exact DeleteProcess and task Delete response replay, and the post-commit
-`WriteStdin` cleanup boundary. The qualification ran only against a dedicated
-private containerd root, state, socket, and systemd unit; the production daemon
-remained active at PID 2485480. Independent audits after every pass found zero
-matching task, container, shim, agent or Host child, qualification process,
-workload process, bundle, live Runtime record, cgroup, mount, zombie, or
-prepared operation. The remaining R7 items stay open until the two remaining
-process-I/O forced-cleanup boundaries, every advertised driver profile, and
-the published release-artifact compatibility record pass.
+`WriteStdin` and `CloseStdin` cleanup boundaries. The qualification ran only
+against a dedicated private containerd root, state, socket, and systemd unit;
+the production daemon remained active at PID 2485480. Independent audits after
+the probe and every pass found zero matching task, container, shim,
+qualification process, workload process, bundle, live Runtime record, cgroup,
+or snapshot. The remaining R7 items stay open until the `ResizePty`
+process-I/O forced-cleanup boundary, every advertised driver profile, and the
+published release-artifact compatibility record pass.
 
 Exit gate: containerd task, restart, I/O, and cleanup suites pass through the
 public SDK without the Box CLI, a direct VMM path, duplicate lifecycle state,
