@@ -270,10 +270,14 @@ A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
 
 It creates a separate empty bootstrap root and UID-owned mode-`0700` runtime
 share, downloads the architecture-specific pinned Alpine archive, and prepares
-two ownership-normalized OCI bundles. Its 16 cases are the complete
+two ownership-normalized OCI bundles. Its 17 cases are the complete
 20-operation lifecycle, the two-container generation/namespace/rootfs/PID
-isolation lifecycle, three no-delete interruption boundaries, and all 11
-protocol-v10 Host/Guest transport fault points. Each case must restore the
+isolation lifecycle, one versioned ten-case Guest path-isolation profile,
+three no-delete interruption boundaries, and all 11 protocol-v10 Host/Guest
+transport fault points. The isolation profile covers reserved and external
+bundles, absolute and symlinked rootfs entries, absolute, traversing, and
+symlinked bind sources, and intermediate magic-link File/Filesystem escapes.
+Each case must restore the
 Unix endpoint and shim-process inventories, leave `run` unchanged, keep the
 bootstrap empty, and remove markers plus token and recovery handoffs. The
 aggregate schema is `a3s.oci.linux-kvm-lifecycle-matrix.v2`.
@@ -327,8 +331,9 @@ downloads or unpacks the Alpine fixture. Lifecycle and recovery emit zero-case
 `unavailable` reports; soak emits `completed_iterations: 0` and
 `fixture_downloaded: false`. CI uploads those reports, but they are not
 `available` hardware results. The driver remains `probe-only` until fresh
-x86_64 and AArch64 KVM hosts retain all three available reports and the
-remaining real-entry Guest negative-isolation profiles pass.
+x86_64 and AArch64 KVM hosts retain all three available reports, including the
+integrated Guest path-isolation evidence. Other real-entry Guest
+negative-isolation profiles remain separate promotion gates.
 
 ## Experimental lifecycle gate
 

@@ -6,10 +6,62 @@ use a3s_oci_core::HostPlatform;
 use crate::report::OciVmSmokeReport;
 use crate::{
     LifecycleFaultPoint, MacosHvfSoakConfig, MacosHvfSoakReport, OciVmFaultCleanupReport,
-    OciVmMultiContainerSmokeReport, OciVmOperationReopenReplacementReport,
-    OciVmReopenReplacementReport, OciVmTransportFaultCleanupReport,
-    WindowsOciVmMultiContainerSmokeReport,
+    OciVmGuestIsolationSmokeReport, OciVmMultiContainerSmokeReport,
+    OciVmOperationReopenReplacementReport, OciVmReopenReplacementReport,
+    OciVmTransportFaultCleanupReport, WindowsOciVmMultiContainerSmokeReport,
 };
+
+/// Exercise hostile Guest filesystem paths against one real utility VM.
+///
+/// This diagnostic requires a writable runtime share that is separate from
+/// the immutable VM bootstrap root. It retains typed rejection, canary, and
+/// cleanup evidence for every versioned negative-isolation case.
+#[must_use]
+pub async fn oci_vm_guest_isolation_smoke(
+    shim: &Path,
+    vm_rootfs: &Path,
+    system_image_manifest: Option<&Path>,
+    runtime_share: &Path,
+    bundle: &Path,
+    console: &Path,
+) -> OciVmGuestIsolationSmokeReport {
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    ))]
+    {
+        utility_vm::run_guest_isolation(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            runtime_share,
+            bundle,
+            console,
+        )
+        .await
+    }
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    )))]
+    {
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            runtime_share,
+            bundle,
+            console,
+        );
+        OciVmGuestIsolationSmokeReport::unsupported(HostPlatform::current())
+    }
+}
 
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),

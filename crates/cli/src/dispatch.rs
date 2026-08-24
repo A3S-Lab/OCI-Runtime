@@ -581,6 +581,31 @@ fn dispatch(
                 ExitCode::from(2)
             })
         }),
+        Command::OciVmGuestIsolationSmoke {
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            runtime_share,
+            bundle,
+            console,
+        } => command_future!({
+            let report = a3s_oci_runtime::oci_vm_guest_isolation_smoke(
+                &shim,
+                &vm_rootfs,
+                system_image_manifest.as_deref(),
+                &runtime_share,
+                &bundle,
+                &console,
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }),
         Command::WhpxDriverSmoke {
             shim,
             runtime_root,

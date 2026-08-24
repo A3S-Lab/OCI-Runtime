@@ -1,3 +1,4 @@
+mod bundle_scope;
 mod capability;
 mod cgroup;
 mod control;
@@ -78,6 +79,7 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, Instant};
 
 use crate::AGENT_VERSION;
+use bundle_scope::{BundleDirectoryScope, PinnedBundleDirectory};
 use cgroup::{CgroupManager, RootlessCgroupDelegation};
 use hook::HookStateTemplate;
 use pidfd::SignalOutcome;
@@ -182,6 +184,7 @@ pub struct LinuxExecutor {
     device_source_root: PathBuf,
     owner_identity: Option<recovery::ProcessIdentity>,
     rootfs_scope: RootfsScope,
+    bundle_directory_scope: BundleDirectoryScope,
     user_mapping_runtime: namespace::UserMappingRuntime,
     rootless_cgroup_delegation: Option<RootlessCgroupDelegation>,
     state: Arc<Mutex<ExecutorState>>,
@@ -199,6 +202,7 @@ impl LinuxExecutor {
             DEFAULT_RUNTIME_PARENT,
             executable,
             RootfsScope::BundleOnly,
+            BundleDirectoryScope::unrestricted(),
             RecoveryMode::Transient,
             None,
         )
@@ -213,10 +217,13 @@ impl LinuxExecutor {
                 format!("failed to resolve guest-agent executable: {error}"),
             )
         })?;
+        let (runtime_parent, bundle_directory_scope) =
+            BundleDirectoryScope::utility_vm(runtime_parent).await?;
         Self::open_with_rootfs_scope(
             runtime_parent,
             executable,
             RootfsScope::BundleOnly,
+            bundle_directory_scope,
             RecoveryMode::Transient,
             Some(Path::new(UTILITY_VM_DEVICE_SOURCE_PARENT)),
         )
@@ -237,6 +244,7 @@ impl LinuxExecutor {
             runtime_parent,
             init_executable,
             RootfsScope::BundleOnly,
+            BundleDirectoryScope::unrestricted(),
             RecoveryMode::DurableNative,
             None,
         )
@@ -256,6 +264,7 @@ impl LinuxExecutor {
             runtime_parent,
             init_executable,
             RootfsScope::NativeAbsolute,
+            BundleDirectoryScope::unrestricted(),
             RecoveryMode::DurableNative,
             None,
         )
@@ -276,6 +285,7 @@ impl LinuxExecutor {
             runtime_parent,
             init_executable,
             RootfsScope::NativeAbsolute,
+            BundleDirectoryScope::unrestricted(),
             RecoveryMode::DurableNative,
             None,
         )
@@ -300,6 +310,7 @@ impl LinuxExecutor {
             runtime_parent,
             init_executable,
             RootfsScope::NativeAbsolute,
+            BundleDirectoryScope::unrestricted(),
             RecoveryMode::DurableNative,
             None,
         )
@@ -357,6 +368,7 @@ impl LinuxExecutor {
         runtime_parent: impl AsRef<Path>,
         init_executable: impl AsRef<Path>,
         rootfs_scope: RootfsScope,
+        bundle_directory_scope: BundleDirectoryScope,
         recovery_mode: RecoveryMode,
         device_source_parent: Option<&Path>,
     ) -> Result<Self> {
@@ -510,6 +522,7 @@ impl LinuxExecutor {
             device_source_root,
             owner_identity,
             rootfs_scope,
+            bundle_directory_scope,
             user_mapping_runtime,
             rootless_cgroup_delegation: None,
             state: Arc::new(Mutex::new(ExecutorState::default())),
@@ -656,6 +669,9 @@ impl LinuxExecutor {
             ));
         }
 
+        let pinned_bundle = self
+            .bundle_directory_scope
+            .pin(request.bundle.guest_directory())?;
         let bundle = request.bundle.to_guest_bundle()?;
         let process_io = match bundle.spec().process().as_ref() {
             Some(process) => request.io.resolve_for_process(process)?,
@@ -663,6 +679,7 @@ impl LinuxExecutor {
         };
         let rootless = self.user_mapping_runtime.is_rootless();
         let mut plan = InitPlan::from_bundle(&bundle, &process_io)?;
+        mount::validate_bundle_source_syntax(&plan.mounts, self.rootfs_scope)?;
         plan.cgroup.ensure_runtime_path(&key.id, key.generation)?;
         plan.resolve_cgroup_ownership(
             self.user_mapping_runtime
@@ -784,6 +801,7 @@ impl LinuxExecutor {
             ProcessSpawnContext {
                 inherited_descriptors,
                 rootless_device_mounts,
+                pinned_bundle,
                 rootfs_scope: self.rootfs_scope,
                 user_mapping_runtime: &self.user_mapping_runtime,
                 device_source_directory: &device_source_directory,
@@ -1735,6 +1753,7 @@ mod rootless_device_tests {
             runtime_root,
             owner_identity: None,
             rootfs_scope: super::RootfsScope::BundleOnly,
+            bundle_directory_scope: super::BundleDirectoryScope::unrestricted(),
             user_mapping_runtime: namespace::UserMappingRuntime::Rootless {
                 effective_uid: 1000,
                 effective_gid: 1001,
@@ -1820,6 +1839,7 @@ mod rootless_device_tests {
             runtime_root,
             owner_identity: None,
             rootfs_scope: super::RootfsScope::BundleOnly,
+            bundle_directory_scope: super::BundleDirectoryScope::unrestricted(),
             user_mapping_runtime: namespace::UserMappingRuntime::Rootless {
                 effective_uid: 1000,
                 effective_gid: 1001,

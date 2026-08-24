@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::{Error, ErrorCode, OciBundle, ProcessIo, Result, MAX_CONFIG_BYTES};
 
+use super::bundle_scope::{PinnedBundleDirectory, PinnedRootfsDirectory};
 use super::control::{
     receive_device_mounts, write_capability_warnings, write_create_hooks_ready, write_ready,
     write_rejection, CREATE_CONTINUE_BYTE, START_BYTE,
@@ -32,6 +33,8 @@ struct ContainerInitInvocation {
     control_name: std::ffi::OsString,
     container_id: String,
     rootfs_scope: RootfsScope,
+    pinned_bundle: Option<PinnedBundleDirectory>,
+    pinned_rootfs: Option<File>,
     expected_owner_pid: libc::pid_t,
     rootless: bool,
     device_source_directory: PathBuf,
@@ -48,6 +51,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     let control_name = arguments.next();
     let container_id = arguments.next();
     let rootfs_scope = arguments.next();
+    let bundle_access = arguments.next();
     let expected_owner_pid = arguments.next();
     let mapping_mode = arguments.next();
     let device_source_directory = arguments.next().map(PathBuf::from);
@@ -59,6 +63,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         Some(control_name),
         Some(container_id),
         Some(rootfs_scope),
+        Some(bundle_access),
         Some(expected_owner_pid),
         Some(mapping_mode),
         Some(device_source_directory),
@@ -70,6 +75,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         control_name,
         container_id,
         rootfs_scope,
+        bundle_access,
         expected_owner_pid,
         mapping_mode,
         device_source_directory,
@@ -79,7 +85,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     else {
         return Some(Err(init_error(
             ErrorCode::InvalidArgument,
-            "container-init requires CONFIG BUNDLE CONTROL ID ROOTFS_SCOPE OWNER_PID MAPPING_MODE DEVICE_SOURCE_DIRECTORY PROCESS_IO and no extra arguments",
+            "container-init requires CONFIG BUNDLE CONTROL ID ROOTFS_SCOPE BUNDLE_ACCESS OWNER_PID MAPPING_MODE DEVICE_SOURCE_DIRECTORY PROCESS_IO and no extra arguments",
         )));
     };
     let container_id = match container_id.into_string() {
@@ -96,6 +102,26 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
             ErrorCode::InvalidArgument,
             "container-init received an invalid rootfs scope",
         )));
+    };
+    let (pinned_bundle, pinned_rootfs) = match bundle_access.to_str() {
+        Some("bundle-path") => (None, None),
+        Some("pinned-bundle-fd") if rootfs_scope == RootfsScope::BundleOnly => {
+            let bundle = match PinnedBundleDirectory::take_from_child() {
+                Ok(bundle) => bundle,
+                Err(error) => return Some(Err(error)),
+            };
+            let rootfs = match PinnedRootfsDirectory::take_from_child() {
+                Ok(rootfs) => rootfs,
+                Err(error) => return Some(Err(error)),
+            };
+            (Some(bundle), Some(rootfs))
+        }
+        _ => {
+            return Some(Err(init_error(
+                ErrorCode::InvalidArgument,
+                "container-init received an invalid bundle-access mode",
+            )));
+        }
     };
     let expected_owner_pid = match expected_owner_pid
         .to_str()
@@ -164,6 +190,8 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         control_name,
         container_id,
         rootfs_scope,
+        pinned_bundle,
+        pinned_rootfs,
         expected_owner_pid,
         rootless,
         device_source_directory,
@@ -178,6 +206,8 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
         control_name,
         container_id,
         rootfs_scope,
+        pinned_bundle,
+        pinned_rootfs,
         expected_owner_pid,
         rootless,
         device_source_directory,
@@ -215,11 +245,14 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
         config_snapshot,
         bundle_directory,
         rootfs_scope,
+        pinned_bundle.as_ref(),
+        pinned_rootfs,
         &process_io,
     ) {
         Ok(prepared) => prepared,
         Err(error) => return reject_before_ready(&mut control, error),
     };
+    let source_resolver = mount::BindSourceResolver::new(&canonical_bundle, pinned_bundle.as_ref());
     let expected_device_mount_count = usize::from(rootless && plan.devices.has_node_setup())
         * super::device::ROOTLESS_DEVICE_MOUNT_COUNT;
     let rootless_device_mount_descriptors =
@@ -247,7 +280,7 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
         Err(error) => return reject_before_ready(&mut control, error),
     };
     let detached_sources =
-        match DetachedMountSources::prepare(&plan.mounts, &canonical_bundle, &idmap_namespaces) {
+        match DetachedMountSources::prepare(&plan.mounts, &source_resolver, &idmap_namespaces) {
             Ok(sources) => sources,
             Err(error) => return reject_before_ready(&mut control, error),
         };
@@ -299,7 +332,7 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
     }
     let create = CreateContext {
         plan: &plan,
-        bundle_directory: &canonical_bundle,
+        source_resolver: &source_resolver,
         rootfs: &rootfs,
         rootfs_file: &rootfs_file,
         prepared_devices: &prepared_devices,
@@ -316,7 +349,7 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
 
 pub(super) struct CreateContext<'a> {
     plan: &'a InitPlan,
-    bundle_directory: &'a Path,
+    source_resolver: &'a mount::BindSourceResolver<'a>,
     rootfs: &'a Path,
     rootfs_file: &'a File,
     prepared_devices: &'a PreparedDeviceSources,
@@ -336,10 +369,10 @@ pub(super) fn complete_create_and_wait_for_start(
     }
     if let Err(error) = prepare_create_environment_before_pivot(
         create.plan,
-        create.bundle_directory,
         create.rootfs,
         create.prepared_devices,
         &mut detached_sources,
+        create.source_resolver,
     ) {
         return reject_before_ready(&mut control, error);
     }
@@ -464,6 +497,8 @@ fn prepare_container_init(
     config_snapshot: PathBuf,
     bundle_directory: PathBuf,
     rootfs_scope: RootfsScope,
+    pinned_bundle: Option<&PinnedBundleDirectory>,
+    pinned_rootfs: Option<File>,
     process_io: &ProcessIo,
 ) -> Result<(InitPlan, PathBuf, PathBuf, File, File)> {
     let config_json = read_bounded_config(&config_snapshot)?;
@@ -474,54 +509,140 @@ fn prepare_container_init(
         .as_ref()
         .is_some_and(|root| root.path().is_absolute());
     let mut plan = InitPlan::from_bundle(&bundle, process_io)?;
-    plan.namespaces
-        .resolve_joined_user_mappings(plan.uid, plan.gid, &plan.additional_gids)?;
-    let canonical_bundle = plan.bundle_directory.canonicalize().map_err(|error| {
-        init_error(
-            ErrorCode::InvalidArgument,
-            format!(
-                "failed to resolve guest bundle {}: {error}",
-                plan.bundle_directory.display()
-            ),
-        )
-    })?;
-    let rootfs = plan.rootfs.canonicalize().map_err(|error| {
-        init_error(
-            ErrorCode::InvalidArgument,
-            format!(
-                "failed to resolve container rootfs {}: {error}",
-                plan.rootfs.display()
-            ),
-        )
-    })?;
+    plan.resolve_joined_user_namespace()?;
+    let canonical_bundle = if pinned_bundle.is_some() {
+        plan.bundle_directory.clone()
+    } else {
+        plan.bundle_directory.canonicalize().map_err(|error| {
+            init_error(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "failed to resolve guest bundle {}: {error}",
+                    plan.bundle_directory.display()
+                ),
+            )
+        })?
+    };
+    if pinned_bundle.is_none() {
+        mount::validate_bundle_scoped_sources(&plan.mounts, &canonical_bundle, rootfs_scope)?;
+    }
+    let pinned_rootfs = if let Some(bundle) = pinned_bundle {
+        let relative = plan
+            .rootfs
+            .strip_prefix(&plan.bundle_directory)
+            .map_err(|_| {
+                init_error(
+                    ErrorCode::PermissionDenied,
+                    format!(
+                        "container rootfs must be relative to its descriptor-pinned utility-VM bundle: {}",
+                        plan.rootfs.display()
+                    ),
+                )
+            })?;
+        let inherited = pinned_rootfs.ok_or_else(|| {
+            init_error(
+                ErrorCode::PermissionDenied,
+                "container-init did not receive its descriptor-pinned utility-VM rootfs",
+            )
+        })?;
+        let current = bundle
+            .open_relative(
+                relative,
+                libc::O_PATH,
+                true,
+                "container rootfs",
+                "run-container-init",
+            )?
+            .ok_or_else(|| {
+                init_error(
+                    ErrorCode::PermissionDenied,
+                    format!(
+                        "descriptor-pinned container rootfs no longer occupies its bundle entry: {}",
+                        plan.rootfs.display()
+                    ),
+                )
+            })?;
+        let inherited_metadata = inherited.metadata().map_err(|error| {
+            init_error(
+                ErrorCode::FailedPrecondition,
+                format!("failed to inspect inherited container rootfs: {error}"),
+            )
+        })?;
+        let current_metadata = current.metadata().map_err(|error| {
+            init_error(
+                ErrorCode::FailedPrecondition,
+                format!("failed to inspect current container rootfs entry: {error}"),
+            )
+        })?;
+        use std::os::unix::fs::MetadataExt;
+        if inherited_metadata.dev() != current_metadata.dev()
+            || inherited_metadata.ino() != current_metadata.ino()
+        {
+            return Err(init_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "container rootfs changed after descriptor-confined validation: {}",
+                    plan.rootfs.display()
+                ),
+            ));
+        }
+        Some(inherited)
+    } else {
+        if pinned_rootfs.is_some() {
+            return Err(init_error(
+                ErrorCode::PermissionDenied,
+                "container-init received a rootfs descriptor without bundle authority",
+            ));
+        }
+        None
+    };
+    let rootfs = if let Some(rootfs) = pinned_rootfs.as_ref() {
+        PathBuf::from(format!("/proc/self/fd/{}", rootfs.as_raw_fd()))
+    } else {
+        plan.rootfs.canonicalize().map_err(|error| {
+            init_error(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "failed to resolve container rootfs {}: {error}",
+                    plan.rootfs.display()
+                ),
+            )
+        })?
+    };
     if !rootfs.is_dir() {
         return Err(init_error(
             ErrorCode::InvalidArgument,
             format!("container rootfs is not a directory: {}", rootfs.display()),
         ));
     }
-    let rootfs_is_in_bundle = rootfs != canonical_bundle && rootfs.starts_with(&canonical_bundle);
-    if rootfs == canonical_bundle
-        || (!rootfs_is_in_bundle
-            && (rootfs_scope == RootfsScope::BundleOnly || !root_path_is_absolute))
-    {
-        return Err(init_error(
-            ErrorCode::PermissionDenied,
-            format!(
-                "container rootfs escapes its guest bundle: {}",
-                rootfs.display()
-            ),
-        ));
+    if pinned_bundle.is_none() {
+        let rootfs_is_in_bundle =
+            rootfs != canonical_bundle && rootfs.starts_with(&canonical_bundle);
+        if rootfs == canonical_bundle
+            || (!rootfs_is_in_bundle
+                && (rootfs_scope == RootfsScope::BundleOnly || !root_path_is_absolute))
+        {
+            return Err(init_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "container rootfs escapes its guest bundle: {}",
+                    rootfs.display()
+                ),
+            ));
+        }
     }
-    let rootfs_file = File::open(&rootfs).map_err(|error| {
-        init_error(
-            ErrorCode::InvalidArgument,
-            format!(
-                "failed to retain the container rootfs {} before namespace entry: {error}",
-                rootfs.display()
-            ),
-        )
-    })?;
+    let rootfs_file = match pinned_rootfs {
+        Some(rootfs) => rootfs,
+        None => File::open(&rootfs).map_err(|error| {
+            init_error(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "failed to retain the container rootfs {} before namespace entry: {error}",
+                    rootfs.display()
+                ),
+            )
+        })?,
+    };
     if !rootfs_file
         .metadata()
         .map_err(|error| {
@@ -566,10 +687,10 @@ fn prepare_container_init(
 
 fn prepare_create_environment_before_pivot(
     plan: &InitPlan,
-    bundle_directory: &Path,
     rootfs: &Path,
     prepared_devices: &PreparedDeviceSources,
     detached_sources: &mut DetachedMountSources,
+    source_resolver: &mount::BindSourceResolver<'_>,
 ) -> Result<()> {
     super::portable_rootfs_metadata::replay_if_requested(&plan.annotations, rootfs)?;
     if let Some(hostname) = &plan.hostname {
@@ -605,10 +726,10 @@ fn prepare_create_environment_before_pivot(
         plan.devices.validate_rootfs(rootfs)?;
         rootfs::prepare_pivot(rootfs, plan.rootfs_propagation)?;
         plan.default_filesystems
-            .apply_early(bundle_directory, rootfs, detached_sources)?;
-        mount::apply_all(&plan.mounts, bundle_directory, rootfs, detached_sources)?;
+            .apply_early(rootfs, detached_sources, source_resolver)?;
+        mount::apply_all(&plan.mounts, rootfs, detached_sources, source_resolver)?;
         plan.default_filesystems
-            .apply_late(bundle_directory, rootfs, detached_sources)?;
+            .apply_late(rootfs, detached_sources, source_resolver)?;
         plan.devices
             .bind_prepared_sources(rootfs, prepared_devices)?;
     }

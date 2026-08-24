@@ -403,6 +403,27 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
     },
+    /// Qualify hostile Guest paths inside one real utility VM.
+    OciVmGuestIsolationSmoke {
+        /// Isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Empty immutable bootstrap root, disjoint from the runtime share.
+        #[arg(long, value_name = "DIR")]
+        vm_rootfs: PathBuf,
+        /// Immutable system-image manifest required by KVM and HVF.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: Option<PathBuf>,
+        /// Writable runtime share containing `run/` and the known-good bundle.
+        #[arg(long, value_name = "DIR")]
+        runtime_share: PathBuf,
+        /// Known-good OCI bundle contained by the writable runtime share.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// New host file that receives the Guest console stream.
+        #[arg(long, value_name = "FILE")]
+        console: PathBuf,
+    },
     /// Run one exact lifecycle through the qualification-only WHPX driver.
     WhpxDriverSmoke {
         /// Isolated libkrun shim executable.

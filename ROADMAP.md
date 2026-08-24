@@ -1355,7 +1355,7 @@ bundle, validates negative isolation cases, retains exact terminal evidence
 across host restart, and leaves no process, handle, or runtime-root leak. Only
 then may WHPX become `experimental`.
 
-### R2M — macOS HVF Utility VM qualification harness — 15/15 complete
+### R2M — macOS HVF Utility VM qualification harness — 16/16 implementation items complete
 
 - [x] Query Apple Silicon Hypervisor.framework support directly.
 - [x] Add the minimal checked-in Hypervisor entitlement used to sign runtime
@@ -1409,6 +1409,12 @@ then may WHPX become `experimental`.
 - [x] Retain fail-closed unavailable-virtualization, missing-entitlement,
   invalid-runtime-asset, missing-agent-rootfs, wrong-token, and unexpected-peer
   evidence without reporting false negotiation.
+- [x] Add a versioned ten-case real-Guest path-isolation gate for reserved or
+  external bundles, absolute or symlinked rootfs paths, absolute, traversing,
+  or symlinked bind sources, and intermediate magic-link File/Filesystem
+  escapes.
+  Apple Silicon CI requires exact typed rejection, unchanged canaries, absent
+  container state, and complete Guest and host cleanup.
 - [x] Expose the launch-ready `HvfRuntimeDriver` through a public Apple Silicon
   Host Service and CLI. Use one same-UID mode-0600 Unix socket below a real
   owner-only mode-0700 root, separate durable `state/` from writable HVF
@@ -1465,7 +1471,10 @@ The currently advertised macOS/HVF public product path is therefore 100%
 function-complete and remains `experimental`. Signed release-package
 qualification, upstream OCI conformance, adversarial security review, upgrade
 and rollback compatibility, and longer release soak remain promotion gates
-before `supported`.
+before `supported`. The new path-isolation profile is implementation-complete
+and CI-wired, but its first `available` artifact at the updated source revision
+still must be retained; the historical lifecycle evidence does not substitute
+for that run.
 
 The August 15, 2026 focused follow-up closed durable Host journaling for File
 upload and Filesystem mkdir/move/remove, raised the durable operation schema to
@@ -1522,9 +1531,9 @@ release-promotion gates above.
   multi-container, fault-cleanup, owner-death, and service-restart matrices
   used to qualify WHPX and HVF.
   - [x] Wire the shared Utility VM lifecycle to Linux x86_64/AArch64 and add a
-    16-case CI entry for the complete 20-operation lifecycle, two-container
-    isolation, three lifecycle cleanup boundaries, and all 11 Host/Guest
-    transport interruption points. The
+    17-case CI entry for the complete 20-operation lifecycle, two-container
+    isolation, one ten-case real-Guest path-isolation profile, three lifecycle
+    cleanup boundaries, and all 11 Host/Guest transport interruption points. The
     `a3s.oci.linux-kvm-lifecycle-matrix.v2` report retains endpoint,
     shim-process, runtime-state, bootstrap, token/recovery, and marker cleanup.
     Runners without usable KVM emit `unavailable` with zero cases and skip the
@@ -1552,9 +1561,10 @@ release-promotion gates above.
     before `shares/<container>/<generation>` is created. The same production
     path and cleanup assertions run on Linux x86_64 and AArch64 CI without
     requiring `/dev/kvm`.
-  - [ ] Retain the `available` 16-case lifecycle, owner-death/restart, and
-    25-wave soak reports on fresh x86_64 and AArch64 KVM hosts, then complete
-    the remaining real-entry Guest negative-isolation profiles.
+  - [ ] Retain the `available` 17-case lifecycle, owner-death/restart, and
+    25-wave soak reports on fresh x86_64 and AArch64 KVM hosts. The lifecycle
+    artifact must include the integrated ten-case Guest path-isolation report;
+    any other real-entry Guest negative-isolation profiles remain separate.
 - [x] Retain fail-closed context evidence for invalid, missing, symbolic-link,
   or drifted Linux libkrun, firmware, and exported-kernel assets.
 - [ ] Retain real-entry fail-closed evidence for an initialization-failing KVM

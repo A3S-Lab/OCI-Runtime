@@ -42,6 +42,8 @@ fn native_scope_accepts_an_explicit_absolute_rootfs_outside_the_bundle() {
         config,
         bundle.clone(),
         RootfsScope::NativeAbsolute,
+        None,
+        None,
         &ProcessIo::default(),
     )
     .expect("native absolute rootfs");
@@ -67,6 +69,8 @@ fn rejects_missing_or_non_directory_rootfs_before_namespace_entry() {
         config.clone(),
         bundle.clone(),
         RootfsScope::BundleOnly,
+        None,
+        None,
         &ProcessIo::default(),
     )
     .expect_err("the declared rootfs directory must exist");
@@ -81,6 +85,8 @@ fn rejects_missing_or_non_directory_rootfs_before_namespace_entry() {
         config,
         bundle,
         RootfsScope::BundleOnly,
+        None,
+        None,
         &ProcessIo::default(),
     )
     .expect_err("the declared rootfs path must resolve to a directory");
@@ -101,6 +107,8 @@ fn bundle_scope_rejects_the_same_external_absolute_rootfs() {
         config,
         bundle,
         RootfsScope::BundleOnly,
+        None,
+        None,
         &ProcessIo::default(),
     )
     .expect_err("guest rootfs must remain bundle-confined");
@@ -123,6 +131,8 @@ fn native_scope_does_not_let_a_relative_symlink_escape_the_bundle() {
         config,
         bundle,
         RootfsScope::NativeAbsolute,
+        None,
+        None,
         &ProcessIo::default(),
     )
     .expect_err("relative rootfs must remain bundle-confined");
@@ -161,9 +171,60 @@ fn prepared_init_reloads_terminal_bundle_with_forwarded_process_io() {
         config_path,
         bundle,
         RootfsScope::NativeAbsolute,
+        None,
+        None,
         &terminal_io,
     )
     .expect("prepared terminal init");
 
     assert!(plan.terminal);
+}
+
+#[tokio::test]
+async fn descriptor_pinned_rootfs_rejects_an_entry_swap_before_namespace_entry() {
+    use a3s_oci_agent_protocol::GuestPath;
+
+    use crate::executor::bundle_scope::BundleDirectoryScope;
+
+    let temporary = tempdir().expect("temporary utility VM share");
+    let share = temporary.path().join("share");
+    let state = share.join("run");
+    let bundle = share.join("bundle");
+    let rootfs = bundle.join("rootfs");
+    let retained = bundle.join("retained-rootfs");
+    std::fs::create_dir_all(&state).expect("runtime state");
+    std::fs::create_dir_all(&rootfs).expect("rootfs");
+    let config = write_configuration(temporary.path(), Path::new("rootfs"));
+    let (_, scope) = BundleDirectoryScope::utility_vm(&state)
+        .await
+        .expect("utility VM scope");
+    let pinned = scope
+        .pin(&GuestPath::new(bundle.to_string_lossy()).expect("guest bundle"))
+        .expect("pin bundle")
+        .expect("utility VM pin");
+    let pinned_rootfs = pinned
+        .open_relative(
+            Path::new("rootfs"),
+            libc::O_PATH,
+            true,
+            "container rootfs",
+            "run-container-init",
+        )
+        .expect("open rootfs")
+        .expect("rootfs exists");
+
+    std::fs::rename(&rootfs, &retained).expect("move validated rootfs");
+    std::fs::create_dir(&rootfs).expect("replace rootfs entry");
+    let error = prepare_container_init(
+        config,
+        bundle,
+        RootfsScope::BundleOnly,
+        Some(&pinned),
+        Some(pinned_rootfs),
+        &ProcessIo::default(),
+    )
+    .expect_err("changed rootfs entry must fail closed");
+
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
+    assert!(error.message.contains("rootfs changed"));
 }

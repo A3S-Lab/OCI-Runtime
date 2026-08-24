@@ -635,6 +635,10 @@ jobs:
           test "$endpoint_after" = "$endpoint_baseline"
           test ! -e "$marker"
       - if: runner.os == 'macOS'
+        name: macOS Guest negative isolation or fail-closed worker
+        shell: bash
+        run: bash .github/scripts/macos-guest-isolation.sh
+      - if: runner.os == 'macOS'
         name: Multi-container macOS OCI lifecycle or fail-closed worker
         shell: bash
         run: |

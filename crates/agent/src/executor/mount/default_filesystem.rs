@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::Result;
 
-use super::{DetachedMountSources, MountPlan};
+use super::{BindSourceResolver, DetachedMountSources, MountPlan};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ApplyPhase {
@@ -45,7 +45,7 @@ const DEFINITIONS: [Definition; 4] = [
         source: "devpts",
         filesystem_type: "devpts",
         flags: libc::MS_NOSUID | libc::MS_NOEXEC,
-        data: &["newinstance", "ptmxmode=0666", "mode=0620", "gid=5"],
+        data: &["newinstance", "ptmxmode=0666", "mode=0620"],
         phase: ApplyPhase::AfterConfigured,
         requires_owned_network_namespace: false,
     },
@@ -80,6 +80,7 @@ impl DefaultFilesystemPlan {
         configured: &[MountPlan],
         new_mount_namespace: bool,
         sysfs_mount_allowed: bool,
+        devpts_gid: u32,
     ) -> Self {
         if !new_mount_namespace {
             return Self::default();
@@ -96,7 +97,7 @@ impl DefaultFilesystemPlan {
             {
                 continue;
             }
-            let mount = default_mount(configured.len() + ordinal, definition);
+            let mount = default_mount(configured.len() + ordinal, definition, devpts_gid);
             match definition.phase {
                 ApplyPhase::BeforeConfigured => plan.early.push(mount),
                 ApplyPhase::AfterConfigured => plan.late.push(mount),
@@ -107,20 +108,20 @@ impl DefaultFilesystemPlan {
 
     pub(in crate::executor) fn apply_early(
         &self,
-        bundle_directory: &Path,
         rootfs: &Path,
         detached_sources: &mut DetachedMountSources,
+        source_resolver: &BindSourceResolver<'_>,
     ) -> Result<()> {
-        apply(&self.early, bundle_directory, rootfs, detached_sources)
+        apply(&self.early, rootfs, detached_sources, source_resolver)
     }
 
     pub(in crate::executor) fn apply_late(
         &self,
-        bundle_directory: &Path,
         rootfs: &Path,
         detached_sources: &mut DetachedMountSources,
+        source_resolver: &BindSourceResolver<'_>,
     ) -> Result<()> {
-        apply(&self.late, bundle_directory, rootfs, detached_sources)
+        apply(&self.late, rootfs, detached_sources, source_resolver)
     }
 
     #[cfg(test)]
@@ -143,9 +144,26 @@ impl DefaultFilesystemPlan {
     pub(in crate::executor) fn is_empty(&self) -> bool {
         self.early.is_empty() && self.late.is_empty()
     }
+
+    #[cfg(test)]
+    pub(in crate::executor) fn data_for(&self, destination: &Path) -> Option<&[String]> {
+        self.early
+            .iter()
+            .chain(&self.late)
+            .find(|mount| mount.destination == destination)
+            .map(|mount| mount.data.as_slice())
+    }
 }
 
-fn default_mount(index: usize, definition: &Definition) -> MountPlan {
+fn default_mount(index: usize, definition: &Definition, devpts_gid: u32) -> MountPlan {
+    let mut data = definition
+        .data
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if definition.destination == "/dev/pts" {
+        data.push(format!("gid={devpts_gid}"));
+    }
     MountPlan {
         index,
         destination: PathBuf::from(definition.destination),
@@ -158,7 +176,7 @@ fn default_mount(index: usize, definition: &Definition) -> MountPlan {
         propagation: None,
         recursive_attributes: None,
         idmap: None,
-        data: definition.data.iter().map(ToString::to_string).collect(),
+        data,
         oci_cgroup_source: false,
         oci_cgroup_destination: false,
         oci_readonly_option: false,
@@ -167,12 +185,12 @@ fn default_mount(index: usize, definition: &Definition) -> MountPlan {
 
 fn apply(
     mounts: &[MountPlan],
-    bundle_directory: &Path,
     rootfs: &Path,
     detached_sources: &mut DetachedMountSources,
+    source_resolver: &BindSourceResolver<'_>,
 ) -> Result<()> {
     for mount in mounts {
-        mount.apply(bundle_directory, rootfs, detached_sources)?;
+        mount.apply(rootfs, detached_sources, source_resolver)?;
     }
     Ok(())
 }

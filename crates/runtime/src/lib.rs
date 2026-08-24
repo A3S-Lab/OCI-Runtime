@@ -45,6 +45,7 @@ mod fault;
     all(target_os = "macos", target_arch = "aarch64")
 ))]
 mod filesystem_smoke;
+mod guest_isolation_report;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod host_cleanup;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -166,6 +167,10 @@ pub use driver::{
     DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
     DriverWaitRequest, DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
 };
+pub use guest_isolation_report::{
+    OciVmGuestIsolationCaseEvidence, OciVmGuestIsolationSmokeReport,
+    OCI_VM_GUEST_ISOLATION_CASE_COUNT, OCI_VM_GUEST_ISOLATION_SMOKE_SCHEMA_VERSION,
+};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub use hvf_driver::{HvfRuntimeDriver, HvfRuntimeDriverConfig};
 #[cfg(all(
@@ -240,10 +245,11 @@ pub use native_smoke::{
 pub use oci_smoke::{
     macos_hvf_soak, oci_vm_close_stdin_reopen_replacement_at, oci_vm_delete_reopen_replacement_at,
     oci_vm_exec_reopen_replacement_at, oci_vm_fault_cleanup, oci_vm_file_reopen_replacement_at,
-    oci_vm_filesystem_reopen_replacement_at, oci_vm_kill_reopen_replacement_at,
-    oci_vm_multi_container_smoke, oci_vm_pause_reopen_replacement_at,
-    oci_vm_processes_reopen_replacement_at, oci_vm_read_output_reopen_replacement_at,
-    oci_vm_reopen_replacement, oci_vm_reopen_replacement_at, oci_vm_resize_reopen_replacement_at,
+    oci_vm_filesystem_reopen_replacement_at, oci_vm_guest_isolation_smoke,
+    oci_vm_kill_reopen_replacement_at, oci_vm_multi_container_smoke,
+    oci_vm_pause_reopen_replacement_at, oci_vm_processes_reopen_replacement_at,
+    oci_vm_read_output_reopen_replacement_at, oci_vm_reopen_replacement,
+    oci_vm_reopen_replacement_at, oci_vm_resize_reopen_replacement_at,
     oci_vm_resume_reopen_replacement_at, oci_vm_signal_process_reopen_replacement_at, oci_vm_smoke,
     oci_vm_start_reopen_replacement_at, oci_vm_state_reopen_replacement_at,
     oci_vm_stats_reopen_replacement_at, oci_vm_transport_fault_cleanup,

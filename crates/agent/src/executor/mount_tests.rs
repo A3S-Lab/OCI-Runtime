@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use a3s_oci_sdk::{ErrorCode, IoMode, OciBundle, ProcessIo, OCI_LINUX_MOUNT_OPTIONS};
 use tempfile::tempdir;
 
+use super::mount::{BindSourceResolver, MountTargetKind};
 use super::plan::InitPlan;
 
 const MOUNT_CONFIG: &str = r#"{
@@ -70,6 +71,17 @@ fn with_user_namespace(config: &str) -> String {
     "namespaces": [{"type": "mount"}, {"type": "user"}],
     "uidMappings": [{"containerID": 0, "hostID": 100000, "size": 65536}],
     "gidMappings": [{"containerID": 0, "hostID": 200000, "size": 65536}]
+  }"#,
+    )
+}
+
+fn with_narrow_user_namespace(config: &str) -> String {
+    config.replace(
+        r#""linux": {"namespaces": [{"type": "mount"}]}"#,
+        r#""linux": {
+    "namespaces": [{"type": "mount"}, {"type": "user"}],
+    "uidMappings": [{"containerID": 0, "hostID": 100000, "size": 1}],
+    "gidMappings": [{"containerID": 0, "hostID": 200000, "size": 1}]
   }"#,
     )
 }
@@ -232,6 +244,34 @@ fn does_not_expose_host_sysfs_to_a_user_namespace_with_inherited_networking() {
     assert_eq!(
         plan.default_filesystems.late_destinations(),
         [Path::new("/dev/pts"), Path::new("/dev/shm")]
+    );
+}
+
+#[test]
+fn keeps_the_standard_devpts_gid_when_it_is_mapped() {
+    let configuration = with_user_namespace(MOUNT_CONFIG);
+    let plan = InitPlan::from_bundle(&bundle(&configuration), &null_io())
+        .expect("user namespace mapping containing the tty group");
+
+    assert_eq!(
+        plan.default_filesystems
+            .data_for(Path::new("/dev/pts"))
+            .expect("synthesized devpts mount"),
+        ["newinstance", "ptmxmode=0666", "mode=0620", "gid=5"]
+    );
+}
+
+#[test]
+fn uses_the_verified_process_gid_when_the_tty_group_is_not_mapped() {
+    let configuration = with_narrow_user_namespace(MOUNT_CONFIG);
+    let plan = InitPlan::from_bundle(&bundle(&configuration), &null_io())
+        .expect("narrow user namespace mapping");
+
+    assert_eq!(
+        plan.default_filesystems
+            .data_for(Path::new("/dev/pts"))
+            .expect("synthesized devpts mount"),
+        ["newinstance", "ptmxmode=0666", "mode=0620", "gid=0"]
     );
 }
 
@@ -639,10 +679,22 @@ fn creates_missing_directory_and_file_mount_targets_inside_the_rootfs() {
     );
     let bundle = bundle_at(bundle_directory.to_path_buf(), &config);
     let plan = InitPlan::from_bundle(&bundle, &null_io()).expect("mount target creation plan");
+    let resolver = BindSourceResolver::new(bundle_directory, None);
 
     for mount in &plan.mounts {
+        let kind = if mount.bind {
+            resolver
+                .resolve_required(
+                    mount.index,
+                    mount.source.as_deref().expect("bind mount source"),
+                )
+                .expect("resolve bind source")
+                .kind()
+        } else {
+            MountTargetKind::Directory
+        };
         mount
-            .prepare_target(bundle_directory, &rootfs)
+            .prepare_target(&rootfs, kind)
             .expect("create the requested mount target");
     }
 
@@ -665,9 +717,53 @@ fn refuses_to_create_a_mount_target_through_an_escaping_symlink() {
     let bundle = bundle_at(bundle_directory.to_path_buf(), &config);
     let plan = InitPlan::from_bundle(&bundle, &null_io()).expect("mount target creation plan");
     let error = plan.mounts[0]
-        .prepare_target(bundle_directory, &rootfs)
+        .prepare_target(&rootfs, MountTargetKind::Directory)
         .expect_err("escaping target must fail");
 
     assert_eq!(error.code, ErrorCode::PermissionDenied);
     assert!(!outside.join("created").exists());
+}
+
+#[tokio::test]
+async fn descriptor_confined_bind_source_survives_an_entry_swap() {
+    use std::os::unix::fs::symlink;
+
+    use a3s_oci_agent_protocol::GuestPath;
+
+    use super::bundle_scope::BundleDirectoryScope;
+
+    let temporary = tempdir().expect("temporary runtime share");
+    let share = temporary.path().join("share");
+    let state = share.join("run");
+    let bundle = share.join("bundle");
+    let retained = bundle.join("retained-source");
+    let source = bundle.join("source");
+    let external = temporary.path().join("external-source");
+    std::fs::create_dir_all(&state).expect("runtime state");
+    std::fs::create_dir(&bundle).expect("bundle");
+    std::fs::write(&source, b"retained").expect("bundle source");
+    std::fs::write(&external, b"external").expect("external source");
+    let (_, scope) = BundleDirectoryScope::utility_vm(&state)
+        .await
+        .expect("utility VM scope");
+    let pinned = scope
+        .pin(&GuestPath::new(bundle.to_string_lossy()).expect("guest bundle"))
+        .expect("pin guest bundle")
+        .expect("utility VM pin");
+    let resolver = BindSourceResolver::new(&bundle, Some(&pinned));
+    let resolved = resolver
+        .resolve_required(0, Path::new("source"))
+        .expect("resolve exact bind source");
+
+    std::fs::rename(&source, &retained).expect("move retained source");
+    symlink(&external, &source).expect("install hostile source link");
+
+    assert_eq!(
+        std::fs::read(resolved.path()).expect("read retained descriptor"),
+        b"retained"
+    );
+    let error = resolver
+        .resolve_required(0, Path::new("source"))
+        .expect_err("new symbolic source lookup must fail closed");
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
 }

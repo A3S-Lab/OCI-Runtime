@@ -3,7 +3,6 @@ use std::ffi::{CStr, CString};
 use std::io;
 use std::mem::size_of;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::path::Path;
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
@@ -12,18 +11,24 @@ use super::attributes::{
     MOUNT_ATTR_NOEXEC, MOUNT_ATTR_NOSUID, MOUNT_ATTR_NOSYMFOLLOW, MOUNT_ATTR_RDONLY,
     MOUNT_ATTR_STRICTATIME,
 };
-use super::{bind_source_candidate_path, path_cstring, resolve_bind_source_path, MountPlan};
+use super::{path_cstring, BindSourceResolver, MountPlan, MountTargetKind};
 use crate::executor::namespace::IdmapNamespaceHandles;
 
 #[derive(Debug, Default)]
 pub(in crate::executor) struct DetachedMountSources {
-    sources: BTreeMap<usize, OwnedFd>,
+    sources: BTreeMap<usize, DetachedMountSource>,
+}
+
+#[derive(Debug)]
+struct DetachedMountSource {
+    descriptor: OwnedFd,
+    kind: MountTargetKind,
 }
 
 impl DetachedMountSources {
     pub(in crate::executor) fn prepare(
         plans: &[MountPlan],
-        bundle_directory: &Path,
+        source_resolver: &BindSourceResolver<'_>,
         namespaces: &IdmapNamespaceHandles,
     ) -> Result<Self> {
         let mut sources = BTreeMap::new();
@@ -31,7 +36,7 @@ impl DetachedMountSources {
             if plan.idmap.is_none() && !plan.detached_bind {
                 continue;
             }
-            let detached = if plan.bind {
+            let (detached, kind) = if plan.bind {
                 let source = plan.source.as_deref().ok_or_else(|| {
                     apply_error(
                         ErrorCode::InvalidArgument,
@@ -39,26 +44,32 @@ impl DetachedMountSources {
                         "detached bind mount is missing its source",
                     )
                 })?;
-                if plan.idmap.is_none() && plan.detached_bind {
-                    let candidate = bind_source_candidate_path(bundle_directory, source);
-                    match std::fs::metadata(candidate) {
-                        Ok(_) => {}
-                        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                            // A source produced by an earlier mount in this
-                            // plan does not exist until namespace entry. Keep
-                            // it on the existing in-namespace path; only an
-                            // already-existing foreign source needs parent
-                            // user-namespace preparation.
-                            continue;
-                        }
-                        Err(_) => {}
+                let source = match source_resolver.resolve(plan.index, source)? {
+                    Some(source) => source,
+                    None if plan.idmap.is_none() && plan.detached_bind => {
+                        // A source produced by an earlier mount in this
+                        // plan does not exist until namespace entry. Keep
+                        // it on the existing in-namespace path; only an
+                        // already-existing foreign source needs parent
+                        // user-namespace preparation.
+                        continue;
                     }
-                }
-                let source = resolve_bind_source_path(plan.index, bundle_directory, source)?;
-                let source = path_cstring(plan.index, "source", &source)?;
-                clone_mount(plan.index, &source, plan.flags & libc::MS_REC != 0)?
+                    None => {
+                        return Err(apply_error(
+                            ErrorCode::InvalidArgument,
+                            plan.index,
+                            "detached bind mount source does not exist",
+                        ));
+                    }
+                };
+                let kind = source.kind();
+                let source_path = path_cstring(plan.index, "source", source.path())?;
+                (
+                    clone_mount(plan.index, &source_path, plan.flags & libc::MS_REC != 0)?,
+                    kind,
+                )
             } else {
-                create_filesystem_mount(plan)?
+                (create_filesystem_mount(plan)?, MountTargetKind::Directory)
             };
             if let Some(idmap) = &plan.idmap {
                 apply_idmap_attribute(
@@ -71,7 +82,16 @@ impl DetachedMountSources {
             if plan.detached_bind {
                 apply_detached_bind_attributes(plan, &detached)?;
             }
-            if sources.insert(plan.index, detached).is_some() {
+            if sources
+                .insert(
+                    plan.index,
+                    DetachedMountSource {
+                        descriptor: detached,
+                        kind,
+                    },
+                )
+                .is_some()
+            {
                 return Err(apply_error(
                     ErrorCode::Internal,
                     plan.index,
@@ -84,6 +104,10 @@ impl DetachedMountSources {
 
     pub(in crate::executor) fn contains(&self, index: usize) -> bool {
         self.sources.contains_key(&index)
+    }
+
+    pub(in crate::executor) fn source_kind(&self, index: usize) -> Option<MountTargetKind> {
+        self.sources.get(&index).map(|source| source.kind)
     }
 
     pub(in crate::executor) fn open_destination(
@@ -121,7 +145,7 @@ impl DetachedMountSources {
         let moved = unsafe {
             libc::syscall(
                 libc::SYS_move_mount,
-                source.as_raw_fd(),
+                source.descriptor.as_raw_fd(),
                 empty_path.as_ptr(),
                 destination.as_raw_fd(),
                 empty_path.as_ptr(),
@@ -552,7 +576,8 @@ mod tests {
     use a3s_oci_sdk::ErrorCode;
 
     use super::{
-        bind_mount_attributes, classify_errno, filesystem_mount_attributes, DetachedMountSources,
+        bind_mount_attributes, classify_errno, filesystem_mount_attributes, BindSourceResolver,
+        DetachedMountSources,
     };
     use crate::executor::mount::MountPlan;
     use crate::executor::namespace::IdmapNamespaceHandles;
@@ -643,12 +668,10 @@ mod tests {
             oci_readonly_option: false,
         };
 
-        let sources = DetachedMountSources::prepare(
-            &[plan],
-            bundle.path(),
-            &IdmapNamespaceHandles::default(),
-        )
-        .expect("deferred generated bind source");
+        let resolver = BindSourceResolver::new(bundle.path(), None);
+        let sources =
+            DetachedMountSources::prepare(&[plan], &resolver, &IdmapNamespaceHandles::default())
+                .expect("deferred generated bind source");
 
         assert!(!sources.contains(7));
     }

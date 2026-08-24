@@ -19,6 +19,9 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
+use super::bundle_scope::{
+    PinnedBundleDirectory, PinnedRootfsDirectory, UTILITY_VM_BUNDLE_FD, UTILITY_VM_ROOTFS_FD,
+};
 use super::capability::{report_capability_warnings, CapabilityPlan};
 use super::cgroup::{self, CgroupHandle, CgroupManager};
 use super::control::{
@@ -63,6 +66,7 @@ pub(super) struct PreparedProcess {
 pub(super) struct ProcessSpawnContext<'a> {
     pub(super) inherited_descriptors: InheritedDescriptorPlan,
     pub(super) rootless_device_mounts: Vec<OwnedFd>,
+    pub(super) pinned_bundle: Option<PinnedBundleDirectory>,
     pub(super) rootfs_scope: RootfsScope,
     pub(super) user_mapping_runtime: &'a UserMappingRuntime,
     pub(super) device_source_directory: &'a Path,
@@ -81,13 +85,19 @@ impl PreparedProcess {
         let ProcessSpawnContext {
             inherited_descriptors,
             rootless_device_mounts,
+            pinned_bundle,
             rootfs_scope,
             user_mapping_runtime,
             device_source_directory,
         } = context;
         let rootless = user_mapping_runtime.is_rootless();
-        let original_rootfs = retain_original_rootfs(&plan.rootfs).await?;
+        let (original_rootfs, pinned_rootfs) =
+            retain_original_rootfs(plan, pinned_bundle.as_ref()).await?;
         let process_group = ProcessGroupLease::open_for_snapshot(config_snapshot).await?;
+        if pinned_bundle.is_some() {
+            inherited_descriptors
+                .ensure_targets_available(&[UTILITY_VM_BUNDLE_FD, UTILITY_VM_ROOTFS_FD])?;
+        }
         if plan.cgroup.uses_control_workload_layout() {
             inherited_descriptors
                 .ensure_targets_available(&[CONTROL_CGROUP_PROCS_FD, WORKLOAD_CGROUP_PROCS_FD])?;
@@ -97,23 +107,7 @@ impl PreparedProcess {
             rootless,
             plan.devices.has_node_setup(),
         )?;
-        let mut cgroup = CgroupHandle::create(
-            &plan.cgroup,
-            &plan.cgroup_ownership,
-            &plan.devices,
-            cgroup_manager,
-        )?;
         let mut intel_rdt = IntelRdtHandle::create(plan.intel_rdt.as_ref(), hook_state.id())?;
-        let init_cgroup_procs = cgroup.as_ref().map(CgroupHandle::init_procs_descriptor);
-        let control_workload_descriptors = cgroup
-            .as_ref()
-            .and_then(CgroupHandle::control_workload_descriptors);
-        if plan.cgroup.uses_control_workload_layout() && control_workload_descriptors.is_none() {
-            return Err(process_error(
-                ErrorCode::Internal,
-                "control/workload cgroup descriptors were not prepared",
-            ));
-        }
         let (listener, control_name) = bind_control_listener()?;
         // SAFETY: getpid has no preconditions and cannot fail.
         let expected_owner_pid = unsafe { libc::getpid() };
@@ -141,6 +135,11 @@ impl PreparedProcess {
             .arg(&control_name)
             .arg(hook_state.id())
             .arg(rootfs_scope.internal_argument())
+            .arg(if pinned_bundle.is_some() {
+                "pinned-bundle-fd"
+            } else {
+                "bundle-path"
+            })
             .arg(expected_owner_pid.to_string())
             .arg(if rootless { "rootless" } else { "privileged" })
             .arg(device_source_directory)
@@ -149,6 +148,23 @@ impl PreparedProcess {
             .kill_on_drop(true);
         let io_setup = ProcessIoHandle::configure(&mut command, io)?;
         let terminal = io_setup.uses_terminal();
+        let mut cgroup = CgroupHandle::create(
+            &plan.cgroup,
+            &plan.cgroup_ownership,
+            &plan.devices,
+            cgroup_manager,
+        )?;
+        let init_cgroup_procs = cgroup.as_ref().map(CgroupHandle::init_procs_descriptor);
+        let control_workload_descriptors = cgroup
+            .as_ref()
+            .and_then(CgroupHandle::control_workload_descriptors);
+        if plan.cgroup.uses_control_workload_layout() && control_workload_descriptors.is_none() {
+            let error = process_error(
+                ErrorCode::Internal,
+                "control/workload cgroup descriptors were not prepared",
+            );
+            return Err(cleanup_unstarted_cgroup(&mut cgroup, error));
+        }
         // SAFETY: the callback runs in the freshly forked command child and
         // performs one bounded write to the already-open outer cgroup.procs
         // file, installs fixed control/workload descriptors, establishes the
@@ -167,38 +183,47 @@ impl PreparedProcess {
                 if let Some((control, workload)) = control_workload_descriptors {
                     cgroup::install_control_workload_descriptors_from_pre_exec(control, workload)?;
                 }
+                if let Some(bundle) = pinned_bundle.as_ref() {
+                    bundle.install_in_child()?;
+                }
+                if let Some(rootfs) = pinned_rootfs.as_ref() {
+                    rootfs.install_in_child()?;
+                }
                 super::terminal::prepare_child_terminal(terminal)?;
                 inherited_descriptors.install_in_child()
             });
         }
-        let mut child = command.spawn().map_err(|error| {
-            process_error(
-                ErrorCode::Internal,
-                format!("failed to spawn prepared container init: {error}"),
-            )
-        })?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                let error = process_error(
+                    ErrorCode::Internal,
+                    format!("failed to spawn prepared container init: {error}"),
+                );
+                return Err(cleanup_unstarted_cgroup(&mut cgroup, error));
+            }
+        };
         let process_io = match ProcessIoHandle::attach(io_setup, &mut child, io) {
             Ok(process_io) => process_io,
             Err(error) => {
-                terminate(&mut child).await;
-                return Err(error);
+                return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
             }
         };
         let Some(raw_pid) = child.id() else {
-            terminate(&mut child).await;
-            return Err(process_error(
+            let error = process_error(
                 ErrorCode::Internal,
                 "spawned container init has no live process ID",
-            ));
+            );
+            return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
         };
         let pid = match i32::try_from(raw_pid) {
             Ok(pid) => pid,
             Err(_) => {
-                terminate(&mut child).await;
-                return Err(process_error(
+                let error = process_error(
                     ErrorCode::ResourceExhausted,
                     format!("container init PID {raw_pid} does not fit the OCI state model"),
-                ));
+                );
+                return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
             }
         };
 
@@ -216,55 +241,56 @@ impl PreparedProcess {
         let mut control = match ready {
             Ok(ReadyOutcome::Connected(Ok((control, _)))) => control,
             Ok(ReadyOutcome::Connected(Err(error))) => {
-                terminate(&mut child).await;
-                return Err(process_error(
+                let error = process_error(
                     ErrorCode::Internal,
                     format!("failed to accept prepared init control connection: {error}"),
-                ));
+                );
+                return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
             }
             Ok(ReadyOutcome::Exited(Ok(status))) => {
-                return Err(process_error(
+                let error = process_error(
                     ErrorCode::FailedPrecondition,
                     format!("container init rejected its plan and exited with {status}"),
-                ));
+                );
+                return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
             }
             Ok(ReadyOutcome::Exited(Err(error))) => {
-                return Err(process_error(
+                let error = process_error(
                     ErrorCode::Internal,
                     format!("failed to wait for prepared container init: {error}"),
-                ));
+                );
+                return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
             }
             Err(_) => {
-                terminate(&mut child).await;
-                return Err(process_error(
+                let error = process_error(
                     ErrorCode::DeadlineExceeded,
                     "timed out waiting for the prepared container init",
-                ));
+                );
+                return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
             }
         };
         let peer = match control.peer_cred() {
             Ok(peer) => peer,
             Err(error) => {
-                terminate(&mut child).await;
-                return Err(process_error(
+                let error = process_error(
                     ErrorCode::Internal,
                     format!("failed to read prepared init peer credentials: {error}"),
-                ));
+                );
+                return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
             }
         };
         if peer.pid() != Some(pid) {
-            terminate(&mut child).await;
-            return Err(process_error(
+            let error = process_error(
                 ErrorCode::PermissionDenied,
                 format!(
                     "init control peer PID {:?} does not match spawned PID {pid}",
                     peer.pid()
                 ),
-            ));
+            );
+            return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
         }
         if let Err(error) = send_device_mounts(&control, &rootless_device_mounts) {
-            terminate(&mut child).await;
-            return Err(error);
+            return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
         }
         drop(rootless_device_mounts);
         let mut user_mapping_installed = false;
@@ -276,11 +302,22 @@ impl PreparedProcess {
                         || user_mapping_installed
                         || create_hooks_ready.is_some()
                     {
-                        terminate(&mut child).await;
-                        return Err(process_error(
+                        let error = process_error(
                             ErrorCode::PermissionDenied,
                             "container init sent an unexpected user namespace mapping request",
-                        ));
+                        );
+                        return Err(if create_hooks_ready.is_some() {
+                            cleanup_failed_create(
+                                &mut child,
+                                &mut cgroup,
+                                &plan.hooks,
+                                hook_state,
+                                error,
+                            )
+                            .await
+                        } else {
+                            cleanup_uncommitted_create(&mut child, &mut cgroup, error).await
+                        });
                     }
                     match timeout(
                         INIT_READY_TIMEOUT,
@@ -295,20 +332,24 @@ impl PreparedProcess {
                     {
                         Ok(Ok(())) => {}
                         Ok(Err(error)) => {
-                            terminate(&mut child).await;
-                            return Err(error);
+                            return Err(
+                                cleanup_uncommitted_create(&mut child, &mut cgroup, error).await
+                            );
                         }
                         Err(_) => {
-                            terminate(&mut child).await;
-                            return Err(process_error(
+                            let error = process_error(
                                 ErrorCode::DeadlineExceeded,
                                 "timed out installing container user namespace mappings",
-                            ));
+                            );
+                            return Err(
+                                cleanup_uncommitted_create(&mut child, &mut cgroup, error).await
+                            );
                         }
                     }
                     if let Err(error) = acknowledge_user_mapping(&mut control).await {
-                        terminate(&mut child).await;
-                        return Err(error);
+                        return Err(
+                            cleanup_uncommitted_create(&mut child, &mut cgroup, error).await
+                        );
                     }
                     user_mapping_installed = true;
                 }
@@ -323,22 +364,37 @@ impl PreparedProcess {
                             ErrorCode::PermissionDenied,
                             "container init reported an invalid create-hook barrier",
                         );
-                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
-                            .await;
-                        return Err(error);
+                        return Err(cleanup_failed_create(
+                            &mut child,
+                            &mut cgroup,
+                            &plan.hooks,
+                            hook_state,
+                            error,
+                        )
+                        .await);
                     }
                     if let Err(error) =
                         pid::validate_runtime_pid(plan, pid, runtime_pid, namespace_init_pid).await
                     {
-                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
-                            .await;
-                        return Err(error);
+                        return Err(cleanup_failed_create(
+                            &mut child,
+                            &mut cgroup,
+                            &plan.hooks,
+                            hook_state,
+                            error,
+                        )
+                        .await);
                     }
                     if let Some(handle) = intel_rdt.as_mut() {
                         if let Err(error) = handle.assign(runtime_pid) {
-                            cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
-                                .await;
-                            return Err(error);
+                            return Err(cleanup_failed_create(
+                                &mut child,
+                                &mut cgroup,
+                                &plan.hooks,
+                                hook_state,
+                                error,
+                            )
+                            .await);
                         }
                     }
                     if plan.cgroup.uses_control_workload_layout() {
@@ -352,9 +408,14 @@ impl PreparedProcess {
                             )),
                         };
                         if let Err(error) = finalized {
-                            cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
-                                .await;
-                            return Err(error);
+                            return Err(cleanup_failed_create(
+                                &mut child,
+                                &mut cgroup,
+                                &plan.hooks,
+                                hook_state,
+                                error,
+                            )
+                            .await);
                         }
                     }
                     let creating = match hook_state.encode(
@@ -363,22 +424,37 @@ impl PreparedProcess {
                     ) {
                         Ok(state) => state,
                         Err(error) => {
-                            cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
-                                .await;
-                            return Err(error);
+                            return Err(cleanup_failed_create(
+                                &mut child,
+                                &mut cgroup,
+                                &plan.hooks,
+                                hook_state,
+                                error,
+                            )
+                            .await);
                         }
                     };
                     for phase in [HookPhase::Prestart, HookPhase::CreateRuntime] {
                         if let Err(error) = plan.hooks.run(phase, &creating).await {
-                            cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
-                                .await;
-                            return Err(error);
+                            return Err(cleanup_failed_create(
+                                &mut child,
+                                &mut cgroup,
+                                &plan.hooks,
+                                hook_state,
+                                error,
+                            )
+                            .await);
                         }
                     }
                     if let Err(error) = continue_create(&mut control).await {
-                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
-                            .await;
-                        return Err(error);
+                        return Err(cleanup_failed_create(
+                            &mut child,
+                            &mut cgroup,
+                            &plan.hooks,
+                            hook_state,
+                            error,
+                        )
+                        .await);
                     }
                     create_hooks_ready = Some((runtime_pid, namespace_init_pid));
                 }
@@ -387,68 +463,106 @@ impl PreparedProcess {
                     namespace_init_pid,
                 })) => {
                     if plan.namespaces.new_user() && !user_mapping_installed {
-                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
-                            .await;
-                        return Err(process_error(
+                        let error = process_error(
                             ErrorCode::PermissionDenied,
                             "container init bypassed required user namespace mappings",
-                        ));
+                        );
+                        return Err(cleanup_failed_create(
+                            &mut child,
+                            &mut cgroup,
+                            &plan.hooks,
+                            hook_state,
+                            error,
+                        )
+                        .await);
                     }
                     if let Err(error) =
                         pid::validate_runtime_pid(plan, pid, runtime_pid, namespace_init_pid).await
                     {
-                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
-                            .await;
-                        return Err(error);
+                        return Err(cleanup_failed_create(
+                            &mut child,
+                            &mut cgroup,
+                            &plan.hooks,
+                            hook_state,
+                            error,
+                        )
+                        .await);
                     }
                     if create_hooks_ready != Some((runtime_pid, namespace_init_pid)) {
                         let error = process_error(
                             ErrorCode::PermissionDenied,
                             "container init final readiness did not match its create-hook barrier",
                         );
-                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
-                            .await;
-                        return Err(error);
+                        return Err(cleanup_failed_create(
+                            &mut child,
+                            &mut cgroup,
+                            &plan.hooks,
+                            hook_state,
+                            error,
+                        )
+                        .await);
                     }
                     break runtime_pid;
                 }
                 Ok(Ok(InitOutcome::Rejected(error))) => {
-                    if create_hooks_ready.is_some() {
-                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
-                            .await;
+                    return Err(if create_hooks_ready.is_some() {
+                        cleanup_failed_create(
+                            &mut child,
+                            &mut cgroup,
+                            &plan.hooks,
+                            hook_state,
+                            error,
+                        )
+                        .await
                     } else {
-                        terminate(&mut child).await;
-                    }
-                    return Err(error);
+                        cleanup_uncommitted_create(&mut child, &mut cgroup, error).await
+                    });
                 }
                 Ok(Err(error)) => {
-                    if create_hooks_ready.is_some() {
-                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
-                            .await;
+                    return Err(if create_hooks_ready.is_some() {
+                        cleanup_failed_create(
+                            &mut child,
+                            &mut cgroup,
+                            &plan.hooks,
+                            hook_state,
+                            error,
+                        )
+                        .await
                     } else {
-                        terminate(&mut child).await;
-                    }
-                    return Err(error);
+                        cleanup_uncommitted_create(&mut child, &mut cgroup, error).await
+                    });
                 }
                 Err(_) => {
-                    if create_hooks_ready.is_some() {
-                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
-                            .await;
-                    } else {
-                        terminate(&mut child).await;
-                    }
-                    return Err(process_error(
+                    let error = process_error(
                         ErrorCode::DeadlineExceeded,
                         "timed out reading prepared container init readiness",
-                    ));
+                    );
+                    return Err(if create_hooks_ready.is_some() {
+                        cleanup_failed_create(
+                            &mut child,
+                            &mut cgroup,
+                            &plan.hooks,
+                            hook_state,
+                            error,
+                        )
+                        .await
+                    } else {
+                        cleanup_uncommitted_create(&mut child, &mut cgroup, error).await
+                    });
                 }
             }
         };
         let pidfd = match PidFd::open(runtime_pid) {
             Ok(pidfd) => pidfd,
             Err(error) => {
-                cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state).await;
-                return Err(error);
+                return Err(cleanup_failed_create(
+                    &mut child,
+                    &mut cgroup,
+                    &plan.hooks,
+                    hook_state,
+                    error,
+                )
+                .await);
             }
         };
         let execution_context =
@@ -457,8 +571,14 @@ impl PreparedProcess {
             {
                 Ok(context) => context,
                 Err(error) => {
-                    cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state).await;
-                    return Err(error);
+                    return Err(cleanup_failed_create(
+                        &mut child,
+                        &mut cgroup,
+                        &plan.hooks,
+                        hook_state,
+                        error,
+                    )
+                    .await);
                 }
             };
         let network_devices = if plan.network_devices.is_empty() {
@@ -467,15 +587,27 @@ impl PreparedProcess {
             let target_namespace = match execution_context.duplicate_network_namespace() {
                 Ok(namespace) => namespace,
                 Err(error) => {
-                    cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state).await;
-                    return Err(error);
+                    return Err(cleanup_failed_create(
+                        &mut child,
+                        &mut cgroup,
+                        &plan.hooks,
+                        hook_state,
+                        error,
+                    )
+                    .await);
                 }
             };
             match NetworkDeviceLease::apply(&plan.network_devices, target_namespace).await {
                 Ok(lease) => lease,
                 Err(error) => {
-                    cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state).await;
-                    return Err(error);
+                    return Err(cleanup_failed_create(
+                        &mut child,
+                        &mut cgroup,
+                        &plan.hooks,
+                        hook_state,
+                        error,
+                    )
+                    .await);
                 }
             }
         };
@@ -755,7 +887,38 @@ fn validate_rootless_device_mounts(
     Ok(())
 }
 
-async fn retain_original_rootfs(path: &Path) -> Result<File> {
+async fn retain_original_rootfs(
+    plan: &InitPlan,
+    pinned_bundle: Option<&PinnedBundleDirectory>,
+) -> Result<(File, Option<PinnedRootfsDirectory>)> {
+    if let Some(bundle) = pinned_bundle {
+        let relative = plan.rootfs.strip_prefix(&plan.bundle_directory).map_err(|_| {
+            process_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "container rootfs must be relative to its descriptor-pinned utility-VM bundle: {}",
+                    plan.rootfs.display()
+                ),
+            )
+        })?;
+        let rootfs = bundle
+            .open_relative(
+                relative,
+                libc::O_PATH,
+                true,
+                "container rootfs",
+                "run-container-init",
+            )?
+            .ok_or_else(|| {
+                process_error(
+                    ErrorCode::InvalidArgument,
+                    format!("container rootfs does not exist: {}", plan.rootfs.display()),
+                )
+            })?;
+        let child_rootfs = bundle.prepare_rootfs_for_child(&rootfs)?;
+        return Ok((rootfs, Some(child_rootfs)));
+    }
+    let path = &plan.rootfs;
     let file = tokio::fs::File::open(path)
         .await
         .map_err(|error| {
@@ -769,7 +932,7 @@ async fn retain_original_rootfs(path: &Path) -> Result<File> {
         })?
         .into_std()
         .await;
-    Ok(file)
+    Ok((file, None))
 }
 
 pub(super) fn bind_control_listener() -> Result<(UnixListener, String)> {
@@ -807,21 +970,64 @@ pub(super) async fn terminate(child: &mut Child) {
     let _ = child.wait().await;
 }
 
+fn cleanup_unstarted_cgroup(cgroup: &mut Option<CgroupHandle>, mut primary: Error) -> Error {
+    if let Some(mut cgroup) = cgroup.take() {
+        if let Err(error) = cgroup.cleanup() {
+            append_cleanup_error(
+                &mut primary,
+                "remove the unstarted container cgroup",
+                &error,
+            );
+        }
+    }
+    primary
+}
+
+async fn cleanup_uncommitted_create(
+    child: &mut Child,
+    cgroup: &mut Option<CgroupHandle>,
+    mut primary: Error,
+) -> Error {
+    let termination = match cgroup.as_ref() {
+        Some(cgroup) => cgroup.terminate_all().await,
+        None => Ok(()),
+    };
+    terminate(child).await;
+    if let Err(error) = termination {
+        append_cleanup_error(&mut primary, "terminate the container cgroup", &error);
+    }
+    if let Some(mut cgroup) = cgroup.take() {
+        if let Err(error) = cgroup.cleanup() {
+            append_cleanup_error(&mut primary, "remove the container cgroup", &error);
+        }
+    }
+    primary
+}
+
 async fn cleanup_failed_create(
     child: &mut Child,
     cgroup: &mut Option<CgroupHandle>,
     hooks: &HookSet,
     hook_state: &HookStateTemplate,
-) {
-    terminate(child).await;
-    drop(cgroup.take());
+    primary: Error,
+) -> Error {
+    let mut primary = cleanup_uncommitted_create(child, cgroup, primary).await;
     match hook_state.encode(
         a3s_oci_sdk::oci_spec::runtime::ContainerState::Stopped,
         None,
     ) {
         Ok(state) => hooks.run_poststop(&state).await,
-        Err(error) => eprintln!("a3s-oci-agent: failed-create poststop state warning: {error}"),
+        Err(error) => append_cleanup_error(&mut primary, "encode the poststop hook state", &error),
     }
+    primary
+}
+
+fn append_cleanup_error(primary: &mut Error, action: &str, cleanup: &Error) {
+    primary.message = format!(
+        "{}; failed-create cleanup could not {action}: {cleanup}",
+        primary.message
+    );
+    primary.retryable |= cleanup.retryable;
 }
 
 fn process_error(code: ErrorCode, message: impl Into<String>) -> Error {
@@ -852,7 +1058,7 @@ mod tests {
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus as ProcessExitStatus;
 
-    use super::{bind_control_listener, convert_exit_status};
+    use super::{append_cleanup_error, bind_control_listener, convert_exit_status, process_error};
     use crate::executor::control::READY_BYTE;
 
     #[tokio::test(flavor = "current_thread")]
@@ -890,5 +1096,27 @@ mod tests {
             convert_exit_status(ProcessExitStatus::from_raw(libc::SIGKILL)).expect("signal result"),
             a3s_oci_sdk::ExitStatus::signaled(libc::SIGKILL, false).expect("signal SDK result")
         );
+    }
+
+    #[test]
+    fn failed_create_cleanup_is_returned_without_hiding_the_primary_rejection() {
+        let mut primary = process_error(
+            a3s_oci_sdk::ErrorCode::PermissionDenied,
+            "hostile create rejected",
+        );
+        let cleanup = a3s_oci_sdk::Error::new(
+            a3s_oci_sdk::ErrorCode::Internal,
+            "cgroup remained populated",
+        )
+        .for_operation("configure-container-cgroup")
+        .retryable(true);
+
+        append_cleanup_error(&mut primary, "remove the container cgroup", &cleanup);
+
+        assert_eq!(primary.code, a3s_oci_sdk::ErrorCode::PermissionDenied);
+        assert_eq!(primary.operation.as_deref(), Some("run-container-init"));
+        assert!(primary.message.contains("hostile create rejected"));
+        assert!(primary.message.contains("cgroup remained populated"));
+        assert!(primary.retryable);
     }
 }
