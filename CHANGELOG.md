@@ -6,6 +6,33 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Committed containerd `CloseStdin` cleanup after shim death. A focused
+  DeleteShim boundary starts with one already committed stdin close and
+  schema-v9 metadata that still records Closing, then proves cleanup never
+  dispatches a second close and fences both Kill and force Delete to the exact
+  Runtime generation. The real-containerd gate creates a non-terminal exec
+  that exits 29 only on EOF, stops the Host, invokes `CloseIO` through the task
+  shim's advertised ttrpc endpoint, and waits for exec incarnation 1 to retain
+  Closing with no pending write. It then stops the shim, resumes the Host, and
+  commits the same `close-stdin-1` operation directly through the public SDK.
+  The exec must exit 29 from that one EOF while init stays Running at its
+  original PID and generation. After shim `SIGKILL`, containerd leak cleanup
+  must remove the exec, init, exact Runtime generation, shim metadata, bundle,
+  cgroup, and mounts while retaining caller-owned container metadata. Source
+  revision `9726719e5a66156cd61f8be36ca00998bbcfc871` passed three complete
+  Ubuntu 24.04 x86_64/containerd 2.2.3 matrices consecutively in 117.37,
+  119.36, and 118.94 seconds through unchanged Host PID 2678296. Release CLI,
+  agent, shim, qualification executable, and Cargo.lock SHA-256 values were
+  `80d0b69686c73516fc3a507f2545af77b405918584176bdb0a96ab3bcf067102`,
+  `68219e592a061b9dba7f491d54716354195cd8f8005fa792ab367681dda5352e`,
+  `99bacac7a308e4830ca55101ef8148a511526722cf9006d8a37ef9cba89dbf50`,
+  `3e752abc8ada3b8e3dae9d86e370feb7d17bf04c2245f13888d52ba7537b2fd2`,
+  and `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`.
+  The qualification used a dedicated private containerd root, state, socket,
+  and systemd unit; the production daemon remained active at PID 2485480.
+  Independent audits after the probe and every pass found no matching task,
+  container, bundle, live Runtime record, cgroup, snapshot, shim,
+  qualification process, or workload process.
 - Committed containerd `WriteStdin` cleanup after shim death. A focused
   DeleteShim boundary starts with one already committed stdin write and
   schema-v9 metadata that still retains the pending bytes, then proves cleanup
