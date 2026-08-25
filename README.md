@@ -37,6 +37,10 @@ remain in [A3S Box](https://github.com/A3S-Lab/Box), which supplies prepared
 bundles, an isolation requirement, and a versioned attachment manifest through
 the public `a3s-oci-sdk`.
 
+The provider-neutral Rust contracts are also available independently as
+`a3s-oci-core = "=0.3.0"` and `a3s-oci-sdk = "=0.3.0"`. Their
+`sdk/rust/v*` source tags are separate from full Runtime binary releases.
+
 > [!WARNING]
 > This repository is in active development. No built-in driver is currently
 > advertised as `supported`. The default host service exposes discovery

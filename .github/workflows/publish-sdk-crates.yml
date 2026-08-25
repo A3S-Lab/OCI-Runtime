@@ -1,0 +1,120 @@
+name: Publish Rust SDK crates
+
+on:
+  push:
+    tags:
+      - "sdk/rust/v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-rust-sdk-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish a3s-oci-core and a3s-oci-sdk
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify immutable release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#sdk/rust/v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected sdk/rust/v<stable-semver>, got $GITHUB_REF_NAME"
+            exit 1
+          fi
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          mapfile -t versions < <(
+            cargo metadata --locked --no-deps --format-version 1 |
+              jq -r '.packages[] | select(.name == "a3s-oci-core" or .name == "a3s-oci-sdk") | "\(.name)=\(.version)"' |
+              sort
+          )
+          expected=("a3s-oci-core=$version" "a3s-oci-sdk=$version")
+          if [[ "${versions[*]}" != "${expected[*]}" ]]; then
+            printf 'Expected: %s\nActual: %s\n' "${expected[*]}" "${versions[*]}" >&2
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify SDK crates
+        run: |
+          set -euo pipefail
+          cargo fmt --all --check
+          cargo clippy --locked -p a3s-oci-core -p a3s-oci-sdk --all-targets -- -D warnings
+          cargo test --locked -p a3s-oci-core -p a3s-oci-sdk --all-targets
+          cargo doc --locked -p a3s-oci-core -p a3s-oci-sdk --no-deps
+          cargo package --locked -p a3s-oci-core
+      - name: Publish and verify crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
+            echo "::error::CARGO_REGISTRY_TOKEN is not configured"
+            exit 1
+          fi
+          version="${GITHUB_REF_NAME#sdk/rust/v}"
+          user_agent="A3S-Lab-OCI-Runtime-sdk-publisher/$version"
+
+          crate_status() {
+            curl --retry 5 --retry-all-errors --silent --show-error \
+              --location --user-agent "$user_agent" \
+              --output /dev/null --write-out '%{http_code}' \
+              "https://crates.io/api/v1/crates/$1/$version"
+          }
+
+          wait_for_crate() {
+            local crate="$1"
+            local attempt status
+            for attempt in $(seq 1 18); do
+              status="$(crate_status "$crate")"
+              if [[ "$status" == "200" ]] &&
+                 cargo info "$crate@$version" --registry crates-io >/dev/null 2>&1; then
+                echo "Verified $crate@$version in crates.io and its index"
+                return 0
+              fi
+              if [[ "$status" != "200" && "$status" != "404" ]]; then
+                echo "::error::crates.io returned HTTP $status for $crate@$version"
+                return 1
+              fi
+              if [[ "$attempt" -lt 18 ]]; then sleep 10; fi
+            done
+            echo "::error::$crate@$version did not become visible"
+            return 1
+          }
+
+          publish_one() {
+            local crate="$1"
+            local status
+            status="$(crate_status "$crate")"
+            case "$status" in
+              200)
+                echo "$crate@$version already exists; verifying it"
+                ;;
+              404)
+                cargo publish --locked -p "$crate"
+                ;;
+              *)
+                echo "::error::crates.io returned HTTP $status for $crate@$version"
+                return 1
+                ;;
+            esac
+            wait_for_crate "$crate"
+          }
+
+          publish_one a3s-oci-core
+          publish_one a3s-oci-sdk
