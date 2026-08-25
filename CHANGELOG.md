@@ -2,7 +2,7 @@
 
 All notable changes to A3S OCI Runtime are documented in this file.
 
-## Rust SDK crates 0.3.0 — 2026-08-25
+## Rust SDK crates 0.3.1 — 2026-08-25
 
 ### Added
 
@@ -11,9 +11,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
   versioned attachment manifests, reconnectable local transport, bounded
   filesystem sessions, portable rootfs metadata, and runtime bundle handoff.
 - Added an immutable, main-ancestry-gated crates.io release path under the
-  `sdk/rust/v0.3.0` tag namespace. Internal path dependencies retain exact
+  `sdk/rust/v0.3.1` tag namespace. Internal path dependencies retain exact
   registry versions so downstream packages can be reproduced without Git
   dependency substitutions.
+
+### Fixed
+
+- Made the SDK crate self-contained by packaging the exact checked-in OCI
+  Runtime and Image specification snapshots consumed by its embedded schemas,
+  conformance inventory, and tests. The incomplete 0.3.0 attempt published
+  only `a3s-oci-core`; `a3s-oci-sdk` starts at 0.3.1 together with the matching
+  Core patch release.
 
 ## [Unreleased]
 

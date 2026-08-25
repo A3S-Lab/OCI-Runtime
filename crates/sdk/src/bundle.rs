@@ -863,26 +863,24 @@ mod tests {
             (
                 "linux-netdevice.json",
                 include_str!(
-                    "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/linux-netdevice.json"
+                    "../vendor/runtime-spec/v1.3.0/schema/test/config/good/linux-netdevice.json"
                 ),
             ),
             (
                 "linux-rdma.json",
                 include_str!(
-                    "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/linux-rdma.json"
+                    "../vendor/runtime-spec/v1.3.0/schema/test/config/good/linux-rdma.json"
                 ),
             ),
             (
                 "minimal-for-start.json",
                 include_str!(
-                    "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/minimal-for-start.json"
+                    "../vendor/runtime-spec/v1.3.0/schema/test/config/good/minimal-for-start.json"
                 ),
             ),
             (
                 "minimal.json",
-                include_str!(
-                    "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/minimal.json"
-                ),
+                include_str!("../vendor/runtime-spec/v1.3.0/schema/test/config/good/minimal.json"),
             ),
         ];
 

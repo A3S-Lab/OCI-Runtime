@@ -38,7 +38,7 @@ bundles, an isolation requirement, and a versioned attachment manifest through
 the public `a3s-oci-sdk`.
 
 The provider-neutral Rust contracts are also available independently as
-`a3s-oci-core = "=0.3.0"` and `a3s-oci-sdk = "=0.3.0"`. Their
+`a3s-oci-core = "=0.3.1"` and `a3s-oci-sdk = "=0.3.1"`. Their
 `sdk/rust/v*` source tags are separate from full Runtime binary releases.
 
 > [!WARNING]

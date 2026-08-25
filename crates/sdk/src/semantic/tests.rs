@@ -34,7 +34,7 @@ fn semantic_rule_registry_is_complete_and_unique() {
 #[test]
 fn accepts_upstream_minimal_linux_configuration_and_start_fixtures() {
     let minimal: Value = serde_json::from_str(include_str!(
-        "../../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/minimal.json"
+        "../../vendor/runtime-spec/v1.3.0/schema/test/config/good/minimal.json"
     ))
     .expect("decode upstream minimal fixture");
     OciSemanticValidator::new()
@@ -43,7 +43,7 @@ fn accepts_upstream_minimal_linux_configuration_and_start_fixtures() {
         .expect("minimal configuration semantics");
 
     let runnable: Value = serde_json::from_str(include_str!(
-        "../../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/minimal-for-start.json"
+        "../../vendor/runtime-spec/v1.3.0/schema/test/config/good/minimal-for-start.json"
     ))
     .expect("decode upstream runnable fixture");
     OciSemanticValidator::new()
@@ -282,7 +282,7 @@ fn validates_device_access_types_and_masks_without_requiring_access() {
 #[test]
 fn schema_good_net_device_fixture_still_requires_runtime_namespace_semantics() {
     let value: Value = serde_json::from_str(include_str!(
-        "../../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/linux-netdevice.json"
+        "../../vendor/runtime-spec/v1.3.0/schema/test/config/good/linux-netdevice.json"
     ))
     .expect("decode upstream net-device fixture");
     let rules = rules(&value, OciSemanticPhase::Configuration);

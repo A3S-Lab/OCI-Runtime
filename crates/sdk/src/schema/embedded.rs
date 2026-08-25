@@ -1,66 +1,66 @@
 pub(super) const EMBEDDED_SCHEMAS: &[(&str, &str)] = &[
     (
         "config-freebsd.json",
-        include_str!("../../../../vendor/runtime-spec/v1.3.0/schema/config-freebsd.json"),
+        include_str!("../../vendor/runtime-spec/v1.3.0/schema/config-freebsd.json"),
     ),
     (
         "config-linux.json",
-        include_str!("../../../../vendor/runtime-spec/v1.3.0/schema/config-linux.json"),
+        include_str!("../../vendor/runtime-spec/v1.3.0/schema/config-linux.json"),
     ),
     (
         "config-schema.json",
-        include_str!("../../../../vendor/runtime-spec/v1.3.0/schema/config-schema.json"),
+        include_str!("../../vendor/runtime-spec/v1.3.0/schema/config-schema.json"),
     ),
     (
         "config-solaris.json",
-        include_str!("../../../../vendor/runtime-spec/v1.3.0/schema/config-solaris.json"),
+        include_str!("../../vendor/runtime-spec/v1.3.0/schema/config-solaris.json"),
     ),
     (
         "config-vm.json",
-        include_str!("../../../../vendor/runtime-spec/v1.3.0/schema/config-vm.json"),
+        include_str!("../../vendor/runtime-spec/v1.3.0/schema/config-vm.json"),
     ),
     (
         "config-windows.json",
-        include_str!("../../../../vendor/runtime-spec/v1.3.0/schema/config-windows.json"),
+        include_str!("../../vendor/runtime-spec/v1.3.0/schema/config-windows.json"),
     ),
     (
         "config-zos.json",
-        include_str!("../../../../vendor/runtime-spec/v1.3.0/schema/config-zos.json"),
+        include_str!("../../vendor/runtime-spec/v1.3.0/schema/config-zos.json"),
     ),
     (
         "defs-freebsd.json",
-        include_str!("../../../../vendor/runtime-spec/v1.3.0/schema/defs-freebsd.json"),
+        include_str!("../../vendor/runtime-spec/v1.3.0/schema/defs-freebsd.json"),
     ),
     (
         "defs-linux.json",
-        include_str!("../../../../vendor/runtime-spec/v1.3.0/schema/defs-linux.json"),
+        include_str!("../../vendor/runtime-spec/v1.3.0/schema/defs-linux.json"),
     ),
     (
         "defs-vm.json",
-        include_str!("../../../../vendor/runtime-spec/v1.3.0/schema/defs-vm.json"),
+        include_str!("../../vendor/runtime-spec/v1.3.0/schema/defs-vm.json"),
     ),
     (
         "defs-windows.json",
-        include_str!("../../../../vendor/runtime-spec/v1.3.0/schema/defs-windows.json"),
+        include_str!("../../vendor/runtime-spec/v1.3.0/schema/defs-windows.json"),
     ),
     (
         "defs-zos.json",
-        include_str!("../../../../vendor/runtime-spec/v1.3.0/schema/defs-zos.json"),
+        include_str!("../../vendor/runtime-spec/v1.3.0/schema/defs-zos.json"),
     ),
     (
         "defs.json",
-        include_str!("../../../../vendor/runtime-spec/v1.3.0/schema/defs.json"),
+        include_str!("../../vendor/runtime-spec/v1.3.0/schema/defs.json"),
     ),
     (
         "features-linux.json",
-        include_str!("../../../../vendor/runtime-spec/v1.3.0/schema/features-linux.json"),
+        include_str!("../../vendor/runtime-spec/v1.3.0/schema/features-linux.json"),
     ),
     (
         "features-schema.json",
-        include_str!("../../../../vendor/runtime-spec/v1.3.0/schema/features-schema.json"),
+        include_str!("../../vendor/runtime-spec/v1.3.0/schema/features-schema.json"),
     ),
     (
         "state-schema.json",
-        include_str!("../../../../vendor/runtime-spec/v1.3.0/schema/state-schema.json"),
+        include_str!("../../vendor/runtime-spec/v1.3.0/schema/state-schema.json"),
     ),
 ];

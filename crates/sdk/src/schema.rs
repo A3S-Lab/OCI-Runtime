@@ -828,10 +828,10 @@ mod tests {
     #[test]
     fn typed_sdk_models_preserve_upstream_state_and_features_fixtures() {
         assert_strict_typed_round_trip::<State>(include_str!(
-            "../../../vendor/runtime-spec/v1.3.0/schema/test/state/good/spec-example.json"
+            "../vendor/runtime-spec/v1.3.0/schema/test/state/good/spec-example.json"
         ));
         assert_strict_typed_round_trip::<Features>(include_str!(
-            "../../../vendor/runtime-spec/v1.3.0/schema/test/features/good/runc.json"
+            "../vendor/runtime-spec/v1.3.0/schema/test/features/good/runc.json"
         ));
     }
 

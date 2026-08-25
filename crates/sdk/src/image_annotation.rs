@@ -26,9 +26,9 @@ const OCI_IMAGE_CREATED_ANNOTATION: &str = "org.opencontainers.image.created";
 
 const IMAGE_SCHEMA_BASE_URI: &str = "https://opencontainers.org/schema/image/";
 const IMAGE_CONFIG_SCHEMA: &str =
-    include_str!("../../../vendor/image-spec/v1.1.0-rc2/schema/config-schema.json");
+    include_str!("../vendor/image-spec/v1.1.0-rc2/schema/config-schema.json");
 const IMAGE_DEFINITIONS_SCHEMA: &str =
-    include_str!("../../../vendor/image-spec/v1.1.0-rc2/schema/defs.json");
+    include_str!("../vendor/image-spec/v1.1.0-rc2/schema/defs.json");
 
 const LINUX_NAMED_SIGNALS: &[(&str, i32)] = &[
     ("SIGHUP", 1),
@@ -255,11 +255,9 @@ mod tests {
     };
     use crate::conformance::canonical_text_sha256;
 
-    const CONFIG_SOURCE: &str = include_str!("../../../vendor/image-spec/v1.1.0-rc2/config.md");
-    const CONVERSION_SOURCE: &str =
-        include_str!("../../../vendor/image-spec/v1.1.0-rc2/conversion.md");
-    const RUNTIME_CONFIG_SOURCE: &str =
-        include_str!("../../../vendor/runtime-spec/v1.3.0/config.md");
+    const CONFIG_SOURCE: &str = include_str!("../vendor/image-spec/v1.1.0-rc2/config.md");
+    const CONVERSION_SOURCE: &str = include_str!("../vendor/image-spec/v1.1.0-rc2/conversion.md");
+    const RUNTIME_CONFIG_SOURCE: &str = include_str!("../vendor/runtime-spec/v1.3.0/config.md");
 
     #[test]
     fn pins_runtime_referenced_image_spec_sources() {

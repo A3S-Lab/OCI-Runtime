@@ -346,77 +346,77 @@ const SPECIFICATION_DOCUMENTS: &[EmbeddedSpecificationDocument] = &[
     EmbeddedSpecificationDocument::new(
         "spec.md",
         OciSpecificationScope::Common,
-        include_str!("../../../vendor/runtime-spec/v1.3.0/spec.md"),
+        include_str!("../vendor/runtime-spec/v1.3.0/spec.md"),
     ),
     EmbeddedSpecificationDocument::new(
         "principles.md",
         OciSpecificationScope::Common,
-        include_str!("../../../vendor/runtime-spec/v1.3.0/principles.md"),
+        include_str!("../vendor/runtime-spec/v1.3.0/principles.md"),
     ),
     EmbeddedSpecificationDocument::new(
         "bundle.md",
         OciSpecificationScope::Common,
-        include_str!("../../../vendor/runtime-spec/v1.3.0/bundle.md"),
+        include_str!("../vendor/runtime-spec/v1.3.0/bundle.md"),
     ),
     EmbeddedSpecificationDocument::new(
         "runtime.md",
         OciSpecificationScope::Common,
-        include_str!("../../../vendor/runtime-spec/v1.3.0/runtime.md"),
+        include_str!("../vendor/runtime-spec/v1.3.0/runtime.md"),
     ),
     EmbeddedSpecificationDocument::new(
         "runtime-linux.md",
         OciSpecificationScope::Linux,
-        include_str!("../../../vendor/runtime-spec/v1.3.0/runtime-linux.md"),
+        include_str!("../vendor/runtime-spec/v1.3.0/runtime-linux.md"),
     ),
     EmbeddedSpecificationDocument::new(
         "config.md",
         OciSpecificationScope::Common,
-        include_str!("../../../vendor/runtime-spec/v1.3.0/config.md"),
+        include_str!("../vendor/runtime-spec/v1.3.0/config.md"),
     ),
     EmbeddedSpecificationDocument::new(
         "config-freebsd.md",
         OciSpecificationScope::FreeBsd,
-        include_str!("../../../vendor/runtime-spec/v1.3.0/config-freebsd.md"),
+        include_str!("../vendor/runtime-spec/v1.3.0/config-freebsd.md"),
     ),
     EmbeddedSpecificationDocument::new(
         "config-linux.md",
         OciSpecificationScope::Linux,
-        include_str!("../../../vendor/runtime-spec/v1.3.0/config-linux.md"),
+        include_str!("../vendor/runtime-spec/v1.3.0/config-linux.md"),
     ),
     EmbeddedSpecificationDocument::new(
         "config-solaris.md",
         OciSpecificationScope::Solaris,
-        include_str!("../../../vendor/runtime-spec/v1.3.0/config-solaris.md"),
+        include_str!("../vendor/runtime-spec/v1.3.0/config-solaris.md"),
     ),
     EmbeddedSpecificationDocument::new(
         "config-windows.md",
         OciSpecificationScope::Windows,
-        include_str!("../../../vendor/runtime-spec/v1.3.0/config-windows.md"),
+        include_str!("../vendor/runtime-spec/v1.3.0/config-windows.md"),
     ),
     EmbeddedSpecificationDocument::new(
         "config-vm.md",
         OciSpecificationScope::Vm,
-        include_str!("../../../vendor/runtime-spec/v1.3.0/config-vm.md"),
+        include_str!("../vendor/runtime-spec/v1.3.0/config-vm.md"),
     ),
     EmbeddedSpecificationDocument::new(
         "config-zos.md",
         OciSpecificationScope::Zos,
-        include_str!("../../../vendor/runtime-spec/v1.3.0/config-zos.md"),
+        include_str!("../vendor/runtime-spec/v1.3.0/config-zos.md"),
     ),
     EmbeddedSpecificationDocument::new(
         "features.md",
         OciSpecificationScope::Common,
-        include_str!("../../../vendor/runtime-spec/v1.3.0/features.md"),
+        include_str!("../vendor/runtime-spec/v1.3.0/features.md"),
     ),
     EmbeddedSpecificationDocument::new(
         "features-linux.md",
         OciSpecificationScope::Linux,
-        include_str!("../../../vendor/runtime-spec/v1.3.0/features-linux.md"),
+        include_str!("../vendor/runtime-spec/v1.3.0/features-linux.md"),
     ),
     EmbeddedSpecificationDocument::new(
         "glossary.md",
         OciSpecificationScope::Common,
-        include_str!("../../../vendor/runtime-spec/v1.3.0/glossary.md"),
+        include_str!("../vendor/runtime-spec/v1.3.0/glossary.md"),
     ),
 ];
 

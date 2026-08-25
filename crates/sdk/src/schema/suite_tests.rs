@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use super::{OciSchemaDocument, OciSchemaValidator};
 
-const UPSTREAM_FIXTURE_ROOT: &str = "../../vendor/runtime-spec/v1.3.0/schema/test";
+const UPSTREAM_FIXTURE_ROOT: &str = "vendor/runtime-spec/v1.3.0/schema/test";
 const UPSTREAM_FIXTURE_SET_SHA256: &str =
     "sha256:d03beb426942605b7fe387237da7ab2db9ce76e351b26902b49be18325c6f398";
 
@@ -31,7 +31,7 @@ macro_rules! schema_case {
             document: $document,
             expected: $expected,
             source: include_bytes!(concat!(
-                "../../../../vendor/runtime-spec/v1.3.0/schema/test/",
+                "../../vendor/runtime-spec/v1.3.0/schema/test/",
                 $path
             )),
         }
