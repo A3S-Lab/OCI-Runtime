@@ -11,7 +11,8 @@ use crate::{
     FilesystemEntry, FilesystemEntryKind, FilesystemOp, FilesystemRequest, FilesystemResponse,
     Generation, IsolationClass, IsolationRequest, KillRequest, OciBundle, OciRuntimeService,
     OperationContext, OperationId, ProcessIo, Result, RuntimeFeatures, RuntimeInfo,
-    RuntimeOperation, StartRequest, StateRequest,
+    RuntimeOperation, StartRequest, StateRequest, StorageAccessMode, StorageAttachmentId,
+    StorageCleanup, StorageOwnership,
 };
 
 use super::wire::{read_frame, write_frame, ClientMessage, ServerMessage, WireRequest, WireResult};
@@ -117,6 +118,48 @@ impl OciRuntimeService for EchoService {
     }
 }
 
+fn storage_create_request() -> CreateRequest {
+    let bundle = OciBundle::from_json(
+        std::env::current_dir()
+            .expect("current directory")
+            .join("protocol-five-storage-bundle"),
+        serde_json::to_string(&json!({
+            "ociVersion": "1.3.0",
+            "root": {"path": "rootfs"},
+            "process": {
+                "cwd": "/",
+                "args": ["/bin/true"],
+                "user": {"uid": 0, "gid": 0}
+            },
+            "mounts": [
+                {"destination": "/data", "type": "bind", "source": "data", "options": ["ro"]}
+            ]
+        }))
+        .expect("storage configuration"),
+    )
+    .expect("storage bundle");
+    let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .expect("base attachments")
+        .attach_storage_mount(
+            &bundle,
+            0,
+            StorageAttachmentId::new("protocol-storage-1").expect("storage identity"),
+            StorageAccessMode::ReadOnly,
+            StorageOwnership::Caller,
+            StorageCleanup::DetachOnly,
+        )
+        .expect("storage attachments");
+    CreateRequest {
+        context: OperationContext::new(
+            OperationId::new("protocol-storage-create").expect("operation ID"),
+        ),
+        id: ContainerId::new("protocol-storage-container").expect("container ID"),
+        bundle,
+        isolation: IsolationRequest::SharedHostKernel,
+        attachments,
+    }
+}
+
 #[tokio::test]
 async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
     let (client_io, server_io) = tokio::io::duplex(64 * 1024);
@@ -128,7 +171,7 @@ async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
     let client = RuntimeTransportClient::from_io(client_io)
         .await
         .expect("negotiate in-memory SDK transport");
-    assert_eq!(client.protocol_version(), 4);
+    assert_eq!(client.protocol_version(), 5);
 
     let info = client.features().await.expect("transport features");
     assert_eq!(
@@ -266,6 +309,96 @@ async fn protocol_three_rejects_file_operations_before_dispatch() {
     assert!(error.message.contains("requires protocol 4"));
     drop(client);
     server.await.expect("server task must join");
+}
+
+#[tokio::test]
+async fn protocol_four_rejects_storage_attachments_before_dispatch() {
+    let (client_io, mut server_io) = tokio::io::duplex(4096);
+    let server = tokio::spawn(async move {
+        let hello = read_frame::<ClientMessage>(&mut server_io)
+            .await
+            .expect("read client hello")
+            .expect("client hello frame");
+        assert!(matches!(hello, ClientMessage::Hello { .. }));
+        write_frame(&mut server_io, &ServerMessage::Welcome { protocol: 4 })
+            .await
+            .expect("write protocol-four welcome");
+        assert!(read_frame::<ClientMessage>(&mut server_io)
+            .await
+            .expect("read protocol-four connection close")
+            .is_none());
+    });
+
+    let client = RuntimeTransportClient::from_io(client_io)
+        .await
+        .expect("negotiate protocol four");
+    let error = client
+        .create(storage_create_request())
+        .await
+        .expect_err("protocol four must reject storage attachments");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("requires protocol 5"));
+    drop(client);
+    server.await.expect("server task must join");
+}
+
+#[tokio::test]
+async fn server_rejects_protocol_four_storage_before_service_dispatch() {
+    let (mut client_io, server_io) = tokio::io::duplex(16 * 1024);
+    let service = Arc::new(EchoService::default());
+    let server_service: Arc<dyn OciRuntimeService> = service.clone();
+    let server =
+        tokio::spawn(async move { serve_transport_connection(server_service, server_io).await });
+
+    write_frame(
+        &mut client_io,
+        &ClientMessage::Hello {
+            protocol_min: 4,
+            protocol_max: 4,
+        },
+    )
+    .await
+    .expect("write protocol-four hello");
+    assert_eq!(
+        read_frame::<ServerMessage>(&mut client_io)
+            .await
+            .expect("read welcome")
+            .expect("welcome frame"),
+        ServerMessage::Welcome { protocol: 4 }
+    );
+    write_frame(
+        &mut client_io,
+        &ClientMessage::Request {
+            protocol: 4,
+            request_id: 7,
+            request: Box::new(WireRequest::Create(storage_create_request())),
+        },
+    )
+    .await
+    .expect("write storage request");
+    let response = read_frame::<ServerMessage>(&mut client_io)
+        .await
+        .expect("read storage rejection")
+        .expect("storage rejection frame");
+    let ServerMessage::Response { result, .. } = response else {
+        panic!("expected SDK response");
+    };
+    let WireResult::Error { error } = *result else {
+        panic!("protocol-four storage must fail");
+    };
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("requires protocol 5"));
+    assert!(service
+        .exact_config
+        .lock()
+        .expect("captured configuration lock")
+        .is_none());
+
+    drop(client_io);
+    server
+        .await
+        .expect("server task must join")
+        .expect("server connection must close cleanly");
 }
 
 #[test]

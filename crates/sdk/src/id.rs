@@ -131,6 +131,7 @@ macro_rules! identifier {
 identifier!(ContainerId, "container ID");
 identifier!(ProcessId, "process ID");
 identifier!(OperationId, "operation ID");
+identifier!(StorageAttachmentId, "storage attachment ID");
 identifier!(TrustDomainId, "trust-domain ID");
 
 const INIT_PROCESS_ID: &str = "init";
@@ -158,7 +159,7 @@ pub struct Generation(pub u64);
 
 #[cfg(test)]
 mod tests {
-    use super::{ContainerId, Generation, ProcessId};
+    use super::{ContainerId, Generation, ProcessId, StorageAttachmentId};
 
     #[test]
     fn accepts_path_safe_identifier() {
@@ -206,6 +207,10 @@ mod tests {
         let error = serde_json::from_str::<ContainerId>(r#""../box""#)
             .expect_err("invalid serialized ID must be rejected");
         assert!(error.to_string().contains("container ID"));
+
+        let error = serde_json::from_str::<StorageAttachmentId>(r#""../volume""#)
+            .expect_err("invalid serialized storage ID must be rejected");
+        assert!(error.to_string().contains("storage attachment ID"));
     }
 
     #[test]

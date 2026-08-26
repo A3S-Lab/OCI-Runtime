@@ -26,8 +26,9 @@ use a3s_oci_sdk::{
     OperationContext, OperationId, OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord,
     ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeEventKind,
     RuntimeNegotiationRequest, RuntimeOperation, Signal, SignalProcessRequest, StartRequest,
-    StateRequest, StatsRequest, TerminalSize, TrustDomainId, UpdateRequest, WaitProcessRequest,
-    WaitRequest, WriteStdinRequest, ATTACHMENT_SCHEMA_V1,
+    StateRequest, StatsRequest, StorageAccessMode, StorageAttachmentId, StorageCleanup,
+    StorageOwnership, TerminalSize, TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest,
+    WriteStdinRequest, ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2,
     BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS, OCI_LINUX_CAPABILITY_NAMES,
     OCI_LINUX_MEMORY_POLICY_FLAGS, OCI_LINUX_MEMORY_POLICY_MODES, OCI_LINUX_MOUNT_OPTIONS,
     OCI_LINUX_SECCOMP_ACTIONS, OCI_LINUX_SECCOMP_ARCHITECTURES, OCI_LINUX_SECCOMP_KNOWN_FLAGS,
@@ -253,6 +254,12 @@ impl RecordingDriver {
             .attachments
             .with_extension(name, versions)
             .expect("test attachment capability");
+        driver
+    }
+
+    fn with_storage_attachments() -> Self {
+        let mut driver = Self::supported();
+        driver.attachments = AttachmentCapabilities::base_v2();
         driver
     }
 
@@ -2399,6 +2406,123 @@ async fn create_uses_driver_staged_bundle_without_rewriting_public_bundle_identi
 }
 
 #[tokio::test]
+async fn storage_attachment_v2_is_capability_gated_and_passed_exactly_to_the_driver() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle = OciBundle::from_json(
+        temporary.path().join("storage-bundle"),
+        serde_json::to_string(&serde_json::json!({
+            "ociVersion": "1.3.0",
+            "process": {
+                "terminal": false,
+                "user": {"uid": 0, "gid": 0},
+                "args": ["/bin/true"],
+                "cwd": "/"
+            },
+            "root": {"path": "rootfs", "readonly": true},
+            "mounts": [
+                {"destination": "/data", "type": "bind", "source": "authorized-data", "options": ["rbind", "ro"]}
+            ]
+        }))
+        .expect("storage configuration"),
+    )
+    .expect("storage bundle");
+    let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .expect("base attachments")
+        .attach_storage_mount(
+            &bundle,
+            0,
+            StorageAttachmentId::new("authorized-dataset-11").expect("storage identity"),
+            StorageAccessMode::ReadOnly,
+            StorageOwnership::Caller,
+            StorageCleanup::DetachOnly,
+        )
+        .expect("storage attachments");
+    let create = CreateRequest {
+        context: OperationContext::new(operation_id("storage-v2-create")),
+        id: container_id("storage-v2-container"),
+        bundle,
+        isolation: IsolationRequest::DedicatedVm,
+        attachments,
+    };
+
+    let v1_driver = Arc::new(RecordingDriver::supported());
+    let v1_service = open_service(&temporary, Arc::clone(&v1_driver)).await;
+    let error = v1_service
+        .create(create.clone())
+        .await
+        .expect_err("v1-only driver must reject storage before dispatch");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(v1_driver.calls().is_empty());
+    drop(v1_service);
+
+    let v2_driver = Arc::new(RecordingDriver::with_storage_attachments());
+    let v2_service = open_service(&temporary, Arc::clone(&v2_driver)).await;
+    let info = v2_service.features().await.expect("runtime features");
+    assert!(info.attachments.supports_schema(ATTACHMENT_SCHEMA_V2));
+    let created = v2_service
+        .create(create.clone())
+        .await
+        .expect("v2 storage create");
+    assert_eq!(
+        created.attachments_digest.as_deref(),
+        Some(
+            create
+                .attachments
+                .digest()
+                .expect("attachment digest")
+                .as_str()
+        )
+    );
+    let calls = v2_driver.calls();
+    let DriverCall::Create(driver_create) = calls.first().expect("driver create call") else {
+        panic!("first driver call must be create");
+    };
+    assert_eq!(driver_create.attachment_contract, create.attachments);
+    let storage = &driver_create.attachment_contract.storage()[0];
+    assert_eq!(storage.identity().as_str(), "authorized-dataset-11");
+    assert_eq!(storage.access_mode(), StorageAccessMode::ReadOnly);
+    assert_eq!(storage.ownership(), StorageOwnership::Caller);
+    assert_eq!(storage.cleanup(), StorageCleanup::DetachOnly);
+
+    drop(v2_service);
+    let reopened = open_service(&temporary, Arc::clone(&v2_driver)).await;
+    assert_eq!(
+        reopened
+            .create(create.clone())
+            .await
+            .expect("replay storage create after reopen"),
+        created
+    );
+    assert_eq!(
+        v2_driver
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Create(_)))
+            .count(),
+        1
+    );
+
+    let mut changed = create.clone();
+    changed.attachments = CreateAttachments::from_bundle(&changed.bundle, ProcessIo::default())
+        .expect("changed base attachments")
+        .attach_storage_mount(
+            &changed.bundle,
+            0,
+            StorageAttachmentId::new("authorized-dataset-12").expect("changed storage identity"),
+            StorageAccessMode::ReadOnly,
+            StorageOwnership::Caller,
+            StorageCleanup::DetachOnly,
+        )
+        .expect("changed storage attachments");
+    let error = reopened
+        .create(changed)
+        .await
+        .expect_err("one operation ID cannot change immutable storage identity");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(error.message.contains("different request"));
+}
+
+#[tokio::test]
 async fn required_runtime_extension_fails_before_durable_or_driver_mutation() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let bundle_directory = temporary.path().join("extension-bundle");
@@ -3641,10 +3765,12 @@ async fn negotiates_versioned_capabilities_for_the_selected_driver_and_artifact(
     const NETWORK_EXTENSION: &str = "dev.a3s.network.tsi";
 
     let temporary = tempfile::tempdir().expect("temporary directory");
-    let dedicated = Arc::new(RecordingDriver::with_attachment_extension(
-        NETWORK_EXTENSION,
-        vec![1],
-    ));
+    let mut dedicated_driver = RecordingDriver::with_storage_attachments();
+    dedicated_driver.attachments = dedicated_driver
+        .attachments
+        .with_extension(NETWORK_EXTENSION, vec![1])
+        .expect("network attachment capability");
+    let dedicated = Arc::new(dedicated_driver);
     let mut shared = RecordingDriver::shared_guest_supported();
     shared.operations.pop();
     let drivers: Vec<Arc<dyn RuntimeDriver>> = vec![dedicated, Arc::new(shared)];
@@ -3669,11 +3795,12 @@ async fn negotiates_versioned_capabilities_for_the_selected_driver_and_artifact(
     assert_eq!(info.extensions.drivers().len(), 2);
     assert!(!info.operations.contains(&RuntimeOperation::Wait));
     assert!(!info.attachments.supports_extension(NETWORK_EXTENSION, 1));
+    assert!(!info.attachments.supports_schema(ATTACHMENT_SCHEMA_V2));
 
     let dedicated_request = RuntimeNegotiationRequest::new(IsolationClass::DedicatedVm)
         .with_operation(RuntimeOperation::Wait, RUNTIME_OPERATION_CONTRACT_V1)
         .expect("wait requirement")
-        .with_attachment_schema(ATTACHMENT_SCHEMA_V1)
+        .with_attachment_schema(ATTACHMENT_SCHEMA_V2)
         .expect("attachment schema requirement")
         .with_attachment_extension(NETWORK_EXTENSION, 1)
         .expect("network requirement");

@@ -8,6 +8,7 @@ use crate::{
     ListRequest, OutputChunk, ProcessRecord, ProcessesRequest, ReadOutputRequest, ResizeRequest,
     RestoreRequest, RuntimeInfo, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
     UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    ATTACHMENT_SCHEMA_V2,
 };
 
 use super::{protocol_error, transport_error};
@@ -113,8 +114,18 @@ impl WireRequest {
         }
     }
 
-    pub(super) const fn minimum_protocol(&self) -> u16 {
+    pub(super) fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::Create(request)
+                if request.attachments.schema_version() == ATTACHMENT_SCHEMA_V2 =>
+            {
+                5
+            }
+            Self::Restore(request)
+                if request.attachments.schema_version() == ATTACHMENT_SCHEMA_V2 =>
+            {
+                5
+            }
             Self::File(_) | Self::Filesystem(_) => 4,
             _ => 3,
         }

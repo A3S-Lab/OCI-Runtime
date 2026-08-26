@@ -2403,9 +2403,15 @@ or leaked runtime resources.
   canonical operation and attachment versions per launch-ready driver, binds
   them to the running executable SHA-256, and makes typed isolation negotiation
   fail closed; legacy flat fields retain only the common driver surface.
-- [ ] Accept already-authorized storage attachments with immutable identity,
+- [x] Accept already-authorized storage attachments with immutable identity,
   access mode, ownership, and cleanup contracts while leaving named-volume
-  and snapshot policy in A3S Box.
+  and snapshot policy in A3S Box. `a3s.oci.attachments.v2` binds one
+  caller-owned allocation incarnation to an exact OCI mount and matching
+  read-only/read-write mode, permits detach-only cleanup, rejects ownership or
+  classification drift, and requires SDK protocol 5 without changing v1
+  serialization or protocol-3 compatibility. Native Linux advertises v2;
+  utility-VM drivers remain v1 until a separate caller-owned transport and
+  detach-cleanup gate exists.
 - [ ] Accept already-authorized network attachments with exact namespace,
   interface, and cleanup identities while leaving IPAM, DNS, and network
   policy in A3S Box.

@@ -8,9 +8,9 @@ use a3s_oci_agent::{
 use a3s_oci_agent_protocol::{AgentBundle, AgentCreateRequest, GuestAgentService, GuestPath};
 use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, IsolationClass};
 use a3s_oci_sdk::{
-    async_trait, ContainerId, ContainerRecord, ContainerStats, ContainerTarget, Error, ErrorCode,
-    ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse, OperationId,
-    OutputChunk, ProcessRecord, Result, RuntimeOperation,
+    async_trait, AttachmentCapabilities, ContainerId, ContainerRecord, ContainerStats,
+    ContainerTarget, Error, ErrorCode, ExitStatus, FileRequest, FileResponse, FilesystemRequest,
+    FilesystemResponse, OperationId, OutputChunk, ProcessRecord, Result, RuntimeOperation,
 };
 use tokio::sync::Mutex;
 
@@ -248,6 +248,10 @@ impl RuntimeDriver for NativeLinuxDriver {
 
     fn hooks(&self) -> &[OciHookPhase] {
         &AGENT_DRIVER_HOOKS
+    }
+
+    fn attachment_capabilities(&self) -> AttachmentCapabilities {
+        AttachmentCapabilities::base_v2()
     }
 
     async fn acknowledge_operation(&self, operation_id: &OperationId) -> Result<()> {

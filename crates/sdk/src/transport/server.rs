@@ -96,7 +96,8 @@ where
                 error: Error::new(
                     ErrorCode::Unsupported,
                     format!(
-                        "SDK operation requires protocol {}, but the connection negotiated \n+                         protocol {protocol}",
+                        "SDK operation requires protocol {}, but the connection negotiated \
+                         protocol {protocol}",
                         request.minimum_protocol()
                     ),
                 )
@@ -209,6 +210,7 @@ mod tests {
         assert_eq!(select_protocol(1, 1), None);
         assert_eq!(select_protocol(1, 2), None);
         assert_eq!(select_protocol(4, 4), Some(4));
-        assert_eq!(select_protocol(5, 5), None);
+        assert_eq!(select_protocol(5, 5), Some(5));
+        assert_eq!(select_protocol(6, 6), None);
     }
 }

@@ -38,7 +38,8 @@ pub use a3s_oci_core::{
 pub use async_trait::async_trait;
 pub use attachment::{
     AttachmentCapabilities, AttachmentSource, ConfigurationAttachment, CreateAttachments,
-    RuntimeExtensionAttachment, ATTACHMENT_SCHEMA_V1, RUNTIME_BUNDLE_HANDOFF_EXTENSION,
+    RuntimeExtensionAttachment, StorageAccessMode, StorageAttachment, StorageCleanup,
+    StorageOwnership, ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2, RUNTIME_BUNDLE_HANDOFF_EXTENSION,
     RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION, RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
 };
 pub use bundle::{
@@ -62,7 +63,7 @@ pub use handoff::{
     runtime_bundle_handoff_directory, runtime_bundle_handoff_root,
     RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY, RUNTIME_BUNDLE_HANDOFF_ROOT_DIRECTORY,
 };
-pub use id::{ContainerId, Generation, OperationId, ProcessId, TrustDomainId};
+pub use id::{ContainerId, Generation, OperationId, ProcessId, StorageAttachmentId, TrustDomainId};
 pub use image_annotation::{
     OCI_IMAGE_SPEC_COMMIT, OCI_IMAGE_SPEC_VERSION, OCI_IMAGE_STOP_SIGNAL_ANNOTATION,
 };

@@ -7,13 +7,16 @@
 runtime calls. The transport maps every trait method; it does not invoke the
 CLI or expose WHPX, libkrun, or native Linux driver internals.
 
-The current wire contract is protocol version 4. Version 4 adds exact-target
-file upload/download and filesystem stat/mkdir/move/list/remove. Mutations
-carry stable `OperationContext` identities, payloads and recursive listings
-are bounded, and protocol-3 peers reject these operations before dispatch.
-Version 3 made the complete `a3s.oci.attachments.v1` manifest mandatory for
-create and restore, moved init process I/O inside that versioned contract, and
-returned its durable digest.
+The current wire contract is protocol version 5. Version 5 adds
+`a3s.oci.attachments.v2` already-authorized storage evidence to create and
+restore. A v2 request is rejected before dispatch when a connection negotiated
+protocol 4 or earlier; ordinary v1 create/restore requests remain valid on
+protocol 3. Version 4 added exact-target file upload/download and filesystem
+stat/mkdir/move/list/remove. Mutations carry stable `OperationContext`
+identities, payloads and recursive listings are bounded, and protocol-3 peers
+reject those file operations before dispatch. Version 3 made the complete
+`a3s.oci.attachments.v1` manifest mandatory for create and restore, moved init
+process I/O inside that versioned contract, and returned its durable digest.
 The transport rejects protocol-2 peers rather than silently dropping rootfs,
 mount, network, I/O, secret, or runtime-extension evidence. Version 2 had
 already made `OperationContext` mandatory for write-stdin, close-stdin, and
@@ -350,9 +353,10 @@ does not silently choose those authorization policies.
 `CreateAttachments`. Their wire decoders revalidate the absolute bundle path,
 exact `config.json`, supported OCI version, official schema, unknown-property
 policy, configuration SHA-256, attachment JSON Pointers, per-value digests,
-category completeness, and the process-I/O contract before the service
-receives the request. The transport therefore cannot be used to bypass either
-the SDK's bundle checks or its attachment boundary.
+category completeness, storage identity/access/ownership/cleanup, and the
+process-I/O contract before the service receives the request. The transport
+therefore cannot be used to bypass either the SDK's bundle checks or its
+attachment boundary.
 
 Every request implements `ValidateRequest`. The in-process `RuntimeClient`,
 transport client, and server call it independently. The server-side check is

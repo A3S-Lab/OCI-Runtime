@@ -3,9 +3,11 @@
 ## Boundary
 
 `CreateAttachments` is the public, versioned description of every resource
-attached to an OCI create or restore request. The current schema is
-`a3s.oci.attachments.v1` and is negotiated through
-`RuntimeInfo::attachments` before product preparation begins.
+attached to an OCI create or restore request. Schema
+`a3s.oci.attachments.v1` covers the original OCI and extension inventory;
+`a3s.oci.attachments.v2` adds already-authorized storage. The exact schema is
+negotiated through the selected driver's `RuntimeInfo::extensions` entry before
+product preparation begins.
 
 The contract deliberately separates product policy from runtime mechanism:
 
@@ -16,6 +18,7 @@ The contract deliberately separates product policy from runtime mechanism:
 | Networking | Exact OCI network namespace/device descriptors plus explicit extension references | Network objects, IPAM, DNS, aliases, publication policy |
 | Process I/O | Complete `ProcessIo` modes and initial terminal size | Box log retention, indexing, redaction, search policy |
 | Secrets | A classified mount index or declared runtime mechanism | Secret name, value, authorization decision, materialization credential |
+| Storage (v2) | Caller-issued immutable allocation ID, exact OCI mount descriptor, access mode, ownership, and cleanup action | Named-volume lookup, snapshot selection, authorization, retention, and backing-resource deletion |
 | Runtime extensions | Reverse-DNS name, positive version, required/advisory bit, and digest-bound OCI annotation | Driver handles or implementation-specific internal types |
 
 The manifest never contains a PID, VM handle, descriptor number, socket,
@@ -58,6 +61,54 @@ value; `attach_network_extension` and `attach_secret_extension` classify that
 declared mechanism. Duplicate, missing, reordered, unknown, drifted, or
 oversized declarations fail request validation.
 
+## Already-authorized storage
+
+A caller upgrades a derived v1 manifest to v2 by binding a prepared OCI mount:
+
+```rust,no_run
+use a3s_oci_sdk::{
+    CreateAttachments, OciBundle, ProcessIo, StorageAccessMode,
+    StorageAttachmentId, StorageCleanup, StorageOwnership,
+};
+
+fn storage_attachments(bundle: &OciBundle) -> a3s_oci_sdk::Result<CreateAttachments> {
+    CreateAttachments::from_bundle(bundle, ProcessIo::default())?
+        .attach_storage_mount(
+            bundle,
+            0,
+            StorageAttachmentId::new("allocation-7")?,
+            StorageAccessMode::ReadOnly,
+            StorageOwnership::Caller,
+            StorageCleanup::DetachOnly,
+        )
+}
+```
+
+`StorageAttachmentId` identifies one caller-authorized allocation incarnation;
+it is not a mutable named-volume selector and is never interpreted as a host
+path. The selected mount remains bound by its JSON Pointer and canonical-value
+SHA-256. `ReadOnly` requires the OCI mount's `ro` option; `ReadWrite` requires
+`rw` or the OCI default. Contradictory `ro`/`rw`, duplicate identities,
+duplicate mount classifications, secret/storage overlap, access drift, and
+non-canonical order all fail validation.
+
+Schema v2 intentionally exposes only `StorageOwnership::Caller` and
+`StorageCleanup::DetachOnly`. Container deletion tears down runtime mount,
+namespace, and guest-transport resources but preserves the backing allocation.
+A3S Box remains responsible for named-volume and snapshot resolution,
+authorization, retention, commit, and deletion policy. A future mechanism that
+lets Runtime own or delete backing storage requires a new schema; v2 cannot be
+reinterpreted to grant that authority.
+
+Caller-owned storage cannot be combined with `dev.a3s.bundle-handoff`, because
+that extension transfers and later deletes the bundle tree. The Native Linux
+driver advertises v2 because its mount namespace cleanup preserves external
+bind sources. The current utility-VM drivers deliberately remain v1: their
+exact-generation share is runtime-owned and removed as one subtree. They must
+gain a separate caller-owned storage transport plus detach-cleanup evidence
+before advertising v2; the runtime will not absorb the allocation into an
+owned bundle as an implicit fallback.
+
 ## Runtime-owned bundle handoff
 
 Local products that prepare a portable bundle for a utility-VM driver may
@@ -81,9 +132,13 @@ substitute durable product record.
 
 ## Negotiation And Failure Rules
 
-SDK transport protocol 3 is the first protocol that carries this contract.
-Protocol-2 peers are rejected during negotiation, so an attachment-aware
-client cannot be silently downgraded to a server that ignores the field.
+SDK transport protocol 3 is the first protocol that carries v1. Protocol-2
+peers are rejected during negotiation, so an attachment-aware client cannot be
+silently downgraded to a server that ignores the field. Protocol 5 is required
+for v2 create and restore requests. Both the client and server reject a v2
+operation before dispatch when the negotiated connection is protocol 4 or
+earlier; v1 wire serialization remains unchanged and keeps its protocol-3
+compatibility.
 
 The host advertises `AttachmentCapabilities`. Create fails before driver
 selection or durable reservation when the schema is unsupported or any
@@ -105,8 +160,9 @@ The runtime stores the exact manifest with the container record and returns
 its SHA-256 digest in `ContainerRecord::attachments_digest`. On reopen it
 revalidates all pointers against the immutable configuration snapshot and
 checks the stored digest before returning state or resuming an operation.
-Changing I/O, classification, extension version, or referenced configuration
-while reusing an operation ID therefore fails as a different request.
+Changing I/O, classification, storage identity/access/lifetime, extension
+version, or referenced configuration while reusing an operation ID therefore
+fails as a different request.
 
 Records created before protocol 3 have neither a stored manifest nor an
 attachment digest. The runtime retains that explicit legacy state for old

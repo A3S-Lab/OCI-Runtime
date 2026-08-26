@@ -27,6 +27,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added `a3s.oci.attachments.v2` for already-authorized storage. Each entry
+  binds one validated OCI mount to a caller-issued immutable allocation ID,
+  exact read-only/read-write mode, caller ownership, and detach-only cleanup.
+  The SDK rejects duplicate identities or mounts, access drift, secret/storage
+  overlap, runtime-owned bundle handoff, and non-canonical wire inventories.
+  Protocol 5 prevents v2 create/restore requests from downgrading to older
+  peers; v1 serialization and protocol-3 compatibility remain unchanged. The
+  Native Linux driver advertises v2; utility-VM drivers remain v1 until they
+  have a separate caller-owned storage transport and detach-cleanup gate. The
+  legacy aggregate capability remains the safe driver intersection.
 - Added `a3s.oci.extensions.v1`, an exact-artifact, per-driver capability
   catalog returned by `RuntimeInfo`. Every entry binds canonical v1 operation
   contracts and attachment versions to one launch-ready driver and its unique

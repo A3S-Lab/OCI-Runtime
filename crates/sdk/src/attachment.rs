@@ -4,10 +4,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::{Error, ErrorCode, OciBundle, ProcessIo, Result};
+use crate::{Error, ErrorCode, OciBundle, ProcessIo, Result, StorageAttachmentId};
+
+mod storage;
+
+pub use storage::{StorageAccessMode, StorageAttachment, StorageCleanup, StorageOwnership};
 
 /// First public create-time attachment contract understood by A3S OCI Runtime.
 pub const ATTACHMENT_SCHEMA_V1: &str = "a3s.oci.attachments.v1";
+/// Storage-aware create-time attachment contract.
+pub const ATTACHMENT_SCHEMA_V2: &str = "a3s.oci.attachments.v2";
 /// Required extension declaring an operation-scoped transfer of bundle ownership.
 pub const RUNTIME_BUNDLE_HANDOFF_EXTENSION: &str = "dev.a3s.bundle-handoff";
 /// First bundle-handoff contract version.
@@ -18,6 +24,7 @@ pub const RUNTIME_BUNDLE_HANDOFF_MOVE_V1: &str = "move-to-runtime-v1";
 const MAX_MOUNT_ATTACHMENTS: usize = 4_096;
 const MAX_NETWORK_ATTACHMENTS: usize = 256;
 const MAX_SECRET_ATTACHMENTS: usize = 256;
+const MAX_STORAGE_ATTACHMENTS: usize = MAX_MOUNT_ATTACHMENTS;
 const MAX_RUNTIME_EXTENSIONS: usize = 64;
 const MAX_ATTACHMENT_SCHEMAS: usize = 16;
 
@@ -179,6 +186,8 @@ pub struct CreateAttachments {
     network: Vec<AttachmentSource>,
     process_io: ProcessIo,
     secrets: Vec<AttachmentSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    storage: Vec<StorageAttachment>,
     extensions: BTreeMap<String, RuntimeExtensionAttachment>,
 }
 
@@ -200,11 +209,74 @@ impl CreateAttachments {
                 "secret attachment references missing OCI mount index {mount_index}"
             ))
         })?;
+        if self.storage.iter().any(|storage| storage.mount() == &mount) {
+            return Err(invalid_attachment(format!(
+                "OCI mount index {mount_index} is already classified as storage"
+            )));
+        }
         insert_unique_source(
             &mut self.secrets,
             AttachmentSource::configuration(mount),
             "secret",
         )?;
+        Ok(self)
+    }
+
+    /// Bind one already-authorized storage allocation to an existing OCI mount.
+    ///
+    /// The caller must provide an immutable allocation identity and explicitly
+    /// acknowledge the v2 caller-owned, detach-only lifetime boundary. Named
+    /// volume lookup, snapshot selection, authorization, and backing-resource
+    /// deletion remain outside the runtime.
+    pub fn attach_storage_mount(
+        mut self,
+        bundle: &OciBundle,
+        mount_index: usize,
+        identity: StorageAttachmentId,
+        access_mode: StorageAccessMode,
+        ownership: StorageOwnership,
+        cleanup: StorageCleanup,
+    ) -> Result<Self> {
+        let mount = self.mounts.get(mount_index).cloned().ok_or_else(|| {
+            invalid_attachment(format!(
+                "storage attachment references missing OCI mount index {mount_index}"
+            ))
+        })?;
+        if self
+            .storage
+            .iter()
+            .any(|storage| storage.identity() == &identity)
+        {
+            return Err(invalid_attachment(format!(
+                "storage attachment identity {identity} is declared more than once"
+            )));
+        }
+        if self.storage.iter().any(|storage| storage.mount() == &mount) {
+            return Err(invalid_attachment(format!(
+                "OCI mount index {mount_index} is classified as storage more than once"
+            )));
+        }
+        if self.secrets.iter().any(|source| {
+            matches!(
+                source,
+                AttachmentSource::OciConfiguration { configuration } if configuration == &mount
+            )
+        }) {
+            return Err(invalid_attachment(format!(
+                "OCI mount index {mount_index} cannot be both secret and storage"
+            )));
+        }
+
+        self.schema_version = ATTACHMENT_SCHEMA_V2.to_string();
+        self.storage.push(StorageAttachment::new(
+            identity,
+            mount,
+            access_mode,
+            ownership,
+            cleanup,
+        ));
+        self.storage.sort();
+        self.validate(bundle)?;
         Ok(self)
     }
 
@@ -317,6 +389,12 @@ impl CreateAttachments {
         &self.extensions
     }
 
+    /// Already-authorized storage allocations in canonical identity order.
+    #[must_use]
+    pub fn storage(&self) -> &[StorageAttachment] {
+        &self.storage
+    }
+
     /// SHA-256 evidence for the complete canonical attachment manifest.
     pub fn digest(&self) -> Result<String> {
         let encoded = serde_json::to_vec(self).map_err(|error| {
@@ -331,15 +409,35 @@ impl CreateAttachments {
 
     /// Revalidate every pointer, digest, classification, and extension declaration.
     pub fn validate(&self, bundle: &OciBundle) -> Result<()> {
-        if self.schema_version != ATTACHMENT_SCHEMA_V1 {
-            return Err(invalid_attachment(format!(
-                "unsupported attachment schema {}",
-                self.schema_version
-            )));
+        match self.schema_version.as_str() {
+            ATTACHMENT_SCHEMA_V1 if !self.storage.is_empty() => {
+                return Err(invalid_attachment(
+                    "attachment schema v1 cannot carry storage attachments",
+                ));
+            }
+            ATTACHMENT_SCHEMA_V1 => {}
+            ATTACHMENT_SCHEMA_V2 if self.storage.is_empty() => {
+                return Err(invalid_attachment(
+                    "attachment schema v2 requires at least one storage attachment",
+                ));
+            }
+            ATTACHMENT_SCHEMA_V2 => {}
+            _ => {
+                return Err(invalid_attachment(format!(
+                    "unsupported attachment schema {}",
+                    self.schema_version
+                )));
+            }
+        }
+        if !self.storage.is_empty() && self.uses_runtime_bundle_handoff() {
+            return Err(invalid_attachment(
+                "caller-owned storage attachments cannot be placed in a runtime-owned bundle handoff",
+            ));
         }
         if self.mounts.len() > MAX_MOUNT_ATTACHMENTS
             || self.network.len() > MAX_NETWORK_ATTACHMENTS
             || self.secrets.len() > MAX_SECRET_ATTACHMENTS
+            || self.storage.len() > MAX_STORAGE_ATTACHMENTS
             || self.extensions.len() > MAX_RUNTIME_EXTENSIONS
         {
             return Err(invalid_attachment(
@@ -409,6 +507,7 @@ impl CreateAttachments {
                 }
             }
         }
+        storage::validate_attachments(&self.storage, &self.mounts, &self.secrets, &configuration)?;
         Ok(())
     }
 
@@ -476,6 +575,7 @@ impl CreateAttachments {
             network,
             process_io,
             secrets: Vec::new(),
+            storage: Vec::new(),
             extensions: BTreeMap::new(),
         })
     }
@@ -505,6 +605,18 @@ impl AttachmentCapabilities {
     pub fn base_v1() -> Self {
         Self {
             schemas: vec![ATTACHMENT_SCHEMA_V1.to_string()],
+            extensions: BTreeMap::new(),
+        }
+    }
+
+    /// Support both the legacy v1 manifest and storage-aware v2 manifests.
+    #[must_use]
+    pub fn base_v2() -> Self {
+        Self {
+            schemas: vec![
+                ATTACHMENT_SCHEMA_V1.to_string(),
+                ATTACHMENT_SCHEMA_V2.to_string(),
+            ],
             extensions: BTreeMap::new(),
         }
     }
@@ -735,287 +847,4 @@ fn invalid_attachment(message: impl Into<String>) -> Error {
 }
 
 #[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::{
-        AttachmentCapabilities, AttachmentSource, CreateAttachments, ATTACHMENT_SCHEMA_V1,
-        RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
-        RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
-    };
-    use crate::{ErrorCode, IoMode, OciBundle, ProcessIo, TerminalSize};
-
-    fn bundle() -> OciBundle {
-        OciBundle::from_json(
-            std::env::temp_dir().join("a3s-attachment-bundle"),
-            serde_json::to_string(&json!({
-                "ociVersion": "1.3.0",
-                "root": {"path": "rootfs", "readonly": true},
-                "process": {
-                    "cwd": "/",
-                    "args": ["/bin/true"],
-                    "user": {"uid": 0, "gid": 0}
-                },
-                "mounts": [
-                    {"destination": "/data", "type": "bind", "source": "data", "options": ["ro"]},
-                    {"destination": "/run/secret", "type": "bind", "source": "secret", "options": ["ro"]}
-                ],
-                "linux": {
-                    "namespaces": [{"type": "mount"}, {"type": "network"}],
-                    "netDevices": {"tap0": {"name": "eth0"}}
-                },
-                "annotations": {
-                    "dev.a3s.network.tsi": "{\"mode\":\"proxy\"}",
-                    "dev.a3s.secret.channel": "fd-broker"
-                }
-            }))
-            .expect("encode configuration"),
-        )
-        .expect("attachment fixture bundle")
-    }
-
-    fn handoff_bundle() -> OciBundle {
-        let mut configuration: serde_json::Value =
-            serde_json::from_str(bundle().config_json()).expect("fixture configuration");
-        configuration["annotations"][RUNTIME_BUNDLE_HANDOFF_EXTENSION] =
-            json!(RUNTIME_BUNDLE_HANDOFF_MOVE_V1);
-        OciBundle::from_json(
-            std::env::temp_dir().join("a3s-bundle-handoff"),
-            serde_json::to_string(&configuration).expect("handoff configuration"),
-        )
-        .expect("handoff bundle")
-    }
-
-    fn terminal_bundle() -> OciBundle {
-        let mut configuration: serde_json::Value =
-            serde_json::from_str(bundle().config_json()).expect("fixture configuration");
-        configuration["process"]["terminal"] = json!(true);
-        configuration["process"]["consoleSize"] = json!({"width": 120, "height": 40});
-        OciBundle::from_json(
-            std::env::temp_dir().join("a3s-terminal-attachment-bundle"),
-            serde_json::to_string(&configuration).expect("terminal configuration"),
-        )
-        .expect("terminal attachment fixture bundle")
-    }
-
-    #[test]
-    fn derives_and_digest_binds_every_standard_attachment_category() {
-        let bundle = bundle();
-        let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
-            .expect("derive attachments")
-            .mark_secret_mount(1)
-            .expect("classify secret mount")
-            .add_extension_from_annotation(&bundle, "dev.a3s.network.tsi", 1, true)
-            .expect("declare network extension")
-            .attach_network_extension("dev.a3s.network.tsi")
-            .expect("classify network extension")
-            .add_extension_from_annotation(&bundle, "dev.a3s.secret.channel", 1, false)
-            .expect("declare secret extension")
-            .attach_secret_extension("dev.a3s.secret.channel")
-            .expect("classify secret extension");
-
-        attachments.validate(&bundle).expect("valid attachments");
-        assert_eq!(attachments.schema_version(), ATTACHMENT_SCHEMA_V1);
-        assert!(attachments
-            .digest()
-            .expect("attachment digest")
-            .starts_with("sha256:"));
-        assert_eq!(attachments.mounts.len(), 2);
-        assert_eq!(attachments.network.len(), 3);
-        assert_eq!(attachments.secrets.len(), 2);
-        assert_eq!(attachments.extensions.len(), 2);
-    }
-
-    #[test]
-    fn terminal_attachment_binds_the_oci_console_size() {
-        let bundle = terminal_bundle();
-        let io = ProcessIo {
-            stdin: IoMode::Terminal,
-            stdout: IoMode::Terminal,
-            stderr: IoMode::Terminal,
-            terminal_size: None,
-        };
-        let attachments = CreateAttachments::from_bundle(&bundle, io)
-            .expect("derive console-sized terminal attachments");
-        assert_eq!(
-            attachments.process_io().terminal_size,
-            Some(TerminalSize {
-                width: 120,
-                height: 40,
-            })
-        );
-
-        let mut encoded = serde_json::to_value(&attachments).expect("encode attachments");
-        encoded["processIo"]
-            .as_object_mut()
-            .expect("process I/O object")
-            .remove("terminal_size");
-        let unbound: CreateAttachments =
-            serde_json::from_value(encoded).expect("decode unbound attachment");
-        let error = unbound
-            .validate(&bundle)
-            .expect_err("wire input must retain the derived OCI console size");
-        assert_eq!(error.code, ErrorCode::InvalidArgument);
-        assert!(error.message.contains("process I/O"));
-    }
-
-    #[test]
-    fn rejects_drift_unknown_references_and_unversioned_extensions() {
-        let bundle = bundle();
-        let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
-            .expect("derive attachments");
-        assert!(attachments.clone().mark_secret_mount(9).is_err());
-        assert!(attachments
-            .clone()
-            .attach_network_extension("dev.a3s.missing")
-            .is_err());
-        assert!(attachments
-            .clone()
-            .add_extension_from_annotation(&bundle, "dev.a3s.network.tsi", 0, true)
-            .is_err());
-
-        let mut encoded = serde_json::to_value(&attachments).expect("encode attachments");
-        encoded["rootfs"]["valueDigest"] = json!("sha256:deadbeef");
-        let corrupt: CreateAttachments =
-            serde_json::from_value(encoded).expect("decode structurally valid corruption");
-        let error = corrupt
-            .validate(&bundle)
-            .expect_err("configuration evidence drift must fail");
-        assert_eq!(error.code, ErrorCode::InvalidArgument);
-
-        let mut encoded = serde_json::to_value(&attachments).expect("encode attachments");
-        encoded["network"]
-            .as_array_mut()
-            .expect("network array")
-            .push(json!({
-                "kind": "runtime-extension",
-                "name": "dev.a3s.missing"
-            }));
-        let corrupt: CreateAttachments =
-            serde_json::from_value(encoded).expect("decode missing extension reference");
-        assert!(corrupt.validate(&bundle).is_err());
-    }
-
-    #[test]
-    fn required_extensions_are_fail_closed_but_advisory_extensions_are_explicit() {
-        let bundle = bundle();
-        let base = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
-            .expect("derive attachments");
-        let required = base
-            .clone()
-            .add_extension_from_annotation(&bundle, "dev.a3s.network.tsi", 1, true)
-            .expect("required extension");
-        let unsupported = AttachmentCapabilities::base_v1()
-            .require(&required)
-            .expect_err("required unsupported extension must fail");
-        assert_eq!(unsupported.code, ErrorCode::Unsupported);
-
-        let supported = AttachmentCapabilities::base_v1()
-            .with_extension("dev.a3s.network.tsi", vec![2, 1, 2])
-            .expect("extension capability");
-        supported.require(&required).expect("supported extension");
-
-        let advisory = base
-            .add_extension_from_annotation(&bundle, "dev.a3s.secret.channel", 1, false)
-            .expect("advisory extension");
-        AttachmentCapabilities::base_v1()
-            .require(&advisory)
-            .expect("unsupported advisory extension remains explicit and non-enforcing");
-    }
-
-    #[test]
-    fn extension_names_follow_the_canonical_capability_order() {
-        let capabilities = AttachmentCapabilities::base_v1()
-            .with_extension("dev.a3s.network.zeta", vec![1])
-            .expect("zeta extension capability")
-            .with_extension("dev.a3s.network.alpha", vec![2, 1])
-            .expect("alpha extension capability");
-
-        assert_eq!(
-            capabilities.extension_names().collect::<Vec<_>>(),
-            vec!["dev.a3s.network.alpha", "dev.a3s.network.zeta"]
-        );
-    }
-
-    #[test]
-    fn capability_intersection_is_exact_and_wire_inventories_must_be_canonical() {
-        let common = AttachmentCapabilities::base_v1()
-            .with_extension("dev.a3s.network.tsi", vec![1, 2])
-            .expect("left capabilities")
-            .common_with(
-                &AttachmentCapabilities::base_v1()
-                    .with_extension("dev.a3s.network.tsi", vec![2, 3])
-                    .expect("right capabilities")
-                    .with_extension("dev.a3s.storage.volume", vec![1])
-                    .expect("right-only capabilities"),
-            );
-        common.validate().expect("canonical intersection");
-        assert!(common.supports_schema(ATTACHMENT_SCHEMA_V1));
-        assert!(common.supports_extension("dev.a3s.network.tsi", 2));
-        assert!(!common.supports_extension("dev.a3s.network.tsi", 1));
-        assert!(!common.supports_extension("dev.a3s.storage.volume", 1));
-
-        let invalid: AttachmentCapabilities = serde_json::from_value(json!({
-            "schemas": [ATTACHMENT_SCHEMA_V1],
-            "extensions": {"dev.a3s.network.tsi": [2, 1]}
-        }))
-        .expect("decode structurally valid non-canonical inventory");
-        let error = invalid
-            .validate()
-            .expect_err("wire version order must fail closed");
-        assert_eq!(error.code, ErrorCode::InvalidArgument);
-    }
-
-    #[test]
-    fn runtime_bundle_handoff_is_explicit_digest_bound_and_capability_checked() {
-        let handoff = handoff_bundle();
-        let attachments = CreateAttachments::from_bundle(&handoff, ProcessIo::default())
-            .expect("base attachments")
-            .with_runtime_bundle_handoff(&handoff)
-            .expect("bundle handoff extension");
-        assert!(attachments.uses_runtime_bundle_handoff());
-
-        let unsupported = AttachmentCapabilities::base_v1()
-            .require(&attachments)
-            .expect_err("base runtime must reject required handoff");
-        assert_eq!(unsupported.code, ErrorCode::Unsupported);
-        AttachmentCapabilities::base_v1()
-            .with_extension(
-                RUNTIME_BUNDLE_HANDOFF_EXTENSION,
-                vec![RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION],
-            )
-            .expect("handoff capability")
-            .require(&attachments)
-            .expect("handoff-capable runtime");
-
-        let ordinary = bundle();
-        let error = CreateAttachments::from_bundle(&ordinary, ProcessIo::default())
-            .expect("ordinary attachments")
-            .with_runtime_bundle_handoff(&ordinary)
-            .expect_err("missing exact annotation must fail");
-        assert_eq!(error.code, ErrorCode::InvalidArgument);
-    }
-
-    #[test]
-    fn serialized_manifest_contains_no_secret_value_or_runtime_identity() {
-        let bundle = bundle();
-        let encoded = serde_json::to_string(
-            &CreateAttachments::from_bundle(&bundle, ProcessIo::default())
-                .expect("derive attachments")
-                .mark_secret_mount(1)
-                .expect("classify secret mount"),
-        )
-        .expect("encode attachments");
-        assert!(!encoded.contains("fd-broker"));
-        assert!(!encoded.contains("secret.channel"));
-        assert!(!encoded.contains("pid"));
-        assert!(encoded.contains("/mounts/1"));
-        assert!(encoded.contains("valueDigest"));
-        assert!(matches!(
-            serde_json::from_str::<CreateAttachments>(&encoded)
-                .expect("round trip")
-                .secrets[0],
-            AttachmentSource::OciConfiguration { .. }
-        ));
-    }
-}
+mod tests;
