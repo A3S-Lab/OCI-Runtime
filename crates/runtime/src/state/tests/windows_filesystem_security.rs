@@ -1,14 +1,16 @@
 use std::fmt;
+use std::os::windows::fs::OpenOptionsExt as _;
 use std::os::windows::fs::{symlink_dir, symlink_file, MetadataExt as _};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use a3s_oci_core::DriverKind;
 use a3s_oci_sdk::ErrorCode;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
-use crate::fault::{DurableMutation, FaultInjector, FaultPoint, FileCommitStage};
+use crate::fault::{DurableMutation, FaultInjector, FaultPoint, FileCommitStage, NoFaultInjector};
 
 use super::{create_request, state_root, DurableStateStore};
 
@@ -145,7 +147,58 @@ async fn rejects_preexisting_transaction_file_reparse_point() {
 }
 
 #[tokio::test]
-async fn commits_the_open_temporary_file_when_its_name_is_replaced() {
+async fn retries_atomic_replace_while_the_destination_is_transiently_share_locked() {
+    use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let root = state_root(&temporary);
+    let store = DurableStateStore::open(&root)
+        .await
+        .expect("initialize state root");
+    let destination = store
+        .filesystem
+        .root()
+        .join("operations/transient-share-lock.json");
+    store
+        .filesystem
+        .atomic_write(
+            &NoFaultInjector,
+            DurableMutation::PrepareCreateOperation,
+            &destination,
+            b"old\n",
+        )
+        .await
+        .expect("write initial destination");
+
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(&destination)
+        .expect("open destination without delete sharing");
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        drop(held);
+    });
+
+    let result = store
+        .filesystem
+        .atomic_write(
+            &NoFaultInjector,
+            DurableMutation::PrepareCreateOperation,
+            &destination,
+            b"new\n",
+        )
+        .await;
+    release.join().expect("release share lock");
+    result.expect("bounded retry must outlive a transient destination share lock");
+    assert_eq!(
+        std::fs::read(&destination).expect("read replaced destination"),
+        b"new\n"
+    );
+}
+
+#[tokio::test]
+async fn commits_the_open_temporary_file_but_rejects_its_replaced_transaction_name() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let root = state_root(&temporary);
     let external = temporary.path().join("external-temporary.json");
@@ -167,11 +220,12 @@ async fn commits_the_open_temporary_file_when_its_name_is_replaced() {
     }));
     let faults: Arc<dyn FaultInjector> = injector.clone();
 
-    let store = DurableStateStore::open_with_fault_injector(&root, faults)
+    let error = DurableStateStore::open_with_fault_injector(&root, faults)
         .await
-        .expect("commit the exact open transaction object");
+        .expect_err("startup audit must reject the replacement transaction reparse point");
 
     assert!(injector.fired());
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
     assert_plain_file(&root.join("root.json"));
     assert_reparse_point(&transaction);
     assert!(!displaced.exists());
@@ -179,7 +233,6 @@ async fn commits_the_open_temporary_file_when_its_name_is_replaced() {
         std::fs::read(&external).expect("external file remains readable"),
         b"external-temporary\n"
     );
-    drop(store);
 }
 
 #[tokio::test]

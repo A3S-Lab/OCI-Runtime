@@ -33,7 +33,9 @@ The state root:
 - commits files by atomic rename plus directory sync on Unix;
 - commits an already-open file or directory handle with
   `NtSetInformationFile(FileRenameInformation)` relative to the retained
-  destination-parent handle on Windows.
+  destination-parent handle on Windows;
+- audits every runtime-owned namespace and committed cross-record identity
+  before returning an opened store.
 
 A Windows state root therefore requires a filesystem with persistent ACL
 support. Opening the root fails closed when ownership or the protected DACL
@@ -50,8 +52,11 @@ macOS uses `fstatfs` identity for the same boundary.
 Windows CI covers a reparse-point root, layout-directory and transaction-file
 substitution, source-name replacement after the source file is opened, racing
 destination replacement, retained root and lock handles, and exact-handle
-directory moves. Each case fails closed or commits the pinned object without
-touching the external target.
+directory moves. It also holds an existing destination without delete sharing,
+then proves file replacement survives the transient lock. Replacement retries
+only Windows access, sharing, and lock violations for a bounded one second;
+other errors fail immediately. Each case fails closed or commits the pinned
+object without touching the external target.
 
 The implementation uses the security descriptor supplied directly to
 [`CreateDirectoryW`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createdirectoryw)
@@ -285,6 +290,24 @@ journals, avoid duplicate live and quarantined generations, and remove every
 `.next` transaction file. The matrices run in Linux, macOS, and Windows CI.
 Production uses a non-configurable no-op injector.
 
+Before the store can serve a request, startup enumerates the complete durable
+state graph. It rejects unexpected root, container, process, quarantine, and
+event entries; filename/payload identity drift; operations without an
+allocated generation; duplicate Create owners; live records below or beyond
+their generation fence; missing Create or Exec ownership; incompatible active
+claims; malformed configuration or attachment evidence; quarantine entries
+that disagree with their operation; one generation present both live and
+quarantined; and event records without an exact identity claim. Quarantined
+container snapshots and their process namespaces receive the same record and
+configuration validation as live state.
+
+The audit preserves the states created by documented commit ordering. An
+allocated generation may have no operation after interruption, a prepared
+Create may have no complete live record, a failed Create may retain its live
+claim until quarantine replay, an event cursor may contain a gap, and a
+committed event claim may await its sequence record. Plain, validly named
+`.next` files also remain available to the operation that owns recovery.
+
 Startup now audits each durable driver binding and calls only that exact
 driver's idempotent recovery hook. An optional observation is committed through
 the normal durable state transition before requests are accepted. A stopped
@@ -299,10 +322,10 @@ owner-death grace and returns a retryable error if it overruns. If neither a
 report nor marker exists, recovery still yields a stopped cleanup tombstone
 without fabricated exit evidence.
 
-The remaining persistence gates are startup-wide orphan scanning, real-host
-qualification of restart-stable WHPX exit evidence (or qualified reattachment
-where another driver promises it), and equivalent real-driver replacement
-evidence outside HVF. The portable matrix already reopens the durable host
+The remaining persistence gates are real-host qualification of restart-stable
+WHPX exit evidence (or qualified reattachment where another driver promises
+it) and equivalent real-driver replacement evidence outside HVF. The portable
+matrix already reopens the durable host
 around a new authenticated connection and driver at all nine request/response
 stages for create, state,
 start, kill, delete, wait, exec, signal-process, wait-process, pause, resume,

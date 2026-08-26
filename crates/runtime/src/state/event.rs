@@ -17,6 +17,8 @@ use super::model::{
 };
 use super::DurableStateStore;
 
+mod audit;
+
 const EVENT_CURSOR_FILE: &str = "sequence.json";
 
 impl DurableStateStore {

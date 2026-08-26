@@ -27,6 +27,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added a startup-wide durable-state audit before an opened store can serve
+  requests. It recursively validates root and namespace entries, exact
+  generation and operation ownership, unique Create identities, live
+  container and process claims, quarantine contents and live-generation
+  exclusion, and event claim/record relationships while retaining documented
+  crash-recoverable intermediate states. Fourteen focused tests plus the
+  complete 741-point durable fault matrix cover fail-closed corruption and
+  recovery compatibility.
 - Committed containerd `ResizePty` cleanup after shim death. A focused
   DeleteShim boundary starts with one already committed terminal resize and
   schema-v9 metadata that still records the pending size, then proves cleanup
@@ -1132,6 +1140,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Retry Windows handle-relative file replacement for at most one second when
+  an existing destination is transiently held without delete sharing. The
+  retry is limited to access, sharing, and lock violations and runs only on
+  the blocking filesystem path; a deterministic real-handle regression holds
+  the destination for 100 ms before releasing it.
 - Preserve identity UID/GID translation when an OCI process inherits the
   current user namespace. Explicit mappings remain mandatory for created or
   joined user namespaces, while a bundle with no user-namespace request now

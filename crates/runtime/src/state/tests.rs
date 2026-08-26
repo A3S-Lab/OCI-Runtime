@@ -23,6 +23,7 @@ mod fault_matrix;
 #[cfg(unix)]
 mod filesystem_security;
 mod recovery;
+mod startup_audit;
 #[cfg(windows)]
 mod windows_filesystem_security;
 
@@ -347,13 +348,9 @@ async fn durable_attachment_tampering_fails_closed_after_reopen() {
     )
     .expect("write tampered durable record");
 
-    let reopened = DurableStateStore::open(&root)
+    let error = DurableStateStore::open(&root)
         .await
-        .expect("reopen state root");
-    let error = reopened
-        .state(&ContainerTarget::current(request.id))
-        .await
-        .expect_err("tampered attachment evidence must fail closed");
+        .expect_err("startup audit must reject tampered attachment evidence");
     assert_eq!(error.code, ErrorCode::FailedPrecondition);
     assert!(error.message.contains("attachment digest"));
 }

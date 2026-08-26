@@ -744,7 +744,22 @@ impl DurableStateStore {
                 ),
             ));
         }
-        let process: StoredProcess = self.filesystem.read_json(&path).await?;
+        self.load_stored_process_from_path(target, &path).await
+    }
+
+    pub(super) async fn load_stored_process_from_path(
+        &self,
+        target: &ProcessTarget,
+        path: &std::path::Path,
+    ) -> Result<StoredProcess> {
+        let generation = target.container.generation.ok_or_else(|| {
+            state_error(
+                ErrorCode::InvalidArgument,
+                "load-process-state",
+                "durable process lookup requires an exact container generation",
+            )
+        })?;
+        let process: StoredProcess = self.filesystem.read_json(path).await?;
         if process.schema_version != PROCESS_SCHEMA_VERSION
             || process.record.target != *target
             || process.record.target.container.generation != Some(generation)

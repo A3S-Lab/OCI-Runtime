@@ -714,6 +714,11 @@ enforce it. No property is silently ignored.
     CI gate covers real reparse points, already-open source-file commits,
     racing destination replacement, retained root/lock handles, and
     exact-handle directory moves without modifying an external target.
+- [x] Audit the complete durable state graph before serving requests. Reject
+  unknown entries, operation/generation identity drift, ownerless live or
+  process records, incompatible claims, conflicting quarantine snapshots, and
+  unclaimed events while preserving every fault-matrix-proven recoverable
+  intermediate state.
 - [x] Add atomic creating/created records with exact configuration snapshots
   and monotonically increasing generations.
 - [x] Add a global idempotent create journal keyed by `OperationId`.

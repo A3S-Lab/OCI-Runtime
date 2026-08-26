@@ -331,11 +331,17 @@ fn rename_handle_relative(
     use std::mem::{offset_of, size_of};
     use std::os::windows::ffi::OsStrExt as _;
     use std::os::windows::io::AsRawHandle as _;
+    use std::time::Duration;
     use windows_sys::Wdk::Storage::FileSystem::{
         FileRenameInformation, NtSetInformationFile, FILE_RENAME_INFORMATION,
     };
-    use windows_sys::Win32::Foundation::RtlNtStatusToDosError;
+    use windows_sys::Win32::Foundation::{
+        RtlNtStatusToDosError, ERROR_ACCESS_DENIED, ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION,
+    };
     use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
+
+    const RETRY_DELAY: Duration = Duration::from_millis(5);
+    const MAX_RETRIES: usize = 200;
 
     let destination = destination_name.encode_wide().collect::<Vec<_>>();
     let name_bytes = destination
@@ -401,22 +407,40 @@ fn rename_handle_relative(
             destination.len(),
         );
     }
-    // SAFETY: the source and destination-parent handles are live, and the
-    // variable-length FILE_RENAME_INFORMATION buffer is initialized as
-    // documented by the native file-information contract.
-    let mut io_status = std::mem::MaybeUninit::<IO_STATUS_BLOCK>::zeroed();
-    let status = unsafe {
-        NtSetInformationFile(
-            source_handle,
-            io_status.as_mut_ptr(),
-            information.cast(),
-            buffer_length,
-            FileRenameInformation,
-        )
-    };
-    if status < 0 {
+    let mut attempt = 0;
+    loop {
+        // SAFETY: the source and destination-parent handles are live, and the
+        // variable-length FILE_RENAME_INFORMATION buffer is initialized as
+        // documented by the native file-information contract.
+        let mut io_status = std::mem::MaybeUninit::<IO_STATUS_BLOCK>::zeroed();
+        let status = unsafe {
+            NtSetInformationFile(
+                source_handle,
+                io_status.as_mut_ptr(),
+                information.cast(),
+                buffer_length,
+                FileRenameInformation,
+            )
+        };
+        if status >= 0 {
+            return Ok(());
+        }
+
         // SAFETY: the failed native call returned a complete NTSTATUS value.
         let windows_error = unsafe { RtlNtStatusToDosError(status) };
+        let transient_destination_lock = replace
+            && matches!(
+                windows_error,
+                ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION
+            );
+        if transient_destination_lock && attempt < MAX_RETRIES {
+            // This function already runs on the blocking state-filesystem pool.
+            // Windows can retain a destination share lock briefly after a read.
+            attempt += 1;
+            std::thread::sleep(RETRY_DELAY);
+            continue;
+        }
+
         let windows_error = i32::try_from(windows_error).unwrap_or(i32::MAX);
         return Err(io_error(
             operation,
@@ -424,7 +448,6 @@ fn rename_handle_relative(
             io::Error::from_raw_os_error(windows_error),
         ));
     }
-    Ok(())
 }
 
 #[cfg(unix)]

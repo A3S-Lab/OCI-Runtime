@@ -15,6 +15,7 @@ mod process;
 mod process_io;
 mod process_recovery;
 mod start;
+mod startup_audit;
 mod update;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -148,14 +149,16 @@ impl DurableStateStore {
         faults: Arc<dyn FaultInjector>,
     ) -> Result<Self> {
         let (filesystem, root_lock) = filesystem::open_root(root.as_ref(), faults.as_ref()).await?;
-        Ok(Self {
+        let store = Self {
             root: Arc::new(filesystem.root().to_path_buf()),
             filesystem,
             gate: Arc::new(Mutex::new(())),
             event_notify: Arc::new(Notify::new()),
             _root_lock: root_lock,
             faults,
-        })
+        };
+        store.audit_startup_state().await?;
+        Ok(store)
     }
 
     #[cfg(test)]
@@ -724,11 +727,20 @@ impl DurableStateStore {
                 format!("container {id} does not exist"),
             ));
         }
+        self.load_stored_container_from_directory(id, &directory)
+            .await
+    }
+
+    async fn load_stored_container_from_directory(
+        &self,
+        id: &ContainerId,
+        directory: &Path,
+    ) -> Result<StoredContainer> {
         self.filesystem
-            .ensure_plain_directory(&directory, "container state directory")
+            .ensure_plain_directory(directory, "container state directory")
             .await?;
         self.filesystem
-            .set_private_directory_permissions(&directory)
+            .set_private_directory_permissions(directory)
             .await?;
         let path = directory.join(CONTAINER_RECORD_FILE);
         if !self.filesystem.path_exists(&path).await? {
@@ -752,7 +764,7 @@ impl DurableStateStore {
             ));
         }
         OciSchemaValidator::new()?.validate_state(&stored.record.state)?;
-        let bundle = self.load_bundle(&stored).await?;
+        let bundle = self.load_bundle_from_directory(&stored, directory).await?;
         if bundle.config_digest() != stored.record.config_digest {
             return Err(state_error(
                 ErrorCode::FailedPrecondition,
@@ -786,9 +798,16 @@ impl DurableStateStore {
     }
 
     async fn load_bundle(&self, stored: &StoredContainer) -> Result<OciBundle> {
-        let config_path = self
-            .container_directory(&stored.id)
-            .join(CONFIG_SNAPSHOT_FILE);
+        let directory = self.container_directory(&stored.id);
+        self.load_bundle_from_directory(stored, &directory).await
+    }
+
+    async fn load_bundle_from_directory(
+        &self,
+        stored: &StoredContainer,
+        directory: &Path,
+    ) -> Result<OciBundle> {
+        let config_path = directory.join(CONFIG_SNAPSHOT_FILE);
         if !self.filesystem.path_exists(&config_path).await? {
             return Err(state_error(
                 ErrorCode::Unavailable,
