@@ -91,6 +91,15 @@ selection or durable reservation when the schema is unsupported or any
 extension remains in the request fingerprint and returned evidence but does
 not claim enforcement.
 
+For a service with more than one launch-ready driver,
+`RuntimeInfo::extensions` is the authoritative per-driver view. A typed
+`RuntimeNegotiationRequest` selects the unique driver that owns the requested
+`IsolationClass` and can require this schema plus exact extension versions
+before product preparation. The legacy top-level attachment capability field
+contains only versions common to every registered driver; it never exposes a
+union that could overstate support for the selected isolation path. The v1
+catalog is additionally bound to the SHA-256 of the running Host executable.
+
 Every accepted manifest participates in the durable create request digest.
 The runtime stores the exact manifest with the container record and returns
 its SHA-256 digest in `ContainerRecord::attachments_digest`. On reopen it

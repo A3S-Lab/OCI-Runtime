@@ -27,6 +27,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added `a3s.oci.extensions.v1`, an exact-artifact, per-driver capability
+  catalog returned by `RuntimeInfo`. Every entry binds canonical v1 operation
+  contracts and attachment versions to one launch-ready driver and its unique
+  isolation classes; the catalog binds the complete response to the SHA-256 of
+  the running host executable. `RuntimeNegotiationRequest` fails closed on an
+  unavailable operation, schema, extension version, ambiguous isolation, or a
+  legacy peer without the catalog. The existing flat operation and attachment
+  fields now retain only the common multi-driver surface, while OCI unsafe
+  annotation reporting still covers the complete recognized driver set.
 - Added a startup-wide durable-state audit before an opened store can serve
   requests. It recursively validates root and namespace entries, exact
   generation and operation ownership, unique Create identities, live

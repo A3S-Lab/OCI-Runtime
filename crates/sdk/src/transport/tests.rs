@@ -40,6 +40,7 @@ impl OciRuntimeService for EchoService {
                 RuntimeOperation::Filesystem,
             ],
             attachments: AttachmentCapabilities::base_v1(),
+            extensions: Default::default(),
         })
     }
 

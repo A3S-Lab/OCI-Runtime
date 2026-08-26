@@ -668,6 +668,7 @@ mod tests {
                 drivers: RuntimeFeatures::current(Vec::new()),
                 operations: contract::required_sdk_operations(),
                 attachments: AttachmentCapabilities::base_v1(),
+                extensions: Default::default(),
             })
         }
 
@@ -785,6 +786,7 @@ mod tests {
             drivers: RuntimeFeatures::current(Vec::new()),
             operations: contract::required_sdk_operations(),
             attachments: AttachmentCapabilities::base_v1(),
+            extensions: Default::default(),
         };
         validate_sdk_operations(&features).expect("complete SDK contract");
 

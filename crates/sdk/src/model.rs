@@ -53,6 +53,9 @@ pub struct RuntimeInfo {
     pub operations: Vec<RuntimeOperation>,
     /// Versioned create-time attachment schemas and optional extensions.
     pub attachments: AttachmentCapabilities,
+    /// Exact-artifact, per-driver operation and attachment capability catalog.
+    #[serde(default)]
+    pub extensions: crate::RuntimeExtensions,
 }
 
 /// Explicit isolation requirement. Drivers may never silently weaken it.

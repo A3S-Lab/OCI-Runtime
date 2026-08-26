@@ -12,9 +12,9 @@ use a3s_oci_sdk::{
     FileRequest, FileResponse, FilesystemOp, FilesystemRequest, FilesystemResponse, KillRequest,
     ListRequest, OciLinuxSupport, OciRuntimeService, OutputChunk, ProcessId, ProcessRecord,
     ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result,
-    RuntimeInfo, RuntimeOperation, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
-    UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
-    MAX_FILE_TRANSFER_BYTES,
+    RuntimeExtensions, RuntimeInfo, RuntimeOperation, SignalProcessRequest, StartRequest,
+    StateRequest, StatsRequest, UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest,
+    WriteStdinRequest, MAX_FILE_TRANSFER_BYTES,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
@@ -34,6 +34,7 @@ use crate::state::{
     SignalProcessPreparation,
 };
 
+mod artifact;
 mod driver_registry;
 mod feature_report;
 
@@ -95,9 +96,10 @@ impl HostRuntimeService {
 
     /// Open durable lifecycle orchestration around a deterministic driver set.
     ///
-    /// Every isolation class must have exactly one owner. Drivers in one host
-    /// service must expose the same operation and hook surface so feature
-    /// discovery cannot overstate support for a selected workload.
+    /// Every isolation class must have exactly one owner. Driver-specific
+    /// optional operations and attachments are exposed through the versioned
+    /// capability catalog; the legacy flat inventory retains only their common
+    /// surface. OCI hooks and Linux support remain service-wide contracts.
     pub async fn open_with_drivers(
         state_root: impl AsRef<Path>,
         drivers: Vec<Arc<dyn RuntimeDriver>>,
@@ -482,6 +484,7 @@ fn driver_state_error(
 #[async_trait]
 impl OciRuntimeService for HostRuntimeService {
     async fn features(&self) -> Result<RuntimeInfo> {
+        let artifact = artifact::current().await?;
         let hooks = self
             .lifecycle
             .as_deref()
@@ -492,6 +495,12 @@ impl OciRuntimeService for HostRuntimeService {
             .map_or_else(AttachmentCapabilities::base_v1, |lifecycle| {
                 lifecycle.drivers.attachment_capabilities().clone()
             });
+        let all_attachments = self
+            .lifecycle
+            .as_deref()
+            .map_or_else(AttachmentCapabilities::base_v1, |lifecycle| {
+                lifecycle.drivers.all_attachment_capabilities().clone()
+            });
         let linux_support = self
             .lifecycle
             .as_deref()
@@ -501,7 +510,7 @@ impl OciRuntimeService for HostRuntimeService {
         let oci = feature_report::build(
             self.lifecycle.is_some(),
             hooks,
-            &attachments,
+            &all_attachments,
             &linux_support,
         )?;
 
@@ -511,11 +520,16 @@ impl OciRuntimeService for HostRuntimeService {
             operations.insert(RuntimeOperation::List);
             operations.extend(lifecycle.drivers.operations().iter().copied());
         }
+        let extensions = match &self.lifecycle {
+            Some(lifecycle) => lifecycle.drivers.extensions(artifact)?,
+            None => RuntimeExtensions::new(artifact, Vec::new())?,
+        };
         Ok(RuntimeInfo {
             oci,
             drivers: self.runtime_features(),
             operations: operations.into_iter().collect(),
             attachments,
+            extensions,
         })
     }
 

@@ -2397,9 +2397,12 @@ or leaked runtime resources.
 
 ### R8 — Optional Parity Extensions
 
-- [ ] Add versioned extension discovery and negotiation so an optional
+- [x] Add versioned extension discovery and negotiation so an optional
   operation is advertised only when the selected driver and exact release
-  artifact passed its own gate.
+  artifact passed its own gate. `a3s.oci.extensions.v1` publishes bounded,
+  canonical operation and attachment versions per launch-ready driver, binds
+  them to the running executable SHA-256, and makes typed isolation negotiation
+  fail closed; legacy flat fields retain only the common driver surface.
 - [ ] Accept already-authorized storage attachments with immutable identity,
   access mode, ownership, and cleanup contracts while leaving named-volume
   and snapshot policy in A3S Box.

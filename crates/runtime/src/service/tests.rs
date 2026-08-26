@@ -25,12 +25,13 @@ use a3s_oci_sdk::{
     ListRequest, MemoryStats, OciBundle, OciLinuxSupport, OciRuntimeService, OciSchemaValidator,
     OperationContext, OperationId, OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord,
     ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeEventKind,
-    RuntimeOperation, Signal, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
-    TerminalSize, TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
-    ATTACHMENT_SCHEMA_V1, BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS,
-    OCI_LINUX_CAPABILITY_NAMES, OCI_LINUX_MEMORY_POLICY_FLAGS, OCI_LINUX_MEMORY_POLICY_MODES,
-    OCI_LINUX_MOUNT_OPTIONS, OCI_LINUX_SECCOMP_ACTIONS, OCI_LINUX_SECCOMP_ARCHITECTURES,
-    OCI_LINUX_SECCOMP_KNOWN_FLAGS, OCI_LINUX_SECCOMP_OPERATORS,
+    RuntimeNegotiationRequest, RuntimeOperation, Signal, SignalProcessRequest, StartRequest,
+    StateRequest, StatsRequest, TerminalSize, TrustDomainId, UpdateRequest, WaitProcessRequest,
+    WaitRequest, WriteStdinRequest, ATTACHMENT_SCHEMA_V1,
+    BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS, OCI_LINUX_CAPABILITY_NAMES,
+    OCI_LINUX_MEMORY_POLICY_FLAGS, OCI_LINUX_MEMORY_POLICY_MODES, OCI_LINUX_MOUNT_OPTIONS,
+    OCI_LINUX_SECCOMP_ACTIONS, OCI_LINUX_SECCOMP_ARCHITECTURES, OCI_LINUX_SECCOMP_KNOWN_FLAGS,
+    OCI_LINUX_SECCOMP_OPERATORS, RUNTIME_EXTENSIONS_SCHEMA_V1, RUNTIME_OPERATION_CONTRACT_V1,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
@@ -3599,7 +3600,7 @@ async fn service_open_rejects_missing_or_drifted_durable_driver_bindings() {
 }
 
 #[tokio::test]
-async fn multi_driver_registration_rejects_ambiguous_or_inconsistent_sets_before_state() {
+async fn multi_driver_registration_rejects_ambiguous_sets_before_state() {
     let temporary = tempfile::tempdir().expect("temporary directory");
 
     let empty_root = temporary.path().join("empty");
@@ -3623,18 +3624,6 @@ async fn multi_driver_registration_rejects_ambiguous_or_inconsistent_sets_before
     assert!(!overlap_root.exists());
 
     let first = Arc::new(RecordingDriver::supported());
-    let mut inconsistent = RecordingDriver::shared_guest_supported();
-    inconsistent.operations.pop();
-    let inconsistent_root = temporary.path().join("inconsistent");
-    let inconsistent_drivers: Vec<Arc<dyn RuntimeDriver>> = vec![first, Arc::new(inconsistent)];
-    let error = HostRuntimeService::open_with_drivers(&inconsistent_root, inconsistent_drivers)
-        .await
-        .expect_err("inconsistent operation sets must fail");
-    assert_eq!(error.code, ErrorCode::FailedPrecondition);
-    assert!(error.message.contains("different operation set"));
-    assert!(!inconsistent_root.exists());
-
-    let first = Arc::new(RecordingDriver::supported());
     let mut inconsistent_hooks = RecordingDriver::shared_guest_supported();
     inconsistent_hooks.hooks.push(OciHookPhase::Prestart);
     let hook_root = temporary.path().join("inconsistent-hooks");
@@ -3645,6 +3634,65 @@ async fn multi_driver_registration_rejects_ambiguous_or_inconsistent_sets_before
     assert_eq!(error.code, ErrorCode::FailedPrecondition);
     assert!(error.message.contains("different OCI hook set"));
     assert!(!hook_root.exists());
+}
+
+#[tokio::test]
+async fn negotiates_versioned_capabilities_for_the_selected_driver_and_artifact() {
+    const NETWORK_EXTENSION: &str = "dev.a3s.network.tsi";
+
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let dedicated = Arc::new(RecordingDriver::with_attachment_extension(
+        NETWORK_EXTENSION,
+        vec![1],
+    ));
+    let mut shared = RecordingDriver::shared_guest_supported();
+    shared.operations.pop();
+    let drivers: Vec<Arc<dyn RuntimeDriver>> = vec![dedicated, Arc::new(shared)];
+    let service = HostRuntimeService::open_with_drivers(
+        temporary.path().join("versioned-negotiation"),
+        drivers,
+    )
+    .await
+    .expect("driver-specific optional operations must coexist");
+
+    let info = service.features().await.expect("feature discovery");
+    assert_eq!(
+        info.extensions.schema_version(),
+        RUNTIME_EXTENSIONS_SCHEMA_V1
+    );
+    assert!(info
+        .extensions
+        .artifact()
+        .expect("exact runtime artifact")
+        .digest()
+        .starts_with("sha256:"));
+    assert_eq!(info.extensions.drivers().len(), 2);
+    assert!(!info.operations.contains(&RuntimeOperation::Wait));
+    assert!(!info.attachments.supports_extension(NETWORK_EXTENSION, 1));
+
+    let dedicated_request = RuntimeNegotiationRequest::new(IsolationClass::DedicatedVm)
+        .with_operation(RuntimeOperation::Wait, RUNTIME_OPERATION_CONTRACT_V1)
+        .expect("wait requirement")
+        .with_attachment_schema(ATTACHMENT_SCHEMA_V1)
+        .expect("attachment schema requirement")
+        .with_attachment_extension(NETWORK_EXTENSION, 1)
+        .expect("network requirement");
+    let negotiated = info
+        .extensions
+        .negotiate(&dedicated_request)
+        .expect("dedicated driver contract");
+    assert_eq!(negotiated.driver(), DriverKind::LibkrunWhpx);
+    assert!(negotiated.supports_operation(RuntimeOperation::Wait, RUNTIME_OPERATION_CONTRACT_V1));
+
+    let shared_request = RuntimeNegotiationRequest::new(IsolationClass::SharedGuestKernel)
+        .with_operation(RuntimeOperation::Wait, RUNTIME_OPERATION_CONTRACT_V1)
+        .expect("wait requirement");
+    let error = info
+        .extensions
+        .negotiate(&shared_request)
+        .expect_err("shared driver did not qualify wait");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert_eq!(error.operation.as_deref(), Some("negotiate-runtime"));
 }
 
 #[cfg(any(unix, windows))]

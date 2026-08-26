@@ -57,6 +57,51 @@ captured output, and cleanup on the same exact process target. Real native Linux
 and utility-VM driver reattachment remains platform qualification, not
 transport evidence.
 
+## Per-driver Capability Negotiation
+
+`RuntimeInfo::extensions` carries the additive `a3s.oci.extensions.v1`
+catalog. The Host hashes the currently running executable and binds its
+component name, semantic version, optional source revision, and lowercase
+SHA-256 to the complete catalog. Each launch-ready registered driver then owns
+one canonical entry containing its unique isolation classes, versioned SDK
+operations, and exact attachment schemas and extension versions.
+
+Callers negotiate against the isolation requirement rather than a raw backend
+name:
+
+```rust,no_run
+use a3s_oci_sdk::{
+    IsolationClass, RuntimeClient, RuntimeNegotiationRequest, RuntimeOperation,
+    ATTACHMENT_SCHEMA_V1, RUNTIME_OPERATION_CONTRACT_V1,
+};
+
+async fn require_update(client: &RuntimeClient) -> a3s_oci_sdk::Result<()> {
+    let info = client.features().await?;
+    let requirement = RuntimeNegotiationRequest::new(IsolationClass::SharedHostKernel)
+        .with_operation(RuntimeOperation::Update, RUNTIME_OPERATION_CONTRACT_V1)?
+        .with_attachment_schema(ATTACHMENT_SCHEMA_V1)?;
+    let selected = info.extensions.negotiate(&requirement)?;
+    println!("selected {:?}", selected.driver());
+    Ok(())
+}
+```
+
+One service may therefore register drivers with different optional operation
+or attachment inventories. The flat `RuntimeInfo::operations` and
+`RuntimeInfo::attachments` fields retain only their safe intersection for old
+callers; `features`, `list`, and `events` remain Host-owned and appear in every
+per-driver entry. OCI `potentiallyUnsafeConfigAnnotations` continues to list
+the union of recognized driver annotations because it describes the complete
+service parser rather than one selected launch path.
+
+Catalog, artifact, driver, isolation, operation-version, schema, and extension
+inventories are bounded and canonical. Missing versions return `Unsupported`
+from `negotiate-runtime`. A legacy response without the additive field decodes
+to an explicitly empty catalog and fails the same negotiation instead of
+falling back to the flat union. No new mutation route or wire message is
+introduced by this discovery schema, so protocol-3 and protocol-4 framing stay
+unchanged.
+
 ## A3S Box Client
 
 On Windows, use a local named pipe:

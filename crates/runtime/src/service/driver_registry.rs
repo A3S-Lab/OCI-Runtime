@@ -4,7 +4,8 @@ use std::sync::Arc;
 use a3s_oci_core::{DriverCapability, DriverKind, IsolationClass};
 use a3s_oci_sdk::{
     AttachmentCapabilities, ContainerRecord, Error, ErrorCode, OciLinuxSupport, OperationId,
-    Result, RuntimeOperation, ATTACHMENT_SCHEMA_V1,
+    Result, RuntimeArtifact, RuntimeDriverCapabilities, RuntimeExtensions, RuntimeOperation,
+    RuntimeOperationCapability, ATTACHMENT_SCHEMA_V1,
 };
 
 use crate::{OciHookPhase, RuntimeDriver};
@@ -56,6 +57,7 @@ pub(super) struct DriverRegistry {
     operations: BTreeSet<RuntimeOperation>,
     hooks: Vec<OciHookPhase>,
     attachments: AttachmentCapabilities,
+    all_attachments: AttachmentCapabilities,
     linux_support: OciLinuxSupport,
 }
 
@@ -68,10 +70,11 @@ impl DriverRegistry {
         }
 
         let mut entries = Vec::with_capacity(registrations.len());
-        let mut common_operations = None;
+        let mut common_operations: Option<BTreeSet<RuntimeOperation>> = None;
         let mut common_hooks = None;
         let mut common_linux_support = None;
         let mut attachment_capabilities = AttachmentCapabilities::base_v1();
+        let mut common_attachment_capabilities: Option<AttachmentCapabilities> = None;
 
         for registration in registrations {
             let capability = registration.capability;
@@ -100,16 +103,13 @@ impl DriverRegistry {
             }
 
             let operations = validate_driver_operations(registration.driver.operations())?;
-            if let Some(expected) = &common_operations {
-                if expected != &operations {
-                    return Err(open_error(format!(
-                        "runtime driver {:?} advertises a different operation set",
-                        capability.driver
-                    )));
+            common_operations = Some(match common_operations {
+                Some(mut retained) => {
+                    retained.retain(|operation| operations.contains(operation));
+                    retained
                 }
-            } else {
-                common_operations = Some(operations.clone());
-            }
+                None => operations.clone(),
+            });
 
             let hooks = validate_driver_hooks(registration.driver.hooks())?;
             if let Some(expected) = &common_hooks {
@@ -141,6 +141,12 @@ impl DriverRegistry {
             }
 
             let attachments = registration.driver.attachment_capabilities();
+            attachments.validate().map_err(|error| {
+                open_error(format!(
+                    "runtime driver {:?} returned invalid attachment capabilities: {}",
+                    capability.driver, error.message
+                ))
+            })?;
             if !attachments.supports_schema(ATTACHMENT_SCHEMA_V1) {
                 return Err(open_error(format!(
                     "runtime driver {:?} does not support required attachment schema {ATTACHMENT_SCHEMA_V1}",
@@ -148,6 +154,10 @@ impl DriverRegistry {
                 )));
             }
             attachment_capabilities = attachment_capabilities.merged(&attachments);
+            common_attachment_capabilities = Some(match common_attachment_capabilities {
+                Some(retained) => retained.common_with(&attachments),
+                None => attachments.clone(),
+            });
 
             entries.push(RegisteredDriver {
                 driver: registration.driver,
@@ -159,6 +169,8 @@ impl DriverRegistry {
 
         let operations = common_operations
             .ok_or_else(|| open_error("driver registry did not retain an operation set"))?;
+        let attachments = common_attachment_capabilities
+            .ok_or_else(|| open_error("driver registry did not retain attachment capabilities"))?;
         let hooks = common_hooks
             .ok_or_else(|| open_error("driver registry did not retain an OCI hook set"))?;
         let linux_support = common_linux_support
@@ -168,7 +180,8 @@ impl DriverRegistry {
             entries,
             operations,
             hooks,
-            attachments: attachment_capabilities,
+            attachments,
+            all_attachments: attachment_capabilities,
             linux_support,
         })
     }
@@ -268,6 +281,39 @@ impl DriverRegistry {
 
     pub(super) const fn attachment_capabilities(&self) -> &AttachmentCapabilities {
         &self.attachments
+    }
+
+    pub(super) const fn all_attachment_capabilities(&self) -> &AttachmentCapabilities {
+        &self.all_attachments
+    }
+
+    pub(super) fn extensions(&self, artifact: RuntimeArtifact) -> Result<RuntimeExtensions> {
+        const HOST_OPERATIONS: [RuntimeOperation; 3] = [
+            RuntimeOperation::Features,
+            RuntimeOperation::List,
+            RuntimeOperation::Events,
+        ];
+
+        let drivers = self
+            .entries
+            .iter()
+            .map(|entry| {
+                let operations = HOST_OPERATIONS
+                    .into_iter()
+                    .chain(entry.operations.iter().copied())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .map(RuntimeOperationCapability::v1)
+                    .collect();
+                RuntimeDriverCapabilities::new(
+                    entry.kind(),
+                    entry.capability().isolation_classes.clone(),
+                    operations,
+                    entry.attachment_capabilities().clone(),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        RuntimeExtensions::new(artifact, drivers)
     }
 
     pub(super) const fn linux_support(&self) -> &OciLinuxSupport {

@@ -222,6 +222,7 @@ mod tests {
                 drivers: RuntimeFeatures::current(Vec::new()),
                 operations: vec![RuntimeOperation::Features],
                 attachments: AttachmentCapabilities::base_v1(),
+                extensions: Default::default(),
             };
             write_frame(
                 &mut io,

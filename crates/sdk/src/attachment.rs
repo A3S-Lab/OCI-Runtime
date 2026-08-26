@@ -19,6 +19,7 @@ const MAX_MOUNT_ATTACHMENTS: usize = 4_096;
 const MAX_NETWORK_ATTACHMENTS: usize = 256;
 const MAX_SECRET_ATTACHMENTS: usize = 256;
 const MAX_RUNTIME_EXTENSIONS: usize = 64;
+const MAX_ATTACHMENT_SCHEMAS: usize = 16;
 
 /// Digest-bound reference to one exact value in the immutable OCI configuration.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -549,6 +550,52 @@ impl AttachmentCapabilities {
         self
     }
 
+    /// Retain only schemas and extension versions supported by both inventories.
+    #[must_use]
+    pub fn common_with(mut self, other: &Self) -> Self {
+        self.schemas
+            .retain(|schema| other.schemas.binary_search(schema).is_ok());
+        self.extensions.retain(|name, versions| {
+            let Some(other_versions) = other.extensions.get(name) else {
+                return false;
+            };
+            versions.retain(|version| other_versions.binary_search(version).is_ok());
+            !versions.is_empty()
+        });
+        self
+    }
+
+    /// Validate canonical schema, extension-name, and extension-version ordering.
+    pub fn validate(&self) -> Result<()> {
+        if self.schemas.is_empty()
+            || self.schemas.len() > MAX_ATTACHMENT_SCHEMAS
+            || self
+                .schemas
+                .iter()
+                .any(|schema| schema.is_empty() || schema.len() > 128)
+            || !strictly_increasing(&self.schemas)
+        {
+            return Err(invalid_attachment(format!(
+                "attachment capabilities must advertise between 1 and {MAX_ATTACHMENT_SCHEMAS} canonical schemas"
+            )));
+        }
+        if self.extensions.len() > MAX_RUNTIME_EXTENSIONS {
+            return Err(invalid_attachment(format!(
+                "attachment capabilities exceed {MAX_RUNTIME_EXTENSIONS} runtime extensions"
+            )));
+        }
+        for (name, versions) in &self.extensions {
+            validate_extension_name(name)?;
+            if versions.is_empty() || versions.first() == Some(&0) || !strictly_increasing(versions)
+            {
+                return Err(invalid_attachment(format!(
+                    "runtime extension capability {name} must advertise canonical positive versions"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Whether this service supports an attachment schema.
     #[must_use]
     pub fn supports_schema(&self, schema: &str) -> bool {
@@ -652,7 +699,7 @@ fn ensure_unique_sources(sources: &[AttachmentSource], category: &str) -> Result
     Ok(())
 }
 
-fn validate_extension_name(name: &str) -> Result<()> {
+pub(crate) fn validate_extension_name(name: &str) -> Result<()> {
     let valid = (3..=253).contains(&name.len())
         && name.contains('.')
         && name.split('.').all(|label| {
@@ -677,6 +724,10 @@ fn validate_extension_name(name: &str) -> Result<()> {
             "runtime extension name must be a lowercase reverse-DNS name: {name:?}"
         )))
     }
+}
+
+fn strictly_increasing<T: Ord>(values: &[T]) -> bool {
+    values.windows(2).all(|window| window[0] < window[1])
 }
 
 fn invalid_attachment(message: impl Into<String>) -> Error {
@@ -884,6 +935,35 @@ mod tests {
             capabilities.extension_names().collect::<Vec<_>>(),
             vec!["dev.a3s.network.alpha", "dev.a3s.network.zeta"]
         );
+    }
+
+    #[test]
+    fn capability_intersection_is_exact_and_wire_inventories_must_be_canonical() {
+        let common = AttachmentCapabilities::base_v1()
+            .with_extension("dev.a3s.network.tsi", vec![1, 2])
+            .expect("left capabilities")
+            .common_with(
+                &AttachmentCapabilities::base_v1()
+                    .with_extension("dev.a3s.network.tsi", vec![2, 3])
+                    .expect("right capabilities")
+                    .with_extension("dev.a3s.storage.volume", vec![1])
+                    .expect("right-only capabilities"),
+            );
+        common.validate().expect("canonical intersection");
+        assert!(common.supports_schema(ATTACHMENT_SCHEMA_V1));
+        assert!(common.supports_extension("dev.a3s.network.tsi", 2));
+        assert!(!common.supports_extension("dev.a3s.network.tsi", 1));
+        assert!(!common.supports_extension("dev.a3s.storage.volume", 1));
+
+        let invalid: AttachmentCapabilities = serde_json::from_value(json!({
+            "schemas": [ATTACHMENT_SCHEMA_V1],
+            "extensions": {"dev.a3s.network.tsi": [2, 1]}
+        }))
+        .expect("decode structurally valid non-canonical inventory");
+        let error = invalid
+            .validate()
+            .expect_err("wire version order must fail closed");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
     }
 
     #[test]

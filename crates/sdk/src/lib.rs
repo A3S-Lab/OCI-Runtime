@@ -9,6 +9,7 @@ mod client;
 mod config_annotation;
 mod conformance;
 mod error;
+mod extension;
 mod fingerprint;
 mod handoff;
 mod id;
@@ -52,6 +53,10 @@ pub use conformance::{
     OciNormativeInventory, OciNormativeKeyword, OciNormativeRequirement, OciSpecificationScope,
 };
 pub use error::{Error, ErrorCode, Result};
+pub use extension::{
+    RuntimeArtifact, RuntimeDriverCapabilities, RuntimeExtensions, RuntimeNegotiationRequest,
+    RuntimeOperationCapability, RUNTIME_EXTENSIONS_SCHEMA_V1, RUNTIME_OPERATION_CONTRACT_V1,
+};
 pub use fingerprint::canonical_json_bytes;
 pub use handoff::{
     runtime_bundle_handoff_directory, runtime_bundle_handoff_root,
