@@ -9,10 +9,11 @@ use crate::{
     AttachmentCapabilities, ContainerId, ContainerRecord, CreateAttachments, CreateRequest,
     DeleteRequest, DriverKind, Error, ErrorCode, EventsRequest, FileOp, FileRequest, FileResponse,
     FilesystemEntry, FilesystemEntryKind, FilesystemOp, FilesystemRequest, FilesystemResponse,
-    Generation, IsolationClass, IsolationRequest, KillRequest, OciBundle, OciRuntimeService,
-    OperationContext, OperationId, ProcessIo, Result, RuntimeFeatures, RuntimeInfo,
-    RuntimeOperation, StartRequest, StateRequest, StorageAccessMode, StorageAttachmentId,
-    StorageCleanup, StorageOwnership,
+    Generation, IsolationClass, IsolationRequest, KillRequest, NetworkAttachmentIdentity,
+    NetworkCleanup, NetworkCleanupId, NetworkInterfaceId, NetworkNamespaceId, OciBundle,
+    OciRuntimeService, OperationContext, OperationId, ProcessIo, RestoreRequest, Result,
+    RuntimeFeatures, RuntimeInfo, RuntimeOperation, StartRequest, StateRequest, StorageAccessMode,
+    StorageAttachmentId, StorageCleanup, StorageOwnership,
 };
 
 use super::wire::{read_frame, write_frame, ClientMessage, ServerMessage, WireRequest, WireResult};
@@ -160,6 +161,54 @@ fn storage_create_request() -> CreateRequest {
     }
 }
 
+fn network_create_request() -> CreateRequest {
+    let bundle = OciBundle::from_json(
+        std::env::current_dir()
+            .expect("current directory")
+            .join("protocol-six-network-bundle"),
+        serde_json::to_string(&json!({
+            "ociVersion": "1.3.0",
+            "root": {"path": "rootfs"},
+            "process": {
+                "cwd": "/",
+                "args": ["/bin/true"],
+                "user": {"uid": 0, "gid": 0}
+            },
+            "linux": {
+                "namespaces": [{"type": "network"}],
+                "netDevices": {"tap0": {"name": "eth0"}}
+            }
+        }))
+        .expect("network configuration"),
+    )
+    .expect("network bundle");
+    let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .expect("base attachments")
+        .attach_linux_network_interface(
+            &bundle,
+            0,
+            "tap0",
+            NetworkAttachmentIdentity::new(
+                NetworkNamespaceId::new("protocol-network-namespace-1")
+                    .expect("namespace identity"),
+                NetworkInterfaceId::new("protocol-network-interface-1")
+                    .expect("interface identity"),
+                NetworkCleanupId::new("protocol-network-cleanup-1").expect("cleanup identity"),
+            ),
+            NetworkCleanup::ReleaseRuntimeNamespace,
+        )
+        .expect("network attachments");
+    CreateRequest {
+        context: OperationContext::new(
+            OperationId::new("protocol-network-create").expect("operation ID"),
+        ),
+        id: ContainerId::new("protocol-network-container").expect("container ID"),
+        bundle,
+        isolation: IsolationRequest::SharedHostKernel,
+        attachments,
+    }
+}
+
 #[tokio::test]
 async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
     let (client_io, server_io) = tokio::io::duplex(64 * 1024);
@@ -171,7 +220,7 @@ async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
     let client = RuntimeTransportClient::from_io(client_io)
         .await
         .expect("negotiate in-memory SDK transport");
-    assert_eq!(client.protocol_version(), 5);
+    assert_eq!(client.protocol_version(), 6);
 
     let info = client.features().await.expect("transport features");
     assert_eq!(
@@ -388,6 +437,113 @@ async fn server_rejects_protocol_four_storage_before_service_dispatch() {
     };
     assert_eq!(error.code, ErrorCode::Unsupported);
     assert!(error.message.contains("requires protocol 5"));
+    assert!(service
+        .exact_config
+        .lock()
+        .expect("captured configuration lock")
+        .is_none());
+
+    drop(client_io);
+    server
+        .await
+        .expect("server task must join")
+        .expect("server connection must close cleanly");
+}
+
+#[tokio::test]
+async fn protocol_five_rejects_network_attachments_before_dispatch() {
+    let (client_io, mut server_io) = tokio::io::duplex(4096);
+    let server = tokio::spawn(async move {
+        let hello = read_frame::<ClientMessage>(&mut server_io)
+            .await
+            .expect("read client hello")
+            .expect("client hello frame");
+        assert!(matches!(hello, ClientMessage::Hello { .. }));
+        write_frame(&mut server_io, &ServerMessage::Welcome { protocol: 5 })
+            .await
+            .expect("write protocol-five welcome");
+        assert!(read_frame::<ClientMessage>(&mut server_io)
+            .await
+            .expect("read protocol-five connection close")
+            .is_none());
+    });
+
+    let client = RuntimeTransportClient::from_io(client_io)
+        .await
+        .expect("negotiate protocol five");
+    let error = client
+        .create(network_create_request())
+        .await
+        .expect_err("protocol five must reject network attachments");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("requires protocol 6"));
+    drop(client);
+    server.await.expect("server task must join");
+}
+
+#[test]
+fn protocol_six_gates_network_create_and_restore_symmetrically() {
+    let create = network_create_request();
+    assert_eq!(WireRequest::Create(create.clone()).minimum_protocol(), 6);
+    let restore = RestoreRequest {
+        context: create.context,
+        id: create.id,
+        bundle: create.bundle,
+        checkpoint_directory: std::env::current_dir()
+            .expect("current directory")
+            .join("protocol-six-checkpoint"),
+        isolation: create.isolation,
+        attachments: create.attachments,
+    };
+    assert_eq!(WireRequest::Restore(restore).minimum_protocol(), 6);
+}
+
+#[tokio::test]
+async fn server_rejects_protocol_five_network_before_service_dispatch() {
+    let (mut client_io, server_io) = tokio::io::duplex(16 * 1024);
+    let service = Arc::new(EchoService::default());
+    let server_service: Arc<dyn OciRuntimeService> = service.clone();
+    let server =
+        tokio::spawn(async move { serve_transport_connection(server_service, server_io).await });
+
+    write_frame(
+        &mut client_io,
+        &ClientMessage::Hello {
+            protocol_min: 5,
+            protocol_max: 5,
+        },
+    )
+    .await
+    .expect("write protocol-five hello");
+    assert_eq!(
+        read_frame::<ServerMessage>(&mut client_io)
+            .await
+            .expect("read welcome")
+            .expect("welcome frame"),
+        ServerMessage::Welcome { protocol: 5 }
+    );
+    write_frame(
+        &mut client_io,
+        &ClientMessage::Request {
+            protocol: 5,
+            request_id: 8,
+            request: Box::new(WireRequest::Create(network_create_request())),
+        },
+    )
+    .await
+    .expect("write network request");
+    let response = read_frame::<ServerMessage>(&mut client_io)
+        .await
+        .expect("read network rejection")
+        .expect("network rejection frame");
+    let ServerMessage::Response { result, .. } = response else {
+        panic!("expected SDK response");
+    };
+    let WireResult::Error { error } = *result else {
+        panic!("protocol-five network must fail");
+    };
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("requires protocol 6"));
     assert!(service
         .exact_config
         .lock()

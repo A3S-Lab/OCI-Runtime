@@ -131,6 +131,9 @@ macro_rules! identifier {
 identifier!(ContainerId, "container ID");
 identifier!(ProcessId, "process ID");
 identifier!(OperationId, "operation ID");
+identifier!(NetworkCleanupId, "network cleanup ID");
+identifier!(NetworkInterfaceId, "network interface ID");
+identifier!(NetworkNamespaceId, "network namespace ID");
 identifier!(StorageAttachmentId, "storage attachment ID");
 identifier!(TrustDomainId, "trust-domain ID");
 
@@ -159,7 +162,10 @@ pub struct Generation(pub u64);
 
 #[cfg(test)]
 mod tests {
-    use super::{ContainerId, Generation, ProcessId, StorageAttachmentId};
+    use super::{
+        ContainerId, Generation, NetworkCleanupId, NetworkInterfaceId, NetworkNamespaceId,
+        ProcessId, StorageAttachmentId,
+    };
 
     #[test]
     fn accepts_path_safe_identifier() {
@@ -211,6 +217,17 @@ mod tests {
         let error = serde_json::from_str::<StorageAttachmentId>(r#""../volume""#)
             .expect_err("invalid serialized storage ID must be rejected");
         assert!(error.to_string().contains("storage attachment ID"));
+
+        for error in [
+            serde_json::from_str::<NetworkNamespaceId>(r#""../namespace""#)
+                .expect_err("invalid serialized network namespace ID must be rejected"),
+            serde_json::from_str::<NetworkInterfaceId>(r#""../interface""#)
+                .expect_err("invalid serialized network interface ID must be rejected"),
+            serde_json::from_str::<NetworkCleanupId>(r#""../cleanup""#)
+                .expect_err("invalid serialized network cleanup ID must be rejected"),
+        ] {
+            assert!(error.to_string().contains("network"));
+        }
     }
 
     #[test]

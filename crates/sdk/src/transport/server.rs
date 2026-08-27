@@ -211,6 +211,7 @@ mod tests {
         assert_eq!(select_protocol(1, 2), None);
         assert_eq!(select_protocol(4, 4), Some(4));
         assert_eq!(select_protocol(5, 5), Some(5));
-        assert_eq!(select_protocol(6, 6), None);
+        assert_eq!(select_protocol(6, 6), Some(6));
+        assert_eq!(select_protocol(7, 7), None);
     }
 }

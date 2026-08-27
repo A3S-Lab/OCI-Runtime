@@ -27,6 +27,18 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added `a3s.oci.attachments.v3` for already-authorized Linux network
+  interfaces. Each binding carries caller-issued namespace, interface, and
+  cleanup incarnation IDs plus exact OCI network-namespace and
+  `linux.netDevices` descriptors. New namespaces require runtime-namespace
+  release; joined caller namespaces require preservation. Exact bindings
+  reject target-name templates, identity drift, conflicting cleanup units,
+  descriptor reuse, and non-canonical wire inventories. Protocol 6 prevents
+  v3 create/restore downgrade. Rootful Native Linux advertises cumulative
+  v1-v3; rootless Native stays v1-v2 because it has no host network-device
+  authority, and utility-VM drivers stay v1 until an independent NIC transport
+  and cleanup gate exists. IPAM, DNS, routes, aliases, policy, and
+  backing-network deletion remain outside Runtime.
 - Added `a3s.oci.attachments.v2` for already-authorized storage. Each entry
   binds one validated OCI mount to a caller-issued immutable allocation ID,
   exact read-only/read-write mode, caller ownership, and detach-only cleanup.

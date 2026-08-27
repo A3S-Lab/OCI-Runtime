@@ -535,6 +535,17 @@ impl LinuxExecutor {
         &self.runtime_root
     }
 
+    /// Whether this executor retained host network-device authority when it
+    /// opened.
+    ///
+    /// Rootless execution deliberately rejects `linux.netDevices`; callers
+    /// use this signal to avoid advertising attachment contracts that the
+    /// selected executor profile cannot honor.
+    #[must_use]
+    pub fn has_network_device_authority(&self) -> bool {
+        !self.user_mapping_runtime.is_rootless()
+    }
+
     /// Stop every owned init process and remove all transient executor state.
     pub async fn shutdown(&self) -> Result<()> {
         self.shutdown_with_recovery().await.map(drop)

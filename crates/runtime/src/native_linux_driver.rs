@@ -32,6 +32,7 @@ use crate::driver::{
 #[derive(Debug)]
 pub struct NativeLinuxDriver {
     capability: DriverCapability,
+    attachment_capabilities: AttachmentCapabilities,
     executor: Arc<LinuxExecutor>,
     client: AgentDriverClient,
     recovered: Mutex<BTreeMap<ContainerId, LinuxExecutorTombstone>>,
@@ -74,9 +75,12 @@ impl NativeLinuxDriver {
             LinuxExecutor::open_native_with_absolute_rootfs(runtime_parent, init_executable)
                 .await?,
         );
+        let attachment_capabilities =
+            native_attachment_capabilities(executor.has_network_device_authority());
         let service: Arc<dyn GuestAgentService> = executor.clone();
         Ok(Self {
             capability,
+            attachment_capabilities,
             executor,
             client: AgentDriverClient::new(service, "native Linux executor", "native-linux"),
             recovered: Mutex::new(BTreeMap::new()),
@@ -122,9 +126,12 @@ impl NativeLinuxDriver {
             )
             .await?,
         );
+        let attachment_capabilities =
+            native_attachment_capabilities(executor.has_network_device_authority());
         let service: Arc<dyn GuestAgentService> = executor.clone();
         Ok(Self {
             capability,
+            attachment_capabilities,
             executor,
             client: AgentDriverClient::new(service, "native Linux executor", "native-linux"),
             recovered: Mutex::new(BTreeMap::new()),
@@ -179,9 +186,12 @@ impl NativeLinuxDriver {
             )
             .await?,
         );
+        let attachment_capabilities =
+            native_attachment_capabilities(executor.has_network_device_authority());
         let service: Arc<dyn GuestAgentService> = executor.clone();
         Ok(Self {
             capability,
+            attachment_capabilities,
             executor,
             client: AgentDriverClient::new(service, "native Linux executor", "native-linux"),
             recovered: Mutex::new(BTreeMap::new()),
@@ -251,7 +261,7 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     fn attachment_capabilities(&self) -> AttachmentCapabilities {
-        AttachmentCapabilities::base_v2()
+        self.attachment_capabilities.clone()
     }
 
     async fn acknowledge_operation(&self, operation_id: &OperationId) -> Result<()> {
@@ -517,6 +527,14 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 }
 
+fn native_attachment_capabilities(has_network_device_authority: bool) -> AttachmentCapabilities {
+    if has_network_device_authority {
+        AttachmentCapabilities::base_v3()
+    } else {
+        AttachmentCapabilities::base_v2()
+    }
+}
+
 fn recovered_stopped_error(target: &ContainerTarget, operation: &'static str) -> Error {
     Error::new(
         ErrorCode::FailedPrecondition,
@@ -561,4 +579,22 @@ async fn guest_path(bundle: &Path) -> Result<GuestPath> {
         .for_operation("native-linux-create")
     })?;
     GuestPath::new(value.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use a3s_oci_sdk::{ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3};
+
+    use super::native_attachment_capabilities;
+
+    #[test]
+    fn network_attachment_capability_requires_rootful_device_authority() {
+        let rootful = native_attachment_capabilities(true);
+        assert!(rootful.supports_schema(ATTACHMENT_SCHEMA_V2));
+        assert!(rootful.supports_schema(ATTACHMENT_SCHEMA_V3));
+
+        let rootless = native_attachment_capabilities(false);
+        assert!(rootless.supports_schema(ATTACHMENT_SCHEMA_V2));
+        assert!(!rootless.supports_schema(ATTACHMENT_SCHEMA_V3));
+    }
 }

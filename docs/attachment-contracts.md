@@ -5,9 +5,10 @@
 `CreateAttachments` is the public, versioned description of every resource
 attached to an OCI create or restore request. Schema
 `a3s.oci.attachments.v1` covers the original OCI and extension inventory;
-`a3s.oci.attachments.v2` adds already-authorized storage. The exact schema is
-negotiated through the selected driver's `RuntimeInfo::extensions` entry before
-product preparation begins.
+`a3s.oci.attachments.v2` adds already-authorized storage; and
+`a3s.oci.attachments.v3` adds already-authorized Linux network interfaces. The
+schemas are cumulative and the exact schema is negotiated through the selected
+driver's `RuntimeInfo::extensions` entry before product preparation begins.
 
 The contract deliberately separates product policy from runtime mechanism:
 
@@ -16,6 +17,7 @@ The contract deliberately separates product policy from runtime mechanism:
 | Root filesystem | Exact `/root` JSON Pointer and SHA-256 value digest | Image reference, pull/build state, layer ownership |
 | Mounts | One ordered descriptor for every `/mounts/<index>` value | Named-volume policy, snapshot/commit ownership |
 | Networking | Exact OCI network namespace/device descriptors plus explicit extension references | Network objects, IPAM, DNS, aliases, publication policy |
+| Authorized networking (v3) | Caller-issued namespace, interface, and cleanup IDs bound to exact OCI namespace and `linux.netDevices` descriptors | IPAM, DNS, routes, aliases, network policy, and backing-network deletion |
 | Process I/O | Complete `ProcessIo` modes and initial terminal size | Box log retention, indexing, redaction, search policy |
 | Secrets | A classified mount index or declared runtime mechanism | Secret name, value, authorization decision, materialization credential |
 | Storage (v2) | Caller-issued immutable allocation ID, exact OCI mount descriptor, access mode, ownership, and cleanup action | Named-volume lookup, snapshot selection, authorization, retention, and backing-resource deletion |
@@ -102,12 +104,70 @@ reinterpreted to grant that authority.
 
 Caller-owned storage cannot be combined with `dev.a3s.bundle-handoff`, because
 that extension transfers and later deletes the bundle tree. The Native Linux
-driver advertises v2 because its mount namespace cleanup preserves external
-bind sources. The current utility-VM drivers deliberately remain v1: their
+driver advertises v2 as part of cumulative v1-v3 because its mount namespace
+cleanup preserves external bind sources. The current utility-VM drivers
+deliberately remain v1: their
 exact-generation share is runtime-owned and removed as one subtree. They must
 gain a separate caller-owned storage transport plus detach-cleanup evidence
 before advertising v2; the runtime will not absorb the allocation into an
 owned bundle as an implicit fallback.
+
+## Already-authorized Linux networking
+
+A caller upgrades a v1 or v2 manifest to v3 by binding a prepared
+`linux.netDevices` entry to the exact OCI network namespace that will receive
+it:
+
+```rust,no_run
+use a3s_oci_sdk::{
+    CreateAttachments, NetworkAttachmentIdentity, NetworkCleanup,
+    NetworkCleanupId, NetworkInterfaceId, NetworkNamespaceId, OciBundle,
+    ProcessIo,
+};
+
+fn network_attachments(bundle: &OciBundle) -> a3s_oci_sdk::Result<CreateAttachments> {
+    CreateAttachments::from_bundle(bundle, ProcessIo::default())?
+        .attach_linux_network_interface(
+            bundle,
+            0,
+            "tap0",
+            NetworkAttachmentIdentity::new(
+                NetworkNamespaceId::new("network-namespace-7")?,
+                NetworkInterfaceId::new("network-interface-7")?,
+                NetworkCleanupId::new("network-cleanup-7")?,
+            ),
+            NetworkCleanup::ReleaseRuntimeNamespace,
+        )
+}
+```
+
+The three IDs identify caller-authorized allocation incarnations. They are not
+namespace paths, host interface names, IP addresses, DNS names, network names,
+or policy selectors. The namespace and interface remain independently bound by
+their JSON Pointers and canonical-value SHA-256 digests. Multiple interfaces
+in one namespace must repeat the same namespace and cleanup IDs and cleanup
+mode; interface IDs and OCI interface descriptors remain one-to-one. Reordered
+entries, identity aliasing, conflicting cleanup units, descriptor reuse, and
+wire drift fail validation.
+
+`NetworkOwnership::Caller` is the only v3 ownership mode. A newly created OCI
+network namespace requires `NetworkCleanup::ReleaseRuntimeNamespace`; Runtime
+releases that namespace with the container but never releases the caller's
+IPAM or backing-network allocation. An OCI namespace with a `path` is joined
+and caller-owned, so it requires `NetworkCleanup::PreserveCallerNamespace` and
+Runtime leaves the namespace and interface intact. The cleanup ID lets the
+caller bind its matching release obligation without giving Runtime product
+policy or an external cleanup credential.
+
+Authorized bindings require an exact target interface name. The general v1
+OCI mechanism may still use an appended `%d` target template, but v3 rejects
+that template because the resulting interface identity is not known before
+Create. Rootful Native Linux advertises cumulative v1-v3 because its executor
+already type-checks namespace descriptors, moves and verifies interfaces,
+rolls back failed Create in reverse order, and scopes normal cleanup to the
+configured namespace lifecycle. Rootless Native stays v1-v2 because its helper
+contract grants no host network-device authority. Utility-VM drivers remain v1
+until a separate caller-owned NIC transport plus cleanup/recovery gate exists.
 
 ## Runtime-owned bundle handoff
 
@@ -135,10 +195,10 @@ substitute durable product record.
 SDK transport protocol 3 is the first protocol that carries v1. Protocol-2
 peers are rejected during negotiation, so an attachment-aware client cannot be
 silently downgraded to a server that ignores the field. Protocol 5 is required
-for v2 create and restore requests. Both the client and server reject a v2
-operation before dispatch when the negotiated connection is protocol 4 or
-earlier; v1 wire serialization remains unchanged and keeps its protocol-3
-compatibility.
+for v2 create and restore requests, and protocol 6 is required for v3. Both the
+client and server reject a versioned operation before dispatch when the
+negotiated connection predates its schema; v1 wire serialization remains
+unchanged and keeps its protocol-3 compatibility.
 
 The host advertises `AttachmentCapabilities`. Create fails before driver
 selection or durable reservation when the schema is unsupported or any
@@ -160,9 +220,10 @@ The runtime stores the exact manifest with the container record and returns
 its SHA-256 digest in `ContainerRecord::attachments_digest`. On reopen it
 revalidates all pointers against the immutable configuration snapshot and
 checks the stored digest before returning state or resuming an operation.
-Changing I/O, classification, storage identity/access/lifetime, extension
-version, or referenced configuration while reusing an operation ID therefore
-fails as a different request.
+Changing I/O, classification, storage identity/access/lifetime, network
+namespace/interface/cleanup identity, extension version, or referenced
+configuration while reusing an operation ID therefore fails as a different
+request.
 
 Records created before protocol 3 have neither a stored manifest nor an
 attachment digest. The runtime retains that explicit legacy state for old

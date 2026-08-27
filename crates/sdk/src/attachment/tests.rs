@@ -1,11 +1,16 @@
 use serde_json::json;
 
 use super::{
-    AttachmentCapabilities, AttachmentSource, CreateAttachments, StorageAccessMode, StorageCleanup,
-    StorageOwnership, ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2, RUNTIME_BUNDLE_HANDOFF_EXTENSION,
-    RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION, RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
+    AttachmentCapabilities, AttachmentSource, CreateAttachments, NetworkAttachmentIdentity,
+    NetworkCleanup, NetworkOwnership, StorageAccessMode, StorageCleanup, StorageOwnership,
+    ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3,
+    RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
+    RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
 };
-use crate::{ErrorCode, IoMode, OciBundle, ProcessIo, StorageAttachmentId, TerminalSize};
+use crate::{
+    ErrorCode, IoMode, NetworkCleanupId, NetworkInterfaceId, NetworkNamespaceId, OciBundle,
+    ProcessIo, StorageAttachmentId, TerminalSize,
+};
 
 fn bundle() -> OciBundle {
     OciBundle::from_json(
@@ -73,6 +78,28 @@ fn storage_bundle() -> OciBundle {
     .expect("storage attachment fixture bundle")
 }
 
+fn multi_interface_network_bundle() -> OciBundle {
+    let mut configuration: serde_json::Value =
+        serde_json::from_str(storage_bundle().config_json()).expect("storage configuration");
+    configuration["linux"]["netDevices"] = json!({
+        "veth-z": {"name": "eth1"},
+        "veth-a": {"name": "eth0"}
+    });
+    OciBundle::from_json(
+        std::env::temp_dir().join("a3s-network-attachment-bundle"),
+        serde_json::to_string(&configuration).expect("network configuration"),
+    )
+    .expect("network attachment fixture bundle")
+}
+
+fn network_identity(interface: &str) -> NetworkAttachmentIdentity {
+    NetworkAttachmentIdentity::new(
+        NetworkNamespaceId::new("authorized-network-namespace-7").expect("namespace identity"),
+        NetworkInterfaceId::new(interface).expect("interface identity"),
+        NetworkCleanupId::new("authorized-network-cleanup-7").expect("cleanup identity"),
+    )
+}
+
 #[test]
 fn derives_and_digest_binds_every_standard_attachment_category() {
     let bundle = bundle();
@@ -109,6 +136,7 @@ fn storage_attachments_are_v2_digest_bound_and_explicitly_caller_owned() {
     let v1_json = serde_json::to_string(&v1).expect("encode v1 attachments");
     assert_eq!(v1.schema_version(), ATTACHMENT_SCHEMA_V1);
     assert!(!v1_json.contains("storage"));
+    assert!(!v1_json.contains("networkAttachments"));
 
     let attachments = v1
         .attach_storage_mount(
@@ -263,6 +291,269 @@ fn caller_owned_storage_cannot_be_transferred_with_a_runtime_owned_bundle() {
         .expect_err("runtime ownership transfer must not absorb caller-owned storage");
     assert_eq!(error.code, ErrorCode::InvalidArgument);
     assert!(error.message.contains("caller-owned storage"));
+}
+
+#[test]
+fn network_attachments_are_v3_digest_bound_and_canonical() {
+    let bundle = multi_interface_network_bundle();
+    let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .expect("base attachments")
+        .attach_linux_network_interface(
+            &bundle,
+            1,
+            "veth-z",
+            network_identity("authorized-interface-z"),
+            NetworkCleanup::ReleaseRuntimeNamespace,
+        )
+        .expect("attach second interface")
+        .attach_linux_network_interface(
+            &bundle,
+            1,
+            "veth-a",
+            network_identity("authorized-interface-a"),
+            NetworkCleanup::ReleaseRuntimeNamespace,
+        )
+        .expect("attach first interface");
+
+    attachments.validate(&bundle).expect("validate network");
+    assert_eq!(attachments.schema_version(), ATTACHMENT_SCHEMA_V3);
+    assert_eq!(attachments.network_attachments().len(), 2);
+    let first = &attachments.network_attachments()[0];
+    assert_eq!(
+        first.identity().namespace().as_str(),
+        "authorized-network-namespace-7"
+    );
+    assert_eq!(
+        first.identity().interface().as_str(),
+        "authorized-interface-a"
+    );
+    assert_eq!(
+        first.identity().cleanup().as_str(),
+        "authorized-network-cleanup-7"
+    );
+    assert_eq!(first.namespace().json_pointer(), "/linux/namespaces/1");
+    assert_eq!(first.interface().json_pointer(), "/linux/netDevices/veth-a");
+    assert_eq!(first.ownership(), NetworkOwnership::Caller);
+    assert_eq!(first.cleanup(), NetworkCleanup::ReleaseRuntimeNamespace);
+    assert!(attachments
+        .digest()
+        .expect("network attachment digest")
+        .starts_with("sha256:"));
+
+    let unsupported = AttachmentCapabilities::base_v2()
+        .require(&attachments)
+        .expect_err("v2-only runtime must reject network schema");
+    assert_eq!(unsupported.code, ErrorCode::Unsupported);
+    AttachmentCapabilities::base_v3()
+        .require(&attachments)
+        .expect("v3 runtime accepts network schema");
+}
+
+#[test]
+fn network_and_storage_attachment_order_is_canonical_and_cumulative() {
+    let bundle = storage_bundle();
+    let base =
+        CreateAttachments::from_bundle(&bundle, ProcessIo::default()).expect("base attachments");
+    let storage_id = StorageAttachmentId::new("authorized-storage-21").expect("storage identity");
+    let network_id = network_identity("authorized-interface-21");
+
+    let storage_first = base
+        .clone()
+        .attach_storage_mount(
+            &bundle,
+            0,
+            storage_id.clone(),
+            StorageAccessMode::ReadOnly,
+            StorageOwnership::Caller,
+            StorageCleanup::DetachOnly,
+        )
+        .expect("attach storage")
+        .attach_linux_network_interface(
+            &bundle,
+            1,
+            "tap0",
+            network_id.clone(),
+            NetworkCleanup::ReleaseRuntimeNamespace,
+        )
+        .expect("attach network after storage");
+    let network_first = base
+        .attach_linux_network_interface(
+            &bundle,
+            1,
+            "tap0",
+            network_id,
+            NetworkCleanup::ReleaseRuntimeNamespace,
+        )
+        .expect("attach network")
+        .attach_storage_mount(
+            &bundle,
+            0,
+            storage_id,
+            StorageAccessMode::ReadOnly,
+            StorageOwnership::Caller,
+            StorageCleanup::DetachOnly,
+        )
+        .expect("attach storage after network");
+
+    assert_eq!(storage_first, network_first);
+    assert_eq!(storage_first.schema_version(), ATTACHMENT_SCHEMA_V3);
+    assert_eq!(
+        storage_first.digest().expect("storage-first digest"),
+        network_first.digest().expect("network-first digest")
+    );
+}
+
+#[test]
+fn network_attachment_validation_rejects_identity_cleanup_and_target_drift() {
+    let bundle = multi_interface_network_bundle();
+    let base =
+        CreateAttachments::from_bundle(&bundle, ProcessIo::default()).expect("base attachments");
+    let attached = base
+        .attach_linux_network_interface(
+            &bundle,
+            1,
+            "veth-a",
+            network_identity("authorized-interface-a"),
+            NetworkCleanup::ReleaseRuntimeNamespace,
+        )
+        .expect("first interface");
+
+    let error = attached
+        .clone()
+        .attach_linux_network_interface(
+            &bundle,
+            1,
+            "veth-z",
+            network_identity("authorized-interface-a"),
+            NetworkCleanup::ReleaseRuntimeNamespace,
+        )
+        .expect_err("one interface identity cannot bind two OCI devices");
+    assert!(error.message.contains("interface identity"));
+
+    let drifted_cleanup = NetworkAttachmentIdentity::new(
+        NetworkNamespaceId::new("authorized-network-namespace-7").expect("namespace identity"),
+        NetworkInterfaceId::new("authorized-interface-z").expect("interface identity"),
+        NetworkCleanupId::new("different-cleanup").expect("cleanup identity"),
+    );
+    let error = attached
+        .attach_linux_network_interface(
+            &bundle,
+            1,
+            "veth-z",
+            drifted_cleanup,
+            NetworkCleanup::ReleaseRuntimeNamespace,
+        )
+        .expect_err("one namespace cannot drift cleanup identity");
+    assert!(error.message.contains("cleanup identity"));
+
+    let valid = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .expect("base attachments")
+        .attach_linux_network_interface(
+            &bundle,
+            1,
+            "veth-a",
+            network_identity("authorized-wire-interface"),
+            NetworkCleanup::ReleaseRuntimeNamespace,
+        )
+        .expect("wire network attachment");
+    let mut encoded = serde_json::to_value(&valid).expect("encode network attachments");
+    encoded["schemaVersion"] = json!(ATTACHMENT_SCHEMA_V2);
+    let downgraded: CreateAttachments =
+        serde_json::from_value(encoded.clone()).expect("decode downgraded manifest");
+    let error = downgraded
+        .validate(&bundle)
+        .expect_err("v2 cannot silently carry v3 network identities");
+    assert!(error.message.contains("schema"));
+    encoded["networkAttachments"][0]["identity"]["interface"] = json!("../interface");
+    assert!(serde_json::from_value::<CreateAttachments>(encoded).is_err());
+
+    let mut invalid_schema = serde_json::to_value(
+        CreateAttachments::from_bundle(&bundle, ProcessIo::default()).expect("base attachments"),
+    )
+    .expect("encode base attachments");
+    invalid_schema["schemaVersion"] = json!("a3s.oci.attachments.unknown");
+    let invalid: CreateAttachments =
+        serde_json::from_value(invalid_schema).expect("decode unknown schema");
+    let error = invalid
+        .attach_storage_mount(
+            &bundle,
+            0,
+            StorageAttachmentId::new("must-not-launder-schema").expect("storage identity"),
+            StorageAccessMode::ReadOnly,
+            StorageOwnership::Caller,
+            StorageCleanup::DetachOnly,
+        )
+        .expect_err("builder must not sanitize an unsupported schema");
+    assert!(error.message.contains("unsupported attachment schema"));
+
+    let error = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .expect("base attachments")
+        .attach_linux_network_interface(
+            &bundle,
+            1,
+            "veth-a",
+            network_identity("authorized-interface-a"),
+            NetworkCleanup::PreserveCallerNamespace,
+        )
+        .expect_err("a new namespace must use runtime namespace cleanup");
+    assert!(error.message.contains("new OCI network namespace"));
+
+    let mut template_configuration: serde_json::Value =
+        serde_json::from_str(bundle.config_json()).expect("network configuration");
+    template_configuration["linux"]["netDevices"]["veth-a"]["name"] = json!("eth%d");
+    let template_bundle = OciBundle::from_json(
+        std::env::temp_dir().join("a3s-network-template-bundle"),
+        serde_json::to_string(&template_configuration).expect("template configuration"),
+    )
+    .expect("template bundle");
+    let error = CreateAttachments::from_bundle(&template_bundle, ProcessIo::default())
+        .expect("template base attachments")
+        .attach_linux_network_interface(
+            &template_bundle,
+            1,
+            "veth-a",
+            network_identity("authorized-template-interface"),
+            NetworkCleanup::ReleaseRuntimeNamespace,
+        )
+        .expect_err("authorized attachments require an exact target name");
+    assert!(error.message.contains("exact target"));
+}
+
+#[test]
+fn joined_network_namespace_requires_caller_preservation_cleanup() {
+    let mut configuration: serde_json::Value =
+        serde_json::from_str(storage_bundle().config_json()).expect("network configuration");
+    configuration["linux"]["namespaces"][1]["path"] = json!("/run/netns/authorized-7");
+    let bundle = OciBundle::from_json(
+        std::env::temp_dir().join("a3s-joined-network-attachment-bundle"),
+        serde_json::to_string(&configuration).expect("joined network configuration"),
+    )
+    .expect("joined network attachment bundle");
+    let base =
+        CreateAttachments::from_bundle(&bundle, ProcessIo::default()).expect("base attachments");
+
+    let error = base
+        .clone()
+        .attach_linux_network_interface(
+            &bundle,
+            1,
+            "tap0",
+            network_identity("authorized-joined-interface"),
+            NetworkCleanup::ReleaseRuntimeNamespace,
+        )
+        .expect_err("runtime cannot release a caller-owned joined namespace");
+    assert!(error.message.contains("joined OCI network namespace"));
+
+    base.attach_linux_network_interface(
+        &bundle,
+        1,
+        "tap0",
+        network_identity("authorized-joined-interface"),
+        NetworkCleanup::PreserveCallerNamespace,
+    )
+    .expect("caller-owned joined namespace remains explicit")
+    .validate(&bundle)
+    .expect("validate joined network attachment");
 }
 
 #[test]

@@ -2412,9 +2412,17 @@ or leaked runtime resources.
   serialization or protocol-3 compatibility. Native Linux advertises v2;
   utility-VM drivers remain v1 until a separate caller-owned transport and
   detach-cleanup gate exists.
-- [ ] Accept already-authorized network attachments with exact namespace,
+- [x] Accept already-authorized network attachments with exact namespace,
   interface, and cleanup identities while leaving IPAM, DNS, and network
-  policy in A3S Box.
+  policy in A3S Box. `a3s.oci.attachments.v3` binds caller-issued namespace,
+  interface, and cleanup incarnation IDs to exact OCI network-namespace and
+  `linux.netDevices` descriptors. New namespaces use runtime-namespace
+  release; joined caller namespaces are preserved; exact bindings reject
+  target templates and identity or cleanup drift. Protocol 6 prevents
+  downgrade. Rootful Native Linux advertises cumulative v1-v3; rootless Native
+  stays v1-v2 because it has no host network-device authority, and utility-VM
+  drivers stay v1 until a separate caller-owned NIC transport and cleanup gate
+  exists.
 - [ ] Add reusable guest-session ownership with trust-domain, isolation,
   generation, capacity, reset, and leak fences; never reuse a guest across an
   incompatible or undeclared trust boundary.

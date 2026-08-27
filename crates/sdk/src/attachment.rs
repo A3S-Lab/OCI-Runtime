@@ -6,14 +6,18 @@ use sha2::{Digest, Sha256};
 
 use crate::{Error, ErrorCode, OciBundle, ProcessIo, Result, StorageAttachmentId};
 
+mod network;
 mod storage;
 
+pub use network::{NetworkAttachment, NetworkAttachmentIdentity, NetworkCleanup, NetworkOwnership};
 pub use storage::{StorageAccessMode, StorageAttachment, StorageCleanup, StorageOwnership};
 
 /// First public create-time attachment contract understood by A3S OCI Runtime.
 pub const ATTACHMENT_SCHEMA_V1: &str = "a3s.oci.attachments.v1";
 /// Storage-aware create-time attachment contract.
 pub const ATTACHMENT_SCHEMA_V2: &str = "a3s.oci.attachments.v2";
+/// Network-aware create-time attachment contract.
+pub const ATTACHMENT_SCHEMA_V3: &str = "a3s.oci.attachments.v3";
 /// Required extension declaring an operation-scoped transfer of bundle ownership.
 pub const RUNTIME_BUNDLE_HANDOFF_EXTENSION: &str = "dev.a3s.bundle-handoff";
 /// First bundle-handoff contract version.
@@ -23,6 +27,7 @@ pub const RUNTIME_BUNDLE_HANDOFF_MOVE_V1: &str = "move-to-runtime-v1";
 
 const MAX_MOUNT_ATTACHMENTS: usize = 4_096;
 const MAX_NETWORK_ATTACHMENTS: usize = 256;
+const MAX_AUTHORIZED_NETWORK_ATTACHMENTS: usize = MAX_NETWORK_ATTACHMENTS;
 const MAX_SECRET_ATTACHMENTS: usize = 256;
 const MAX_STORAGE_ATTACHMENTS: usize = MAX_MOUNT_ATTACHMENTS;
 const MAX_RUNTIME_EXTENSIONS: usize = 64;
@@ -184,6 +189,8 @@ pub struct CreateAttachments {
     rootfs: Option<ConfigurationAttachment>,
     mounts: Vec<ConfigurationAttachment>,
     network: Vec<AttachmentSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    network_attachments: Vec<NetworkAttachment>,
     process_io: ProcessIo,
     secrets: Vec<AttachmentSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -237,6 +244,7 @@ impl CreateAttachments {
         ownership: StorageOwnership,
         cleanup: StorageCleanup,
     ) -> Result<Self> {
+        self.validate(bundle)?;
         let mount = self.mounts.get(mount_index).cloned().ok_or_else(|| {
             invalid_attachment(format!(
                 "storage attachment references missing OCI mount index {mount_index}"
@@ -267,7 +275,9 @@ impl CreateAttachments {
             )));
         }
 
-        self.schema_version = ATTACHMENT_SCHEMA_V2.to_string();
+        if self.schema_version == ATTACHMENT_SCHEMA_V1 {
+            self.schema_version = ATTACHMENT_SCHEMA_V2.to_string();
+        }
         self.storage.push(StorageAttachment::new(
             identity,
             mount,
@@ -276,6 +286,55 @@ impl CreateAttachments {
             cleanup,
         ));
         self.storage.sort();
+        self.validate(bundle)?;
+        Ok(self)
+    }
+
+    /// Bind an already-authorized Linux interface to one exact OCI network namespace.
+    ///
+    /// The caller supplies immutable namespace, interface, and cleanup
+    /// identities. Runtime validates only the prepared OCI mechanism and its
+    /// lifetime boundary; IPAM, DNS, routes, aliases, network policy, and
+    /// backing-network deletion remain caller-owned.
+    pub fn attach_linux_network_interface(
+        mut self,
+        bundle: &OciBundle,
+        namespace_index: usize,
+        host_interface_name: &str,
+        identity: NetworkAttachmentIdentity,
+        cleanup: NetworkCleanup,
+    ) -> Result<Self> {
+        self.validate(bundle)?;
+        let configuration = decode_configuration(bundle)?;
+        let namespace_pointer = format!("/linux/namespaces/{namespace_index}");
+        let namespace_value = configuration.pointer(&namespace_pointer).ok_or_else(|| {
+            invalid_attachment(format!(
+                "network attachment references missing OCI namespace index {namespace_index}"
+            ))
+        })?;
+        if namespace_value.get("type").and_then(Value::as_str) != Some("network") {
+            return Err(invalid_attachment(format!(
+                "OCI namespace index {namespace_index} is not a network namespace"
+            )));
+        }
+        let interface_pointer = format!(
+            "/linux/netDevices/{}",
+            escape_json_pointer(host_interface_name)
+        );
+        if configuration.pointer(&interface_pointer).is_none() {
+            return Err(invalid_attachment(format!(
+                "network attachment references missing linux.netDevices interface {host_interface_name}"
+            )));
+        }
+
+        self.schema_version = ATTACHMENT_SCHEMA_V3.to_string();
+        self.network_attachments.push(NetworkAttachment::new(
+            identity,
+            ConfigurationAttachment::at(&configuration, namespace_pointer)?,
+            ConfigurationAttachment::at(&configuration, interface_pointer)?,
+            cleanup,
+        ));
+        self.network_attachments.sort();
         self.validate(bundle)?;
         Ok(self)
     }
@@ -395,6 +454,12 @@ impl CreateAttachments {
         &self.storage
     }
 
+    /// Already-authorized network bindings in canonical identity order.
+    #[must_use]
+    pub fn network_attachments(&self) -> &[NetworkAttachment] {
+        &self.network_attachments
+    }
+
     /// SHA-256 evidence for the complete canonical attachment manifest.
     pub fn digest(&self) -> Result<String> {
         let encoded = serde_json::to_vec(self).map_err(|error| {
@@ -410,18 +475,31 @@ impl CreateAttachments {
     /// Revalidate every pointer, digest, classification, and extension declaration.
     pub fn validate(&self, bundle: &OciBundle) -> Result<()> {
         match self.schema_version.as_str() {
-            ATTACHMENT_SCHEMA_V1 if !self.storage.is_empty() => {
+            ATTACHMENT_SCHEMA_V1
+                if !self.storage.is_empty() || !self.network_attachments.is_empty() =>
+            {
                 return Err(invalid_attachment(
-                    "attachment schema v1 cannot carry storage attachments",
+                    "attachment schema v1 cannot carry storage or authorized network attachments",
                 ));
             }
             ATTACHMENT_SCHEMA_V1 => {}
+            ATTACHMENT_SCHEMA_V2 if !self.network_attachments.is_empty() => {
+                return Err(invalid_attachment(
+                    "attachment schema v2 cannot carry authorized network attachments",
+                ));
+            }
             ATTACHMENT_SCHEMA_V2 if self.storage.is_empty() => {
                 return Err(invalid_attachment(
                     "attachment schema v2 requires at least one storage attachment",
                 ));
             }
             ATTACHMENT_SCHEMA_V2 => {}
+            ATTACHMENT_SCHEMA_V3 if self.network_attachments.is_empty() => {
+                return Err(invalid_attachment(
+                    "attachment schema v3 requires at least one authorized network attachment",
+                ));
+            }
+            ATTACHMENT_SCHEMA_V3 => {}
             _ => {
                 return Err(invalid_attachment(format!(
                     "unsupported attachment schema {}",
@@ -436,6 +514,7 @@ impl CreateAttachments {
         }
         if self.mounts.len() > MAX_MOUNT_ATTACHMENTS
             || self.network.len() > MAX_NETWORK_ATTACHMENTS
+            || self.network_attachments.len() > MAX_AUTHORIZED_NETWORK_ATTACHMENTS
             || self.secrets.len() > MAX_SECRET_ATTACHMENTS
             || self.storage.len() > MAX_STORAGE_ATTACHMENTS
             || self.extensions.len() > MAX_RUNTIME_EXTENSIONS
@@ -508,6 +587,7 @@ impl CreateAttachments {
             }
         }
         storage::validate_attachments(&self.storage, &self.mounts, &self.secrets, &configuration)?;
+        network::validate_attachments(&self.network_attachments, &self.network, &configuration)?;
         Ok(())
     }
 
@@ -573,6 +653,7 @@ impl CreateAttachments {
             rootfs,
             mounts,
             network,
+            network_attachments: Vec::new(),
             process_io,
             secrets: Vec::new(),
             storage: Vec::new(),
@@ -616,6 +697,19 @@ impl AttachmentCapabilities {
             schemas: vec![
                 ATTACHMENT_SCHEMA_V1.to_string(),
                 ATTACHMENT_SCHEMA_V2.to_string(),
+            ],
+            extensions: BTreeMap::new(),
+        }
+    }
+
+    /// Support legacy v1, storage-aware v2, and network-aware v3 manifests.
+    #[must_use]
+    pub fn base_v3() -> Self {
+        Self {
+            schemas: vec![
+                ATTACHMENT_SCHEMA_V1.to_string(),
+                ATTACHMENT_SCHEMA_V2.to_string(),
+                ATTACHMENT_SCHEMA_V3.to_string(),
             ],
             extensions: BTreeMap::new(),
         }

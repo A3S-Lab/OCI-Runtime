@@ -28,7 +28,7 @@ use a3s_oci_sdk::{
     RuntimeNegotiationRequest, RuntimeOperation, Signal, SignalProcessRequest, StartRequest,
     StateRequest, StatsRequest, StorageAccessMode, StorageAttachmentId, StorageCleanup,
     StorageOwnership, TerminalSize, TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest,
-    WriteStdinRequest, ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2,
+    WriteStdinRequest, ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3,
     BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS, OCI_LINUX_CAPABILITY_NAMES,
     OCI_LINUX_MEMORY_POLICY_FLAGS, OCI_LINUX_MEMORY_POLICY_MODES, OCI_LINUX_MOUNT_OPTIONS,
     OCI_LINUX_SECCOMP_ACTIONS, OCI_LINUX_SECCOMP_ARCHITECTURES, OCI_LINUX_SECCOMP_KNOWN_FLAGS,
@@ -53,6 +53,7 @@ mod filesystem_operations;
 mod io_durability;
 mod io_operations;
 mod linux_support;
+mod network_attachments;
 mod process_operations;
 mod resource_operations;
 mod schema_profiles;
@@ -3765,7 +3766,8 @@ async fn negotiates_versioned_capabilities_for_the_selected_driver_and_artifact(
     const NETWORK_EXTENSION: &str = "dev.a3s.network.tsi";
 
     let temporary = tempfile::tempdir().expect("temporary directory");
-    let mut dedicated_driver = RecordingDriver::with_storage_attachments();
+    let mut dedicated_driver = RecordingDriver::supported();
+    dedicated_driver.attachments = AttachmentCapabilities::base_v3();
     dedicated_driver.attachments = dedicated_driver
         .attachments
         .with_extension(NETWORK_EXTENSION, vec![1])
@@ -3796,11 +3798,12 @@ async fn negotiates_versioned_capabilities_for_the_selected_driver_and_artifact(
     assert!(!info.operations.contains(&RuntimeOperation::Wait));
     assert!(!info.attachments.supports_extension(NETWORK_EXTENSION, 1));
     assert!(!info.attachments.supports_schema(ATTACHMENT_SCHEMA_V2));
+    assert!(!info.attachments.supports_schema(ATTACHMENT_SCHEMA_V3));
 
     let dedicated_request = RuntimeNegotiationRequest::new(IsolationClass::DedicatedVm)
         .with_operation(RuntimeOperation::Wait, RUNTIME_OPERATION_CONTRACT_V1)
         .expect("wait requirement")
-        .with_attachment_schema(ATTACHMENT_SCHEMA_V2)
+        .with_attachment_schema(ATTACHMENT_SCHEMA_V3)
         .expect("attachment schema requirement")
         .with_attachment_extension(NETWORK_EXTENSION, 1)
         .expect("network requirement");
