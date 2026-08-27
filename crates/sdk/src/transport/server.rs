@@ -144,7 +144,7 @@ async fn dispatch(service: &dyn OciRuntimeService, request: WireRequest) -> Resu
             .await
             .map(Box::new)
             .map(WireResponse::Features),
-        WireRequest::Create(request) => service.create(request).await.map(WireResponse::Create),
+        WireRequest::Create(request) => service.create(*request).await.map(WireResponse::Create),
         WireRequest::State(request) => service.state(request).await.map(WireResponse::State),
         WireRequest::Start(request) => service.start(request).await.map(WireResponse::Start),
         WireRequest::Kill(request) => service.kill(request).await.map(WireResponse::Kill),
@@ -191,11 +191,17 @@ async fn dispatch(service: &dyn OciRuntimeService, request: WireRequest) -> Resu
             .filesystem(request)
             .await
             .map(WireResponse::Filesystem),
-        WireRequest::Checkpoint(request) => service
-            .checkpoint(request)
-            .await
-            .map(WireResponse::Checkpoint),
-        WireRequest::Restore(request) => service.restore(request).await.map(WireResponse::Restore),
+        WireRequest::Checkpoint(request) => {
+            let response = service.checkpoint(request.clone()).await?;
+            response.validate_for_request(&request)?;
+            Ok(WireResponse::Checkpoint(response))
+        }
+        WireRequest::Restore(request) => {
+            let request = *request;
+            let response = service.restore(request.clone()).await?;
+            response.validate_for_request(&request)?;
+            Ok(WireResponse::Restore(response))
+        }
     }
 }
 
@@ -213,6 +219,7 @@ mod tests {
         assert_eq!(select_protocol(5, 5), Some(5));
         assert_eq!(select_protocol(6, 6), Some(6));
         assert_eq!(select_protocol(7, 7), Some(7));
-        assert_eq!(select_protocol(8, 8), None);
+        assert_eq!(select_protocol(8, 8), Some(8));
+        assert_eq!(select_protocol(9, 9), None);
     }
 }

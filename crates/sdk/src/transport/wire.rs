@@ -2,13 +2,14 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::{
-    CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, ContainerRecord,
-    ContainerStats, CreateRequest, DeleteRequest, Error, EventBatch, EventsRequest, ExecRequest,
-    ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse, KillRequest,
-    ListRequest, OutputChunk, ProcessRecord, ProcessesRequest, ReadOutputRequest, ResizeRequest,
-    RestoreRequest, RuntimeInfo, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
-    UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
-    ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3, ATTACHMENT_SCHEMA_V4,
+    CheckpointRequest, CheckpointResponse, CloseStdinRequest, ContainerOperationRequest,
+    ContainerRecord, ContainerStats, CreateRequest, DeleteRequest, Error, EventBatch,
+    EventsRequest, ExecRequest, ExitStatus, FileRequest, FileResponse, FilesystemRequest,
+    FilesystemResponse, KillRequest, ListRequest, OutputChunk, ProcessRecord, ProcessesRequest,
+    ReadOutputRequest, ResizeRequest, RestoreRequest, RestoreResponse, RuntimeInfo,
+    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest, ValidateRequest,
+    WaitProcessRequest, WaitRequest, WriteStdinRequest, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3,
+    ATTACHMENT_SCHEMA_V4,
 };
 
 use super::{protocol_error, transport_error};
@@ -58,7 +59,7 @@ pub(super) enum WireResult {
 #[serde(tag = "operation", content = "request", rename_all = "kebab-case")]
 pub(super) enum WireRequest {
     Features,
-    Create(CreateRequest),
+    Create(Box<CreateRequest>),
     State(StateRequest),
     Start(StartRequest),
     Kill(KillRequest),
@@ -81,7 +82,7 @@ pub(super) enum WireRequest {
     File(FileRequest),
     Filesystem(FilesystemRequest),
     Checkpoint(CheckpointRequest),
-    Restore(RestoreRequest),
+    Restore(Box<RestoreRequest>),
 }
 
 impl WireRequest {
@@ -116,12 +117,8 @@ impl WireRequest {
 
     pub(super) fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::Checkpoint(_) | Self::Restore(_) => 8,
             Self::Create(request)
-                if request.attachments.schema_version() == ATTACHMENT_SCHEMA_V4 =>
-            {
-                7
-            }
-            Self::Restore(request)
                 if request.attachments.schema_version() == ATTACHMENT_SCHEMA_V4 =>
             {
                 7
@@ -131,17 +128,7 @@ impl WireRequest {
             {
                 6
             }
-            Self::Restore(request)
-                if request.attachments.schema_version() == ATTACHMENT_SCHEMA_V3 =>
-            {
-                6
-            }
             Self::Create(request)
-                if request.attachments.schema_version() == ATTACHMENT_SCHEMA_V2 =>
-            {
-                5
-            }
-            Self::Restore(request)
                 if request.attachments.schema_version() == ATTACHMENT_SCHEMA_V2 =>
             {
                 5
@@ -178,8 +165,8 @@ pub(super) enum WireResponse {
     WaitProcess(ExitStatus),
     File(FileResponse),
     Filesystem(FilesystemResponse),
-    Checkpoint(ContainerRecord),
-    Restore(ContainerRecord),
+    Checkpoint(CheckpointResponse),
+    Restore(RestoreResponse),
 }
 
 pub(super) async fn write_frame<T>(

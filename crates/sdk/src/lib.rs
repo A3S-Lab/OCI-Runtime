@@ -5,6 +5,7 @@
 
 mod attachment;
 mod bundle;
+mod checkpoint;
 mod client;
 mod config_annotation;
 mod conformance;
@@ -33,7 +34,7 @@ mod transport;
 mod validation;
 
 pub use a3s_oci_core::{
-    DriverCapability, DriverKind, DriverReadiness, IsolationClass, RuntimeFeatures,
+    DriverCapability, DriverKind, DriverReadiness, HostPlatform, IsolationClass, RuntimeFeatures,
 };
 pub use async_trait::async_trait;
 pub use attachment::{
@@ -52,6 +53,11 @@ pub use attachment::{
 pub use bundle::{
     OciBundle, CONFIG_FILE_NAME, MAX_CONFIG_BYTES, OCI_RUNTIME_SPEC_VERSION_MAX,
     OCI_RUNTIME_SPEC_VERSION_MIN,
+};
+pub use checkpoint::{
+    CheckpointArtifactPath, CheckpointCompatibility, CheckpointDigest, CheckpointFormat,
+    CheckpointQuiesce, CheckpointReference, CheckpointRequest, CheckpointResponse, RestoreRequest,
+    RestoreResponse, CHECKPOINT_REFERENCE_SCHEMA_V1, MAX_CHECKPOINT_ARTIFACT_PATH_BYTES,
 };
 pub use client::RuntimeClient;
 pub use config_annotation::BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS;

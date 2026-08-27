@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use a3s_oci_core::{DriverKind, IsolationClass, RuntimeFeatures};
 use oci_spec::runtime::{Features, LinuxResources, Process, State};
@@ -522,27 +521,6 @@ pub struct WaitProcessRequest {
     pub process: ProcessTarget,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
-}
-
-/// Create a portable checkpoint using the selected driver's supported mechanism.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CheckpointRequest {
-    pub context: OperationContext,
-    pub target: ContainerTarget,
-    pub directory: PathBuf,
-    pub leave_running: bool,
-}
-
-/// Restore a container from a previously created checkpoint.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RestoreRequest {
-    pub context: OperationContext,
-    pub id: ContainerId,
-    pub bundle: OciBundle,
-    pub checkpoint_directory: PathBuf,
-    pub isolation: IsolationRequest,
-    /// Complete versioned attachment contract for the restored generation.
-    pub attachments: CreateAttachments,
 }
 
 /// Durable runtime state with generation and effective isolation evidence.

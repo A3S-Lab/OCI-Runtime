@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use crate::{
@@ -210,24 +208,13 @@ impl ValidateRequest for FilesystemRequest {
 
 impl ValidateRequest for CheckpointRequest {
     fn validate(&self) -> Result<()> {
-        validate_absolute_path(&self.directory, "checkpoint.directory")
+        self.validate_contract()
     }
 }
 
 impl ValidateRequest for RestoreRequest {
     fn validate(&self) -> Result<()> {
-        self.bundle.validate_for_phase(OciSemanticPhase::Create)?;
-        self.attachments.validate(&self.bundle)?;
-        self.attachments.validate_isolation(&self.isolation)?;
-        validate_absolute_path(&self.checkpoint_directory, "restore.checkpoint_directory")?;
-        match self.bundle.spec().process().as_ref() {
-            Some(process) => self
-                .attachments
-                .process_io()
-                .resolve_for_process(process)
-                .map(|_| ()),
-            None => crate::process_io::validate_without_process(self.attachments.process_io()),
-        }
+        self.validate_contract()
     }
 }
 
@@ -262,26 +249,6 @@ fn validate_positive_bounded(value: u32, maximum: u32, field: &str) -> Result<()
     if value == 0 || value > maximum {
         return Err(invalid_request(format!(
             "{field} must be between 1 and {maximum}; received {value}"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_absolute_path(path: &Path, field: &str) -> Result<()> {
-    if !path.is_absolute() {
-        return Err(invalid_request(format!(
-            "{field} must be absolute: {}",
-            path.display()
-        )));
-    }
-    let Some(path_text) = path.to_str() else {
-        return Err(invalid_request(format!(
-            "{field} must be valid UTF-8 for SDK transport"
-        )));
-    };
-    if path_text.as_bytes().contains(&0) {
-        return Err(invalid_request(format!(
-            "{field} must not contain a NUL byte"
         )));
     }
     Ok(())
@@ -328,8 +295,6 @@ fn invalid_request(message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use oci_spec::runtime::{LinuxResources, Process};
     use serde_json::json;
 
@@ -338,10 +303,10 @@ mod tests {
         MAX_STDIN_WRITE_BYTES,
     };
     use crate::{
-        CheckpointRequest, ContainerId, ContainerTarget, EventsRequest, ExecRequest, FileOp,
-        FileRequest, FilesystemOp, FilesystemRequest, Generation, IoMode, OperationContext,
-        OperationId, ProcessId, ProcessIo, ReadOutputRequest, ResizeRequest, TerminalSize,
-        UpdateRequest, WriteStdinRequest,
+        CheckpointArtifactPath, CheckpointRequest, ContainerId, ContainerTarget, EventsRequest,
+        ExecRequest, FileOp, FileRequest, FilesystemOp, FilesystemRequest, Generation, IoMode,
+        OperationContext, OperationId, ProcessId, ProcessIo, ReadOutputRequest, ResizeRequest,
+        TerminalSize, UpdateRequest, WriteStdinRequest,
     };
 
     fn target() -> ContainerTarget {
@@ -626,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn validates_resource_updates_and_checkpoint_paths() {
+    fn validates_resource_updates_and_exact_checkpoint_targets() {
         let resources: LinuxResources = serde_json::from_value(json!({
             "cpu": {"quota": 10, "burst": 20}
         }))
@@ -638,12 +603,18 @@ mod tests {
         };
         assert!(update.validate().is_err());
 
-        let checkpoint = CheckpointRequest {
-            context: context(),
-            target: target(),
-            directory: PathBuf::from("relative-checkpoint"),
-            leave_running: false,
-        };
-        assert!(checkpoint.validate().is_err());
+        let checkpoint = CheckpointRequest::new(
+            context(),
+            ContainerTarget::current(
+                ContainerId::new("validation-container").expect("container ID"),
+            ),
+            CheckpointArtifactPath::new(
+                std::env::current_dir()
+                    .expect("current directory")
+                    .join("validation-checkpoint.tar"),
+            )
+            .expect("absolute checkpoint artifact path"),
+        );
+        assert!(checkpoint.is_err());
     }
 }

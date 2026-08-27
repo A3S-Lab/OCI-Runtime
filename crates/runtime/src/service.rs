@@ -6,15 +6,15 @@ use std::sync::Arc;
 use a3s_oci_core::{DriverKind, RuntimeFeatures};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, AttachmentCapabilities, CheckpointRequest, CloseStdinRequest, ContainerId,
-    ContainerOperationRequest, ContainerRecord, ContainerStats, ContainerTarget, CreateRequest,
-    DeleteRequest, Error, ErrorCode, EventBatch, EventsRequest, ExecRequest, ExitStatus, FileOp,
-    FileRequest, FileResponse, FilesystemOp, FilesystemRequest, FilesystemResponse, KillRequest,
-    ListRequest, OciLinuxSupport, OciRuntimeService, OutputChunk, ProcessId, ProcessRecord,
-    ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result,
-    RuntimeExtensions, RuntimeInfo, RuntimeOperation, SignalProcessRequest, StartRequest,
-    StateRequest, StatsRequest, UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest,
-    WriteStdinRequest, MAX_FILE_TRANSFER_BYTES,
+    async_trait, AttachmentCapabilities, CheckpointRequest, CheckpointResponse, CloseStdinRequest,
+    ContainerId, ContainerOperationRequest, ContainerRecord, ContainerStats, ContainerTarget,
+    CreateRequest, DeleteRequest, Error, ErrorCode, EventBatch, EventsRequest, ExecRequest,
+    ExitStatus, FileOp, FileRequest, FileResponse, FilesystemOp, FilesystemRequest,
+    FilesystemResponse, KillRequest, ListRequest, OciLinuxSupport, OciRuntimeService, OutputChunk,
+    ProcessId, ProcessRecord, ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest,
+    RestoreRequest, RestoreResponse, Result, RuntimeExtensions, RuntimeInfo, RuntimeOperation,
+    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest, ValidateRequest,
+    WaitProcessRequest, WaitRequest, WriteStdinRequest, MAX_FILE_TRANSFER_BYTES,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
@@ -1387,11 +1387,11 @@ impl OciRuntimeService for HostRuntimeService {
         Ok(response)
     }
 
-    async fn checkpoint(&self, _request: CheckpointRequest) -> Result<ContainerRecord> {
+    async fn checkpoint(&self, _request: CheckpointRequest) -> Result<CheckpointResponse> {
         Err(Error::unsupported("checkpoint"))
     }
 
-    async fn restore(&self, _request: RestoreRequest) -> Result<ContainerRecord> {
+    async fn restore(&self, _request: RestoreRequest) -> Result<RestoreResponse> {
         Err(Error::unsupported("restore"))
     }
 }

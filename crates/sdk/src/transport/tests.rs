@@ -1,22 +1,26 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use oci_spec::runtime::{Features, State};
+use oci_spec::runtime::{ContainerState, Features, State, StateBuilder};
 use serde_json::json;
 
 use crate::{
-    AttachmentCapabilities, ContainerId, ContainerRecord, CreateAttachments, CreateRequest,
-    DeleteRequest, DriverKind, Error, ErrorCode, EventBatch, EventsRequest, FileOp, FileRequest,
-    FileResponse, FilesystemEntry, FilesystemEntryKind, FilesystemOp, FilesystemRequest,
-    FilesystemResponse, Generation, GuestSessionCapacity, GuestSessionGeneration, GuestSessionId,
-    GuestSessionReset, IsolationRequest, KillRequest, NetworkAttachmentIdentity, NetworkCleanup,
-    NetworkCleanupId, NetworkEnforcementAttachment, NetworkEnforcementId, NetworkInterfaceId,
-    NetworkMechanismDigest, NetworkMechanismGeneration, NetworkNamespaceId, OciBundle,
-    OciRuntimeService, OperationContext, OperationId, ProcessIo, RestoreRequest, Result,
-    RuntimeEvent, RuntimeEventKind, RuntimeFeatures, RuntimeInfo, RuntimeOperation, StartRequest,
-    StateRequest, StorageAccessMode, StorageAttachmentId, StorageCleanup, StorageOwnership,
-    TrustDomainId, NETWORK_ENFORCEMENT_EXTENSION,
+    AttachmentCapabilities, CheckpointArtifactPath, CheckpointCompatibility, CheckpointDigest,
+    CheckpointFormat, CheckpointReference, CheckpointRequest, CheckpointResponse, ContainerId,
+    ContainerRecord, ContainerTarget, CreateAttachments, CreateRequest, DeleteRequest, DriverKind,
+    Error, ErrorCode, EventBatch, EventsRequest, FileOp, FileRequest, FileResponse,
+    FilesystemEntry, FilesystemEntryKind, FilesystemOp, FilesystemRequest, FilesystemResponse,
+    Generation, GuestSessionCapacity, GuestSessionGeneration, GuestSessionId, GuestSessionReset,
+    HostPlatform, IsolationClass, IsolationRequest, KillRequest, NetworkAttachmentIdentity,
+    NetworkCleanup, NetworkCleanupId, NetworkEnforcementAttachment, NetworkEnforcementId,
+    NetworkInterfaceId, NetworkMechanismDigest, NetworkMechanismGeneration, NetworkNamespaceId,
+    OciBundle, OciRuntimeService, OperationContext, OperationId, ProcessIo, RestoreRequest, Result,
+    RuntimeArtifact, RuntimeEvent, RuntimeEventKind, RuntimeFeatures, RuntimeInfo,
+    RuntimeOperation, StartRequest, StateRequest, StorageAccessMode, StorageAttachmentId,
+    StorageCleanup, StorageOwnership, TrustDomainId, NETWORK_ENFORCEMENT_EXTENSION,
+    PAUSED_STATE_ANNOTATION,
 };
 
 use super::wire::{
@@ -27,6 +31,8 @@ use super::{serve_transport_connection, RuntimeTransportClient};
 #[derive(Default)]
 struct EchoService {
     exact_config: Mutex<Option<String>>,
+    checkpoint_response: Mutex<Option<CheckpointResponse>>,
+    checkpoint_calls: AtomicUsize,
 }
 
 #[async_trait]
@@ -123,6 +129,15 @@ impl OciRuntimeService for EchoService {
             entry: None,
             entries,
         })
+    }
+
+    async fn checkpoint(&self, _request: CheckpointRequest) -> Result<CheckpointResponse> {
+        self.checkpoint_calls.fetch_add(1, Ordering::Relaxed);
+        self.checkpoint_response
+            .lock()
+            .map_err(|error| Error::new(ErrorCode::Internal, error.to_string()))?
+            .take()
+            .ok_or_else(|| Error::unsupported("checkpoint-test"))
     }
 }
 
@@ -326,6 +341,111 @@ fn guest_session_create_request() -> CreateRequest {
     }
 }
 
+fn checkpoint_source(create: &CreateRequest) -> ContainerRecord {
+    let state = StateBuilder::default()
+        .version("1.3.0")
+        .id(create.id.as_str())
+        .status(ContainerState::Running)
+        .pid(4_242)
+        .bundle(create.bundle.directory().to_path_buf())
+        .annotations(HashMap::from([(
+            PAUSED_STATE_ANNOTATION.to_string(),
+            "true".to_string(),
+        )]))
+        .build()
+        .expect("paused checkpoint source state");
+    ContainerRecord {
+        state,
+        generation: Generation(7),
+        driver: match create.isolation.class() {
+            IsolationClass::SharedHostKernel => DriverKind::NativeLinux,
+            IsolationClass::DedicatedVm | IsolationClass::SharedGuestKernel => {
+                DriverKind::LibkrunKvm
+            }
+        },
+        isolation: create.isolation.class(),
+        guest_session: create.attachments.guest_session().cloned(),
+        network_enforcement: create
+            .attachments
+            .network_enforcement(&create.bundle)
+            .expect("network-enforcement attachment"),
+        config_digest: create.bundle.config_digest().to_string(),
+        attachments_digest: Some(
+            create
+                .attachments
+                .digest()
+                .expect("checkpoint attachment digest"),
+        ),
+    }
+}
+
+fn checkpoint_reference(create: &CreateRequest) -> (ContainerRecord, CheckpointReference) {
+    let source = checkpoint_source(create);
+    let compatibility = CheckpointCompatibility::new(
+        source.driver,
+        source.isolation,
+        HostPlatform::Linux,
+        "x86_64",
+        RuntimeArtifact::new(
+            "a3s-oci-runtime",
+            "0.3.1",
+            format!("sha256:{}", "a".repeat(64)),
+            Some("sdk-transport-test".to_string()),
+        )
+        .expect("runtime artifact"),
+        CheckpointDigest::new(format!("sha256:{}", "b".repeat(64))).expect("driver build digest"),
+        CheckpointFormat::new("transport-test", 1).expect("checkpoint format"),
+    )
+    .expect("checkpoint compatibility");
+    let reference = CheckpointReference::new(
+        &source,
+        compatibility,
+        CheckpointDigest::new(format!("sha256:{}", "c".repeat(64))).expect("artifact digest"),
+        4_096,
+    )
+    .expect("checkpoint reference");
+    (source, reference)
+}
+
+fn checkpoint_fixture(
+    create: &CreateRequest,
+    operation: &str,
+) -> (CheckpointRequest, CheckpointResponse) {
+    let (source, reference) = checkpoint_reference(create);
+    let request = CheckpointRequest::new(
+        OperationContext::new(OperationId::new(operation).expect("checkpoint operation ID")),
+        ContainerTarget::exact(create.id.clone(), source.generation),
+        CheckpointArtifactPath::new(
+            std::env::current_dir()
+                .expect("current directory")
+                .join(format!("{operation}.checkpoint")),
+        )
+        .expect("checkpoint artifact path"),
+    )
+    .expect("checkpoint request");
+    let response = CheckpointResponse::new(source, reference).expect("checkpoint response");
+    (request, response)
+}
+
+fn restore_request(create: CreateRequest, operation: &str) -> RestoreRequest {
+    let (_, reference) = checkpoint_reference(&create);
+    RestoreRequest::new(
+        OperationContext::new(OperationId::new(operation).expect("restore operation ID")),
+        create.id,
+        create.bundle,
+        CheckpointArtifactPath::new(
+            std::env::current_dir()
+                .expect("current directory")
+                .join(format!("{operation}.checkpoint")),
+        )
+        .expect("restore artifact path"),
+        create.isolation,
+        create.attachments,
+        reference,
+    )
+    .expect("restore request")
+}
+
 #[tokio::test]
 async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
     let (client_io, server_io) = tokio::io::duplex(64 * 1024);
@@ -337,7 +457,7 @@ async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
     let client = RuntimeTransportClient::from_io(client_io)
         .await
         .expect("negotiate in-memory SDK transport");
-    assert_eq!(client.protocol_version(), 7);
+    assert_eq!(client.protocol_version(), 8);
 
     let info = client.features().await.expect("transport features");
     assert_eq!(
@@ -537,7 +657,7 @@ async fn server_rejects_protocol_four_storage_before_service_dispatch() {
         &ClientMessage::Request {
             protocol: 4,
             request_id: 7,
-            request: Box::new(WireRequest::Create(storage_create_request())),
+            request: Box::new(WireRequest::Create(Box::new(storage_create_request()))),
         },
     )
     .await
@@ -599,20 +719,17 @@ async fn protocol_five_rejects_network_attachments_before_dispatch() {
 }
 
 #[test]
-fn protocol_six_gates_network_create_and_restore_symmetrically() {
+fn protocol_six_gates_network_create_while_restore_requires_protocol_eight() {
     let create = network_create_request();
-    assert_eq!(WireRequest::Create(create.clone()).minimum_protocol(), 6);
-    let restore = RestoreRequest {
-        context: create.context,
-        id: create.id,
-        bundle: create.bundle,
-        checkpoint_directory: std::env::current_dir()
-            .expect("current directory")
-            .join("protocol-six-checkpoint"),
-        isolation: create.isolation,
-        attachments: create.attachments,
-    };
-    assert_eq!(WireRequest::Restore(restore).minimum_protocol(), 6);
+    assert_eq!(
+        WireRequest::Create(Box::new(create.clone())).minimum_protocol(),
+        6
+    );
+    let restore = restore_request(create, "protocol-eight-network-restore");
+    assert_eq!(
+        WireRequest::Restore(Box::new(restore)).minimum_protocol(),
+        8
+    );
 }
 
 #[tokio::test]
@@ -623,7 +740,10 @@ async fn protocol_six_round_trips_network_enforcement_without_a_wire_bump() {
         .network_enforcement(&create.bundle)
         .expect("decode network-enforcement attachment")
         .expect("network-enforcement attachment");
-    assert_eq!(WireRequest::Create(create.clone()).minimum_protocol(), 6);
+    assert_eq!(
+        WireRequest::Create(Box::new(create.clone())).minimum_protocol(),
+        6
+    );
 
     let (mut client_io, server_io) = tokio::io::duplex(32 * 1024);
     let service = Arc::new(EchoService::default());
@@ -652,7 +772,7 @@ async fn protocol_six_round_trips_network_enforcement_without_a_wire_bump() {
         &ClientMessage::Request {
             protocol: 6,
             request_id: 61,
-            request: Box::new(WireRequest::Create(create)),
+            request: Box::new(WireRequest::Create(Box::new(create))),
         },
     )
     .await
@@ -711,20 +831,110 @@ async fn protocol_six_rejects_guest_session_attachments_before_dispatch() {
 }
 
 #[test]
-fn protocol_seven_gates_guest_session_create_and_restore_symmetrically() {
+fn protocol_seven_gates_guest_session_create_while_restore_requires_protocol_eight() {
     let create = guest_session_create_request();
-    assert_eq!(WireRequest::Create(create.clone()).minimum_protocol(), 7);
-    let restore = RestoreRequest {
-        context: create.context,
-        id: create.id,
-        bundle: create.bundle,
-        checkpoint_directory: std::env::current_dir()
-            .expect("current directory")
-            .join("protocol-seven-checkpoint"),
-        isolation: create.isolation,
-        attachments: create.attachments,
+    assert_eq!(
+        WireRequest::Create(Box::new(create.clone())).minimum_protocol(),
+        7
+    );
+    let restore = restore_request(create, "protocol-eight-guest-restore");
+    assert_eq!(
+        WireRequest::Restore(Box::new(restore)).minimum_protocol(),
+        8
+    );
+}
+
+#[tokio::test]
+async fn protocol_eight_round_trips_checkpoint_reference_and_paused_source() {
+    let create = network_create_request();
+    let (request, expected) = checkpoint_fixture(&create, "protocol-eight-checkpoint");
+    let service = Arc::new(EchoService::default());
+    *service
+        .checkpoint_response
+        .lock()
+        .expect("checkpoint response lock") = Some(expected.clone());
+    let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+    let server_service: Arc<dyn OciRuntimeService> = service.clone();
+    let server =
+        tokio::spawn(async move { serve_transport_connection(server_service, server_io).await });
+
+    let client = RuntimeTransportClient::from_io(client_io)
+        .await
+        .expect("negotiate protocol eight");
+    assert_eq!(client.protocol_version(), 8);
+    let response = client
+        .checkpoint(request)
+        .await
+        .expect("checkpoint protocol round trip");
+    assert_eq!(response, expected);
+    assert_eq!(service.checkpoint_calls.load(Ordering::Relaxed), 1);
+
+    drop(client);
+    server
+        .await
+        .expect("server task must join")
+        .expect("server connection must close cleanly");
+}
+
+#[tokio::test]
+async fn server_rejects_protocol_seven_checkpoint_before_service_dispatch() {
+    let create = network_create_request();
+    let (request, response) = checkpoint_fixture(&create, "protocol-seven-checkpoint");
+    let service = Arc::new(EchoService::default());
+    *service
+        .checkpoint_response
+        .lock()
+        .expect("checkpoint response lock") = Some(response);
+    let (mut client_io, server_io) = tokio::io::duplex(64 * 1024);
+    let server_service: Arc<dyn OciRuntimeService> = service.clone();
+    let server =
+        tokio::spawn(async move { serve_transport_connection(server_service, server_io).await });
+
+    write_frame(
+        &mut client_io,
+        &ClientMessage::Hello {
+            protocol_min: 7,
+            protocol_max: 7,
+        },
+    )
+    .await
+    .expect("write protocol-seven hello");
+    assert_eq!(
+        read_frame::<ServerMessage>(&mut client_io)
+            .await
+            .expect("read protocol-seven welcome")
+            .expect("protocol-seven welcome frame"),
+        ServerMessage::Welcome { protocol: 7 }
+    );
+    write_frame(
+        &mut client_io,
+        &ClientMessage::Request {
+            protocol: 7,
+            request_id: 78,
+            request: Box::new(WireRequest::Checkpoint(request)),
+        },
+    )
+    .await
+    .expect("write protocol-seven checkpoint");
+    let response = read_frame::<ServerMessage>(&mut client_io)
+        .await
+        .expect("read checkpoint rejection")
+        .expect("checkpoint rejection frame");
+    let ServerMessage::Response { result, .. } = response else {
+        panic!("expected SDK response");
     };
-    assert_eq!(WireRequest::Restore(restore).minimum_protocol(), 7);
+    let WireResult::Error { error } = *result else {
+        panic!("protocol-seven checkpoint must fail");
+    };
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("requires protocol 8"));
+    assert_eq!(service.checkpoint_calls.load(Ordering::Relaxed), 0);
+
+    drop(client_io);
+    server
+        .await
+        .expect("server task must join")
+        .expect("server connection must close cleanly");
 }
 
 #[tokio::test]
@@ -756,7 +966,9 @@ async fn server_rejects_protocol_six_guest_session_before_service_dispatch() {
         &ClientMessage::Request {
             protocol: 6,
             request_id: 9,
-            request: Box::new(WireRequest::Create(guest_session_create_request())),
+            request: Box::new(WireRequest::Create(
+                Box::new(guest_session_create_request()),
+            )),
         },
     )
     .await
@@ -815,7 +1027,7 @@ async fn server_rejects_protocol_five_network_before_service_dispatch() {
         &ClientMessage::Request {
             protocol: 5,
             request_id: 8,
-            request: Box::new(WireRequest::Create(network_create_request())),
+            request: Box::new(WireRequest::Create(Box::new(network_create_request()))),
         },
     )
     .await
@@ -1063,7 +1275,7 @@ fn create_wire_request_requires_bundle_and_container_id() {
     let encoded = serde_json::to_value(ClientMessage::Request {
         protocol: 3,
         request_id: 1,
-        request: Box::new(WireRequest::Create(CreateRequest {
+        request: Box::new(WireRequest::Create(Box::new(CreateRequest {
             context: OperationContext::new(
                 OperationId::new("required-create-wire").expect("operation ID"),
             ),
@@ -1071,7 +1283,7 @@ fn create_wire_request_requires_bundle_and_container_id() {
             bundle,
             isolation: IsolationRequest::SharedHostKernel,
             attachments,
-        })),
+        }))),
     })
     .expect("encode valid create request");
 

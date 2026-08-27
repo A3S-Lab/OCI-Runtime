@@ -7,13 +7,13 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 
 use crate::{
-    CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, ContainerRecord,
-    ContainerStats, CreateRequest, DeleteRequest, Error, ErrorCode, EventBatch, EventsRequest,
-    ExecRequest, ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse,
-    KillRequest, ListRequest, OciRuntimeService, OutputChunk, ProcessRecord, ProcessesRequest,
-    ReadOutputRequest, ResizeRequest, RestoreRequest, Result, RuntimeInfo, SignalProcessRequest,
-    StartRequest, StateRequest, StatsRequest, UpdateRequest, WaitProcessRequest, WaitRequest,
-    WriteStdinRequest,
+    CheckpointRequest, CheckpointResponse, CloseStdinRequest, ContainerOperationRequest,
+    ContainerRecord, ContainerStats, CreateRequest, DeleteRequest, Error, ErrorCode, EventBatch,
+    EventsRequest, ExecRequest, ExitStatus, FileRequest, FileResponse, FilesystemRequest,
+    FilesystemResponse, KillRequest, ListRequest, OciRuntimeService, OutputChunk, ProcessRecord,
+    ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, RestoreResponse, Result,
+    RuntimeInfo, SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest,
+    WaitProcessRequest, WaitRequest, WriteStdinRequest,
 };
 
 use super::wire::{
@@ -285,7 +285,7 @@ impl OciRuntimeService for RuntimeTransportClient {
     }
 
     async fn create(&self, request: CreateRequest) -> Result<ContainerRecord> {
-        typed_call!(self, WireRequest::Create(request), Create)
+        typed_call!(self, WireRequest::Create(Box::new(request)), Create)
     }
 
     async fn state(&self, request: StateRequest) -> Result<ContainerRecord> {
@@ -372,11 +372,17 @@ impl OciRuntimeService for RuntimeTransportClient {
         typed_call!(self, WireRequest::Filesystem(request), Filesystem)
     }
 
-    async fn checkpoint(&self, request: CheckpointRequest) -> Result<ContainerRecord> {
-        typed_call!(self, WireRequest::Checkpoint(request), Checkpoint)
+    async fn checkpoint(&self, request: CheckpointRequest) -> Result<CheckpointResponse> {
+        let expected = request.clone();
+        let response = typed_call!(self, WireRequest::Checkpoint(request), Checkpoint)?;
+        response.validate_for_request(&expected)?;
+        Ok(response)
     }
 
-    async fn restore(&self, request: RestoreRequest) -> Result<ContainerRecord> {
-        typed_call!(self, WireRequest::Restore(request), Restore)
+    async fn restore(&self, request: RestoreRequest) -> Result<RestoreResponse> {
+        let expected = request.clone();
+        let response = typed_call!(self, WireRequest::Restore(Box::new(request)), Restore)?;
+        response.validate_for_request(&expected)?;
+        Ok(response)
     }
 }

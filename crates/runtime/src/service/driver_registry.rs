@@ -428,3 +428,31 @@ fn validate_driver_hooks(hooks: &[OciHookPhase]) -> Result<Vec<OciHookPhase>> {
 fn open_error(message: impl Into<String>) -> Error {
     Error::new(ErrorCode::FailedPrecondition, message).for_operation("open-host-runtime")
 }
+
+#[cfg(test)]
+mod tests {
+    use a3s_oci_sdk::RuntimeOperation;
+
+    use super::validate_driver_operations;
+
+    fn required_operations() -> Vec<RuntimeOperation> {
+        vec![
+            RuntimeOperation::Create,
+            RuntimeOperation::State,
+            RuntimeOperation::Start,
+            RuntimeOperation::Kill,
+            RuntimeOperation::Delete,
+        ]
+    }
+
+    #[test]
+    fn checkpoint_and_restore_remain_unadvertisable_until_host_support_exists() {
+        for operation in [RuntimeOperation::Checkpoint, RuntimeOperation::Restore] {
+            let mut operations = required_operations();
+            operations.push(operation);
+            let error = validate_driver_operations(&operations)
+                .expect_err("checkpoint and restore must remain fail-closed");
+            assert!(error.message.contains("unsupported host operation"));
+        }
+    }
+}

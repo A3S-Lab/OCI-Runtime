@@ -61,7 +61,7 @@ impl RuntimeArtifact {
         self.source_revision.as_deref()
     }
 
-    pub(super) fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         validate_bounded_text(&self.name, "runtime artifact name", MAX_ARTIFACT_NAME_BYTES)?;
         validate_bounded_text(
             &self.version,

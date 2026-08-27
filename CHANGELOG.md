@@ -27,6 +27,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added the protocol-8 immutable checkpoint and restore SDK contract without
+  widening production capability advertisement. The typed reference binds an
+  exact paused source generation, configuration and attachment digests,
+  driver/isolation/platform/architecture, Host executable and driver-build
+  identities, driver format, and artifact digest and size. Checkpoint and
+  restore use normalized single-file paths and request-bound paused responses;
+  legacy `leave_running` and reference-free restore requests fail closed. The
+  Host and every production driver remain `Unsupported` until durable atomic
+  artifact creation, scoped partial cleanup, read-only restore verification,
+  replay, and real-host qualification are implemented.
 - Added a fail-closed, dedicated-VM Linux KVM transport implementation for
   authorized v2 storage attachments without widening the production capability
   advertisement. The Host accepts only caller-owned, detach-only, non-bind
@@ -63,8 +73,9 @@ All notable changes to A3S OCI Runtime are documented in this file.
   path-safe logical session ID, positive incarnation, immutable trust domain,
   bounded capacity, runtime ownership, and explicit empty-session reset mode.
   SharedGuestKernel create/restore now requires that exact binding; other
-  isolation classes reject it. Protocol 7 prevents v4 downgrade, and
-  `ContainerRecord` retains the binding so restart audit and operation replay
+  isolation classes reject it. Protocol 7 prevents v4 create downgrade, while
+  restore now requires protocol 8. `ContainerRecord` retains the binding so
+  restart audit and operation replay
   reject session or generation drift. The platform-neutral HVF/KVM lifecycle
   now implements session-scoped private shares, immutable ownership markers,
   serialized member admission, exact capacity and generation fences,
@@ -83,20 +94,21 @@ All notable changes to A3S OCI Runtime are documented in this file.
   release; joined caller namespaces require preservation. Exact bindings
   reject target-name templates, identity drift, conflicting cleanup units,
   descriptor reuse, and non-canonical wire inventories. Protocol 6 prevents
-  v3 create/restore downgrade. Rootful Native Linux advertises cumulative
-  v1-v3; rootless Native stays v1-v2 because it has no host network-device
-  authority. Utility-VM drivers stay v1: dedicated KVM has the internal
-  transport described above but still lacks cumulative v2 and real-host v3
-  qualification, while HVF has no independent NIC transport. IPAM, DNS,
+  v3 create downgrade, while restore now requires protocol 8. Rootful Native
+  Linux advertises cumulative v1-v3; rootless Native stays v1-v2 because it has
+  no host network-device authority. Utility-VM drivers stay v1: dedicated KVM
+  has the internal transport described above but still lacks cumulative v2 and
+  real-host v3 qualification, while HVF has no independent NIC transport. IPAM, DNS,
   routes, aliases, policy, and backing-network deletion remain outside Runtime.
 - Added `a3s.oci.attachments.v2` for already-authorized storage. Each entry
   binds one validated OCI mount to a caller-issued immutable allocation ID,
   exact read-only/read-write mode, caller ownership, and detach-only cleanup.
   The SDK rejects duplicate identities or mounts, access drift, secret/storage
   overlap, runtime-owned bundle handoff, and non-canonical wire inventories.
-  Protocol 5 prevents v2 create/restore requests from downgrading to older
-  peers; v1 serialization and protocol-3 compatibility remain unchanged. The
-  Native Linux driver advertises v2. Dedicated Linux KVM now has a separate
+  Protocol 5 prevents v2 create requests from downgrading to older peers;
+  restore now requires protocol 8, while v1 create serialization and
+  protocol-3 compatibility remain unchanged. The Native Linux driver advertises
+  v2. Dedicated Linux KVM now has a separate
   internal raw-disk transport but remains v1 until its destructive real-host
   qualification gate passes; the other utility-VM drivers remain v1 until they
   have equivalent transports and evidence. The legacy aggregate capability

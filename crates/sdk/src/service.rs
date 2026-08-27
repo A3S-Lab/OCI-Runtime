@@ -1,12 +1,13 @@
 use async_trait::async_trait;
 
 use crate::{
-    CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, ContainerRecord,
-    ContainerStats, CreateRequest, DeleteRequest, Error, EventBatch, EventsRequest, ExecRequest,
-    ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse, KillRequest,
-    ListRequest, OutputChunk, ProcessRecord, ProcessesRequest, ReadOutputRequest, ResizeRequest,
-    RestoreRequest, Result, RuntimeInfo, SignalProcessRequest, StartRequest, StateRequest,
-    StatsRequest, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    CheckpointRequest, CheckpointResponse, CloseStdinRequest, ContainerOperationRequest,
+    ContainerRecord, ContainerStats, CreateRequest, DeleteRequest, Error, EventBatch,
+    EventsRequest, ExecRequest, ExitStatus, FileRequest, FileResponse, FilesystemRequest,
+    FilesystemResponse, KillRequest, ListRequest, OutputChunk, ProcessRecord, ProcessesRequest,
+    ReadOutputRequest, ResizeRequest, RestoreRequest, RestoreResponse, Result, RuntimeInfo,
+    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest,
+    WaitProcessRequest, WaitRequest, WriteStdinRequest,
 };
 
 /// Complete asynchronous runtime contract consumed by [`crate::RuntimeClient`].
@@ -119,13 +120,13 @@ pub trait OciRuntimeService: Send + Sync {
         Err(Error::unsupported("filesystem"))
     }
 
-    /// Checkpoint a container.
-    async fn checkpoint(&self, _request: CheckpointRequest) -> Result<ContainerRecord> {
+    /// Checkpoint an already-paused exact container generation into one immutable artifact.
+    async fn checkpoint(&self, _request: CheckpointRequest) -> Result<CheckpointResponse> {
         Err(Error::unsupported("checkpoint"))
     }
 
-    /// Restore a container.
-    async fn restore(&self, _request: RestoreRequest) -> Result<ContainerRecord> {
+    /// Restore one immutable artifact as a new paused container generation.
+    async fn restore(&self, _request: RestoreRequest) -> Result<RestoreResponse> {
         Err(Error::unsupported("restore"))
     }
 }

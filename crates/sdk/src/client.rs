@@ -2,14 +2,15 @@ use std::sync::Arc;
 
 use crate::oci_spec::runtime::ContainerState;
 use crate::{
-    CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, ContainerRecord,
-    ContainerStats, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
-    EventBatch, EventsRequest, ExecRequest, ExitStatus, FileRequest, FileResponse,
-    FilesystemRequest, FilesystemResponse, KillRequest, ListRequest, LocalIpcEndpoint,
-    OciRuntimeService, OutputChunk, ProcessRecord, ProcessesRequest, ReadOutputRequest,
-    ResizeRequest, RestoreRequest, Result, RunRequest, RuntimeInfo, RuntimeTransportClient,
-    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest, ValidateRequest,
-    WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    CheckpointRequest, CheckpointResponse, CloseStdinRequest, ContainerOperationRequest,
+    ContainerRecord, ContainerStats, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest,
+    Error, ErrorCode, EventBatch, EventsRequest, ExecRequest, ExitStatus, FileRequest,
+    FileResponse, FilesystemRequest, FilesystemResponse, KillRequest, ListRequest,
+    LocalIpcEndpoint, OciRuntimeService, OutputChunk, ProcessRecord, ProcessesRequest,
+    ReadOutputRequest, ResizeRequest, RestoreRequest, RestoreResponse, Result, RunRequest,
+    RuntimeInfo, RuntimeTransportClient, SignalProcessRequest, StartRequest, StateRequest,
+    StatsRequest, UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest,
+    WriteStdinRequest,
 };
 
 /// Cloneable, transport-independent Rust SDK client.
@@ -208,14 +209,18 @@ impl RuntimeClient {
         self.service.filesystem(request).await
     }
 
-    pub async fn checkpoint(&self, request: CheckpointRequest) -> Result<ContainerRecord> {
+    pub async fn checkpoint(&self, request: CheckpointRequest) -> Result<CheckpointResponse> {
         request.validate()?;
-        self.service.checkpoint(request).await
+        let response = self.service.checkpoint(request.clone()).await?;
+        response.validate_for_request(&request)?;
+        Ok(response)
     }
 
-    pub async fn restore(&self, request: RestoreRequest) -> Result<ContainerRecord> {
+    pub async fn restore(&self, request: RestoreRequest) -> Result<RestoreResponse> {
         request.validate()?;
-        self.service.restore(request).await
+        let response = self.service.restore(request.clone()).await?;
+        response.validate_for_request(&request)?;
+        Ok(response)
     }
 }
 

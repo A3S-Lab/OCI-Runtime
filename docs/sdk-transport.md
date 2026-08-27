@@ -7,22 +7,31 @@
 runtime calls. The transport maps every trait method; it does not invoke the
 CLI or expose WHPX, libkrun, or native Linux driver internals.
 
-The current wire contract is protocol version 7. Version 7 adds
-`a3s.oci.attachments.v4` reusable guest-session identity evidence to create and
-restore. A v4 request is rejected before dispatch when a connection negotiated
-protocol 6 or earlier. Version 6 added `a3s.oci.attachments.v3`
-already-authorized network identity evidence; v3 requires protocol 6. Version
-5 added `a3s.oci.attachments.v2` already-authorized storage evidence; v2
-requires protocol 5, while ordinary v1 create/restore requests remain valid on
-protocol 3. The required `dev.a3s.network.enforcement@1` extension reuses the
-existing extension wire and per-driver negotiation; because it requires v3
-network bindings, protocol 6 is its minimum and no protocol-8 message is
-introduced. Version 4 added exact-target file upload/download and filesystem
-stat/mkdir/move/list/remove. Mutations carry stable `OperationContext`
-identities, payloads and recursive listings are bounded, and protocol-3 peers
-reject those file operations before dispatch. Version 3 made the complete
-`a3s.oci.attachments.v1` manifest mandatory for create and restore, moved init
-process I/O inside that versioned contract, and returned its durable digest.
+The current wire contract is protocol version 8. Version 8 replaces the legacy
+checkpoint directory and `leave_running` boolean with an immutable
+`a3s.oci.checkpoint-reference.v1`, typed single-file artifact paths, paused
+quiescence, exact driver/build compatibility evidence, and request-bound
+checkpoint/restore responses. Every checkpoint and restore requires protocol
+8 regardless of attachment schema; protocol 7 and earlier reject it before
+service dispatch.
+
+Version 7 added `a3s.oci.attachments.v4` reusable guest-session identity
+evidence to create. A v4 create is rejected before dispatch when a connection
+negotiated protocol 6 or earlier. Version 6 added
+`a3s.oci.attachments.v3` already-authorized network identity evidence; v3
+create requires protocol 6. Version 5 added `a3s.oci.attachments.v2`
+already-authorized storage evidence; v2 create requires protocol 5, while
+ordinary v1 create requests remain valid on protocol 3. Restore combines the
+selected attachment schema with the protocol-8 checkpoint reference. The
+required `dev.a3s.network.enforcement@1` extension reuses the existing
+extension wire and per-driver negotiation; because it requires v3 network
+bindings, protocol 6 remains its create minimum. Version 4 added exact-target
+file upload/download and filesystem stat/mkdir/move/list/remove. Mutations
+carry stable `OperationContext` identities, payloads and recursive listings
+are bounded, and protocol-3 peers reject those file operations before
+dispatch. Version 3 made the complete `a3s.oci.attachments.v1` manifest
+mandatory for create and the later restore contract, moved init process I/O
+inside that versioned contract, and returned its durable digest.
 The transport rejects protocol-2 peers rather than silently dropping rootfs,
 mount, network, I/O, secret, or runtime-extension evidence. Version 2 had
 already made `OperationContext` mandatory for write-stdin, close-stdin, and
@@ -378,20 +387,27 @@ does not silently choose those authorization policies.
 ## Validation Boundary
 
 `CreateRequest` and `RestoreRequest` carry `OciBundle` plus
-`CreateAttachments`. Their wire decoders revalidate the absolute bundle path,
-exact `config.json`, supported OCI version, official schema, unknown-property
-policy, configuration SHA-256, attachment JSON Pointers, per-value digests,
-category completeness, storage identity/access/ownership/cleanup, authorized
-network namespace/interface/cleanup identity, and the process-I/O contract
-before the service receives the request. The transport therefore cannot be
-used to bypass either the SDK's bundle checks or its attachment boundary.
+`CreateAttachments`. Restore additionally carries one immutable checkpoint
+reference and typed artifact file path. Their wire decoders revalidate the
+absolute bundle path, exact `config.json`, supported OCI version, official
+schema, unknown-property policy, configuration SHA-256, attachment JSON
+Pointers, per-value digests, category completeness, storage
+identity/access/ownership/cleanup, authorized network
+namespace/interface/cleanup identity, and the process-I/O contract before the
+service receives the request. The transport therefore cannot be used to bypass
+either the SDK's bundle checks or its attachment boundary. Checkpoint and
+restore also require normalized absolute artifact paths, exact positive source
+generations, canonical content and build digests, positive artifact sizes, a
+matching configuration and isolation class, and paused-quiescence response
+correlation. The artifact ownership, cleanup, retry, and capability rules are
+defined in the [immutable checkpoint contract](checkpoint-contract.md).
 
 Every request implements `ValidateRequest`. The in-process `RuntimeClient`,
 transport client, and server call it independently. The server-side check is
 the trust boundary: manually encoded wire requests cannot bypass OCI
-process/resource semantics, terminal consistency, absolute checkpoint paths,
-or the 4,096-event, 16 MiB output/stdin, 32 MiB file, and bounded filesystem
-response limits.
+process/resource semantics, terminal consistency, typed checkpoint paths and
+immutable references, or the 4,096-event, 16 MiB output/stdin, 32 MiB file, and
+bounded filesystem response limits.
 
 Bundle construction also applies the configuration phase of
 `OciSemanticValidator`. The start phase adds the OCI requirement for a

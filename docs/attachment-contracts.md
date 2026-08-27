@@ -347,10 +347,12 @@ substitute durable product record.
 SDK transport protocol 3 is the first protocol that carries v1. Protocol-2
 peers are rejected during negotiation, so an attachment-aware client cannot be
 silently downgraded to a server that ignores the field. Protocol 5 is required
-for v2 create and restore requests, protocol 6 is required for v3, and protocol
-7 is required for v4. Both the client and server reject a versioned operation
-before dispatch when the negotiated connection predates its schema; v1 wire
-serialization remains unchanged and keeps its protocol-3 compatibility.
+for v2 create requests, protocol 6 for v3 create requests, and protocol 7 for
+v4 create requests. Every restore requires protocol 8 because it also carries
+an immutable checkpoint reference and typed response. Both the client and
+server reject a versioned operation before dispatch when the negotiated
+connection predates its schema; v1 create wire serialization remains unchanged
+and keeps its protocol-3 compatibility.
 
 The host advertises `AttachmentCapabilities`. Create fails before driver
 selection or durable reservation when the schema is unsupported or any

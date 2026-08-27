@@ -127,8 +127,9 @@ Every SDK request implements `ValidateRequest`. Validation is applied by:
 
 The server check is authoritative for untrusted local IPC peers. In addition
 to OCI bundle, process, and resource semantics, request validation checks
-terminal consistency, checkpoint paths, and bounded event, output, and stdin
-payloads.
+terminal consistency, normalized checkpoint artifact paths, immutable
+checkpoint references and paused response correlation, and bounded event,
+output, and stdin payloads.
 
 ## Remaining Conformance Work
 
