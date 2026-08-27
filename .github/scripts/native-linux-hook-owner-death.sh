@@ -138,8 +138,8 @@ run_hook_owner_death_recovery() {
     "$hook_recovery_leader" \
     "$hook_recovery_descendant" \
     "$hook_recovery_bundle/rootfs/.a3s-oci-native-smoke"
-  sudo "$PWD/target/debug/a3s-oci" native-linux-hook-owner-death-owner \
-    --agent "$PWD/target/debug/a3s-oci-agent" \
+  sudo "$native_runtime_binary" native-linux-hook-owner-death-owner \
+    --agent "$native_agent_binary" \
     --root "$recovery_root" \
     --bundle "$hook_recovery_bundle" \
     --container-id native-hook-owner-recovery \
@@ -228,9 +228,9 @@ run_hook_owner_death_recovery() {
     return 1
   fi
 
-  if output="$(sudo "$PWD/target/debug/a3s-oci" \
+  if output="$(sudo "$native_runtime_binary" \
       native-linux-hook-owner-death-resume \
-      --agent "$PWD/target/debug/a3s-oci-agent" \
+      --agent "$native_agent_binary" \
       --root "$recovery_root" \
       --bundle "$hook_recovery_bundle" \
       --container-id native-hook-owner-recovery \

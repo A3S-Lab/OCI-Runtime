@@ -1162,8 +1162,12 @@ cargo clippy --target aarch64-unknown-linux-gnu \
 Tagged archives contain host diagnostics and the matching platform assets.
 Linux x86_64 and arm64 archives carry statically linked musl CLI, agent, and
 containerd shim executables whose release gate rejects ELF interpreters and
-dynamic dependencies. Package availability never overrides the readiness
-reported by the exact binary's `features` result.
+dynamic dependencies. Before either Linux directory is archived, its exact
+CLI and Agent run the complete Native Linux SDK, rootless, owner-death,
+Hook-recovery, fault-cleanup, and bounded-soak matrix with `/dev/kvm` removed.
+The archive retains `qualification/native-linux-package.json` plus the seven
+digest-bound subordinate reports. Package availability never overrides the
+readiness reported by the exact binary's `features` result.
 
 ## License
 

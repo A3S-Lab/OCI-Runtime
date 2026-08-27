@@ -34,6 +34,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
   publishes a portable Sigstore bundle with verification instructions in every
   archive. Provenance verification remains separate from driver, containerd,
   OCI, security, upgrade, rollback, and soak qualification.
+- Added exact staged-package qualification for tagged Linux x86_64 and arm64
+  archives. The static musl CLI and Agent now run the complete Native Linux
+  matrix with `/dev/kvm` removed before compression, while a versioned package
+  report binds the source commit, platform, driver/isolation profile, all three
+  executable digests, and seven retained subordinate evidence records. The
+  package gate does not promote Native Linux beyond `probe-only` or replace the
+  remaining A3S Box, upstream OCI, security, or release-host gates.
 - Added a canonical machine-readable containerd runtime-v2 compatibility
   record that is schema-checked against the code-owned support matrix and
   retains exact qualification environments, protocol ranges, digests,

@@ -29,6 +29,8 @@ hook_recovery_group_pid=""
 soak_bundles=()
 soak_iterations="${A3S_OCI_NATIVE_SOAK_ITERATIONS:-25}"
 native_focus="${A3S_OCI_NATIVE_FOCUS:-}"
+native_runtime_binary="${A3S_OCI_NATIVE_RUNTIME_BINARY:-}"
+native_agent_binary="${A3S_OCI_NATIVE_AGENT_BINARY:-}"
 soak_concurrent_containers=4
 soak_operation_timeout_ms=30000
 unprivileged_userns_original=""
@@ -292,9 +294,41 @@ if [[ ! "$soak_iterations" =~ ^[0-9]+$ ]] ||
   exit 2
 fi
 
+validate_native_binaries() {
+  for candidate in "$native_runtime_binary" "$native_agent_binary"; do
+    if [[ ! -f "$candidate" || -L "$candidate" || ! -x "$candidate" ]]; then
+      printf 'Native qualification binary must be a regular nonsymlink executable: %s\n' \
+        "$candidate" >&2
+      exit 2
+    fi
+  done
+  native_runtime_binary="$(realpath -e -- "$native_runtime_binary")"
+  native_agent_binary="$(realpath -e -- "$native_agent_binary")"
+  if [[ "$native_runtime_binary" == "$native_agent_binary" ]]; then
+    printf '%s\n' 'Native runtime and Agent qualification binaries must be distinct' >&2
+    exit 2
+  fi
+}
+
+if [[ -z "$native_runtime_binary" && -z "$native_agent_binary" ]]; then
+  use_development_binaries=true
+elif [[ -z "$native_runtime_binary" || -z "$native_agent_binary" ]]; then
+  printf '%s\n' \
+    'A3S_OCI_NATIVE_RUNTIME_BINARY and A3S_OCI_NATIVE_AGENT_BINARY must be supplied together' >&2
+  exit 2
+else
+  use_development_binaries=false
+  validate_native_binaries
+fi
+
 sudo apt-get update
 sudo apt-get install --yes busybox-static iproute2 jq uidmap util-linux
-cargo build -p a3s-oci-agent -p a3s-oci-cli
+if [[ "$use_development_binaries" == true ]]; then
+  cargo build -p a3s-oci-agent -p a3s-oci-cli
+  native_runtime_binary="$PWD/target/debug/a3s-oci"
+  native_agent_binary="$PWD/target/debug/a3s-oci-agent"
+  validate_native_binaries
+fi
 
 hugetlb_page_size="$(detect_hugetlb_page_size)"
 if [[ -n "$hugetlb_page_size" ]]; then
@@ -325,7 +359,7 @@ else
     'Native Unified io.max evidence skipped: no usable host block device'
 fi
 
-features="$("$PWD/target/debug/a3s-oci" features)"
+features="$("$native_runtime_binary" features)"
 printf '%s\n' "$features"
 jq --exit-status \
   '.platform == "linux"
@@ -968,8 +1002,8 @@ sudo install \
   --owner="$rootless_uid" \
   --group="$rootless_gid" \
   --mode=0755 \
-  "$PWD/target/debug/a3s-oci" \
-  "$PWD/target/debug/a3s-oci-agent" \
+  "$native_runtime_binary" \
+  "$native_agent_binary" \
   "$rootless_bin/"
 sudo touch "$rootless_bundle/rootfs/.a3s-oci-rootless-subordinate"
 sudo chown 300000:400000 \
@@ -1126,8 +1160,8 @@ run_smoke() {
   local output
   local status
   sudo truncate --size 0 "$smoke_hook_trace"
-  if output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-smoke \
-      --agent "$PWD/target/debug/a3s-oci-agent" \
+  if output="$(sudo "$native_runtime_binary" native-linux-smoke \
+      --agent "$native_agent_binary" \
       --bundle "$smoke_bundle" \
       --work-parent "$work_parent")"; then
     status=0
@@ -1192,8 +1226,8 @@ run_network_device_negative_smoke() {
   local output
   local status
 
-  if output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-smoke \
-      --agent "$PWD/target/debug/a3s-oci-agent" \
+  if output="$(sudo "$native_runtime_binary" native-linux-smoke \
+      --agent "$native_agent_binary" \
       --bundle "$smoke_bundle" \
       --work-parent "$work_parent")"; then
     status=0
@@ -1226,8 +1260,8 @@ run_service_smoke() {
   local output
   local status
   sudo truncate --size 0 "$hook_trace"
-  if output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-service-smoke \
-      --agent "$PWD/target/debug/a3s-oci-agent" \
+  if output="$(sudo "$native_runtime_binary" native-linux-service-smoke \
+      --agent "$native_agent_binary" \
       --bundle "$bundle" \
       --work-parent "$work_parent")"; then
     status=0
@@ -1248,9 +1282,9 @@ run_multi_container_smoke() {
   local expected_kvm_present="$1"
   local output
   local status
-  if output="$(sudo "$PWD/target/debug/a3s-oci" \
+  if output="$(sudo "$native_runtime_binary" \
       native-linux-multi-container-smoke \
-      --agent "$PWD/target/debug/a3s-oci-agent" \
+      --agent "$native_agent_binary" \
       --bundle-a "$bundle" \
       --bundle-b "$bundle_b" \
       --work-parent "$work_parent")"; then
@@ -1394,7 +1428,7 @@ run_soak() {
   local status
   local arguments=(
     native-linux-soak
-    --agent "$PWD/target/debug/a3s-oci-agent"
+    --agent "$native_agent_binary"
     --work-parent "$work_parent"
     --iterations "$soak_iterations"
     --concurrent-containers "$soak_concurrent_containers"
@@ -1403,7 +1437,7 @@ run_soak() {
   for candidate in "${soak_bundles[@]}"; do
     arguments+=(--bundle "$candidate")
   done
-  if output="$(sudo "$PWD/target/debug/a3s-oci" "${arguments[@]}")"; then
+  if output="$(sudo "$native_runtime_binary" "${arguments[@]}")"; then
     status=0
   else
     status=$?
@@ -1485,8 +1519,8 @@ run_fault_cleanup() {
   local output
   local status
   for phase in after-create after-start after-kill; do
-    if output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-fault-cleanup \
-        --agent "$PWD/target/debug/a3s-oci-agent" \
+    if output="$(sudo "$native_runtime_binary" native-linux-fault-cleanup \
+        --agent "$native_agent_binary" \
         --bundle "$bundle" \
         --work-parent "$work_parent" \
         --fault-after "$phase")"; then
@@ -1944,8 +1978,8 @@ run_owner_death_recovery() {
   local deadline
 
   sudo rm -f "$recovery_bundle/rootfs/.a3s-oci-native-smoke"
-  sudo "$PWD/target/debug/a3s-oci" native-linux-recovery-owner \
-    --agent "$PWD/target/debug/a3s-oci-agent" \
+  sudo "$native_runtime_binary" native-linux-recovery-owner \
+    --agent "$native_agent_binary" \
     --root "$recovery_root" \
     --bundle "$recovery_bundle" \
     --container-id native-owner-recovery \
@@ -2007,9 +2041,9 @@ run_owner_death_recovery() {
     'a3s-oci-native-box-mapping-v1' \
     "$recovery_bundle/rootfs/.a3s-oci-native-smoke" >/dev/null
 
-  if output="$(sudo "$PWD/target/debug/a3s-oci" \
+  if output="$(sudo "$native_runtime_binary" \
       native-linux-recovery-resume \
-      --agent "$PWD/target/debug/a3s-oci-agent" \
+      --agent "$native_agent_binary" \
       --root "$recovery_root" \
       --bundle "$recovery_bundle" \
       --container-id native-owner-recovery \
@@ -2249,8 +2283,8 @@ run_rootless_owner_death_recovery() {
 run_service_signal_cleanup() {
   # Match the root-owned A3S Box profile qualified by the transported lifecycle.
   sudo python3 - \
-    "$PWD/target/debug/a3s-oci" \
-    "$PWD/target/debug/a3s-oci-agent" \
+    "$native_runtime_binary" \
+    "$native_agent_binary" \
     "$qualification_root/native-service-owner" \
     "$qualification_root/native-service-control" <<'PY'
 import atexit
@@ -2371,6 +2405,33 @@ PY
 if [[ -e /dev/kvm || -L /dev/kvm ]]; then
   sudo mv /dev/kvm "$saved_kvm"
   kvm_original_moved=true
+fi
+if [[ -n "${A3S_OCI_NATIVE_KVM_ABSENCE_EVIDENCE:-}" ]]; then
+  if [[ -e /dev/kvm || -L /dev/kvm ]]; then
+    printf '%s\n' 'Native lifecycle KVM-absence boundary was not established' >&2
+    exit 1
+  fi
+  kvm_evidence="$A3S_OCI_NATIVE_KVM_ABSENCE_EVIDENCE"
+  if [[ -e "$kvm_evidence" || -L "$kvm_evidence" ]]; then
+    printf 'Refusing to replace Native KVM-absence evidence: %s\n' \
+      "$kvm_evidence" >&2
+    exit 2
+  fi
+  mkdir -p "$(dirname "$kvm_evidence")"
+  jq --null-input \
+    --arg schema_version 'a3s.oci.native-linux-kvm-absence.v1' \
+    --arg platform 'linux' \
+    --arg architecture "$(uname -m)" \
+    --argjson device_was_hidden "$kvm_original_moved" \
+    '{
+      schema_version: $schema_version,
+      platform: $platform,
+      architecture: $architecture,
+      device_was_hidden: $device_was_hidden,
+      device_absent_before_lifecycle: true
+    }' >"$kvm_evidence.tmp"
+  chmod 0644 "$kvm_evidence.tmp"
+  mv "$kvm_evidence.tmp" "$kvm_evidence"
 fi
 
 if [[ "$native_focus" == terminal-init ]]; then

@@ -1101,6 +1101,31 @@ The x86_64 and aarch64 CI jobs run all three phases while `/dev/kvm` is absent.
 The shell also independently requires an empty work parent and no marker after
 every command.
 
+## Packaged Native Linux qualification
+
+The tagged Linux x86_64 and aarch64 workflows stage the exact static musl CLI,
+Agent, and containerd shim in their final archive layout before invoking
+`.github/scripts/native-linux-package-smoke.sh`. The package gate supplies the
+staged CLI and Agent to this document's complete Native matrix through the
+strict `A3S_OCI_NATIVE_RUNTIME_BINARY` and
+`A3S_OCI_NATIVE_AGENT_BINARY` pair. Development runs that omit both variables
+continue to build and use `target/debug`; supplying only one path, a symbolic
+link, a non-file, or a non-executable fails before host mutation.
+
+The gate removes `/dev/kvm` before the lifecycle dispatch and retains
+`a3s.oci.native-linux-package-qualification.v1` in
+`qualification/native-linux-package.json`. That report binds the source
+commit, workflow run, host architecture and kernel, driver, isolation class,
+profile, runtime version, and exact SHA-256/size identity of all three package
+executables. It also SHA-256-binds seven subordinate reports covering Features,
+the bounded soak, rootful and rootless recovery, Hook owner-death recovery,
+rootless device policy, and the KVM-absence boundary. The reports are archived
+and later covered by the release checksum and signed provenance.
+
+This closes the reproducible package-to-Native-matrix wiring. Actual tag
+artifacts still need retained runs, and A3S Box product startup and its
+cross-language Sandbox SDK suites remain separate W1 exit gates.
+
 ## Remaining promotion gates
 
 This evidence proves rootful and core rootless bootstrap profiles, not general

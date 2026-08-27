@@ -2,6 +2,9 @@ const RELEASE_WORKFLOW: &str = include_str!("../../../.github/workflows/release.
 const RELEASE_GUIDE: &str = include_str!("../../../docs/release-verification.md");
 const README: &str = include_str!("../../../README.md");
 const CONTAINERD_GUIDE: &str = include_str!("../../../docs/containerd-runtime-v2.md");
+const NATIVE_LINUX_PACKAGE_SMOKE: &str =
+    include_str!("../../../.github/scripts/native-linux-package-smoke.sh");
+const NATIVE_LINUX_SMOKE: &str = include_str!("../../../.github/scripts/native-linux-smoke.sh");
 
 const ATTEST_ACTION: &str = "actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1";
 const RELEASE_ACTION: &str =
@@ -132,4 +135,54 @@ fn packaged_verification_guide_enforces_identity_without_promoting_capability() 
     assert!(RELEASE_GUIDE.contains("does not establish that an experimental or probe-only"));
     assert!(README.contains("docs/release-verification.md"));
     assert!(CONTAINERD_GUIDE.contains("release-verification.md"));
+}
+
+#[test]
+fn linux_release_archives_retain_exact_package_qualification() {
+    let qualification = "bash .github/scripts/native-linux-package-smoke.sh \"$package\"";
+    assert_eq!(RELEASE_WORKFLOW.matches(qualification).count(), 1);
+    let qualification_position = RELEASE_WORKFLOW
+        .find(qualification)
+        .expect("Linux package qualification must be present");
+    let archive_position = RELEASE_WORKFLOW
+        .find("tar -czf \"${package}.tar.gz\" \"$package\"")
+        .expect("host package archive must be created");
+    assert!(qualification_position < archive_position);
+
+    for required in [
+        "a3s.oci.native-linux-package-qualification.v1",
+        "full-sdk-without-kvm-v1",
+        "A3S_OCI_NATIVE_RUNTIME_BINARY",
+        "A3S_OCI_NATIVE_AGENT_BINARY",
+        "A3S_OCI_NATIVE_KVM_ABSENCE_EVIDENCE",
+        "verify-static-elf.sh",
+        "containerd-shim-a3s-oci-v2",
+    ] {
+        assert!(
+            NATIVE_LINUX_PACKAGE_SMOKE.contains(required),
+            "Native package qualification lost {required}"
+        );
+    }
+}
+
+#[test]
+fn packaged_native_binaries_are_validated_before_host_setup() {
+    let host_setup_position = NATIVE_LINUX_SMOKE
+        .find("sudo apt-get update")
+        .expect("Native host dependency setup must be present");
+    let pre_setup = &NATIVE_LINUX_SMOKE[..host_setup_position];
+
+    for required in [
+        "must be supplied together",
+        "! -f \"$candidate\" || -L \"$candidate\" || ! -x \"$candidate\"",
+        "realpath -e -- \"$native_runtime_binary\"",
+        "Native runtime and Agent qualification binaries must be distinct",
+        "use_development_binaries=false",
+    ] {
+        assert!(
+            pre_setup.contains(required),
+            "Native package binary validation must precede host setup: {required}"
+        );
+    }
+    assert!(pre_setup.matches("validate_native_binaries").count() >= 2);
 }
