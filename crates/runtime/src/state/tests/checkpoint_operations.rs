@@ -200,7 +200,7 @@ async fn checkpoint_refuses_an_existing_process_io_claim_before_writing_its_jour
 }
 
 #[tokio::test]
-async fn startup_rejects_checkpoint_request_drift_inside_the_v4_journal() {
+async fn startup_rejects_checkpoint_request_drift_inside_the_current_journal() {
     let (temporary, store, source) = paused_fixture().await;
     let checkpoint = checkpoint_request(
         &temporary,

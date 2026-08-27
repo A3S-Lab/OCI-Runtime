@@ -15,10 +15,13 @@ checkpoint/restore responses. Every checkpoint and restore requires protocol
 8 regardless of attachment schema; protocol 7 and earlier reject it before
 service dispatch.
 
-The Host implements checkpoint through a durable v4 journal and dispatches it
-only to a current-platform driver that explicitly advertises the operation.
-No production driver advertises checkpoint yet. Restore remains unsupported by
-Host orchestration and cannot be advertised by a registered driver.
+The Host implements checkpoint and restore through durable journals and
+dispatches them only to a current-platform driver that explicitly advertises
+the operation. Restore capability is cumulative: the same driver must also
+advertise checkpoint. A committed v5 restore replays without reopening its
+artifact; a pending restore validates the caller-owned file and exact
+compatibility evidence before allocating lifecycle state. No production driver
+advertises either operation yet.
 
 Version 7 added `a3s.oci.attachments.v4` reusable guest-session identity
 evidence to create. A v4 create is rejected before dispatch when a connection
@@ -266,8 +269,9 @@ duplication.
 The host also requires the five core driver operations and advertises
 `wait`, `exec`, `signal-process`, `wait-process`, `pause`, `resume`, and
 `processes`, `update`, `stats`, `read-output`, `write-stdin`, `close-stdin`,
-`resize`, `file`, and `filesystem` only when the selected driver implements
-each one. `WaitRequest`
+`resize`, `file`, `filesystem`, and `checkpoint` only when the selected driver
+implements each one. `restore` additionally requires that driver's checkpoint
+capability and matching immutable compatibility evidence. `WaitRequest`
 targets one exact generation, accepts an optional
 millisecond timeout, and returns an `ExitStatus` containing either an exit
 code in `0..=255` or a positive signal. Repeated waits must return the same
@@ -349,10 +353,12 @@ acknowledgement is retryable, and replaying the completed Host operation sends
 it again without redispatching the workload mutation. Protocol-v1 through
 protocol-v9 Guests retain a compatibility no-op. File upload and Filesystem
 mkdir/move/remove retain their exact v3 request and typed response. New Host
-mutations use v4; checkpoint additionally retains its exact normalized path,
-paused source target, and immutable typed response. These operations share the
-same post-commit reclamation boundary. Reusing an acknowledged OperationId with
-changed content remains fenced by the Host record.
+mutations use v5; checkpoint retains its v4-compatible exact normalized path,
+paused source target, and immutable typed response. Restore adds its complete
+request, allocated generation, immutable reference, and paused-running
+response. These operations share the same post-commit reclamation boundary.
+Reusing an acknowledged OperationId with changed content remains fenced by the
+Host record.
 
 File downloads and uploads are limited to 32 MiB decoded payloads. Directory
 listings are limited to depth 64, 4,096 entries, and a 12 MiB serialized

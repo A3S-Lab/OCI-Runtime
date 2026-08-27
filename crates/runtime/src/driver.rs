@@ -3,11 +3,11 @@ use a3s_oci_core::DriverCapability;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
     async_trait, AttachmentCapabilities, CheckpointArtifactPath, CheckpointCompatibility,
-    CheckpointDigest, ContainerRecord, ContainerStats, ContainerTarget, CreateAttachments,
-    DeleteMode, Error, ErrorCode, ExitStatus, FileRequest, FileResponse, FilesystemRequest,
-    FilesystemResponse, IsolationRequest, OciBundle, OciLinuxSupport, OperationContext,
-    OperationId, OutputChunk, ProcessIo, ProcessRecord, ProcessTarget, Result, RuntimeArtifact,
-    RuntimeOperation, Signal, TerminalSize,
+    CheckpointDigest, CheckpointReference, ContainerRecord, ContainerStats, ContainerTarget,
+    CreateAttachments, DeleteMode, Error, ErrorCode, ExitStatus, FileRequest, FileResponse,
+    FilesystemRequest, FilesystemResponse, IsolationRequest, OciBundle, OciLinuxSupport,
+    OperationContext, OperationId, OutputChunk, ProcessIo, ProcessRecord, ProcessTarget, Result,
+    RuntimeArtifact, RuntimeOperation, Signal, TerminalSize,
 };
 
 const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
@@ -627,6 +627,42 @@ impl DriverCheckpointResult {
     }
 }
 
+/// Read-only checkpoint artifact validation before Host lifecycle reservation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverRestoreValidationRequest {
+    /// Stable identity for diagnostics and driver-side validation deduplication.
+    pub context: OperationContext,
+    /// Already-authorized caller-owned artifact path.
+    pub artifact_path: CheckpointArtifactPath,
+    /// Complete immutable artifact and execution-stack evidence.
+    pub reference: CheckpointReference,
+    /// Exact Host executable evaluating this restore attempt.
+    pub runtime_artifact: RuntimeArtifact,
+}
+
+/// Exact restore input passed from durable Host orchestration to one driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverRestoreRequest {
+    /// Stable idempotency and deadline metadata.
+    pub context: OperationContext,
+    /// Newly allocated container ID and exact generation.
+    pub target: ContainerTarget,
+    /// Immutable bundle reconstructed from the durable configuration snapshot.
+    pub bundle: OciBundle,
+    /// Already-authorized caller-owned artifact path.
+    pub artifact_path: CheckpointArtifactPath,
+    /// Isolation contract bound by the immutable checkpoint reference.
+    pub isolation: IsolationRequest,
+    /// Host-side standard-I/O disposition for the restored init process.
+    pub io: ProcessIo,
+    /// New versioned, digest-bound attachment contract for this generation.
+    pub attachment_contract: CreateAttachments,
+    /// Exact immutable checkpoint evidence consumed by this operation.
+    pub reference: CheckpointReference,
+    /// Exact Host executable invoking this attempt.
+    pub runtime_artifact: RuntimeArtifact,
+}
+
 /// Driver-reported process identity returned after exec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DriverProcess {
@@ -857,5 +893,38 @@ pub trait RuntimeDriver: Send + Sync {
         _request: DriverCheckpointRequest,
     ) -> Result<DriverCheckpointResult> {
         Err(Error::unsupported("checkpoint"))
+    }
+
+    /// Validate one caller-owned checkpoint artifact without lifecycle effects.
+    ///
+    /// Implementations must open the artifact read-only without following an
+    /// unsafe link, verify its exact size and content digest, and reject any
+    /// incompatible driver build or format. This preflight must not create a
+    /// container, attach resources, or mutate the artifact.
+    async fn validate_restore_artifact(
+        &self,
+        _request: DriverRestoreValidationRequest,
+    ) -> Result<()> {
+        Err(Error::unsupported("restore"))
+    }
+
+    /// Prepare a driver-local bundle view without changing immutable config.
+    ///
+    /// The method runs after generation reservation. It must be idempotent by
+    /// operation ID and must either retain enough exact-target state for
+    /// `restore` to resume or clean every partial before a terminal error.
+    async fn prepare_restore_bundle(&self, request: &DriverRestoreRequest) -> Result<OciBundle> {
+        Ok(request.bundle.clone())
+    }
+
+    /// Restore one immutable checkpoint as a new paused running generation.
+    ///
+    /// Implementations must revalidate the caller-owned artifact before their
+    /// first lifecycle effect, never modify it, and remain idempotent by
+    /// operation ID. Success returns a positive init PID with `running` and
+    /// `paused=true`. A terminal error is valid only after every resource
+    /// created for this target has been removed or detached.
+    async fn restore(&self, _request: DriverRestoreRequest) -> Result<DriverState> {
+        Err(Error::unsupported("restore"))
     }
 }

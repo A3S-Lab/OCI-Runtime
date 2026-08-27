@@ -151,6 +151,7 @@ impl DurableStateStore {
                 StoredOperationStatus::Succeeded { .. }
                 | StoredOperationStatus::SucceededFilesystem { .. }
                 | StoredOperationStatus::SucceededCheckpoint { .. }
+                | StoredOperationStatus::SucceededRestore { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-exec",
@@ -307,6 +308,7 @@ impl DurableStateStore {
             StoredOperationStatus::Succeeded { .. }
             | StoredOperationStatus::SucceededFilesystem { .. }
             | StoredOperationStatus::SucceededCheckpoint { .. }
+            | StoredOperationStatus::SucceededRestore { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
@@ -447,7 +449,8 @@ impl DurableStateStore {
                 StoredOperationStatus::Succeeded { .. }
                 | StoredOperationStatus::SucceededProcess { .. }
                 | StoredOperationStatus::SucceededFilesystem { .. }
-                | StoredOperationStatus::SucceededCheckpoint { .. } => Err(state_error(
+                | StoredOperationStatus::SucceededCheckpoint { .. }
+                | StoredOperationStatus::SucceededRestore { .. } => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-signal-process",
                     format!(
@@ -545,7 +548,8 @@ impl DurableStateStore {
             StoredOperationStatus::Succeeded { .. }
             | StoredOperationStatus::SucceededProcess { .. }
             | StoredOperationStatus::SucceededFilesystem { .. }
-            | StoredOperationStatus::SucceededCheckpoint { .. } => {
+            | StoredOperationStatus::SucceededCheckpoint { .. }
+            | StoredOperationStatus::SucceededRestore { .. } => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "complete-signal-process",

@@ -23,8 +23,8 @@ impl DurableStateStore {
         match &operation.outcome {
             StoredOperationStatus::Prepared => {}
             StoredOperationStatus::Failed { error: durable } if durable == error => {
-                if operation.kind == StoredOperationKind::Create {
-                    self.reconcile_failed_create(&operation).await?;
+                if is_creation(operation.kind) {
+                    self.reconcile_failed_creation(&operation).await?;
                 }
                 return Ok(());
             }
@@ -39,6 +39,7 @@ impl DurableStateStore {
             | StoredOperationStatus::SucceededProcess { .. }
             | StoredOperationStatus::SucceededFilesystem { .. }
             | StoredOperationStatus::SucceededCheckpoint { .. }
+            | StoredOperationStatus::SucceededRestore { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::Conflict,
@@ -48,19 +49,24 @@ impl DurableStateStore {
             }
         }
 
-        if operation.kind == StoredOperationKind::Create {
+        if is_creation(operation.kind) {
             // Journal first. If the host dies before the directory move, the
             // next retry can still recover the exact error and finish cleanup.
             operation.outcome = StoredOperationStatus::Failed {
                 error: error.clone(),
             };
+            let failure_mutation = match operation.kind {
+                StoredOperationKind::Create => DurableMutation::RecordCreateFailure,
+                StoredOperationKind::Restore => DurableMutation::RecordRestoreFailure,
+                _ => unreachable!("creation kind was checked above"),
+            };
             self.write_json(
-                DurableMutation::RecordCreateFailure,
+                failure_mutation,
                 &self.operation_path(operation_id),
                 &operation,
             )
             .await?;
-            self.reconcile_failed_create(&operation).await?;
+            self.reconcile_failed_creation(&operation).await?;
             return Ok(());
         }
 
@@ -101,7 +107,7 @@ impl DurableStateStore {
                 state_error(
                     ErrorCode::Internal,
                     "fail-operation",
-                    format!("create operation {operation_id} reached non-create failure handling"),
+                    format!("operation {operation_id} reached invalid failure handling"),
                 )
             })?;
         let mut stored = self
@@ -139,16 +145,60 @@ impl DurableStateStore {
                 format!("operation {} is not an OCI create", operation.operation_id),
             ));
         }
+        self.reconcile_failed_creation(operation).await
+    }
+
+    pub(super) async fn reconcile_failed_restore(
+        &self,
+        operation: &super::model::StoredOperation,
+    ) -> Result<()> {
+        if operation.kind != StoredOperationKind::Restore {
+            return Err(state_error(
+                ErrorCode::FailedPrecondition,
+                "reconcile-failed-restore",
+                format!("operation {} is not an OCI restore", operation.operation_id),
+            ));
+        }
+        self.reconcile_failed_creation(operation).await
+    }
+
+    async fn reconcile_failed_creation(
+        &self,
+        operation: &super::model::StoredOperation,
+    ) -> Result<()> {
+        if !is_creation(operation.kind) {
+            return Err(state_error(
+                ErrorCode::FailedPrecondition,
+                "reconcile-failed-creation",
+                format!(
+                    "operation {} is not an OCI creation operation",
+                    operation.operation_id
+                ),
+            ));
+        }
         if !matches!(operation.outcome, StoredOperationStatus::Failed { .. }) {
             return Err(state_error(
                 ErrorCode::FailedPrecondition,
-                "reconcile-failed-create",
-                format!("operation {} has not failed", operation.operation_id),
+                "reconcile-failed-creation",
+                format!(
+                    "creation operation {} has not failed",
+                    operation.operation_id
+                ),
             ));
         }
 
         let source = self.container_directory(&operation.container_id);
-        let tombstone = self.failed_create_tombstone(&operation.operation_id);
+        let (tombstone, mutation) = match operation.kind {
+            StoredOperationKind::Create => (
+                self.failed_create_tombstone(&operation.operation_id),
+                DurableMutation::MoveFailedCreateTombstone,
+            ),
+            StoredOperationKind::Restore => (
+                self.failed_restore_tombstone(&operation.operation_id),
+                DurableMutation::MoveFailedRestoreTombstone,
+            ),
+            _ => unreachable!("creation kind was checked above"),
+        };
         match (
             self.filesystem.path_exists(&source).await?,
             self.filesystem.path_exists(&tombstone).await?,
@@ -160,23 +210,18 @@ impl DurableStateStore {
                 ensure_active_operation(
                     &stored,
                     &operation.operation_id,
-                    "reconcile-failed-create",
+                    "reconcile-failed-creation",
                 )?;
-                self.move_directory(
-                    DurableMutation::MoveFailedCreateTombstone,
-                    &source,
-                    &tombstone,
-                )
-                .await
+                self.move_directory(mutation, &source, &tombstone).await
             }
             (true, true) => {
                 let live = self.load_stored_container(&operation.container_id).await?;
                 if live.record.generation == operation.generation {
                     Err(state_error(
                         ErrorCode::Conflict,
-                        "reconcile-failed-create",
+                        "reconcile-failed-creation",
                         format!(
-                            "failed create operation {} has both live state and a tombstone",
+                            "failed creation operation {} has both live state and a tombstone",
                             operation.operation_id
                         ),
                     ))
@@ -216,6 +261,7 @@ const fn process_failure_mutations(
             DurableMutation::RecordResizeFailure,
         )),
         StoredOperationKind::Create
+        | StoredOperationKind::Restore
         | StoredOperationKind::Start
         | StoredOperationKind::Kill
         | StoredOperationKind::Pause
@@ -233,6 +279,7 @@ const fn failure_mutations(
 ) -> Option<(DurableMutation, DurableMutation)> {
     match kind {
         StoredOperationKind::Create => None,
+        StoredOperationKind::Restore => None,
         StoredOperationKind::Start => Some((
             DurableMutation::ReleaseFailedStartClaim,
             DurableMutation::RecordStartFailure,
@@ -275,4 +322,11 @@ const fn failure_mutations(
         | StoredOperationKind::CloseStdin
         | StoredOperationKind::Resize => None,
     }
+}
+
+const fn is_creation(kind: StoredOperationKind) -> bool {
+    matches!(
+        kind,
+        StoredOperationKind::Create | StoredOperationKind::Restore
+    )
 }

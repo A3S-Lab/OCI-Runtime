@@ -22,9 +22,10 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use crate::driver::{
     DriverCheckpointRequest, DriverCloseStdinRequest, DriverContainerOperationRequest,
     DriverCreateAttachments, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest,
-    DriverStartRequest, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
-    DriverWriteStdinRequest, RecreatedProcess, RuntimeDriver,
+    DriverKillRequest, DriverReadOutputRequest, DriverResizeRequest, DriverRestoreRequest,
+    DriverRestoreValidationRequest, DriverSignalProcessRequest, DriverStartRequest,
+    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
+    RecreatedProcess, RuntimeDriver,
 };
 use crate::fault::{
     DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint, NoFaultInjector,
@@ -32,7 +33,8 @@ use crate::fault::{
 use crate::state::{
     CheckpointOperationPreparation, DeletePreparation, DurableStateStore,
     FilesystemMutationPreparation, ProcessIoPreparation, ProcessOperationPreparation,
-    ProcessWaitPreparation, RecordOperationPreparation, SignalProcessPreparation,
+    ProcessWaitPreparation, RecordOperationPreparation, RestoreOperationLookup,
+    RestoreOperationPreparation, SignalProcessPreparation,
 };
 
 mod artifact;
@@ -1429,7 +1431,7 @@ impl OciRuntimeService for HostRuntimeService {
             || compatibility.isolation() != source.isolation
             || compatibility.platform() != HostPlatform::current()
             || compatibility.architecture() != std::env::consts::ARCH
-            || compatibility.runtime_artifact().name() != runtime_artifact.name()
+            || compatibility.runtime_artifact() != &runtime_artifact
         {
             return Err(Error::new(
                 ErrorCode::FailedPrecondition,
@@ -1464,8 +1466,152 @@ impl OciRuntimeService for HostRuntimeService {
         lifecycle.acknowledge_result(&operation_id, completed).await
     }
 
-    async fn restore(&self, _request: RestoreRequest) -> Result<RestoreResponse> {
-        Err(Error::unsupported("restore"))
+    async fn restore(&self, request: RestoreRequest) -> Result<RestoreResponse> {
+        request.validate()?;
+        let lifecycle = self.lifecycle("restore")?;
+        lifecycle.ensure_operation(RuntimeOperation::Restore, "restore")?;
+        let operation_id = request.context().operation_id.clone();
+        if let RestoreOperationLookup::Replayed(response) =
+            lifecycle.store.lookup_restore(&request).await?
+        {
+            return lifecycle
+                .acknowledge_result(&operation_id, Ok(*response))
+                .await;
+        }
+
+        let reference = request.reference()?.clone();
+        let compatibility = reference.compatibility();
+        let runtime_artifact = artifact::current()
+            .await
+            .map_err(|error| error.for_operation("restore"))?;
+        if compatibility.platform() != HostPlatform::current()
+            || compatibility.architecture() != std::env::consts::ARCH
+            || compatibility.runtime_artifact() != &runtime_artifact
+        {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "checkpoint reference is incompatible with the current Host platform, architecture, or executable",
+            )
+            .for_operation("restore"));
+        }
+        let registered = lifecycle.driver(compatibility.driver(), "restore")?;
+        registered.ensure_operation(RuntimeOperation::Restore, "restore")?;
+        if !registered
+            .capability()
+            .isolation_classes
+            .contains(&request.isolation().class())
+        {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                "checkpoint restore isolation is not provided by its recorded driver",
+            )
+            .for_operation("restore"));
+        }
+        lifecycle
+            .drivers
+            .linux_support()
+            .validate_spec(request.bundle().spec(), "restore")?;
+        registered
+            .driver()
+            .validate_create_bundle(request.bundle())?;
+        registered
+            .attachment_capabilities()
+            .require(request.attachments())?;
+
+        lifecycle.driver_boundary(
+            DriverOperation::RestoreValidation,
+            DriverBoundaryStage::BeforeCall,
+        )?;
+        let validation = registered
+            .driver()
+            .validate_restore_artifact(DriverRestoreValidationRequest {
+                context: request.context().clone(),
+                artifact_path: request.artifact_path().clone(),
+                reference: reference.clone(),
+                runtime_artifact: runtime_artifact.clone(),
+            })
+            .await;
+        lifecycle.driver_boundary(
+            DriverOperation::RestoreValidation,
+            DriverBoundaryStage::AfterCall,
+        )?;
+        validation?;
+
+        let restoring = match lifecycle
+            .store
+            .prepare_restore(&request, registered.kind())
+            .await?
+        {
+            RestoreOperationPreparation::Replayed(response) => {
+                return lifecycle
+                    .acknowledge_result(&operation_id, Ok(*response))
+                    .await;
+            }
+            RestoreOperationPreparation::Prepared(record)
+            | RestoreOperationPreparation::Resume(record) => record,
+        };
+        let target = ContainerTarget::exact(request.id().clone(), restoring.generation);
+        let durable_bundle = lifecycle.store.bundle(&target).await?;
+        let mut driver_request = DriverRestoreRequest {
+            context: request.context().clone(),
+            target,
+            bundle: durable_bundle,
+            artifact_path: request.artifact_path().clone(),
+            isolation: request.isolation().clone(),
+            io: request.attachments().process_io().clone(),
+            attachment_contract: request.attachments().clone(),
+            reference,
+            runtime_artifact,
+        };
+        lifecycle.driver_boundary(DriverOperation::Restore, DriverBoundaryStage::BeforeCall)?;
+        let staged_bundle = match registered
+            .driver()
+            .prepare_restore_bundle(&driver_request)
+            .await
+        {
+            Ok(bundle) => bundle,
+            Err(error) => {
+                return lifecycle.fail_driver_operation(&operation_id, error).await;
+            }
+        };
+        if staged_bundle.config_bytes() != driver_request.bundle.config_bytes()
+            || staged_bundle.config_digest() != driver_request.bundle.config_digest()
+        {
+            let error = Error::new(
+                ErrorCode::FailedPrecondition,
+                "driver restore-bundle preparation changed immutable configuration bytes",
+            )
+            .for_operation("restore");
+            return lifecycle.fail_driver_operation(&operation_id, error).await;
+        }
+        if let Err(error) = driver_request.attachment_contract.validate(&staged_bundle) {
+            return lifecycle.fail_driver_operation(&operation_id, error).await;
+        }
+        driver_request.bundle = staged_bundle;
+        let restored = registered.driver().restore(driver_request).await;
+        lifecycle.driver_boundary(DriverOperation::Restore, DriverBoundaryStage::AfterCall)?;
+        let restored = match restored {
+            Ok(restored) => restored,
+            Err(error) => return lifecycle.fail_driver_operation(&operation_id, error).await,
+        };
+        let Some(pid) = restored.pid() else {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "restore driver returned no positive init PID",
+            )
+            .for_operation("restore")
+            .retryable(true));
+        };
+        if restored.status() != ContainerState::Running || !restored.paused() || pid <= 0 {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "restore driver must return one paused running generation with a positive init PID",
+            )
+            .for_operation("restore")
+            .retryable(true));
+        }
+        let completed = lifecycle.store.complete_restore(&operation_id, pid).await;
+        lifecycle.acknowledge_result(&operation_id, completed).await
     }
 }
 

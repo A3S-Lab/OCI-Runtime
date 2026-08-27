@@ -4,17 +4,19 @@
 
 SDK protocol 8 freezes the public checkpoint and restore contract. It does not
 claim that a production driver can execute either operation. The Host Service
-now implements durable checkpoint orchestration and permits a current-platform
-driver to advertise `Checkpoint`. No production driver advertises it, so
-callers must still treat absence from `RuntimeInfo::operations` and the
-exact-artifact extension catalog as authoritative. Restore continues to return
-`Unsupported`, and the driver registry rejects `Restore` advertisements.
+implements durable orchestration for both operations. The registry permits a
+current-platform driver to advertise `Checkpoint`, and permits `Restore` only
+when that same driver also advertises `Checkpoint`. No production driver
+advertises either operation, so callers must still treat absence from
+`RuntimeInfo::operations` and the exact-artifact extension catalog as
+authoritative.
 
 A production driver may advertise checkpoint only after it provides the
 required atomic artifact and cleanup behavior and the relevant real-host
-qualification passes. Restore additionally requires durable Host creation and
-rollback orchestration before any driver may advertise it. Protocol
-availability alone is never capability evidence.
+qualification passes. Restore additionally requires read-only artifact
+validation, exact compatibility checks, idempotent paused-process recreation,
+and scoped terminal cleanup. Protocol and Host availability alone are never
+capability evidence.
 
 ## Artifact And Reference
 
@@ -78,20 +80,33 @@ content before lifecycle mutation, and never changes or deletes the artifact.
 A failed restore removes only runtime-owned lifecycle, driver, and attachment
 resources created for that attempt.
 
-Both requests carry `OperationContext`. The Host stores checkpoint in
-`a3s.oci.operation.v4`, retaining the exact normalized request and typed
-response. It claims the source before driver dispatch, rejects active process
-mutations and I/O, and blocks new process I/O until success or terminal failure
-is durable. Reusing an operation ID with a different target or path fails. A
-retry of a committed checkpoint returns the same reference without rewriting
-the file, including after service reopen. The future restore implementation
-must apply the same rule to its reference, bundle, isolation, attachments, and
-new generation.
+Both requests carry `OperationContext`. New Host journals use
+`a3s.oci.operation.v5`; checkpoint records written with v4 remain readable.
+Checkpoint retains the exact normalized request and typed response. It claims
+the source before driver dispatch, rejects active process mutations and I/O,
+and blocks new process I/O until success or terminal failure is durable.
+Reusing an operation ID with a different target or path fails. A retry of a
+committed checkpoint returns the same reference without rewriting the file,
+including after service reopen.
+
+Restore checks its durable journal before touching the caller artifact, so a
+committed response or terminal error replays even when the artifact is no
+longer present. A pending restore performs read-only artifact validation and
+exact compatibility selection before it writes an operation or allocates a
+generation. Its v5 journal retains the reference, bundle, isolation,
+attachments, path, target ID, and allocated generation. A prepared attempt
+resumes through the same operation ID; success commits `running`, a positive
+PID, and the paused annotation before returning the exact typed response.
+Changing any retained field under the same operation ID fails closed.
 
 Terminal driver errors are durable only after the driver has removed its own
-unpublished partials. A retryable driver error or Host rejection of inconsistent
-compatibility evidence leaves the checkpoint claim active so another mutation
-cannot race an unresolved published effect.
+unpublished partials. A retryable checkpoint driver error or Host rejection of
+inconsistent compatibility evidence leaves the source claim active so another
+mutation cannot race an unresolved published effect. A terminal restore error
+is journaled before the runtime-owned generation directory is moved to an
+operation-bound `.failed-restore` quarantine entry. Exact retries finish that
+move before replaying the same error; a later operation may reuse the container
+ID only with a higher generation.
 
 ## Ownership Boundary
 

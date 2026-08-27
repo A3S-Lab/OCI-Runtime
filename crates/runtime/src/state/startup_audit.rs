@@ -129,7 +129,7 @@ impl DurableStateStore {
         operations: &OperationInventory,
         generations: &GenerationInventory,
     ) -> Result<()> {
-        let mut create_owners = BTreeSet::new();
+        let mut creation_owners = BTreeSet::new();
         for operation in operations.values() {
             let last_generation = generations
                 .get(operation.container_id.as_str())
@@ -154,16 +154,17 @@ impl DurableStateStore {
                     ),
                 ));
             }
-            if operation.kind == StoredOperationKind::Create
-                && !create_owners.insert((
-                    operation.container_id.as_str().to_string(),
-                    operation.generation.0,
-                ))
-            {
+            if matches!(
+                operation.kind,
+                StoredOperationKind::Create | StoredOperationKind::Restore
+            ) && !creation_owners.insert((
+                operation.container_id.as_str().to_string(),
+                operation.generation.0,
+            )) {
                 return Err(audit_error(
                     "audit-operation-state",
                     format!(
-                        "container {} generation {} has more than one Create operation",
+                        "container {} generation {} has more than one creation operation",
                         operation.container_id, operation.generation.0
                     ),
                 ));
@@ -198,8 +199,10 @@ impl DurableStateStore {
             if !has_record {
                 let prepared = generations.get(id.as_str()).is_some_and(|last_generation| {
                     operations.values().any(|operation| {
-                        operation.kind == StoredOperationKind::Create
-                            && operation.container_id == id
+                        matches!(
+                            operation.kind,
+                            StoredOperationKind::Create | StoredOperationKind::Restore
+                        ) && operation.container_id == id
                             && operation.generation == *last_generation
                             && matches!(operation.outcome, StoredOperationStatus::Prepared)
                     })
@@ -208,7 +211,7 @@ impl DurableStateStore {
                     return Err(audit_error(
                         "audit-container-state",
                         format!(
-                            "container state directory {name:?} has no record or prepared Create operation"
+                            "container state directory {name:?} has no record or prepared creation operation"
                         ),
                     ));
                 }
@@ -231,16 +234,18 @@ impl DurableStateStore {
                     ),
                 ));
             }
-            let has_create = operations.values().any(|operation| {
-                operation.kind == StoredOperationKind::Create
-                    && operation.container_id == id
+            let has_creation = operations.values().any(|operation| {
+                matches!(
+                    operation.kind,
+                    StoredOperationKind::Create | StoredOperationKind::Restore
+                ) && operation.container_id == id
                     && operation.generation == stored.record.generation
             });
-            if !has_create {
+            if !has_creation {
                 return Err(audit_error(
                     "audit-container-state",
                     format!(
-                        "container {id} generation {} has no durable Create operation",
+                        "container {id} generation {} has no durable creation operation",
                         stored.record.generation.0
                     ),
                 ));
@@ -428,7 +433,10 @@ fn validate_claim(
     })?;
     let recoverable_outcome = matches!(operation.outcome, StoredOperationStatus::Prepared)
         || (process_id.is_none()
-            && operation.kind == StoredOperationKind::Create
+            && matches!(
+                operation.kind,
+                StoredOperationKind::Create | StoredOperationKind::Restore
+            )
             && matches!(operation.outcome, StoredOperationStatus::Failed { .. }));
     if operation.container_id != *container_id
         || operation.generation != generation

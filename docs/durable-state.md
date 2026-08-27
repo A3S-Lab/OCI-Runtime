@@ -94,7 +94,8 @@ runtime-root/
 |       `-- <20-digit-sequence>.json
 `-- quarantine/
     |-- <operation-id>.deleted/
-    `-- <operation-id>.failed-create/
+    |-- <operation-id>.failed-create/
+    `-- <operation-id>.failed-restore/
 ```
 
 All identifiers are validated SDK types before they become path components.
@@ -146,36 +147,44 @@ cleanup. Production drivers do not expose this profile until real-host restart
 and leak qualification is retained.
 
 Start, kill, pause, resume, update, delete, File upload, Filesystem
-mkdir/move/remove, and checkpoint use the same global journal and request
-fingerprinting. Each accepted mutation claims the target record so a
-second mutation cannot race the driver call. Start revalidates the durable
-configuration snapshot, not the caller's mutable source bundle, before
+mkdir/move/remove, checkpoint, and restore use the same global journal and
+request fingerprinting. Mutations of an existing container claim its exact
+record so a second mutation cannot race the driver call. Start revalidates the
+durable configuration snapshot, not the caller's mutable source bundle, before
 recording an intent. Pause and resume preserve the standard OCI `running`
 status and store freezer state in the reserved
 `dev.a3s.oci.runtime.paused=true` state annotation. Checkpoint requires that
 paused running state, refuses any active init or exec mutation/I/O, and prevents
-new process I/O until its exact response or terminal error is durable. Update
-fingerprints the complete OCI `LinuxResources` patch and returns the exact
-observed container record on replay. Delete atomically moves the owned container
-directory into quarantine rather than recursively deleting an unresolved path.
+new process I/O until its exact response or terminal error is durable. Restore
+checks for a committed replay first, validates the immutable caller artifact
+and exact compatibility without lifecycle effects, and only then allocates and
+claims a new `creating` generation. Success commits a positive driver PID as a
+paused `running` record. Update fingerprints the complete OCI `LinuxResources`
+patch and returns the exact observed container record on replay. Delete
+atomically moves the owned container directory into quarantine rather than
+recursively deleting an unresolved path.
 
-New journals use `a3s.oci.operation.v4` and SHA-256 over canonical JSON with
+New journals use `a3s.oci.operation.v5` and SHA-256 over canonical JSON with
 every object key sorted, so unordered OCI resource maps retain the same
 identity after process reconstruction. Version 3 retains the complete
 validated request and typed response for File and Filesystem mutations;
 version 4 adds the exact normalized checkpoint request and immutable typed
-response. Existing `a3s.oci.operation.v1`, `a3s.oci.operation.v2`, and
-`a3s.oci.operation.v3` journals remain loadable and validate retries with their
-original digest algorithm.
+response; version 5 adds the complete restore request, generation, and paused
+typed response. Existing `a3s.oci.operation.v1` through
+`a3s.oci.operation.v4` journals remain loadable and validate supported retries
+with their original schema and digest rules. Restore is accepted only in v5.
 
 Drivers must be idempotent by `OperationId`. A retryable driver error leaves
 the intent active for an exact retry. A terminal error is stored and replayed
 exactly; it releases a start, kill, pause, resume, update, delete, exec,
 checkpoint, or per-process signal, write-stdin, close-stdin, resize, File, or
-Filesystem claim, while a failed create is moved out of the live namespace
-before its ID can be reused. A checkpoint driver must remove only its own
-unpublished partials before returning a terminal error; retryable or
-unvalidated evidence keeps the durable claim active.
+Filesystem claim, while a failed create or restore is moved out of the live
+namespace before its ID can be reused. A checkpoint driver must remove only
+its own unpublished partials before returning a terminal error. A restore
+driver must remove its runtime-owned process and attachment effects while
+leaving the caller artifact untouched; the Host then journals the failure and
+quarantines that attempt's exact generation. Retryable or unvalidated evidence
+keeps the durable operation resumable.
 
 Exec uses the same global operation journal. Preparation reserves the
 generation-scoped process ID before driver dispatch, so duplicate IDs fail
@@ -258,6 +267,8 @@ handles these interrupted states:
 - a crash after generation allocation may leave an unused generation;
 - a prepared create rebuilds a missing or partial configuration/record pair
   from the digest-matched request before the driver is called;
+- a prepared restore rebuilds the same request-bound configuration/record pair
+  and resumes only after the caller artifact is revalidated;
 - a prepared operation is returned as resume work and is reconciled through
   the idempotent driver;
 - a created record whose success journal was not committed can be completed
@@ -282,13 +293,16 @@ handles these interrupted states:
 - cached init and exec terminal results survive host-service reopen;
 - a terminal create failure completes quarantine before replaying its exact
   error;
+- a terminal restore failure completes its distinct quarantine move before
+  replaying the exact error, while a committed success replays without touching
+  the artifact;
 - malformed or digest-mismatched records fail closed.
 
 ## Fault Injection Contract
 
 Every lifecycle write is routed through one typed `DurableMutation` registry.
-The registry currently contains 113 semantic mutations. One hundred eleven atomic
-file replacements are exercised at all seven commit stages:
+The registry currently contains 121 semantic mutations. One hundred eighteen
+atomic file replacements are exercised at all seven commit stages:
 
 1. temporary file creation;
 2. private permission or ACL application;
@@ -298,12 +312,12 @@ file replacements are exercised at all seven commit stages:
 6. atomic replacement;
 7. parent-directory sync.
 
-The delete and failed-create quarantine moves are each exercised after the
-rename, source-parent sync, and destination-parent sync. This expands to 783
-durable fault points. The host matrix separately injects before and after all
-23 `RuntimeDriver` boundaries, including capability discovery, startup
-recovery, file transfer, filesystem operations, and checkpoint, for another 46
-boundaries.
+The delete, failed-create, and failed-restore quarantine moves are each
+exercised after the rename, source-parent sync, and destination-parent sync.
+This expands to 835 durable fault points. The host matrix separately injects
+before and after all 25 `RuntimeDriver` boundaries, including capability
+discovery, startup recovery, file transfer, filesystem operations, checkpoint,
+restore validation, and restore execution, for another 50 boundaries.
 
 On Unix the final file and directory boundaries follow explicit directory
 `sync_all` calls. Windows reaches the same logical checkpoints after its
@@ -321,21 +335,21 @@ Production uses a non-configurable no-op injector.
 Before the store can serve a request, startup enumerates the complete durable
 state graph. It rejects unexpected root, container, process, quarantine, and
 event entries; filename/payload identity drift; operations without an
-allocated generation; duplicate Create owners; live records below or beyond
-their generation fence; missing Create or Exec ownership; incompatible active
-claims; malformed configuration or attachment evidence, including mismatched
-v4 guest-session or OAR-01 network-enforcement records; quarantine entries
-that disagree with their operation; one generation present both live and
-quarantined; and event records without an exact identity claim. Quarantined
+allocated generation; duplicate creation owners; live records below or beyond
+their generation fence; missing Create/Restore or Exec ownership; incompatible
+active claims; malformed configuration or attachment evidence, including
+mismatched v4 guest-session or OAR-01 network-enforcement records; quarantine
+entries that disagree with their operation; one generation present both live
+and quarantined; and event records without an exact identity claim. Quarantined
 container snapshots and their process namespaces receive the same record and
 configuration validation as live state.
 
 The audit preserves the states created by documented commit ordering. An
 allocated generation may have no operation after interruption, a prepared
-Create may have no complete live record, a failed Create may retain its live
-claim until quarantine replay, an event cursor may contain a gap, and a
-committed event claim may await its sequence record. Plain, validly named
-`.next` files also remain available to the operation that owns recovery.
+Create or Restore may have no complete live record, a failed creation may
+retain its live claim until quarantine replay, an event cursor may contain a
+gap, and a committed event claim may await its sequence record. Plain, validly
+named `.next` files also remain available to the operation that owns recovery.
 
 Startup now audits each durable driver binding and calls only that exact
 driver's idempotent recovery hook. An optional observation is committed through

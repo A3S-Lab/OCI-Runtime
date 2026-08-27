@@ -103,11 +103,15 @@ impl DriverRegistry {
             }
 
             let operations = validate_driver_operations(registration.driver.operations())?;
-            if operations.contains(&RuntimeOperation::Checkpoint)
-                && driver_platform(capability.driver) != HostPlatform::current()
+            if operations.iter().any(|operation| {
+                matches!(
+                    operation,
+                    RuntimeOperation::Checkpoint | RuntimeOperation::Restore
+                )
+            }) && driver_platform(capability.driver) != HostPlatform::current()
             {
                 return Err(open_error(format!(
-                    "runtime driver {:?} cannot advertise checkpoint on {:?}",
+                    "runtime driver {:?} cannot advertise checkpoint or restore on {:?}",
                     capability.driver,
                     HostPlatform::current()
                 )));
@@ -376,7 +380,7 @@ fn validate_driver_operations(
         RuntimeOperation::Kill,
         RuntimeOperation::Delete,
     ];
-    const HOST_SUPPORTED: [RuntimeOperation; 21] = [
+    const HOST_SUPPORTED: [RuntimeOperation; 22] = [
         RuntimeOperation::Create,
         RuntimeOperation::State,
         RuntimeOperation::Start,
@@ -398,6 +402,7 @@ fn validate_driver_operations(
         RuntimeOperation::File,
         RuntimeOperation::Filesystem,
         RuntimeOperation::Checkpoint,
+        RuntimeOperation::Restore,
     ];
     let reported = operations.iter().copied().collect::<BTreeSet<_>>();
     if reported.len() != operations.len() {
@@ -418,6 +423,13 @@ fn validate_driver_operations(
         return Err(open_error(format!(
             "runtime driver does not advertise required operation {operation:?}"
         )));
+    }
+    if reported.contains(&RuntimeOperation::Restore)
+        && !reported.contains(&RuntimeOperation::Checkpoint)
+    {
+        return Err(open_error(
+            "runtime driver cannot advertise restore without checkpoint",
+        ));
     }
     Ok(reported)
 }
@@ -464,15 +476,18 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_is_advertisable_but_restore_remains_fail_closed() {
+    fn checkpoint_and_restore_are_advertisable_only_as_a_cumulative_pair() {
         let mut checkpoint = required_operations();
         checkpoint.push(RuntimeOperation::Checkpoint);
         validate_driver_operations(&checkpoint).expect("checkpoint Host routing exists");
 
         let mut restore = required_operations();
         restore.push(RuntimeOperation::Restore);
-        let error =
-            validate_driver_operations(&restore).expect_err("restore must remain fail-closed");
-        assert!(error.message.contains("unsupported host operation"));
+        let error = validate_driver_operations(&restore)
+            .expect_err("restore without checkpoint must remain fail-closed");
+        assert!(error.message.contains("without checkpoint"));
+
+        restore.push(RuntimeOperation::Checkpoint);
+        validate_driver_operations(&restore).expect("cumulative restore Host routing exists");
     }
 }

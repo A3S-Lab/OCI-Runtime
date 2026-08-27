@@ -28,6 +28,7 @@ mod fault_matrix;
 #[cfg(unix)]
 mod filesystem_security;
 mod recovery;
+mod restore_operations;
 mod startup_audit;
 #[cfg(windows)]
 mod windows_filesystem_security;

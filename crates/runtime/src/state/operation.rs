@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use super::filesystem::state_error;
 use super::model::{
     StoredOperation, StoredOperationKind, OPERATION_SCHEMA_VERSION, OPERATION_SCHEMA_VERSION_V1,
-    OPERATION_SCHEMA_VERSION_V2, OPERATION_SCHEMA_VERSION_V3,
+    OPERATION_SCHEMA_VERSION_V2, OPERATION_SCHEMA_VERSION_V3, OPERATION_SCHEMA_VERSION_V4,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +33,7 @@ impl RequestDigests {
             OPERATION_SCHEMA_VERSION_V1 => Some(&self.legacy),
             OPERATION_SCHEMA_VERSION_V2
             | OPERATION_SCHEMA_VERSION_V3
+            | OPERATION_SCHEMA_VERSION_V4
             | OPERATION_SCHEMA_VERSION => Some(&self.canonical),
             _ => None,
         }
@@ -136,6 +137,7 @@ mod tests {
     use crate::state::model::{
         StoredOperation, StoredOperationKind, StoredOperationStatus, OPERATION_SCHEMA_VERSION,
         OPERATION_SCHEMA_VERSION_V1, OPERATION_SCHEMA_VERSION_V2, OPERATION_SCHEMA_VERSION_V3,
+        OPERATION_SCHEMA_VERSION_V4,
     };
 
     #[derive(Serialize)]
@@ -182,6 +184,7 @@ mod tests {
             (OPERATION_SCHEMA_VERSION_V1, digests.legacy.clone()),
             (OPERATION_SCHEMA_VERSION_V2, digests.canonical.clone()),
             (OPERATION_SCHEMA_VERSION_V3, digests.canonical.clone()),
+            (OPERATION_SCHEMA_VERSION_V4, digests.canonical.clone()),
             (OPERATION_SCHEMA_VERSION, digests.canonical.clone()),
         ] {
             let stored = StoredOperation {

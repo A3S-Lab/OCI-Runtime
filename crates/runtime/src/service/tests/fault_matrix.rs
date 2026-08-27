@@ -12,7 +12,7 @@ async fn every_host_driver_boundary_recovers_without_duplicate_effects() {
     let registry = FaultPoint::driver_registry();
     assert_eq!(
         registry.len(),
-        46,
+        50,
         "update the host/driver fault contract when the registry changes"
     );
     for point in registry {
@@ -95,7 +95,7 @@ async fn exercise_driver_boundary(point: FaultPoint) {
     let bundle_directory = temporary.path().join("bundle");
     fs::create_dir(&bundle_directory).expect("bundle directory");
     let state_root = temporary.path().join("state");
-    let driver = Arc::new(RecordingDriver::with_checkpoint_operations());
+    let driver = Arc::new(RecordingDriver::with_restore_operations());
     let mut create = create_request(&bundle_directory, "boundary-create");
     create.isolation = match driver.capability.isolation_classes[0] {
         IsolationClass::SharedHostKernel => IsolationRequest::SharedHostKernel,
@@ -134,6 +134,8 @@ async fn exercise_driver_boundary(point: FaultPoint) {
                 | DriverOperation::CloseStdin
                 | DriverOperation::Resize
                 | DriverOperation::Checkpoint
+                | DriverOperation::RestoreValidation
+                | DriverOperation::Restore
         ) {
             setup
                 .start(StartRequest {
@@ -182,7 +184,10 @@ async fn exercise_driver_boundary(point: FaultPoint) {
         }
         if matches!(
             operation,
-            DriverOperation::Resume | DriverOperation::Checkpoint
+            DriverOperation::Resume
+                | DriverOperation::Checkpoint
+                | DriverOperation::RestoreValidation
+                | DriverOperation::Restore
         ) {
             setup
                 .pause(ContainerOperationRequest {
@@ -191,6 +196,29 @@ async fn exercise_driver_boundary(point: FaultPoint) {
                 })
                 .await
                 .expect("pause setup container");
+        }
+        if matches!(
+            operation,
+            DriverOperation::RestoreValidation | DriverOperation::Restore
+        ) {
+            let artifact = create
+                .bundle
+                .directory()
+                .parent()
+                .expect("restore fixture root")
+                .join("boundary-restore.checkpoint");
+            setup
+                .checkpoint(
+                    CheckpointRequest::new(
+                        OperationContext::new(operation_id("boundary-restore-checkpoint")),
+                        target.clone(),
+                        CheckpointArtifactPath::new(artifact)
+                            .expect("restore checkpoint artifact path"),
+                    )
+                    .expect("restore checkpoint request"),
+                )
+                .await
+                .expect("checkpoint restore boundary source");
         }
         drop(setup);
         Some(target)
@@ -301,6 +329,8 @@ const fn operation_requires_created_container(operation: DriverOperation) -> boo
             | DriverOperation::File
             | DriverOperation::Filesystem
             | DriverOperation::Checkpoint
+            | DriverOperation::RestoreValidation
+            | DriverOperation::Restore
     )
 }
 
@@ -329,6 +359,11 @@ const fn call_matches_operation(call: &DriverCall, operation: DriverOperation) -
             | (DriverCall::File(_), DriverOperation::File)
             | (DriverCall::Filesystem(_), DriverOperation::Filesystem)
             | (DriverCall::Checkpoint(_), DriverOperation::Checkpoint)
+            | (
+                DriverCall::RestoreValidation(_),
+                DriverOperation::RestoreValidation
+            )
+            | (DriverCall::Restore(_), DriverOperation::Restore)
     )
 }
 
@@ -561,6 +596,41 @@ async fn invoke_operation(
                         CheckpointArtifactPath::new(artifact).expect("checkpoint artifact path"),
                     )
                     .expect("checkpoint request"),
+                )
+                .await?;
+            Ok(())
+        }
+        DriverOperation::RestoreValidation | DriverOperation::Restore => {
+            let source = target.expect("restore source target");
+            let artifact = create
+                .bundle
+                .directory()
+                .parent()
+                .expect("restore fixture root")
+                .join("boundary-restore.checkpoint");
+            let checkpoint = service
+                .checkpoint(
+                    CheckpointRequest::new(
+                        OperationContext::new(operation_id("boundary-restore-checkpoint")),
+                        source.clone(),
+                        CheckpointArtifactPath::new(artifact.clone())
+                            .expect("restore checkpoint artifact path"),
+                    )
+                    .expect("restore checkpoint request"),
+                )
+                .await?;
+            service
+                .restore(
+                    RestoreRequest::new(
+                        OperationContext::new(operation_id("boundary-restore")),
+                        container_id("boundary-restored"),
+                        create.bundle.clone(),
+                        CheckpointArtifactPath::new(artifact).expect("restore artifact path"),
+                        create.isolation.clone(),
+                        create.attachments.clone(),
+                        checkpoint.reference().clone(),
+                    )
+                    .expect("restore request"),
                 )
                 .await?;
             Ok(())

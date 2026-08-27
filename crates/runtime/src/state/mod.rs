@@ -1,5 +1,6 @@
 mod checkpoint;
 mod create;
+mod creation;
 mod delete;
 mod event;
 mod failure;
@@ -15,11 +16,12 @@ mod operation;
 mod process;
 mod process_io;
 mod process_recovery;
+mod restore;
 mod start;
 mod startup_audit;
 mod update;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -28,7 +30,7 @@ use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     CheckpointResponse, ContainerId, ContainerRecord, ContainerTarget, CreateRequest, ErrorCode,
     FileOp, Generation, OciBundle, OciSchemaValidator, OperationId, ProcessRecord, ProcessTarget,
-    Result, RuntimeEventKind, ValidateRequest,
+    RestoreResponse, Result, RuntimeEventKind, ValidateRequest,
 };
 use tokio::sync::{Mutex, Notify};
 
@@ -42,9 +44,9 @@ use model::{
     StoredContainer, StoredFilesystemMutationResponse, StoredGeneration, StoredOperation,
     StoredOperationKind, StoredOperationRequest, StoredOperationStatus, CONTAINER_SCHEMA_VERSION,
     GENERATION_SCHEMA_VERSION, OPERATION_SCHEMA_VERSION, OPERATION_SCHEMA_VERSION_V1,
-    OPERATION_SCHEMA_VERSION_V2, OPERATION_SCHEMA_VERSION_V3,
+    OPERATION_SCHEMA_VERSION_V2, OPERATION_SCHEMA_VERSION_V3, OPERATION_SCHEMA_VERSION_V4,
 };
-use oci_state::{build_state, container_state, is_paused, rebuild_state};
+use oci_state::{container_state, is_paused, rebuild_state};
 use operation::validate_deadline;
 
 const CONTAINER_RECORD_FILE: &str = "record.json";
@@ -136,6 +138,26 @@ pub(crate) enum CheckpointOperationPreparation {
     Resume(ContainerRecord),
     /// A matching checkpoint already completed; this is its exact response.
     Replayed(Box<CheckpointResponse>),
+}
+
+/// Result of checking an idempotent restore before read-only artifact preflight.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RestoreOperationLookup {
+    /// No committed response exists; artifact preflight is required.
+    Pending,
+    /// The exact restore already completed and can replay without the artifact.
+    Replayed(Box<RestoreResponse>),
+}
+
+/// Result of reserving one generation after restore artifact preflight.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RestoreOperationPreparation {
+    /// This call durably allocated a new restoring generation.
+    Prepared(ContainerRecord),
+    /// A matching restoring generation exists and requires driver reconciliation.
+    Resume(ContainerRecord),
+    /// A racing owner committed the exact response after preflight.
+    Replayed(Box<RestoreResponse>),
 }
 
 /// Single-writer durable lifecycle store.
@@ -238,6 +260,7 @@ impl DurableStateStore {
                 StoredOperationStatus::SucceededProcess { .. }
                 | StoredOperationStatus::SucceededFilesystem { .. }
                 | StoredOperationStatus::SucceededCheckpoint { .. }
+                | StoredOperationStatus::SucceededRestore { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-create",
@@ -298,94 +321,21 @@ impl DurableStateStore {
         driver: DriverKind,
         generation: Generation,
     ) -> Result<StoredContainer> {
-        let attachments_digest = request.attachments.digest()?;
-        let network_enforcement = request.attachments.network_enforcement(&request.bundle)?;
-        let container_directory = self.container_directory(&request.id);
-        if self.filesystem.path_exists(&container_directory).await? {
-            self.filesystem
-                .ensure_plain_directory(&container_directory, "container state directory")
-                .await?;
-            self.filesystem
-                .set_private_directory_permissions(&container_directory)
-                .await?;
-        } else {
-            self.filesystem
-                .create_private_directory(&container_directory)
-                .await?;
-        }
-
-        let config_path = container_directory.join(CONFIG_SNAPSHOT_FILE);
-        if self.filesystem.path_exists(&config_path).await? {
-            let durable_config = self.filesystem.read_utf8(&config_path).await?;
-            if durable_config.as_bytes() != request.bundle.config_bytes() {
-                return Err(state_error(
-                    ErrorCode::Conflict,
-                    "reconcile-create",
-                    format!(
-                        "container {} configuration snapshot differs from its create request",
-                        request.id
-                    ),
-                ));
-            }
-        } else {
-            self.write_bytes(
-                DurableMutation::StoreCreateConfig,
-                &config_path,
-                request.bundle.config_bytes(),
-            )
-            .await?;
-        }
-
-        let record_path = container_directory.join(CONTAINER_RECORD_FILE);
-        if self.filesystem.path_exists(&record_path).await? {
-            let stored = self.load_stored_exact(&request.id, generation).await?;
-            if stored.record.driver != driver
-                || stored.record.isolation != request.isolation.class()
-                || stored.record.guest_session.as_ref() != request.attachments.guest_session()
-                || stored.record.network_enforcement.as_ref() != network_enforcement.as_ref()
-                || stored.record.config_digest != request.bundle.config_digest()
-                || stored.record.attachments_digest.as_deref() != Some(attachments_digest.as_str())
-                || stored.attachments.as_ref() != Some(&request.attachments)
-            {
-                return Err(state_error(
-                    ErrorCode::Conflict,
-                    "reconcile-create",
-                    format!(
-                        "container {} durable record differs from its create request",
-                        request.id
-                    ),
-                ));
-            }
-            return Ok(stored);
-        }
-
-        let state = build_state(&request.id, &request.bundle, ContainerState::Creating, None)?;
-        let record = ContainerRecord {
-            state,
-            generation,
+        self.reconcile_prepared_container(
+            &request.id,
+            &request.bundle,
+            request.isolation.class(),
+            &request.attachments,
             driver,
-            isolation: request.isolation.class(),
-            guest_session: request.attachments.guest_session().cloned(),
-            network_enforcement,
-            config_digest: request.bundle.config_digest().to_string(),
-            attachments_digest: Some(attachments_digest),
-        };
-        let stored = StoredContainer {
-            schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
-            id: request.id.clone(),
-            record,
-            attachments: Some(request.attachments.clone()),
-            active_operation: Some(request.context.operation_id.clone()),
-            init_io_operations: BTreeSet::new(),
-            init_exit_status: None,
-        };
-        self.write_json(
-            DurableMutation::StoreCreatingContainer,
-            &record_path,
-            &stored,
+            generation,
+            &request.context.operation_id,
+            creation::CreationProfile {
+                operation: "reconcile-create",
+                store_config: DurableMutation::StoreCreateConfig,
+                store_container: DurableMutation::StoreCreatingContainer,
+            },
         )
-        .await?;
-        Ok(stored)
+        .await
     }
 
     async fn reconcile_succeeded_create(
@@ -513,6 +463,7 @@ impl DurableStateStore {
             StoredOperationStatus::SucceededProcess { .. }
             | StoredOperationStatus::SucceededFilesystem { .. }
             | StoredOperationStatus::SucceededCheckpoint { .. }
+            | StoredOperationStatus::SucceededRestore { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
@@ -697,6 +648,7 @@ impl DurableStateStore {
             OPERATION_SCHEMA_VERSION_V1
                 | OPERATION_SCHEMA_VERSION_V2
                 | OPERATION_SCHEMA_VERSION_V3
+                | OPERATION_SCHEMA_VERSION_V4
                 | OPERATION_SCHEMA_VERSION
         ) || operation.operation_id != *operation_id
         {
@@ -891,6 +843,12 @@ impl DurableStateStore {
             .join(format!("{}.failed-create", operation_id.as_str()))
     }
 
+    fn failed_restore_tombstone(&self, operation_id: &OperationId) -> PathBuf {
+        self.root
+            .join("quarantine")
+            .join(format!("{}.failed-restore", operation_id.as_str()))
+    }
+
     async fn write_json(
         &self,
         mutation: DurableMutation,
@@ -950,7 +908,9 @@ fn validate_stored_operation_shape(operation: &StoredOperation) -> Result<()> {
         StoredOperationKind::File => {
             if !matches!(
                 operation.schema_version.as_str(),
-                OPERATION_SCHEMA_VERSION_V3 | OPERATION_SCHEMA_VERSION
+                OPERATION_SCHEMA_VERSION_V3
+                    | OPERATION_SCHEMA_VERSION_V4
+                    | OPERATION_SCHEMA_VERSION
             ) {
                 return Err(invalid(
                     "File mutations require the current request-retaining schema".to_string(),
@@ -997,7 +957,9 @@ fn validate_stored_operation_shape(operation: &StoredOperation) -> Result<()> {
         StoredOperationKind::Filesystem => {
             if !matches!(
                 operation.schema_version.as_str(),
-                OPERATION_SCHEMA_VERSION_V3 | OPERATION_SCHEMA_VERSION
+                OPERATION_SCHEMA_VERSION_V3
+                    | OPERATION_SCHEMA_VERSION_V4
+                    | OPERATION_SCHEMA_VERSION
             ) {
                 return Err(invalid(
                     "Filesystem mutations require the current request-retaining schema".to_string(),
@@ -1044,7 +1006,10 @@ fn validate_stored_operation_shape(operation: &StoredOperation) -> Result<()> {
             }
         }
         StoredOperationKind::Checkpoint => {
-            if operation.schema_version != OPERATION_SCHEMA_VERSION {
+            if !matches!(
+                operation.schema_version.as_str(),
+                OPERATION_SCHEMA_VERSION_V4 | OPERATION_SCHEMA_VERSION
+            ) {
                 return Err(invalid(
                     "Checkpoint mutations require the current request-retaining schema".to_string(),
                 ));
@@ -1082,6 +1047,47 @@ fn validate_stored_operation_shape(operation: &StoredOperation) -> Result<()> {
                 }
             }
         }
+        StoredOperationKind::Restore => {
+            if operation.schema_version != OPERATION_SCHEMA_VERSION {
+                return Err(invalid(
+                    "Restore mutations require the current request-retaining schema".to_string(),
+                ));
+            }
+            let Some(StoredOperationRequest::Restore(request)) = operation.request.as_ref() else {
+                return Err(invalid(
+                    "Restore mutation does not retain its exact request".to_string(),
+                ));
+            };
+            let request_digest_matches = restore::restore_request_digest(request)
+                .is_ok_and(|digest| digest.current() == operation.request_digest);
+            if request.id() != &operation.container_id
+                || request.context().operation_id != operation.operation_id
+                || request.validate().is_err()
+                || !request_digest_matches
+            {
+                return Err(invalid(
+                    "Restore request does not match its durable identity".to_string(),
+                ));
+            }
+            match &operation.outcome {
+                StoredOperationStatus::Prepared | StoredOperationStatus::Failed { .. } => {}
+                StoredOperationStatus::SucceededRestore { response } => {
+                    if response.restored().generation != operation.generation
+                        || response.validate_for_request(request).is_err()
+                    {
+                        return Err(invalid(
+                            "Restore response does not match its retained request and generation"
+                                .to_string(),
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(invalid(
+                        "Restore mutation contains an incompatible outcome".to_string(),
+                    ));
+                }
+            }
+        }
         StoredOperationKind::Create
         | StoredOperationKind::Start
         | StoredOperationKind::Kill
@@ -1099,6 +1105,7 @@ fn validate_stored_operation_shape(operation: &StoredOperation) -> Result<()> {
                     operation.outcome,
                     StoredOperationStatus::SucceededFilesystem { .. }
                         | StoredOperationStatus::SucceededCheckpoint { .. }
+                        | StoredOperationStatus::SucceededRestore { .. }
                 )
             {
                 return Err(invalid(

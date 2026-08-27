@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use a3s_oci_sdk::{
     CheckpointRequest, CheckpointResponse, ContainerId, ContainerRecord, CreateAttachments, Error,
     ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse, Generation,
-    OperationId, ProcessId, ProcessRecord, RuntimeEvent,
+    OperationId, ProcessId, ProcessRecord, RestoreRequest, RestoreResponse, RuntimeEvent,
 };
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +13,8 @@ pub(super) const GENERATION_SCHEMA_VERSION: &str = "a3s.oci.generation.v1";
 pub(super) const OPERATION_SCHEMA_VERSION_V1: &str = "a3s.oci.operation.v1";
 pub(super) const OPERATION_SCHEMA_VERSION_V2: &str = "a3s.oci.operation.v2";
 pub(super) const OPERATION_SCHEMA_VERSION_V3: &str = "a3s.oci.operation.v3";
-pub(super) const OPERATION_SCHEMA_VERSION: &str = "a3s.oci.operation.v4";
+pub(super) const OPERATION_SCHEMA_VERSION_V4: &str = "a3s.oci.operation.v4";
+pub(super) const OPERATION_SCHEMA_VERSION: &str = "a3s.oci.operation.v5";
 pub(super) const PROCESS_SCHEMA_VERSION: &str = "a3s.oci.process-record.v1";
 pub(super) const EVENT_CURSOR_SCHEMA_VERSION: &str = "a3s.oci.event-cursor.v1";
 pub(super) const EVENT_CLAIM_SCHEMA_VERSION: &str = "a3s.oci.event-claim.v1";
@@ -118,6 +119,7 @@ pub(super) enum StoredOperationKind {
     File,
     Filesystem,
     Checkpoint,
+    Restore,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +128,7 @@ pub(super) enum StoredOperationRequest {
     File(FileRequest),
     Filesystem(FilesystemRequest),
     Checkpoint(CheckpointRequest),
+    Restore(Box<RestoreRequest>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +153,9 @@ pub(super) enum StoredOperationStatus {
     },
     SucceededCheckpoint {
         response: Box<CheckpointResponse>,
+    },
+    SucceededRestore {
+        response: Box<RestoreResponse>,
     },
     SucceededEmpty,
     Failed {

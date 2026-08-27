@@ -9,6 +9,7 @@ mod checkpoint;
 mod filesystem_mutation;
 mod process;
 mod process_io;
+mod restore;
 
 use super::*;
 use crate::driver::DriverState;
@@ -26,6 +27,7 @@ use process::{
     exercise_process_success, exercise_recreated_exec_recovery, exercise_signal_process_failure,
 };
 use process_io::{exercise_process_io_failure, exercise_process_io_success};
+use restore::{exercise_restore_failure, exercise_restore_success};
 
 #[derive(Debug, Clone, Copy)]
 enum Scenario {
@@ -58,6 +60,9 @@ enum Scenario {
     FilesystemMutationFailure,
     CheckpointSuccess,
     CheckpointFailure,
+    RestoreSuccess,
+    RestoreClaimRecovery,
+    RestoreFailure,
 }
 
 struct Fixture {
@@ -89,7 +94,7 @@ async fn every_registered_durable_commit_stage_recovers_after_reopen() {
     let registry = FaultPoint::durable_registry();
     assert_eq!(
         registry.len(),
-        783,
+        835,
         "update the durable fault contract when the registry changes"
     );
     for point in registry {
@@ -512,6 +517,15 @@ const fn scenario_for(mutation: DurableMutation) -> Scenario {
         | DurableMutation::CompleteCheckpointOperation => Scenario::CheckpointSuccess,
         DurableMutation::ReleaseFailedCheckpointClaim
         | DurableMutation::RecordCheckpointFailure => Scenario::CheckpointFailure,
+        DurableMutation::ClaimRestoreOperation => Scenario::RestoreClaimRecovery,
+        DurableMutation::PrepareRestoreOperation
+        | DurableMutation::StoreRestoreConfig
+        | DurableMutation::StoreRestoringContainer
+        | DurableMutation::CompleteRestoreContainer
+        | DurableMutation::CompleteRestoreOperation => Scenario::RestoreSuccess,
+        DurableMutation::RecordRestoreFailure | DurableMutation::MoveFailedRestoreTombstone => {
+            Scenario::RestoreFailure
+        }
         DurableMutation::AllocateGeneration
         | DurableMutation::AdvanceEventSequence
         | DurableMutation::ClaimRuntimeEvent
@@ -603,6 +617,9 @@ async fn exercise(scenario: Scenario, point: FaultPoint) {
         Scenario::FilesystemMutationFailure => exercise_filesystem_mutation_failure(point).await,
         Scenario::CheckpointSuccess => exercise_checkpoint_success(point).await,
         Scenario::CheckpointFailure => exercise_checkpoint_failure(point).await,
+        Scenario::RestoreSuccess => exercise_restore_success(point, false).await,
+        Scenario::RestoreClaimRecovery => exercise_restore_success(point, true).await,
+        Scenario::RestoreFailure => exercise_restore_failure(point).await,
     }
 }
 

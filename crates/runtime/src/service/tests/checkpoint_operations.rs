@@ -156,6 +156,38 @@ async fn checkpoint_publishes_and_replays_one_exact_immutable_reference() {
 }
 
 #[tokio::test]
+async fn checkpoint_rejects_a_same_name_but_different_host_artifact_identity() {
+    let (temporary, driver, service, source) = checkpoint_fixture().await;
+    let info = service.features().await.expect("configured features");
+    let current = info
+        .extensions
+        .artifact()
+        .expect("current runtime artifact");
+    let incompatible = a3s_oci_sdk::RuntimeArtifact::new(
+        current.name(),
+        current.version(),
+        format!("sha256:{}", "d".repeat(64)),
+        current.source_revision().map(str::to_string),
+    )
+    .expect("incompatible runtime artifact");
+    assert_ne!(&incompatible, current);
+    driver.override_checkpoint_runtime_artifact(incompatible);
+    let checkpoint = request(
+        &source,
+        "checkpoint-artifact-drift",
+        temporary.path().join("artifact-drift.bin"),
+    );
+
+    let error = service
+        .checkpoint(checkpoint)
+        .await
+        .expect_err("different Host executable identity must fail");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(error.retryable);
+    assert_eq!(error.operation.as_deref(), Some("checkpoint"));
+}
+
+#[tokio::test]
 async fn checkpoint_rejects_unpaused_sources_before_driver_dispatch() {
     let (temporary, driver, service, source) = checkpoint_fixture().await;
     let target = ContainerTarget::exact(container_id(source.state.id()), source.generation);

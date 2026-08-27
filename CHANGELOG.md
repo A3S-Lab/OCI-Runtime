@@ -27,15 +27,20 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
-- Added durable Host checkpoint orchestration behind an explicit
-  current-platform driver capability. The new `a3s.oci.operation.v4` journal
-  retains the exact normalized request and immutable typed response, fences the
-  paused source against lifecycle and process-I/O mutations, replays success or
-  terminal failure across service reopen, validates driver/build/artifact
-  evidence, and acknowledges driver replay state only after Host commit. The
-  deterministic coverage registry now exercises 783 durable commit stages and
-  46 Host/driver boundaries. No production driver advertises checkpoint, and
-  restore remains fail-closed at the Host and registry boundaries.
+- Added durable Host checkpoint and restore orchestration behind explicit
+  current-platform driver capabilities. Checkpoint's v4-compatible journal
+  retains the exact normalized request and immutable typed response and fences
+  the paused source against lifecycle and process-I/O mutations. The new
+  `a3s.oci.operation.v5` restore journal performs read-only artifact and exact
+  runtime/driver compatibility validation before generation allocation,
+  retains the complete request, resumes only through an idempotent driver,
+  commits one paused running generation, and replays a committed response
+  without reopening the caller artifact. Terminal failures are journaled
+  before their exact generation moves to `.failed-restore`, permitting later
+  monotonic ID reuse. The registry permits `Restore` only together with
+  `Checkpoint`; no production driver advertises either operation. Deterministic
+  coverage now exercises 835 durable commit stages and 50 Host/driver
+  boundaries.
 - Added the protocol-8 immutable checkpoint and restore SDK contract without
   widening production capability advertisement. The typed reference binds an
   exact paused source generation, configuration and attachment digests,
@@ -43,10 +48,9 @@ All notable changes to A3S OCI Runtime are documented in this file.
   identities, driver format, and artifact digest and size. Checkpoint and
   restore use normalized single-file paths and request-bound paused responses;
   legacy `leave_running` and reference-free restore requests fail closed. The
-  Production checkpoint drivers remain unadvertised until atomic artifact
-  creation, scoped partial cleanup, replay, and real-host qualification are
-  implemented. Restore remains `Unsupported` until read-only artifact
-  verification plus durable creation and rollback are implemented.
+  Production checkpoint and restore drivers remain unadvertised until atomic
+  artifact handling, scoped cleanup, replay, and real-host qualification are
+  implemented.
 - Added a fail-closed, dedicated-VM Linux KVM transport implementation for
   authorized v2 storage attachments without widening the production capability
   advertisement. The Host accepts only caller-owned, detach-only, non-bind
@@ -138,7 +142,7 @@ All notable changes to A3S OCI Runtime are documented in this file.
   container and process claims, quarantine contents and live-generation
   exclusion, and event claim/record relationships while retaining documented
   crash-recoverable intermediate states. Fourteen focused tests plus the
-  complete 783-point durable fault matrix cover fail-closed corruption and
+  complete 835-point durable fault matrix cover fail-closed corruption and
   recovery compatibility.
 - Committed containerd `ResizePty` cleanup after shim death. A focused
   DeleteShim boundary starts with one already committed terminal resize and

@@ -75,7 +75,7 @@ pub(super) async fn exercise_checkpoint_failure(point: FaultPoint) {
     assert_consistent_layout(recovered.root());
 }
 
-async fn prepare_paused_source(root: &Path, create: &CreateRequest) -> ContainerRecord {
+pub(super) async fn prepare_paused_source(root: &Path, create: &CreateRequest) -> ContainerRecord {
     let target = prepare_running_for_freezer(root, create).await;
     let store = DurableStateStore::open(root)
         .await
@@ -143,7 +143,9 @@ async fn drive_failure(
     expect_failure(store.prepare_checkpoint(request).await, failure)
 }
 
-fn checkpoint_response(source: ContainerRecord) -> a3s_oci_sdk::Result<CheckpointResponse> {
+pub(super) fn checkpoint_response(
+    source: ContainerRecord,
+) -> a3s_oci_sdk::Result<CheckpointResponse> {
     let platform = match source.driver {
         DriverKind::NativeLinux | DriverKind::LibkrunKvm => HostPlatform::Linux,
         DriverKind::LibkrunHvf => HostPlatform::Macos,

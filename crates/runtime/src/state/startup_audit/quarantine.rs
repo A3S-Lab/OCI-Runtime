@@ -20,11 +20,13 @@ impl DurableStateStore {
                 "audit-quarantine-state",
                 "quarantine state directory",
             )?;
-            let (stem, expected_kind, failed_create) =
+            let (stem, expected_kind, failed_creation) =
                 if let Some(stem) = name.strip_suffix(".deleted") {
                     (stem, StoredOperationKind::Delete, false)
                 } else if let Some(stem) = name.strip_suffix(".failed-create") {
                     (stem, StoredOperationKind::Create, true)
+                } else if let Some(stem) = name.strip_suffix(".failed-restore") {
+                    (stem, StoredOperationKind::Restore, true)
                 } else {
                     return Err(audit_error(
                         "audit-quarantine-state",
@@ -38,7 +40,7 @@ impl DurableStateStore {
                     format!("quarantine entry {name:?} has no durable operation"),
                 )
             })?;
-            let valid_outcome = if failed_create {
+            let valid_outcome = if failed_creation {
                 matches!(operation.outcome, StoredOperationStatus::Failed { .. })
             } else {
                 matches!(

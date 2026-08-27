@@ -85,6 +85,12 @@ pub(crate) enum DurableMutation {
     ClaimCheckpointOperation,
     CompleteCheckpointContainer,
     CompleteCheckpointOperation,
+    PrepareRestoreOperation,
+    StoreRestoreConfig,
+    StoreRestoringContainer,
+    ClaimRestoreOperation,
+    CompleteRestoreContainer,
+    CompleteRestoreOperation,
     CacheInitWait,
     CacheProcessWait,
     AdvanceEventSequence,
@@ -120,13 +126,15 @@ pub(crate) enum DurableMutation {
     RecordFilesystemFailure,
     ReleaseFailedCheckpointClaim,
     RecordCheckpointFailure,
+    RecordRestoreFailure,
+    MoveFailedRestoreTombstone,
     ObserveContainer,
     CompleteObservedOperation,
 }
 
 impl DurableMutation {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 113] = [
+    pub(crate) const ALL: [Self; 121] = [
         Self::RuntimeRootMarker,
         Self::AllocateGeneration,
         Self::PrepareCreateOperation,
@@ -203,6 +211,12 @@ impl DurableMutation {
         Self::ClaimCheckpointOperation,
         Self::CompleteCheckpointContainer,
         Self::CompleteCheckpointOperation,
+        Self::PrepareRestoreOperation,
+        Self::StoreRestoreConfig,
+        Self::StoreRestoringContainer,
+        Self::ClaimRestoreOperation,
+        Self::CompleteRestoreContainer,
+        Self::CompleteRestoreOperation,
         Self::CacheInitWait,
         Self::CacheProcessWait,
         Self::AdvanceEventSequence,
@@ -238,6 +252,8 @@ impl DurableMutation {
         Self::RecordFilesystemFailure,
         Self::ReleaseFailedCheckpointClaim,
         Self::RecordCheckpointFailure,
+        Self::RecordRestoreFailure,
+        Self::MoveFailedRestoreTombstone,
         Self::ObserveContainer,
         Self::CompleteObservedOperation,
     ];
@@ -246,7 +262,9 @@ impl DurableMutation {
     pub(crate) const fn is_directory_move(self) -> bool {
         matches!(
             self,
-            Self::MoveDeleteTombstone | Self::MoveFailedCreateTombstone
+            Self::MoveDeleteTombstone
+                | Self::MoveFailedCreateTombstone
+                | Self::MoveFailedRestoreTombstone
         )
     }
 }
@@ -319,11 +337,13 @@ pub(crate) enum DriverOperation {
     File,
     Filesystem,
     Checkpoint,
+    RestoreValidation,
+    Restore,
 }
 
 impl DriverOperation {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 23] = [
+    pub(crate) const ALL: [Self; 25] = [
         Self::Capability,
         Self::Recover,
         Self::Create,
@@ -347,6 +367,8 @@ impl DriverOperation {
         Self::File,
         Self::Filesystem,
         Self::Checkpoint,
+        Self::RestoreValidation,
+        Self::Restore,
     ];
 }
 

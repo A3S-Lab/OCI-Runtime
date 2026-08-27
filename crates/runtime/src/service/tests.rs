@@ -18,28 +18,29 @@ use a3s_oci_sdk::oci_spec::runtime::{
 };
 use a3s_oci_sdk::{
     async_trait, canonical_json_bytes, AttachmentCapabilities, CheckpointArtifactPath,
-    CheckpointCompatibility, CheckpointDigest, CheckpointFormat, CheckpointRequest,
-    CloseStdinRequest, ContainerId, ContainerOperationRequest, ContainerRecord, ContainerStats,
-    ContainerTarget, CpuStats, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest, Error,
-    ErrorCode, EventsRequest, ExecRequest, ExitStatus, FileOp, FileRequest, FileResponse,
-    FilesystemEntry, FilesystemEntryKind, FilesystemOp, FilesystemRequest, FilesystemResponse,
-    Generation, GuestSessionCapacity, GuestSessionGeneration, GuestSessionId, GuestSessionReset,
-    IoMode, IsolationRequest, KillRequest, ListRequest, MemoryStats, OciBundle, OciLinuxSupport,
-    OciRuntimeService, OciSchemaValidator, OperationContext, OperationId, OutputChunk,
-    OutputStream, ProcessId, ProcessIo, ProcessRecord, ProcessTarget, ProcessesRequest,
-    ReadOutputRequest, ResizeRequest, Result, RuntimeEventKind, RuntimeNegotiationRequest,
-    RuntimeOperation, Signal, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
-    StorageAccessMode, StorageAttachmentId, StorageCleanup, StorageOwnership, TerminalSize,
-    TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
-    ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3, ATTACHMENT_SCHEMA_V4,
-    BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS, OCI_LINUX_CAPABILITY_NAMES,
-    OCI_LINUX_MEMORY_POLICY_FLAGS, OCI_LINUX_MEMORY_POLICY_MODES, OCI_LINUX_MOUNT_OPTIONS,
-    OCI_LINUX_SECCOMP_ACTIONS, OCI_LINUX_SECCOMP_ARCHITECTURES, OCI_LINUX_SECCOMP_KNOWN_FLAGS,
-    OCI_LINUX_SECCOMP_OPERATORS, RUNTIME_EXTENSIONS_SCHEMA_V1, RUNTIME_OPERATION_CONTRACT_V1,
+    CheckpointCompatibility, CheckpointDigest, CheckpointFormat, CheckpointReference,
+    CheckpointRequest, CloseStdinRequest, ContainerId, ContainerOperationRequest, ContainerRecord,
+    ContainerStats, ContainerTarget, CpuStats, CreateAttachments, CreateRequest, DeleteMode,
+    DeleteRequest, Error, ErrorCode, EventsRequest, ExecRequest, ExitStatus, FileOp, FileRequest,
+    FileResponse, FilesystemEntry, FilesystemEntryKind, FilesystemOp, FilesystemRequest,
+    FilesystemResponse, Generation, GuestSessionCapacity, GuestSessionGeneration, GuestSessionId,
+    GuestSessionReset, IoMode, IsolationRequest, KillRequest, ListRequest, MemoryStats, OciBundle,
+    OciLinuxSupport, OciRuntimeService, OciSchemaValidator, OperationContext, OperationId,
+    OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
+    ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result, RuntimeEventKind,
+    RuntimeNegotiationRequest, RuntimeOperation, Signal, SignalProcessRequest, StartRequest,
+    StateRequest, StatsRequest, StorageAccessMode, StorageAttachmentId, StorageCleanup,
+    StorageOwnership, TerminalSize, TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest,
+    WriteStdinRequest, ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3,
+    ATTACHMENT_SCHEMA_V4, BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS,
+    OCI_LINUX_CAPABILITY_NAMES, OCI_LINUX_MEMORY_POLICY_FLAGS, OCI_LINUX_MEMORY_POLICY_MODES,
+    OCI_LINUX_MOUNT_OPTIONS, OCI_LINUX_SECCOMP_ACTIONS, OCI_LINUX_SECCOMP_ARCHITECTURES,
+    OCI_LINUX_SECCOMP_KNOWN_FLAGS, OCI_LINUX_SECCOMP_OPERATORS, RUNTIME_EXTENSIONS_SCHEMA_V1,
+    RUNTIME_OPERATION_CONTRACT_V1,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt as _;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 use super::HostRuntimeService;
 #[cfg(target_os = "linux")]
@@ -48,9 +49,9 @@ use crate::{
     DriverCheckpointRequest, DriverCheckpointResult, DriverCloseStdinRequest,
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
     DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverRecovery, DriverResizeRequest,
-    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverUpdateRequest,
-    DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest, OciHookPhase,
-    RuntimeDriver,
+    DriverRestoreRequest, DriverRestoreValidationRequest, DriverSignalProcessRequest,
+    DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
+    DriverWaitRequest, DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
 };
 
 mod agent_transport_recovery;
@@ -64,6 +65,7 @@ mod linux_support;
 mod network_attachments;
 mod process_operations;
 mod resource_operations;
+mod restore_operations;
 mod schema_profiles;
 
 const TEST_CONFIG: &str = concat!(
@@ -103,6 +105,8 @@ enum DriverCall {
     File(FileRequest),
     Filesystem(FilesystemRequest),
     Checkpoint(Box<DriverCheckpointRequest>),
+    RestoreValidation(Box<DriverRestoreValidationRequest>),
+    Restore(Box<DriverRestoreRequest>),
 }
 
 type DriverProcessKey = (ContainerId, Generation, ProcessId);
@@ -137,6 +141,9 @@ struct RecordingDriver {
     checkpoint_replays:
         Mutex<HashMap<OperationId, (DriverCheckpointRequest, DriverCheckpointResult)>>,
     checkpoint_gate: tokio::sync::Mutex<()>,
+    checkpoint_runtime_artifact: Mutex<Option<a3s_oci_sdk::RuntimeArtifact>>,
+    restore_replays: Mutex<HashMap<OperationId, (DriverRestoreRequest, DriverState)>>,
+    restore_gate: tokio::sync::Mutex<()>,
     output_responses: Mutex<VecDeque<Vec<OutputChunk>>>,
     recovery: Mutex<DriverRecovery>,
     failures: Mutex<HashMap<&'static str, Vec<Error>>>,
@@ -181,6 +188,9 @@ impl RecordingDriver {
             resize_replays: Mutex::new(HashMap::new()),
             checkpoint_replays: Mutex::new(HashMap::new()),
             checkpoint_gate: tokio::sync::Mutex::new(()),
+            checkpoint_runtime_artifact: Mutex::new(None),
+            restore_replays: Mutex::new(HashMap::new()),
+            restore_gate: tokio::sync::Mutex::new(()),
             output_responses: Mutex::new(VecDeque::new()),
             recovery: Mutex::new(DriverRecovery::none()),
             failures: Mutex::new(HashMap::new()),
@@ -272,6 +282,19 @@ impl RecordingDriver {
         }
         driver.operations.push(RuntimeOperation::Checkpoint);
         driver
+    }
+
+    fn with_restore_operations() -> Self {
+        let mut driver = Self::with_checkpoint_operations();
+        driver.operations.push(RuntimeOperation::Restore);
+        driver
+    }
+
+    fn override_checkpoint_runtime_artifact(&self, artifact: a3s_oci_sdk::RuntimeArtifact) {
+        *self
+            .checkpoint_runtime_artifact
+            .lock()
+            .expect("checkpoint runtime artifact lock") = Some(artifact);
     }
 
     fn with_hooks(hooks: Vec<OciHookPhase>) -> Self {
@@ -573,6 +596,118 @@ impl RecordingDriver {
             target.process_id.clone(),
         ))
     }
+
+    async fn validate_restore_fixture(
+        &self,
+        artifact_path: &CheckpointArtifactPath,
+        reference: &CheckpointReference,
+        runtime_artifact: &a3s_oci_sdk::RuntimeArtifact,
+        operation: &'static str,
+    ) -> Result<()> {
+        let compatibility = reference.compatibility();
+        let expected_build = CheckpointDigest::new(format!("sha256:{}", "b".repeat(64)))?;
+        if compatibility.driver() != self.capability.driver
+            || !self
+                .capability
+                .isolation_classes
+                .contains(&compatibility.isolation())
+            || compatibility.platform() != HostPlatform::current()
+            || compatibility.architecture() != std::env::consts::ARCH
+            || compatibility.runtime_artifact() != runtime_artifact
+            || compatibility.driver_build_digest() != &expected_build
+            || compatibility.format().name() != "recording-driver"
+            || compatibility.format().version() != 1
+        {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "checkpoint reference is incompatible with the recording restore driver",
+            )
+            .for_operation(operation));
+        }
+
+        let path = artifact_path.as_path();
+        let metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
+            checkpoint_fixture_io_error("inspect restore artifact", path, error)
+                .for_operation(operation)
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "checkpoint restore artifact is not a plain file: {}",
+                    path.display()
+                ),
+            )
+            .for_operation(operation));
+        }
+        if metadata.len() != reference.artifact_size_bytes() {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "checkpoint restore artifact size differs from its immutable reference",
+            )
+            .for_operation(operation));
+        }
+
+        let mut file = tokio::fs::File::open(path).await.map_err(|error| {
+            checkpoint_fixture_io_error("open restore artifact", path, error)
+                .for_operation(operation)
+        })?;
+        let opened = file.metadata().await.map_err(|error| {
+            checkpoint_fixture_io_error("inspect opened restore artifact", path, error)
+                .for_operation(operation)
+        })?;
+        if opened.len() != reference.artifact_size_bytes() {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "opened checkpoint artifact size differs from its immutable reference",
+            )
+            .for_operation(operation));
+        }
+        let mut hasher = Sha256::new();
+        let mut total = 0_u64;
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            let read = file.read(&mut buffer).await.map_err(|error| {
+                checkpoint_fixture_io_error("read restore artifact", path, error)
+                    .for_operation(operation)
+            })?;
+            if read == 0 {
+                break;
+            }
+            total = total
+                .checked_add(u64::try_from(read).map_err(|error| {
+                    Error::new(
+                        ErrorCode::ResourceExhausted,
+                        format!("restore artifact read size does not fit u64: {error}"),
+                    )
+                    .for_operation(operation)
+                })?)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::ResourceExhausted,
+                        "restore artifact size overflowed u64",
+                    )
+                    .for_operation(operation)
+                })?;
+            if total > reference.artifact_size_bytes() {
+                return Err(Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "checkpoint artifact grew beyond its immutable reference",
+                )
+                .for_operation(operation));
+            }
+            hasher.update(&buffer[..read]);
+        }
+        let digest = CheckpointDigest::new(format!("sha256:{:x}", hasher.finalize()))?;
+        if total != reference.artifact_size_bytes() || &digest != reference.artifact_digest() {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "checkpoint restore artifact content differs from its immutable reference",
+            )
+            .for_operation(operation));
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -622,6 +757,15 @@ impl RuntimeDriver for RecordingDriver {
     }
 
     async fn prepare_create_bundle(&self, request: &DriverCreateRequest) -> Result<OciBundle> {
+        self.staged_bundle_directory.as_ref().map_or_else(
+            || Ok(request.bundle.clone()),
+            |directory| {
+                OciBundle::from_json(directory.clone(), request.bundle.config_json().to_string())
+            },
+        )
+    }
+
+    async fn prepare_restore_bundle(&self, request: &DriverRestoreRequest) -> Result<OciBundle> {
         self.staged_bundle_directory.as_ref().map_or_else(
             || Ok(request.bundle.clone()),
             |directory| {
@@ -1442,12 +1586,18 @@ impl RuntimeDriver for RecordingDriver {
         })?;
         let artifact_digest =
             CheckpointDigest::new(format!("sha256:{:x}", Sha256::digest(&bytes)))?;
+        let runtime_artifact = self
+            .checkpoint_runtime_artifact
+            .lock()
+            .expect("checkpoint runtime artifact lock")
+            .take()
+            .unwrap_or_else(|| request.runtime_artifact.clone());
         let compatibility = CheckpointCompatibility::new(
             self.capability.driver,
             request.source.isolation,
             HostPlatform::current(),
             std::env::consts::ARCH,
-            request.runtime_artifact.clone(),
+            runtime_artifact,
             CheckpointDigest::new(format!("sha256:{}", "b".repeat(64)))?,
             CheckpointFormat::new("recording-driver", 1)?,
         )?;
@@ -1529,6 +1679,87 @@ impl RuntimeDriver for RecordingDriver {
                 (request, result.clone()),
             );
         Ok(result)
+    }
+
+    async fn validate_restore_artifact(
+        &self,
+        request: DriverRestoreValidationRequest,
+    ) -> Result<()> {
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::RestoreValidation(Box::new(request.clone())));
+        if let Some(error) = self.take_failure("restore-validation") {
+            return Err(error);
+        }
+        self.validate_restore_fixture(
+            &request.artifact_path,
+            &request.reference,
+            &request.runtime_artifact,
+            "driver-restore-validation",
+        )
+        .await
+    }
+
+    async fn restore(&self, request: DriverRestoreRequest) -> Result<DriverState> {
+        let _restore_guard = self.restore_gate.lock().await;
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::Restore(Box::new(request.clone())));
+        if let Some((recorded, response)) = self
+            .restore_replays
+            .lock()
+            .expect("driver restore replay lock")
+            .get(&request.context.operation_id)
+            .cloned()
+        {
+            if recorded != request {
+                return Err(Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "driver restore operation ID was reused for a different request",
+                )
+                .for_operation("driver-restore"));
+            }
+            return Ok(response);
+        }
+        if let Some(error) = self.take_failure("restore") {
+            return Err(error);
+        }
+        self.validate_restore_fixture(
+            &request.artifact_path,
+            &request.reference,
+            &request.runtime_artifact,
+            "driver-restore",
+        )
+        .await?;
+        let generation = Self::exact_generation(&request.target)?;
+        if self
+            .states
+            .lock()
+            .expect("driver states lock")
+            .contains_key(&request.target.id)
+        {
+            return Err(Error::new(
+                ErrorCode::AlreadyExists,
+                "driver restore target already exists",
+            )
+            .for_operation("driver-restore"));
+        }
+        let state = DriverState::running(5_151)?.with_paused(true)?;
+        self.states
+            .lock()
+            .expect("driver states lock")
+            .insert(request.target.id.clone(), (generation, state));
+        self.exits
+            .lock()
+            .expect("driver exits lock")
+            .remove(&request.target.id);
+        self.restore_replays
+            .lock()
+            .expect("driver restore replay lock")
+            .insert(request.context.operation_id.clone(), (request, state));
+        Ok(state)
     }
 }
 

@@ -104,7 +104,7 @@ and `experimental` or `supported` readiness.
 | --- | --- |
 | Public SDK | Async `Send + Sync` Rust contract using official OCI `Spec`, `Process`, `LinuxResources`, `State`, and `Features` types; typed IDs, generations, operation contexts, exact-artifact per-driver capability negotiation, versioned attachments including already-authorized storage, Linux network interfaces, opaque network-enforcement/local-redirect evidence, reusable guest-session identity, immutable checkpoint references and paused restore responses, I/O, filesystem sessions, stats, events, and stable errors |
 | Validation and transport | OCI 1.0.0–1.3.0 schema and semantic validation with forward-compatible unknown-property retention and ignore semantics, an exact 79-item common configuration and 278-requirement owner gate, an exhaustive 19-case pinned upstream JSON Schema suite, four launch-profile configuration/State/Features matrices, immutable configuration, attachment, and checkpoint SHA-256 binding, and bounded protocol-8 local IPC over Unix sockets or protected Windows named pipes |
-| Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals including File upload and Filesystem mkdir/move/remove, replay, generation fencing, startup recovery, startup-wide cross-journal orphan auditing, quarantine, capability-rooted state traversal with Unix mount-identity fencing, post-commit replay-record acknowledgement for local and utility-VM drivers, sorted list, ordered events, and same-UID multi-container owners for Native Linux and Apple Silicon HVF |
+| Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations including immutable checkpoint and paused-generation restore orchestration, global idempotency journals including File upload and Filesystem mkdir/move/remove, replay, generation fencing, startup recovery, startup-wide cross-journal orphan auditing, failed-generation quarantine, capability-rooted state traversal with Unix mount-identity fencing, post-commit replay-record acknowledgement for local and utility-VM drivers, sorted list, ordered events, and same-UID multi-container owners for Native Linux and Apple Silicon HVF |
 | Shared Linux executor | Namespace create/join, declared-root directory admission before namespace entry, `pivot_root`, ordered OCI mounts with root-relative legacy destinations and optional-field handling, the complete OCI 1.3 Linux mount-option control registry, exact init/exec argv, environment, cwd, terminal default, UID/GID, supplementary groups, and umask, conditional `/dev/fd`, `/dev/stdin`, `/dev/stdout`, and `/dev/stderr` links after mount processing, OCI hooks, user mappings, exact absolute and stable relative `cgroupsPath` resolution plus a private generation-fenced path on omission, complete cgroup v2 CPU shares/quota/burst/period/cpuset/idle mapping with explicit cgroup v1 realtime rejection, exact memory limit/reservation/swap and PIDs create/update mapping with zero preserved and OCI `-1` encoded as `max`, finite total-swap validation, complete cgroup v2 Block I/O default/per-device weight and read/write BPS/IOPS throttle mapping with zero-rate clearing, keyed read-back, partial-update preservation, reverse rollback, and explicit leaf-weight rejection, dynamic HugeTLB usage/reservation controls, keyed RDMA HCA handle/object limits, bounded OCI 1.3 unified control-file writes with dynamic controller enablement, kernel-defined formatting, typed-file conflict rejection, readable no-op/rollback snapshots, and write-only control support, typed rejection of cgroup v1-only memory and network `net_cls`/`net_prio` controls, all five capability sets with kernel read-back, exact `no_new_privileges` verification, all 16 OCI rlimit types with exact kernel read-back, `oomScoreAdj`, scheduler policy, I/O priority, exact `LINUX`/`LINUX32` init personality, all seven OCI NUMA memory-policy modes and three flags with kernel read-back, parent-owned Intel RDT CLOS, ordered schemata, process assignment, monitoring, and owner-death cleanup, exec CPU affinity applied around cgroup membership, transactional namespaced sysctls with descriptor-confined apply, read-back, and rollback, exact rootful block/character/FIFO nodes, the six default devices, `/dev/ptmx`, PTY-backed `/dev/console`, durable placeholder cleanup, immutable declared/default device inventory BPF with ordered resource-rule narrowing, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY with OCI `consoleSize` initialization, a bounded Host-acknowledged mutation replay journal, parent-bound launch/session helpers, PID-start-time-bound owner-death tombstones, descriptor-confined file/filesystem sessions, pause/resume, resource updates, normalized CPU/memory/PID/block-I/O stats, and scoped cleanup for the qualified profile |
 | Utility-VM boundary | Isolated libkrun shim, authenticated protocol v10 with v1-v9 compatibility, 20 public workload operations plus one bounded maintenance acknowledgement, clone-wide shutdown, exact-generation VM sessions, and the same Linux executor behind the static guest agent. A platform-neutral one-VM-per-generation lifecycle now backs both the public HVF driver and the Linux KVM candidate, including bundle ownership handoff, concurrent Create fencing, retry and terminal cleanup, stopped recovery tombstones, and bounded shutdown. Durable recovery records remain on the per-generation share, privileged OCI device sources are created only on Guest-local devtmpfs and removed at the Create barrier, and shutdown consumes every retained device-target manifest before deleting the Guest runtime root |
 | containerd runtime-v2 | SDK-only `containerd-shim-a3s-oci-v2` with a code-owned contract for the `containerd.task.v2.Task` API, a 23-route translation table whose exact 18-operation public-SDK union gates endpoint admission, an exact 2.2.2 arm64 Native Linux development claim plus retained 2.2.3 x86_64 regression evidence, Linux package entry, durable namespace/task identity, lifecycle and exec recovery, and schema-v9 metadata. A retained per-task exec sequence gives every `Exec` incarnation fresh SDK process and operation identities, so `DeleteProcess` can be followed by reuse of the same containerd exec ID across daemon restart without replaying the deleted process. A separate task-identity- and generation-bound receipt journal makes a committed `DeleteProcess` response replayable with its exact PID, status, and nanosecond exit time after shim replacement; the main metadata record distinguishes a pre-commit intent from a committed removal, and a durably added replacement incarnation consumes the old receipt. Task Delete has its own identity-, generation-, and bundle-bound receipt, so a metadata-free replacement replays the exact task PID, status, and nanosecond exit time and exits after serving that response. Init/exec input, signal, and terminal-resize journals retain Open/Closing/Closed stdin state, byte-exact partial-write output cursors, independent per-process signal and resize sequences, and a per-task control sequence. Schema v9 also retains the canonical digest and exact `LinuxResources` body for every pending Update. Rehydration automatically replays pending Pause, Resume, and body-complete Update operations with their original SDK identities; schema-v3 through schema-v8 digest-only pending Updates wait for a matching caller retry to supply the missing body before upgrading. The shim publishes restored task state before starting output pumps, so immediately available output can durably advance its cursor without racing an absent task. The shim also provides process/task-scoped serialization, cross-process-stable request fingerprints, bounded FIFO/PTY I/O, live replacement with exact stdin and output continuation, committed init-Start exact-state adoption, committed exec-Start exact-process adoption, committed pending-write, close, init-Kill, exec-signal, resize, and task-control replay without duplicate effects, correct `SIGSTOP→SIGCONT→SIGSTOP→SIGCONT` transitions, same-size resize suppression, correct `A→B→A` terminal restoration, no output replay, repeated pause/resume and update, stats, PID inventory, in-flight and post-commit Create plus committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update/WriteStdin/CloseStdin/ResizePty recovery, post-commit Native Linux guest-journal reclamation, four-state forced shim-crash cleanup, and a four-task parallel restart gate. Unit coverage proves committed init-Start adoption, durable `Starting` intent before Runtime adapter connection, exact one-time replay of a missing `Starting` exec, adoption of an existing exec without redispatch, settlement of pending terminal init and exec signals from durable exit evidence, exact `DeleteProcess` and task Delete response replay, and race-free output cursor commit during restoration. Three consecutive same-Host Ubuntu arm64/containerd 2.2.2 matrices retain the committed init-Start, exec-Start, terminal init-Kill, terminal exec-SignalProcess, `DeleteProcess`, Pause, Resume, and Update replacement gates; three consecutive Ubuntu x86_64/containerd 2.2.3 matrices additionally retain exact task Delete response replay and post-commit `WriteStdin` and `CloseStdin` forced cleanup. Broader version qualification, published-artifact compatibility, and cross-driver release gates remain open |
@@ -343,13 +343,15 @@ claimed durably before dispatch, and replayed with the same runtime operation
 after a lost response. Runtime acknowledgement updates Box restart intent
 atomically without changing the original create identity.
 
-New mutation records use `a3s.oci.operation.v4`. Version 3 File uploads and
+New mutation records use `a3s.oci.operation.v5`. Version 3 File uploads and
 Filesystem mkdir/move/remove remain readable; version 4 additionally retains
-each exact checkpoint request and typed immutable response. The Host commits a
-journaled result before acknowledging driver replay evidence, so a disconnect
-returns a retryable error and the next owner replays the Host result without
-dispatching the mutation again. The Host journal remains the permanent
-changed-request fence after driver evidence has been released.
+each exact checkpoint request and typed immutable response; version 5 adds the
+exact restore request, allocated generation, and paused-running response.
+The Host commits a journaled result before acknowledging driver replay
+evidence, so a disconnect returns a retryable error and the next owner replays
+the Host result without dispatching the mutation again. The Host journal
+remains the permanent changed-request fence after driver evidence has been
+released.
 
 Durable state now pins its canonical root as a directory capability. All
 descendant reads, enumeration, creation, replacement, and quarantine moves are
@@ -957,14 +959,18 @@ driver-defined format, and exact artifact digest and size. Checkpoint accepts
 only an already-paused running generation and leaves it paused; restore returns
 a new paused running generation and requires an explicit later `resume`.
 Artifact storage, lineage, retention, and object policy remain caller-owned.
-The Host now owns durable checkpoint orchestration: it fences the exact paused
-source and all process I/O, journals the v4 request and response, validates
-driver compatibility evidence, and replays success or terminal failure across
-service reopen. The registry accepts `Checkpoint` only from an explicitly
-advertising current-platform driver. No production driver advertises it yet;
-`Restore` remains rejected by the Host and registry until its durable creation,
-rollback, artifact verification, and real-host qualification exist. See the
-[immutable checkpoint contract](docs/checkpoint-contract.md).
+The Host now owns durable checkpoint and restore orchestration. Checkpoint
+fences the exact paused source and all process I/O. Restore first replays any
+committed v5 outcome without reopening caller data; otherwise it validates the
+immutable artifact and exact runtime/driver compatibility before allocating a
+generation, dispatches an idempotent driver restore, and commits a paused
+running record. Terminal restore failures quarantine only their allocated
+generation so the ID can be reused monotonically. The registry accepts
+`Checkpoint` only from an explicitly advertising current-platform driver and
+accepts `Restore` only together with `Checkpoint`. No production driver
+advertises either operation yet; atomic driver execution and real-host
+qualification remain required. See the [immutable checkpoint
+contract](docs/checkpoint-contract.md).
 
 These commands can require root privileges, hypervisor access, signed
 artifacts, or destructive cleanup within an explicitly supplied test root.
@@ -986,7 +992,7 @@ The repository turns release claims into checked inventories:
 | Typed semantic validation rules | 95 |
 | Owner-bound non-semantic rules | 156 |
 | OCI normative dispositions | 578 enforced · 51 validated · 12 conformant · 14 reviewed external · 0 pending review |
-| Registered durable commit fault stages | 783 |
+| Registered durable commit fault stages | 835 |
 | Durable-state replacement qualification | macOS/Linux/Windows complete, including a real Linux bind mount and the Windows reparse-point matrix |
 | Live containerd terminal init-Kill rehydration | 3 / 3 consecutive same-Host Ubuntu arm64/containerd 2.2.2 matrices on August 24, 2026 |
 | Live containerd `DeleteProcess` response replay | 3 / 3 consecutive same-Host Ubuntu arm64/containerd 2.2.2 matrices on August 24, 2026 |
@@ -994,7 +1000,7 @@ The repository turns release claims into checked inventories:
 | Post-commit containerd `WriteStdin` forced cleanup | 3 / 3 consecutive same-Host Ubuntu x86_64/containerd 2.2.3 matrices on August 24, 2026 |
 | Post-commit containerd `CloseStdin` forced cleanup | 3 / 3 consecutive same-Host Ubuntu x86_64/containerd 2.2.3 matrices on August 24, 2026 |
 | Post-commit containerd `ResizePty` forced cleanup | Automated gate implemented; 3-pass real-host qualification pending |
-| Before/after `RuntimeDriver` fault boundaries | 46 |
+| Before/after `RuntimeDriver` fault boundaries | 50 |
 | Authenticated agent operation-stage fault pairs | 180 |
 | Portable Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host-service reopen pairs | 180 |
 | Real HVF Create Host/Guest plus Host shutdown interruption and cleanup stages | 11 |
@@ -1047,8 +1053,8 @@ exact release-artifact qualification must all pass before a driver becomes
 - utility-VM hook recovery and security certification;
 - the default and cross-platform A3S Box cutover, plus the remaining
   containerd compatibility, packaging, and cross-driver gates;
-- production checkpoint-driver execution, restore Host/driver execution, and
-  later attachment extensions;
+- production checkpoint/restore driver execution and real-host qualification,
+  plus later attachment extensions;
 - signed-package, upgrade, rollback, security, and long-duration release gates.
 
 ## Workspace map
