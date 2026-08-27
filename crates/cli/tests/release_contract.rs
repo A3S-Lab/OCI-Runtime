@@ -4,7 +4,69 @@ const README: &str = include_str!("../../../README.md");
 const CONTAINERD_GUIDE: &str = include_str!("../../../docs/containerd-runtime-v2.md");
 
 const ATTEST_ACTION: &str = "actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1";
+const RELEASE_ACTION: &str =
+    "softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2";
 const SIGNER_WORKFLOW: &str = "--signer-workflow A3S-Lab/OCI-Runtime/.github/workflows/release.yml";
+const PINNED_RELEASE_ACTIONS: [(&str, usize); 7] = [
+    (
+        "actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0",
+        3,
+    ),
+    (
+        "dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable",
+        3,
+    ),
+    (
+        "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2",
+        3,
+    ),
+    (
+        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
+        2,
+    ),
+    (
+        "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0",
+        1,
+    ),
+    (ATTEST_ACTION, 1),
+    (RELEASE_ACTION, 1),
+];
+
+#[test]
+fn every_external_release_action_is_pinned_to_an_immutable_commit() {
+    let action_lines = RELEASE_WORKFLOW
+        .lines()
+        .filter(|line| line.contains("uses: "))
+        .collect::<Vec<_>>();
+    assert_eq!(action_lines.len(), 14);
+
+    for line in &action_lines {
+        let action = line
+            .split_once("uses: ")
+            .expect("action line must contain a uses value")
+            .1;
+        let revision = action
+            .split_once('@')
+            .expect("external action must contain a revision")
+            .1
+            .split_whitespace()
+            .next()
+            .expect("external action must contain a revision value");
+        assert_eq!(revision.len(), 40, "action is not pinned: {action}");
+        assert!(
+            revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "action is not pinned: {action}"
+        );
+    }
+
+    for (action, expected_count) in PINNED_RELEASE_ACTIONS {
+        assert_eq!(
+            RELEASE_WORKFLOW.matches(action).count(),
+            expected_count,
+            "unexpected release action revision for {action}"
+        );
+    }
+}
 
 #[test]
 fn release_attests_every_checksum_bound_archive_before_publishing() {
@@ -38,7 +100,7 @@ fn release_attests_every_checksum_bound_archive_before_publishing() {
         .find(ATTEST_ACTION)
         .expect("attestation action must be present");
     let release_position = publish_job
-        .find("softprops/action-gh-release@v2")
+        .find(RELEASE_ACTION)
         .expect("release action must be present");
     let bundle_position = publish_job
         .find("Retain portable Sigstore bundle")

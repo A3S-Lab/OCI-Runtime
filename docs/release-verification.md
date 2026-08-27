@@ -4,7 +4,8 @@ A full Runtime tag produced by the current release workflow publishes five
 platform archives, `SHA256SUMS`, and one portable Sigstore bundle named
 `a3s-oci-runtime-<tag>-provenance.sigstore.json`. The release workflow creates
 one signed SLSA build-provenance attestation whose subjects are the five
-archives and `SHA256SUMS`.
+archives and `SHA256SUMS`. Every external Action in that release workflow is
+pinned to an immutable commit rather than a movable tag or branch.
 
 The provenance binds subject names and SHA-256 digests to the GitHub Actions
 workflow identity. It does not establish that an experimental or probe-only

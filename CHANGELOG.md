@@ -29,11 +29,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 - Added signed SLSA build provenance for all five full Runtime archives and
   `SHA256SUMS`. The tag workflow grants signing and artifact metadata access
-  only to the publish job, pins the attestation action to its immutable commit,
-  uploads the provenance through GitHub's attestation API, and publishes a
-  portable Sigstore bundle with verification instructions in every archive.
-  Provenance verification remains separate from driver, containerd, OCI,
-  security, upgrade, rollback, and soak qualification.
+  only to the publish job, pins every external release Action to an immutable
+  commit, uploads the provenance through GitHub's attestation API, and
+  publishes a portable Sigstore bundle with verification instructions in every
+  archive. Provenance verification remains separate from driver, containerd,
+  OCI, security, upgrade, rollback, and soak qualification.
 - Added a canonical machine-readable containerd runtime-v2 compatibility
   record that is schema-checked against the code-owned support matrix and
   retains exact qualification environments, protocol ranges, digests,
