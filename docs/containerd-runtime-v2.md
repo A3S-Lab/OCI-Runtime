@@ -650,8 +650,9 @@ pending resize; it kills and force-deletes only the exact task generation,
 clears shim metadata and the bundle, and retains containerd-owned container
 metadata. A focused unit boundary begins with one recorded Runtime resize and
 asserts that DeleteShim leaves the resize count unchanged while fencing Kill
-and force Delete to that generation. The gate passes non-destructive CI, but
-its destructive three-pass real-host qualification record remains open.
+and force Delete to that generation. The gate passes non-destructive CI and
+the machine-readable compatibility record retains three consecutive current
+real-daemon observations through one unchanged Host process.
 
 The committed SignalProcess rehydration gate instead keeps the exec alive. It
 persists sequence 1 SIGSTOP, freezes the original shim and Runtime, commits the
