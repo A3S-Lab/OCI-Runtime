@@ -290,6 +290,7 @@ impl UtilityVmOwner for FakeOwner {
 struct FakeFactory {
     launches: AtomicUsize,
     launch_shares: StdMutex<Vec<PathBuf>>,
+    launch_contracts: StdMutex<Vec<CreateAttachments>>,
     next_launch_failure: StdMutex<Option<Error>>,
     guest: Arc<FakeGuest>,
     owner: Arc<FakeOwner>,
@@ -310,13 +311,17 @@ impl UtilityVmFactory for FakeFactory {
         &self,
         _target: &ContainerTarget,
         runtime_share: &Path,
-        _guest_session: Option<&a3s_oci_sdk::GuestSessionAttachment>,
+        attachment_contract: &CreateAttachments,
     ) -> Result<LaunchedUtilityVm> {
         self.launches.fetch_add(1, Ordering::Relaxed);
         self.launch_shares
             .lock()
             .expect("launch shares lock")
             .push(runtime_share.to_path_buf());
+        self.launch_contracts
+            .lock()
+            .expect("launch contracts lock")
+            .push(attachment_contract.clone());
         if let Some(error) = self
             .next_launch_failure
             .lock()
@@ -374,6 +379,21 @@ impl Fixture {
     }
 
     fn with_capability(capability: DriverCapability) -> Self {
+        let attachment_capabilities = if capability
+            .isolation_classes
+            .contains(&IsolationClass::SharedGuestKernel)
+        {
+            a3s_oci_sdk::AttachmentCapabilities::base_v4()
+        } else {
+            a3s_oci_sdk::AttachmentCapabilities::base_v1()
+        };
+        Self::with_profile(capability, attachment_capabilities)
+    }
+
+    fn with_profile(
+        capability: DriverCapability,
+        attachment_capabilities: a3s_oci_sdk::AttachmentCapabilities,
+    ) -> Self {
         let temporary = tempfile::tempdir().expect("temporary utility-VM fixture");
         set_private_directory(temporary.path());
         let temporary_root = std::fs::canonicalize(temporary.path()).expect("canonical fixture");
@@ -397,6 +417,7 @@ impl Fixture {
         let factory = Arc::new(FakeFactory {
             launches: AtomicUsize::new(0),
             launch_shares: StdMutex::new(Vec::new()),
+            launch_contracts: StdMutex::new(Vec::new()),
             next_launch_failure: StdMutex::new(None),
             guest: guest.clone(),
             owner: owner.clone(),
@@ -404,6 +425,7 @@ impl Fixture {
         let factory_dyn: Arc<dyn UtilityVmFactory> = factory.clone();
         let driver = UtilityVmRuntimeDriver::new(
             capability,
+            attachment_capabilities,
             "test utility VM",
             runtime_root.clone(),
             runtime_share_root.clone(),
@@ -546,6 +568,7 @@ pub(crate) async fn shutdown_fixture(
     let factory = Arc::new(FakeFactory {
         launches: AtomicUsize::new(0),
         launch_shares: StdMutex::new(Vec::new()),
+        launch_contracts: StdMutex::new(Vec::new()),
         next_launch_failure: StdMutex::new(None),
         guest: guest.clone(),
         owner: owner.clone(),
@@ -553,6 +576,7 @@ pub(crate) async fn shutdown_fixture(
     let factory_dyn: Arc<dyn UtilityVmFactory> = factory;
     let driver = UtilityVmRuntimeDriver::new(
         candidate_capability(),
+        a3s_oci_sdk::AttachmentCapabilities::base_v1(),
         "test utility VM",
         runtime_root.clone(),
         runtime_share_root.clone(),

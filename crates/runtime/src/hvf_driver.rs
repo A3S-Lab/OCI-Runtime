@@ -137,6 +137,7 @@ impl HvfRuntimeDriver {
         Ok(Self {
             inner: UtilityVmRuntimeDriver::new(
                 capability,
+                a3s_oci_sdk::AttachmentCapabilities::base_v1(),
                 "HVF",
                 prepared.runtime_root,
                 prepared.runtime_share_root,
@@ -180,7 +181,7 @@ impl UtilityVmFactory for LiveHvfVmFactory {
         &self,
         target: &a3s_oci_sdk::ContainerTarget,
         runtime_share: &Path,
-        guest_session: Option<&a3s_oci_sdk::GuestSessionAttachment>,
+        attachment_contract: &a3s_oci_sdk::CreateAttachments,
     ) -> Result<LaunchedUtilityVm> {
         let generation = target.generation.ok_or_else(|| {
             Error::new(
@@ -195,7 +196,9 @@ impl UtilityVmFactory for LiveHvfVmFactory {
         let console = self
             .console_directory
             .join(format!("{}-{}.log", target.id, generation.0));
-        let recovery_report = self.recovery.path(target, guest_session)?;
+        let recovery_report = self
+            .recovery
+            .path(target, attachment_contract.guest_session())?;
         let session = Arc::new(
             UtilityVmSession::connect_with_runtime_share(
                 &self.shim,

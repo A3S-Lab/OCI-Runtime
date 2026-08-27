@@ -239,6 +239,14 @@ deterministic driver tests are present, while cumulative v2/v3 transport and
 per-driver real-host restart, cleanup, and soak qualification remain the
 enablement gates.
 
+Utility-VM attachment capabilities are explicit driver configuration, not an
+inference from the advertised isolation classes. The driver repeats schema
+negotiation at its own preflight boundary and passes the complete immutable
+`CreateAttachments` value into the platform VM factory. Production HVF and KVM
+still configure v1, while the reusable-session test profile opts into v4. This
+keeps unimplemented storage and NIC transport fail-closed without discarding
+their typed contracts at the future launch boundary.
+
 ## Runtime-owned bundle handoff
 
 Local products that prepare a portable bundle for a utility-VM driver may

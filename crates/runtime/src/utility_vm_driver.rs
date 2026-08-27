@@ -6,10 +6,10 @@ use std::sync::{Arc, Weak};
 use a3s_oci_core::{DriverCapability, IsolationClass};
 use a3s_oci_sdk::{
     async_trait, AttachmentCapabilities, ContainerId, ContainerRecord, ContainerStats,
-    ContainerTarget, Error, ErrorCode, ExitStatus, FileRequest, FileResponse, FilesystemRequest,
-    FilesystemResponse, GuestSessionAttachment, GuestSessionId, GuestSessionReset, OciBundle,
-    OperationId, OutputChunk, ProcessRecord, Result, RuntimeOperation,
-    RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
+    ContainerTarget, CreateAttachments, Error, ErrorCode, ExitStatus, FileRequest, FileResponse,
+    FilesystemRequest, FilesystemResponse, GuestSessionAttachment, GuestSessionId,
+    GuestSessionReset, OciBundle, OperationId, OutputChunk, ProcessRecord, Result,
+    RuntimeOperation, RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -45,6 +45,7 @@ use sessions::{
 /// Platform-neutral lifecycle for dedicated and explicitly bound reusable utility VMs.
 pub(crate) struct UtilityVmRuntimeDriver {
     capability: DriverCapability,
+    attachment_capabilities: AttachmentCapabilities,
     backend_name: &'static str,
     runtime_root: PathBuf,
     runtime_share_root: PathBuf,
@@ -79,6 +80,7 @@ impl UtilityVmRuntimeDriver {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         capability: DriverCapability,
+        attachment_capabilities: AttachmentCapabilities,
         backend_name: &'static str,
         runtime_root: PathBuf,
         runtime_share_root: PathBuf,
@@ -89,8 +91,15 @@ impl UtilityVmRuntimeDriver {
     ) -> Self {
         let recovery = RecoveryStore::new(recovery_directory);
         let handoff = BundleHandoffStore::new(runtime_root.clone(), runtime_share_root.clone());
+        let attachment_capabilities = attachment_capabilities
+            .with_extension(
+                RUNTIME_BUNDLE_HANDOFF_EXTENSION,
+                vec![RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION],
+            )
+            .expect("the fixed utility-VM bundle-handoff extension is valid");
         Self {
             capability,
+            attachment_capabilities,
             backend_name,
             runtime_root,
             runtime_share_root,
@@ -175,21 +184,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     fn attachment_capabilities(&self) -> AttachmentCapabilities {
-        let capabilities = if self
-            .capability
-            .isolation_classes
-            .contains(&IsolationClass::SharedGuestKernel)
-        {
-            AttachmentCapabilities::base_v4()
-        } else {
-            AttachmentCapabilities::base_v1()
-        };
-        capabilities
-            .with_extension(
-                RUNTIME_BUNDLE_HANDOFF_EXTENSION,
-                vec![RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION],
-            )
-            .expect("the fixed utility-VM bundle-handoff extension is valid")
+        self.attachment_capabilities.clone()
     }
 
     async fn acknowledge_operation(&self, operation_id: &OperationId) -> Result<()> {
@@ -383,7 +378,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
         let container = match existing {
             Some(container) => container,
             None => match self
-                .admit_new_container(&target, guest_session.as_ref())
+                .admit_new_container(&target, &request.attachment_contract)
                 .await
             {
                 Ok(container) => container,
@@ -719,7 +714,7 @@ pub(crate) trait UtilityVmFactory: Send + Sync {
         &self,
         target: &ContainerTarget,
         runtime_share: &Path,
-        guest_session: Option<&GuestSessionAttachment>,
+        attachment_contract: &CreateAttachments,
     ) -> Result<LaunchedUtilityVm>;
 }
 

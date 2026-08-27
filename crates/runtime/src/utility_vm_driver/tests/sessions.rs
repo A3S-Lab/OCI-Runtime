@@ -53,6 +53,7 @@ async fn shared_members_use_one_vm_and_session_scoped_guest_paths() {
             GuestSessionReset::DestroyOnEmpty,
         ))
         .await;
+    let expected_launch_contract = alpha_request.attachment_contract.clone();
     fixture
         .driver
         .create(alpha_request)
@@ -78,6 +79,15 @@ async fn shared_members_use_one_vm_and_session_scoped_guest_paths() {
         .expect("session ownership marker");
     assert_eq!(marker.permissions().mode() & 0o777, 0o600);
     assert_eq!(fixture.factory.launches.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        fixture
+            .factory
+            .launch_contracts
+            .lock()
+            .expect("launch contracts lock")
+            .as_slice(),
+        std::slice::from_ref(&expected_launch_contract)
+    );
     assert_eq!(fixture.driver.active_session_count().await, 1);
     assert_eq!(
         fixture

@@ -71,6 +71,36 @@ async fn create_requires_dedicated_vm_and_an_exact_generation_before_handoff() {
 }
 
 #[tokio::test]
+async fn shared_isolation_does_not_implicitly_advertise_attachment_v4() {
+    let mut capability = candidate_capability();
+    capability
+        .isolation_classes
+        .push(IsolationClass::SharedGuestKernel);
+    let fixture = Fixture::with_profile(capability, a3s_oci_sdk::AttachmentCapabilities::base_v1());
+    let request = fixture.shared_handoff_request(
+        "unadvertised-v4",
+        named_target("unadvertised-v4", 1),
+        SharedSessionFixture {
+            id: "unadvertised-session",
+            generation: 1,
+            trust_domain: "unadvertised-domain",
+            capacity: 1,
+            reset: GuestSessionReset::DestroyOnEmpty,
+        },
+    );
+    let source = request.bundle.directory().to_path_buf();
+
+    let error = fixture
+        .driver
+        .prepare_create_bundle(&request)
+        .await
+        .expect_err("v4 must require an explicit attachment capability");
+
+    assert_preflight_rejection(&fixture, &error, ErrorCode::Unsupported);
+    assert!(source.is_dir());
+}
+
+#[tokio::test]
 async fn missing_handoff_source_does_not_create_an_exact_runtime_share() {
     let fixture = Fixture::new();
     let request = fixture.handoff_request("missing-handoff-source");

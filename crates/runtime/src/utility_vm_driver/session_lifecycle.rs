@@ -40,6 +40,8 @@ impl UtilityVmRuntimeDriver {
         request
             .attachment_contract
             .validate_isolation(&request.isolation)?;
+        self.attachment_capabilities
+            .require(&request.attachment_contract)?;
         require_exact_generation(&request.target, "utility-vm-create")?;
         if !request.attachment_contract.uses_runtime_bundle_handoff() {
             return Err(Error::new(
@@ -144,12 +146,13 @@ impl UtilityVmRuntimeDriver {
     pub(super) async fn launch_guest(
         &self,
         target: &ContainerTarget,
-        guest_session: Option<&GuestSessionAttachment>,
+        attachment_contract: &CreateAttachments,
     ) -> Result<Arc<UtilityVmGuest>> {
+        let guest_session = attachment_contract.guest_session();
         let runtime_share = self.handoff.mount_root(target, guest_session).await?;
         let launched = self
             .factory
-            .launch(target, &runtime_share, guest_session)
+            .launch(target, &runtime_share, attachment_contract)
             .await?;
         Ok(Arc::new(UtilityVmGuest {
             client: launched.client,
@@ -211,10 +214,11 @@ impl UtilityVmRuntimeDriver {
     pub(super) async fn admit_new_container(
         &self,
         target: &ContainerTarget,
-        guest_session: Option<&GuestSessionAttachment>,
+        attachment_contract: &CreateAttachments,
     ) -> Result<Arc<UtilityVmContainer>> {
+        let guest_session = attachment_contract.guest_session();
         let Some(binding) = guest_session else {
-            let guest = self.launch_guest(target, None).await?;
+            let guest = self.launch_guest(target, attachment_contract).await?;
             let container = Arc::new(UtilityVmContainer {
                 target: target.clone(),
                 guest_session: None,
@@ -294,7 +298,7 @@ impl UtilityVmRuntimeDriver {
             }
         }
 
-        let guest = self.launch_guest(target, Some(binding)).await?;
+        let guest = self.launch_guest(target, attachment_contract).await?;
         let container = Arc::new(UtilityVmContainer {
             target: target.clone(),
             guest_session: Some(binding.clone()),

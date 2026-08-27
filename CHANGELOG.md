@@ -41,7 +41,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
   reports, member-local terminal cleanup, and one-owner shutdown. Production
   utility-VM drivers still do not advertise v4; cumulative storage/network
   transport plus real-host restart, cleanup, and soak qualification remain
-  required before either driver enables the profile.
+  required before either driver enables the profile. Utility-VM attachment
+  schemas are now configured independently from isolation classes, rechecked
+  at the driver boundary, and passed intact to the VM factory so a future
+  platform transport cannot silently lose v2/v3 launch evidence.
 - Added `a3s.oci.attachments.v3` for already-authorized Linux network
   interfaces. Each binding carries caller-issued namespace, interface, and
   cleanup incarnation IDs plus exact OCI network-namespace and

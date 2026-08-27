@@ -154,6 +154,7 @@ impl KvmRuntimeDriver {
         Ok(Self {
             inner: UtilityVmRuntimeDriver::new(
                 capability,
+                a3s_oci_sdk::AttachmentCapabilities::base_v1(),
                 "KVM",
                 prepared.runtime_root,
                 prepared.runtime_share_root,
@@ -278,7 +279,7 @@ impl UtilityVmFactory for LiveKvmVmFactory {
         &self,
         target: &a3s_oci_sdk::ContainerTarget,
         runtime_share: &Path,
-        guest_session: Option<&a3s_oci_sdk::GuestSessionAttachment>,
+        attachment_contract: &a3s_oci_sdk::CreateAttachments,
     ) -> Result<LaunchedUtilityVm> {
         let generation = target.generation.ok_or_else(|| {
             Error::new(
@@ -293,7 +294,9 @@ impl UtilityVmFactory for LiveKvmVmFactory {
         let console = self
             .console_directory
             .join(format!("{}-{}.log", target.id, generation.0));
-        let recovery_report = self.recovery.path(target, guest_session)?;
+        let recovery_report = self
+            .recovery
+            .path(target, attachment_contract.guest_session())?;
         let session = Arc::new(
             UtilityVmSession::connect_with_verified_runtime_share(
                 &self.shim,
@@ -361,7 +364,7 @@ mod tests {
             &self,
             _target: &a3s_oci_sdk::ContainerTarget,
             _runtime_share: &Path,
-            _guest_session: Option<&a3s_oci_sdk::GuestSessionAttachment>,
+            _attachment_contract: &a3s_oci_sdk::CreateAttachments,
         ) -> Result<LaunchedUtilityVm> {
             Err(Error::new(
                 ErrorCode::Internal,
@@ -386,6 +389,7 @@ mod tests {
         let runtime_root = root.join("runtime");
         let inner = UtilityVmRuntimeDriver::new(
             capability,
+            a3s_oci_sdk::AttachmentCapabilities::base_v1(),
             "KVM",
             runtime_root.clone(),
             runtime_root.join("shares"),
