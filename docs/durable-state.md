@@ -134,6 +134,15 @@ omitting a previously attached schema fails with `failed-precondition`. A
 matching prepared operation resumes the original generation; a matching
 completed operation returns its exact recorded response.
 
+For the non-advertised reusable Utility-VM profile, the driver additionally
+stores one owner-death report per guest-session incarnation rather than per
+first container. Every durable member resolves the same bounded report and
+selects only its exact container generation and configuration digest. Driver
+shutdown closes the shared owner once, converts each live member to an exact
+stopped tombstone, and keeps the session root until the final tombstone
+cleanup. Production drivers do not expose this profile until real-host restart
+and leak qualification is retained.
+
 Start, kill, pause, resume, update, delete, File upload, and Filesystem
 mkdir/move/remove use the same global journal and request fingerprinting. Each
 accepted mutation claims the target record so a

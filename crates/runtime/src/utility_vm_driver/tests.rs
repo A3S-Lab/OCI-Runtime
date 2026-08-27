@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,7 +14,7 @@ use a3s_oci_agent_protocol::{
     AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentProcess, AgentProcessesRequest,
     AgentReadOutputRequest, AgentResizeRequest, AgentSignalProcessRequest, AgentStartRequest,
     AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
-    AgentWaitRequest, AgentWriteStdinRequest, GuestAgentService,
+    AgentWaitRequest, AgentWriteStdinRequest, GuestAgentService, AGENT_RUNTIME_SHARE_GUEST_ROOT,
 };
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
@@ -24,9 +24,10 @@ use a3s_oci_sdk::{
     async_trait, runtime_bundle_handoff_directory, ContainerId, ContainerRecord, ContainerStats,
     ContainerTarget, CpuStats, CreateAttachments, DeleteMode, Error, ErrorCode, ExitStatus, FileOp,
     FileRequest, FileResponse, FilesystemOp, FilesystemRequest, FilesystemResponse, Generation,
+    GuestSessionCapacity, GuestSessionGeneration, GuestSessionId, GuestSessionReset,
     IsolationRequest, MemoryStats, OciBundle, OperationContext, OperationId, OutputChunk,
     ProcessId, ProcessIo, ProcessRecord, ProcessTarget, Result, RuntimeOperation, Signal,
-    TerminalSize, RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
+    TerminalSize, TrustDomainId, RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
 };
 
 const TEST_CONFIG: &str = concat!(
@@ -43,11 +44,15 @@ const TEST_CONFIG: &str = concat!(
 );
 
 mod isolation;
+mod operations;
+mod session_concurrency;
+mod sessions;
 
 #[derive(Default)]
 struct FakeGuest {
     create_calls: AtomicUsize,
     delete_calls: AtomicUsize,
+    create_bundle_paths: StdMutex<Vec<String>>,
     next_create_failure: StdMutex<Option<Error>>,
     state: StdMutex<Option<AgentState>>,
     dispatches: StdMutex<Vec<RuntimeOperation>>,
@@ -87,6 +92,10 @@ impl GuestAgentService for FakeGuest {
     async fn create(&self, request: AgentCreateRequest) -> Result<AgentState> {
         self.record(RuntimeOperation::Create);
         self.create_calls.fetch_add(1, Ordering::Relaxed);
+        self.create_bundle_paths
+            .lock()
+            .expect("create bundle paths lock")
+            .push(request.bundle.guest_directory().as_str().to_string());
         if let Some(error) = self
             .next_create_failure
             .lock()
@@ -301,6 +310,7 @@ impl UtilityVmFactory for FakeFactory {
         &self,
         _target: &ContainerTarget,
         runtime_share: &Path,
+        _guest_session: Option<&a3s_oci_sdk::GuestSessionAttachment>,
     ) -> Result<LaunchedUtilityVm> {
         self.launches.fetch_add(1, Ordering::Relaxed);
         self.launch_shares
@@ -335,6 +345,15 @@ struct Fixture {
     driver: UtilityVmRuntimeDriver,
 }
 
+#[derive(Clone, Copy)]
+struct SharedSessionFixture<'a> {
+    id: &'a str,
+    generation: u64,
+    trust_domain: &'a str,
+    capacity: u16,
+    reset: GuestSessionReset,
+}
+
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(crate) struct ShutdownFixture {
     pub(crate) driver: Arc<crate::HvfRuntimeDriver>,
@@ -343,6 +362,18 @@ pub(crate) struct ShutdownFixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_capability(candidate_capability())
+    }
+
+    fn with_shared_guest_sessions() -> Self {
+        let mut capability = candidate_capability();
+        capability
+            .isolation_classes
+            .push(IsolationClass::SharedGuestKernel);
+        Self::with_capability(capability)
+    }
+
+    fn with_capability(capability: DriverCapability) -> Self {
         let temporary = tempfile::tempdir().expect("temporary utility-VM fixture");
         set_private_directory(temporary.path());
         let temporary_root = std::fs::canonicalize(temporary.path()).expect("canonical fixture");
@@ -372,7 +403,7 @@ impl Fixture {
         });
         let factory_dyn: Arc<dyn UtilityVmFactory> = factory.clone();
         let driver = UtilityVmRuntimeDriver::new(
-            candidate_capability(),
+            capability,
             "test utility VM",
             runtime_root.clone(),
             runtime_share_root.clone(),
@@ -434,6 +465,30 @@ impl Fixture {
         }
     }
 
+    fn shared_handoff_request(
+        &self,
+        operation: &str,
+        target: ContainerTarget,
+        session: SharedSessionFixture<'_>,
+    ) -> DriverCreateRequest {
+        let isolation = IsolationRequest::SharedGuestKernel {
+            trust_domain: TrustDomainId::new(session.trust_domain).expect("trust domain"),
+        };
+        let mut request = self.handoff_request_for(operation, target, isolation.clone());
+        request.attachment_contract = request
+            .attachment_contract
+            .attach_reusable_guest_session(
+                &request.bundle,
+                &isolation,
+                GuestSessionId::new(session.id).expect("guest-session ID"),
+                GuestSessionGeneration::new(session.generation).expect("guest-session generation"),
+                GuestSessionCapacity::new(session.capacity).expect("guest-session capacity"),
+                session.reset,
+            )
+            .expect("reusable guest-session attachment");
+        request
+    }
+
     async fn stage(&self, mut request: DriverCreateRequest) -> DriverCreateRequest {
         request.bundle = self
             .driver
@@ -465,6 +520,13 @@ impl Fixture {
 
     fn generation_share(&self) -> PathBuf {
         self.runtime_share_root.join("utility-vm-test/1")
+    }
+
+    fn shared_session_root(&self, session_id: &str, session_generation: u64) -> PathBuf {
+        self.runtime_share_root
+            .join(".guest-sessions")
+            .join(session_id)
+            .join(session_generation.to_string())
     }
 }
 
@@ -502,12 +564,15 @@ pub(crate) async fn shutdown_fixture(
     let service: Arc<dyn GuestAgentService> = guest;
     let owner_dyn: Arc<dyn UtilityVmOwner> = owner.clone();
     let target = target();
-    driver.sessions.lock().await.insert(
+    driver.sessions.lock().await.attachments.insert(
         target.id.clone(),
         super::UtilityVmAttachment::Live(Arc::new(super::UtilityVmContainer {
             target,
-            client: AgentDriverClient::new(service, "fake utility-VM guest", "fake-utility-vm"),
-            owner: owner_dyn,
+            guest_session: None,
+            guest: Arc::new(super::UtilityVmGuest {
+                client: AgentDriverClient::new(service, "fake utility-VM guest", "fake-utility-vm"),
+                owner: owner_dyn,
+            }),
         })),
     );
     let driver = Arc::new(crate::HvfRuntimeDriver::from_test_inner(driver));
@@ -532,6 +597,13 @@ fn target() -> ContainerTarget {
     ContainerTarget::exact(
         ContainerId::new("utility-vm-test").expect("container ID"),
         Generation(1),
+    )
+}
+
+fn named_target(id: &str, generation: u64) -> ContainerTarget {
+    ContainerTarget::exact(
+        ContainerId::new(id).expect("container ID"),
+        Generation(generation),
     )
 }
 
@@ -795,205 +867,4 @@ async fn graceful_shutdown_is_bounded_to_one_owner_and_exposes_stopped_cleanup()
         .await
         .expect("delete stopped tombstone");
     assert!(!fixture.generation_share().exists());
-}
-
-#[tokio::test]
-async fn exact_session_delegates_every_advertised_workload_operation() {
-    let fixture = Fixture::new();
-    assert_eq!(
-        fixture.driver.operations(),
-        &crate::agent_driver::AGENT_DRIVER_OPERATIONS
-    );
-    assert_eq!(
-        fixture.driver.hooks(),
-        &crate::agent_driver::AGENT_DRIVER_HOOKS
-    );
-
-    let request = fixture
-        .stage(fixture.handoff_request("delegate-create"))
-        .await;
-    let bundle = request.bundle.clone();
-    let process = bundle
-        .spec()
-        .process()
-        .as_ref()
-        .expect("fixture process")
-        .clone();
-    fixture.driver.create(request).await.expect("create");
-    fixture.driver.state(target()).await.expect("state");
-    fixture
-        .driver
-        .start(crate::DriverStartRequest {
-            context: context("delegate-start"),
-            target: target(),
-            bundle,
-        })
-        .await
-        .expect("start");
-
-    let process_target = ProcessTarget {
-        container: target(),
-        process_id: ProcessId::new("exec-one").expect("process ID"),
-    };
-    fixture
-        .driver
-        .exec(crate::DriverExecRequest {
-            context: context("delegate-exec"),
-            target: process_target.clone(),
-            process,
-            io: ProcessIo::default(),
-        })
-        .await
-        .expect("exec");
-    fixture
-        .driver
-        .signal_process(crate::DriverSignalProcessRequest {
-            context: context("delegate-signal-process"),
-            target: process_target.clone(),
-            signal: Signal::new(15).expect("signal"),
-        })
-        .await
-        .expect("signal process");
-    fixture
-        .driver
-        .wait_process(crate::DriverWaitProcessRequest {
-            target: process_target.clone(),
-            timeout_ms: Some(1),
-        })
-        .await
-        .expect("wait process");
-    fixture
-        .driver
-        .pause(crate::DriverContainerOperationRequest {
-            context: context("delegate-pause"),
-            target: target(),
-        })
-        .await
-        .expect("pause");
-    fixture
-        .driver
-        .resume(crate::DriverContainerOperationRequest {
-            context: context("delegate-resume"),
-            target: target(),
-        })
-        .await
-        .expect("resume");
-    fixture.driver.processes(target()).await.expect("processes");
-    fixture
-        .driver
-        .update(crate::DriverUpdateRequest {
-            context: context("delegate-update"),
-            target: target(),
-            resources: serde_json::from_str("{}").expect("empty Linux resources"),
-        })
-        .await
-        .expect("update");
-    fixture.driver.stats(target()).await.expect("stats");
-    fixture
-        .driver
-        .read_output(crate::DriverReadOutputRequest {
-            target: process_target.clone(),
-            after_sequence: 0,
-            max_bytes: 1,
-            wait_timeout_ms: Some(1),
-        })
-        .await
-        .expect("read output");
-    fixture
-        .driver
-        .write_stdin(crate::DriverWriteStdinRequest {
-            context: context("delegate-write-stdin"),
-            target: process_target.clone(),
-            data: vec![1],
-        })
-        .await
-        .expect("write stdin");
-    fixture
-        .driver
-        .close_stdin(crate::DriverCloseStdinRequest {
-            context: context("delegate-close-stdin"),
-            target: process_target.clone(),
-        })
-        .await
-        .expect("close stdin");
-    fixture
-        .driver
-        .resize(crate::DriverResizeRequest {
-            context: context("delegate-resize"),
-            target: process_target,
-            size: TerminalSize {
-                width: 80,
-                height: 24,
-            },
-        })
-        .await
-        .expect("resize");
-    fixture
-        .driver
-        .file(FileRequest {
-            target: target(),
-            op: FileOp::Download,
-            path: "/file".to_string(),
-            data: None,
-            user: None,
-            context: None,
-        })
-        .await
-        .expect("file");
-    fixture
-        .driver
-        .filesystem(FilesystemRequest {
-            target: target(),
-            op: FilesystemOp::Stat,
-            path: "/".to_string(),
-            destination: None,
-            depth: 0,
-            user: None,
-            context: None,
-        })
-        .await
-        .expect("filesystem");
-    fixture
-        .driver
-        .wait(crate::DriverWaitRequest {
-            target: target(),
-            timeout_ms: Some(1),
-        })
-        .await
-        .expect("wait");
-    fixture
-        .driver
-        .kill(crate::DriverKillRequest {
-            context: context("delegate-kill"),
-            target: target(),
-            signal: Signal::new(9).expect("signal"),
-            all: true,
-        })
-        .await
-        .expect("kill");
-    fixture
-        .driver
-        .delete(DriverDeleteRequest {
-            context: context("delegate-delete"),
-            target: target(),
-            mode: DeleteMode::Force,
-        })
-        .await
-        .expect("delete");
-
-    let dispatches = fixture
-        .guest
-        .dispatches
-        .lock()
-        .expect("dispatch lock")
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>();
-    assert_eq!(dispatches.len(), 20);
-    assert_eq!(
-        dispatches,
-        crate::agent_driver::AGENT_DRIVER_OPERATIONS
-            .into_iter()
-            .collect::<BTreeSet<_>>()
-    );
 }

@@ -10,7 +10,7 @@ use crate::OciVmOperationReopenReplacementReport;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PauseJournalStatus {
     Prepared,
-    Succeeded(ContainerRecord),
+    Succeeded(Box<ContainerRecord>),
 }
 
 pub(super) fn operation_id(value: &str) -> std::result::Result<OperationId, String> {
@@ -121,7 +121,7 @@ pub(super) async fn pause_journal_status(
                     path.display()
                 ));
             }
-            Ok(PauseJournalStatus::Succeeded(response))
+            Ok(PauseJournalStatus::Succeeded(Box::new(response)))
         }
         status => Err(format!(
             "durable Pause journal {} had unexpected status {status:?}",

@@ -3,7 +3,8 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 use a3s_oci_sdk::{
-    runtime_bundle_handoff_root, ContainerTarget, Error, ErrorCode, Generation, Result,
+    runtime_bundle_handoff_root, ContainerTarget, Error, ErrorCode, Generation,
+    GuestSessionAttachment, Result,
 };
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
@@ -11,6 +12,7 @@ use tokio::io::AsyncReadExt;
 pub(super) const CONSOLE_DIRECTORY: &str = "console";
 pub(super) const RECOVERY_DIRECTORY: &str = "recovery";
 pub(super) const RUNTIME_SHARE_DIRECTORY: &str = "shares";
+pub(super) const REUSABLE_GUEST_SESSION_DIRECTORY: &str = ".guest-sessions";
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
@@ -193,12 +195,16 @@ pub(super) async fn ensure_private_directory(
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let mut builder = tokio::fs::DirBuilder::new();
             builder.mode(PRIVATE_DIRECTORY_MODE);
-            builder.create(&path).await.map_err(|error| {
-                path_error(
-                    ErrorCode::PermissionDenied,
-                    format!("failed to create {label} {}: {error}", path.display()),
-                )
-            })?;
+            match builder.create(&path).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(path_error(
+                        ErrorCode::PermissionDenied,
+                        format!("failed to create {label} {}: {error}", path.display()),
+                    ));
+                }
+            }
         }
         Err(error) => {
             return Err(path_error(
@@ -362,77 +368,95 @@ pub(super) fn require_exact_generation(
     })
 }
 
-pub(super) async fn ensure_exact_runtime_share_path(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RuntimeSharePaths {
+    pub(super) mount_root: PathBuf,
+    pub(super) container_share: PathBuf,
+}
+
+pub(super) async fn ensure_runtime_share_paths(
     runtime_share_root: &Path,
     target: &ContainerTarget,
-) -> Result<PathBuf> {
+    guest_session: Option<&GuestSessionAttachment>,
+) -> Result<RuntimeSharePaths> {
     let generation = require_exact_generation(target, "prepare-utility-vm-runtime-share")?;
-    ensure_private_directory(
-        runtime_share_root.join(target.id.as_str()),
+    let container_parent = match guest_session {
+        Some(session) => ensure_reusable_guest_session_root(runtime_share_root, session).await?,
+        None => runtime_share_root.to_path_buf(),
+    };
+    let container = ensure_private_child(
+        &container_parent,
+        target.id.as_str(),
         "utility-VM container-share directory",
     )
     .await?;
-    ensure_private_directory(
-        runtime_share_root
-            .join(target.id.as_str())
-            .join(generation.0.to_string()),
+    let container_share = ensure_private_child(
+        &container,
+        &generation.0.to_string(),
         "utility-VM generation-share directory",
     )
-    .await
+    .await?;
+    Ok(RuntimeSharePaths {
+        mount_root: guest_session.map_or_else(|| container_share.clone(), |_| container_parent),
+        container_share,
+    })
 }
 
-pub(super) async fn existing_exact_runtime_share_path(
+pub(super) async fn existing_runtime_share_paths(
     runtime_share_root: &Path,
     target: &ContainerTarget,
+    guest_session: Option<&GuestSessionAttachment>,
     operation: &'static str,
-) -> Result<Option<PathBuf>> {
+) -> Result<Option<RuntimeSharePaths>> {
     let generation = require_exact_generation(target, operation)?;
-    let configured_container = runtime_share_root.join(target.id.as_str());
-    if path_metadata(&configured_container).await?.is_none() {
-        return Ok(None);
-    }
-    let container = canonical_private_directory(
-        &configured_container,
+    let container_parent = match guest_session {
+        Some(session) => {
+            let Some(session_root) =
+                existing_reusable_guest_session_root(runtime_share_root, session).await?
+            else {
+                return Ok(None);
+            };
+            session_root
+        }
+        None => runtime_share_root.to_path_buf(),
+    };
+    let Some(container) = existing_private_child(
+        &container_parent,
+        target.id.as_str(),
         "utility-VM container-share directory",
     )
-    .await?;
-    if container.parent() != Some(runtime_share_root) {
-        return Err(path_error(
-            ErrorCode::FailedPrecondition,
-            format!(
-                "utility-VM container share escaped protected root {}: {}",
-                runtime_share_root.display(),
-                container.display()
-            ),
-        ));
-    }
-    let configured_share = container.join(generation.0.to_string());
-    if path_metadata(&configured_share).await?.is_none() {
+    .await?
+    else {
         return Ok(None);
-    }
-    let share =
-        canonical_private_directory(&configured_share, "utility-VM generation-share directory")
-            .await?;
-    if share.parent() != Some(container.as_path()) {
-        return Err(path_error(
-            ErrorCode::FailedPrecondition,
-            format!(
-                "utility-VM generation share escaped container directory {}: {}",
-                container.display(),
-                share.display()
-            ),
-        ));
-    }
-    Ok(Some(share))
+    };
+    let Some(container_share) = existing_private_child(
+        &container,
+        &generation.0.to_string(),
+        "utility-VM generation-share directory",
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(RuntimeSharePaths {
+        mount_root: guest_session.map_or_else(|| container_share.clone(), |_| container_parent),
+        container_share,
+    }))
 }
 
-pub(super) async fn exact_runtime_share_path(
+pub(super) async fn exact_runtime_share_paths(
     runtime_share_root: &Path,
     target: &ContainerTarget,
-) -> Result<PathBuf> {
-    existing_exact_runtime_share_path(runtime_share_root, target, "resolve-utility-vm-runtime-share")
-        .await?
-        .ok_or_else(|| {
+    guest_session: Option<&GuestSessionAttachment>,
+) -> Result<RuntimeSharePaths> {
+    existing_runtime_share_paths(
+        runtime_share_root,
+        target,
+        guest_session,
+        "resolve-utility-vm-runtime-share",
+    )
+    .await?
+    .ok_or_else(|| {
             Error::new(
                 ErrorCode::FailedPrecondition,
                 format!(
@@ -442,6 +466,98 @@ pub(super) async fn exact_runtime_share_path(
             )
             .for_operation("resolve-utility-vm-runtime-share")
         })
+}
+
+pub(super) async fn ensure_reusable_guest_session_root(
+    runtime_share_root: &Path,
+    session: &GuestSessionAttachment,
+) -> Result<PathBuf> {
+    let session_root = ensure_private_child(
+        runtime_share_root,
+        REUSABLE_GUEST_SESSION_DIRECTORY,
+        "utility-VM reusable-session root",
+    )
+    .await?;
+    let session_id = ensure_private_child(
+        &session_root,
+        session.id().as_str(),
+        "utility-VM reusable-session identity directory",
+    )
+    .await?;
+    ensure_private_child(
+        &session_id,
+        &session.generation().get().to_string(),
+        "utility-VM reusable-session generation directory",
+    )
+    .await
+}
+
+pub(super) async fn existing_reusable_guest_session_root(
+    runtime_share_root: &Path,
+    session: &GuestSessionAttachment,
+) -> Result<Option<PathBuf>> {
+    let Some(session_root) = existing_private_child(
+        runtime_share_root,
+        REUSABLE_GUEST_SESSION_DIRECTORY,
+        "utility-VM reusable-session root",
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let Some(session_id) = existing_private_child(
+        &session_root,
+        session.id().as_str(),
+        "utility-VM reusable-session identity directory",
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    existing_private_child(
+        &session_id,
+        &session.generation().get().to_string(),
+        "utility-VM reusable-session generation directory",
+    )
+    .await
+}
+
+async fn ensure_private_child(
+    parent: &Path,
+    component: &str,
+    label: &'static str,
+) -> Result<PathBuf> {
+    let child = ensure_private_directory(parent.join(component), label).await?;
+    ensure_direct_child(parent, &child, label)?;
+    Ok(child)
+}
+
+async fn existing_private_child(
+    parent: &Path,
+    component: &str,
+    label: &'static str,
+) -> Result<Option<PathBuf>> {
+    let configured = parent.join(component);
+    if path_metadata(&configured).await?.is_none() {
+        return Ok(None);
+    }
+    let child = canonical_private_directory(&configured, label).await?;
+    ensure_direct_child(parent, &child, label)?;
+    Ok(Some(child))
+}
+
+fn ensure_direct_child(parent: &Path, child: &Path, label: &str) -> Result<()> {
+    if child.parent() != Some(parent) {
+        return Err(path_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "{label} escaped protected parent {}: {}",
+                parent.display(),
+                child.display()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 pub(super) async fn remove_directory_if_empty(path: &Path) -> Result<()> {
@@ -474,15 +590,23 @@ pub(super) async fn remove_directory_if_empty(path: &Path) -> Result<()> {
         })?
         .is_none()
     {
-        tokio::fs::remove_dir(path).await.map_err(|error| {
-            path_error(
-                ErrorCode::Internal,
-                format!(
-                    "failed to remove empty directory {}: {error}",
-                    path.display()
-                ),
-            )
-        })?;
+        match tokio::fs::remove_dir(path).await {
+            Ok(()) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::DirectoryNotEmpty
+                ) => {}
+            Err(error) => {
+                return Err(path_error(
+                    ErrorCode::Internal,
+                    format!(
+                        "failed to remove empty directory {}: {error}",
+                        path.display()
+                    ),
+                ));
+            }
+        }
     }
     Ok(())
 }

@@ -353,7 +353,7 @@ pub(super) async fn run(
                 );
             }
             match service.list(ListRequest::default()).await {
-                Ok(records) if records.as_slice() == [journal.clone()] => {
+                Ok(records) if records.as_slice() == std::slice::from_ref(journal.as_ref()) => {
                     report.replacement_response_matches_durable_record = true;
                 }
                 Ok(records) => append_failure(

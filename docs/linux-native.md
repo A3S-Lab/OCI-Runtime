@@ -259,6 +259,15 @@ no exact-generation share and cannot reach the VM factory. This gate exercises
 the production handoff path and does not treat an unavailable KVM probe as a
 pass for real Guest isolation.
 
+The common HVF/KVM lifecycle also has a non-advertised SharedGuestKernel test
+profile. It binds each exact session incarnation to a private share and marker,
+serializes concurrent admission, enforces capacity and generation rotation,
+and verifies destroy-on-empty, same-trust-domain retention, member-local
+failure cleanup, and one-owner shutdown. KVM discovery deliberately continues
+to reject that isolation class until cumulative storage/network transport is
+implemented and the same behavior passes the real x86_64 and AArch64 restart,
+cleanup, and soak gates.
+
 The next gate runs the shared Utility VM lifecycle only when the feature probe
 can open `/dev/kvm` and verify API version 12:
 

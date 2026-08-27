@@ -266,7 +266,7 @@ pub(super) async fn run(
     )
     .await
     {
-        Ok(UpdateJournalStatus::Succeeded(journal)) if journal == first_update => {
+        Ok(UpdateJournalStatus::Succeeded(journal)) if journal.as_ref() == &first_update => {
             report.update_journal_succeeded_before_reopen = true;
         }
         Ok(UpdateJournalStatus::Succeeded(_)) => {

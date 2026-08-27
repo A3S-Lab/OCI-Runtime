@@ -3,16 +3,18 @@ use std::path::{Component, Path, PathBuf};
 use a3s_oci_agent_protocol::{GuestPath, AGENT_RUNTIME_SHARE_GUEST_ROOT};
 use a3s_oci_sdk::{
     runtime_bundle_handoff_directory, runtime_bundle_handoff_root, ContainerId, ContainerTarget,
-    Error, ErrorCode, OciBundle, OperationId, Result, RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY,
+    Error, ErrorCode, GuestSessionAttachment, OciBundle, OperationId, Result,
+    RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::layout::{
     canonical_plain_directory, canonical_plain_file, canonical_private_directory,
-    ensure_exact_runtime_share_path, is_private_file, path_metadata, remove_directory_if_empty,
-    PRIVATE_FILE_MODE,
+    ensure_reusable_guest_session_root, ensure_runtime_share_paths, existing_runtime_share_paths,
+    is_private_file, path_metadata, remove_directory_if_empty, PRIVATE_FILE_MODE,
 };
+use super::session_marker;
 use crate::DriverCreateRequest;
 
 const MARKER_FILE: &str = ".a3s-oci-bundle-handoff.json";
@@ -35,20 +37,27 @@ impl BundleHandoffStore {
     }
 
     pub(super) async fn prepare(&self, request: &DriverCreateRequest) -> Result<OciBundle> {
+        let guest_session = request.attachment_contract.guest_session();
         let source = runtime_bundle_handoff_directory(
             &self.runtime_root,
             &request.target.id,
             &request.context.operation_id,
         )?;
 
-        let existing_runtime_share = super::layout::existing_exact_runtime_share_path(
+        let existing_runtime_share = existing_runtime_share_paths(
             &self.runtime_share_root,
             &request.target,
+            guest_session,
             "prepare-utility-vm-bundle-handoff",
         )
         .await?;
-        if let Some(runtime_share) = existing_runtime_share.as_ref() {
-            let destination = runtime_share.join(RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY);
+        if let Some(paths) = existing_runtime_share.as_ref() {
+            if let Some(session) = guest_session {
+                session_marker::validate(&paths.mount_root, session).await?;
+            }
+            let destination = paths
+                .container_share
+                .join(RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY);
             if path_metadata(&destination).await?.is_some() {
                 if path_metadata(&source).await?.is_some() {
                     return Err(handoff_error(
@@ -61,7 +70,12 @@ impl BundleHandoffStore {
                     ));
                 }
                 let bundle = load_exact_bundle(&destination, &request.bundle).await?;
-                ensure_marker(runtime_share, &request.target, bundle.config_digest()).await?;
+                ensure_marker(
+                    &paths.container_share,
+                    &request.target,
+                    bundle.config_digest(),
+                )
+                .await?;
                 cleanup_empty_source_parents(&source, &self.runtime_root)
                     .await
                     .map_err(|error| error.retryable(true))?;
@@ -82,15 +96,27 @@ impl BundleHandoffStore {
         )
         .await?;
         let source_bundle = load_exact_bundle(&source, &request.bundle).await?;
-        let runtime_share = match existing_runtime_share {
-            Some(runtime_share) => runtime_share,
+        let paths = match existing_runtime_share {
+            Some(paths) => paths,
             None => {
-                ensure_exact_runtime_share_path(&self.runtime_share_root, &request.target).await?
+                if let Some(session) = guest_session {
+                    let session_root =
+                        ensure_reusable_guest_session_root(&self.runtime_share_root, session)
+                            .await?;
+                    session_marker::ensure(&session_root, session).await?;
+                }
+                ensure_runtime_share_paths(&self.runtime_share_root, &request.target, guest_session)
+                    .await?
             }
         };
-        let destination = runtime_share.join(RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY);
+        if let Some(session) = guest_session {
+            session_marker::ensure(&paths.mount_root, session).await?;
+        }
+        let destination = paths
+            .container_share
+            .join(RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY);
         ensure_marker(
-            &runtime_share,
+            &paths.container_share,
             &request.target,
             source_bundle.config_digest(),
         )
@@ -109,7 +135,7 @@ impl BundleHandoffStore {
                 )
                 .retryable(true)
             })?;
-        sync_directory(&runtime_share).await?;
+        sync_directory(&paths.container_share).await?;
         let bundle = load_exact_bundle(&destination, &source_bundle).await?;
         cleanup_empty_source_parents(&source, &self.runtime_root)
             .await
@@ -117,19 +143,35 @@ impl BundleHandoffStore {
         Ok(bundle)
     }
 
-    pub(super) async fn cleanup(&self, target: &ContainerTarget) -> Result<()> {
-        let Some(runtime_share) = super::layout::existing_exact_runtime_share_path(
+    pub(super) async fn cleanup(
+        &self,
+        target: &ContainerTarget,
+        guest_session: Option<&GuestSessionAttachment>,
+        remove_empty_session: bool,
+    ) -> Result<()> {
+        let paths = existing_runtime_share_paths(
             &self.runtime_share_root,
             target,
+            guest_session,
             "cleanup-utility-vm-bundle-handoff",
         )
-        .await?
-        else {
+        .await?;
+        let Some(paths) = paths else {
+            if remove_empty_session {
+                if let Some(session) = guest_session {
+                    self.cleanup_empty_session(session).await?;
+                }
+            }
             return Ok(());
         };
 
-        let marker_path = runtime_share.join(MARKER_FILE);
-        let bundle_path = runtime_share.join(RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY);
+        if let Some(session) = guest_session {
+            session_marker::validate(&paths.mount_root, session).await?;
+        }
+        let marker_path = paths.container_share.join(MARKER_FILE);
+        let bundle_path = paths
+            .container_share
+            .join(RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY);
         match path_metadata(&marker_path).await? {
             Some(metadata) => {
                 if !is_private_file(&metadata) {
@@ -176,38 +218,90 @@ impl BundleHandoffStore {
         // The exact-generation share is wholly runtime-owned. Removing it as
         // one verified subtree also clears the guest's empty `run` directory
         // and any one-time handoff residue after the VM has been reaped.
-        tokio::fs::remove_dir_all(&runtime_share)
+        tokio::fs::remove_dir_all(&paths.container_share)
             .await
             .map_err(|error| {
                 handoff_error(
                     ErrorCode::Internal,
                     format!(
                         "failed to remove exact-generation utility-VM share {}: {error}",
-                        runtime_share.display()
+                        paths.container_share.display()
                     ),
                 )
             })?;
-        if let Some(container_directory) = runtime_share.parent() {
+        if let Some(container_directory) = paths.container_share.parent() {
             remove_directory_if_empty(container_directory).await?;
         }
+        if remove_empty_session {
+            if let Some(session) = guest_session {
+                let removed = session_marker::remove_if_empty(
+                    &self.runtime_share_root,
+                    &paths.mount_root,
+                    session,
+                )
+                .await?;
+                if !removed {
+                    return Err(nonempty_session_error(session));
+                }
+            }
+        }
         Ok(())
+    }
+
+    pub(super) async fn cleanup_empty_session(
+        &self,
+        guest_session: &GuestSessionAttachment,
+    ) -> Result<()> {
+        let Some(session_root) = super::layout::existing_reusable_guest_session_root(
+            &self.runtime_share_root,
+            guest_session,
+        )
+        .await?
+        else {
+            return Ok(());
+        };
+        if !session_marker::remove_if_empty(&self.runtime_share_root, &session_root, guest_session)
+            .await?
+        {
+            return Err(nonempty_session_error(guest_session));
+        }
+        Ok(())
+    }
+
+    pub(super) async fn mount_root(
+        &self,
+        target: &ContainerTarget,
+        guest_session: Option<&GuestSessionAttachment>,
+    ) -> Result<PathBuf> {
+        Ok(super::layout::exact_runtime_share_paths(
+            &self.runtime_share_root,
+            target,
+            guest_session,
+        )
+        .await?
+        .mount_root)
     }
 
     pub(super) async fn guest_bundle_path(
         &self,
         target: &ContainerTarget,
         bundle: &Path,
+        guest_session: Option<&GuestSessionAttachment>,
     ) -> Result<GuestPath> {
-        let runtime_share =
-            super::layout::exact_runtime_share_path(&self.runtime_share_root, target).await?;
+        let paths = super::layout::exact_runtime_share_paths(
+            &self.runtime_share_root,
+            target,
+            guest_session,
+        )
+        .await?;
         let bundle =
             canonical_private_directory(bundle, "runtime-owned utility-VM OCI bundle").await?;
-        let relative = bundle.strip_prefix(&runtime_share).map_err(|error| {
+        let relative = bundle.strip_prefix(&paths.mount_root).map_err(|error| {
             handoff_error(
                 ErrorCode::FailedPrecondition,
                 format!(
                     "utility-VM OCI bundle must be contained by exact runtime share {}: {} ({error})",
-                    runtime_share.display(),
+                    paths.mount_root.display(),
                     bundle.display()
                 ),
             )
@@ -669,4 +763,15 @@ async fn sync_directory(path: &Path) -> Result<()> {
 
 fn handoff_error(code: ErrorCode, message: impl Into<String>) -> Error {
     Error::new(code, message).for_operation("prepare-utility-vm-bundle-handoff")
+}
+
+fn nonempty_session_error(session: &GuestSessionAttachment) -> Error {
+    handoff_error(
+        ErrorCode::FailedPrecondition,
+        format!(
+            "reusable guest session {} generation {} still contains an untracked runtime-share entry",
+            session.id(),
+            session.generation()
+        ),
+    )
 }

@@ -267,7 +267,7 @@ pub(super) async fn run(
         {
             report.update_response_rebound = true;
             match service.list(ListRequest::default()).await {
-                Ok(records) if records.as_slice() == [journal] => {}
+                Ok(records) if records.as_slice() == std::slice::from_ref(journal.as_ref()) => {}
                 Ok(records) => append_failure(
                     &mut failure,
                     format!(

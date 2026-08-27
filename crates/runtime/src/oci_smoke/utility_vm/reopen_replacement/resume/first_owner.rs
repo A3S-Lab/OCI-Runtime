@@ -262,7 +262,7 @@ pub(super) async fn run(
     )
     .await
     {
-        Ok(FreezerJournalStatus::Succeeded(journal)) if journal == paused => {
+        Ok(FreezerJournalStatus::Succeeded(journal)) if journal.as_ref() == &paused => {
             report.pause_journal_succeeded_before_reopen = true;
         }
         Ok(FreezerJournalStatus::Succeeded(_)) => {
@@ -372,7 +372,7 @@ pub(super) async fn run(
     .await
     {
         Ok(FreezerJournalStatus::Succeeded(journal)) => {
-            report.pause_journal_succeeded_before_reopen = journal == paused;
+            report.pause_journal_succeeded_before_reopen = journal.as_ref() == &paused;
             if !report.pause_journal_succeeded_before_reopen {
                 append_failure(
                     &mut first_failure,

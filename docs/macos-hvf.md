@@ -15,8 +15,10 @@ silently treated as an unavailable Apple Silicon host.
 
 The launch-ready public driver and Host Service advertise only
 `DedicatedVm`: one exact container generation owns one utility VM. The probe
-does not advertise `SharedGuestKernel`; a trust-domain-aware VM pool has not
-been implemented or qualified.
+does not advertise `SharedGuestKernel`. The shared HVF/KVM core now implements
+trust-domain-aware session admission and reset, but the macOS driver has not
+implemented the cumulative storage/network transport or retained the required
+real-host restart, cleanup, and soak qualification for that profile.
 
 The separate `hvf-smoke` command crosses the next host API boundary. On Apple
 Silicon it calls the system Hypervisor.framework directly, creates the single

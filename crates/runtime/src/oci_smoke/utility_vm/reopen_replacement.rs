@@ -475,7 +475,7 @@ async fn exercise(
         {
             Ok(ContainerOperationJournalStatus::Prepared) if !response_delivered => {}
             Ok(ContainerOperationJournalStatus::Succeeded(response))
-                if response_delivered && response == *record => {}
+                if response_delivered && response.as_ref() == record => {}
             Ok(ContainerOperationJournalStatus::Prepared) => append_failure(
                 &mut first_failure,
                 "completed Create response left its Host journal prepared",
@@ -3004,7 +3004,7 @@ async fn create_qualification_state_root(path: &Path) -> std::result::Result<(),
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ContainerOperationJournalStatus {
     Prepared,
-    Succeeded(ContainerRecord),
+    Succeeded(Box<ContainerRecord>),
 }
 
 async fn container_operation_journal_status(
@@ -3077,7 +3077,9 @@ async fn container_operation_journal_status(
                     path.display()
                 ));
             }
-            Ok(ContainerOperationJournalStatus::Succeeded(response))
+            Ok(ContainerOperationJournalStatus::Succeeded(Box::new(
+                response,
+            )))
         }
         status => Err(format!(
             "durable {kind} journal {} had unexpected status {status:?}",

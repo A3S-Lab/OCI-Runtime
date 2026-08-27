@@ -213,10 +213,31 @@ admission from another trust domain or reassignment under another generation.
 Request validation requires exactly one v4 binding for SharedGuestKernel and
 rejects a binding for DedicatedVm or SharedHostKernel. The manifest trust domain
 must equal the typed isolation request. Adding storage or network bindings after
-the session preserves v4 rather than downgrading the schema. No production
-utility-VM driver advertises v4 yet: the schema is durable admission evidence,
-while actual session pooling still requires driver-specific capacity, reset,
-recovery, and leak qualification.
+the session preserves v4 rather than downgrading the schema.
+
+The platform-neutral HVF/KVM lifecycle uses a private root for each exact
+session incarnation. An immutable mode-`0600` marker binds that root to the
+complete v4 contract before a container bundle becomes Guest-visible. Creates
+for one logical session serialize through a session gate, reuse one
+authenticated Guest owner, and count admitted retryable members against the
+fixed capacity. A different contract at the same incarnation, a stale
+generation, or a newer generation while members remain fails with no VM
+replacement. A newer generation may replace an empty retained incarnation
+only after the old owner and root are reaped.
+
+Deleting a non-final member removes only its exact bundle. `DestroyOnEmpty`
+reaps the owner and session root after the last member;
+`RetainWithinTrustDomain` keeps the empty owner available only for the
+identical binding. A terminal member Create failure does not reap an occupied
+shared Guest. Driver shutdown deduplicates members to one owner close and
+leaves exact stopped tombstones for durable cleanup. Owner-death reports are
+named by session incarnation so every member can recover its own retained
+record without pretending the first container owns the VM.
+
+No production utility-VM driver advertises v4 yet. The common mechanism and
+deterministic driver tests are present, while cumulative v2/v3 transport and
+per-driver real-host restart, cleanup, and soak qualification remain the
+enablement gates.
 
 ## Runtime-owned bundle handoff
 
@@ -231,9 +252,13 @@ The selected driver must advertise that extension. After durable create state
 allocates the real generation, the driver validates the exact protected
 operation path, immutable configuration digest, relative `root.path`, and
 relative bind sources, then atomically moves the directory below
-`shares/<container>/<generation>/bundle`. Replay accepts only that exact
-destination with matching ownership evidence. Delete and terminal create
-failure remove only an exact digest- and generation-bound handoff.
+`shares/<container>/<generation>/bundle` for DedicatedVm. SharedGuestKernel
+uses
+`shares/.guest-sessions/<session>/<session-generation>/<container>/<generation>/bundle`
+and mounts only that session incarnation into its Guest. Replay accepts only
+the exact destination with matching container and session ownership evidence.
+Delete and terminal create failure remove only an exact digest- and
+generation-bound handoff.
 
 The public container record deliberately retains the caller's original bundle
 identity. The relocated path is an internal driver attachment and is never a

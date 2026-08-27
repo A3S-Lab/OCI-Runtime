@@ -5,7 +5,9 @@ use std::time::Duration;
 use a3s_oci_agent_protocol::{
     AgentRecoveryReport, AGENT_RECOVERY_REPORT_MAX_BYTES, AGENT_RECOVERY_REPORT_PENDING_SUFFIX,
 };
-use a3s_oci_sdk::{ContainerRecord, ContainerTarget, Error, ErrorCode, ExitStatus, Result};
+use a3s_oci_sdk::{
+    ContainerRecord, ContainerTarget, Error, ErrorCode, ExitStatus, GuestSessionAttachment, Result,
+};
 use tokio::io::AsyncReadExt;
 use tokio::time::{sleep, Instant};
 
@@ -25,8 +27,15 @@ impl RecoveryStore {
         Self { directory }
     }
 
-    pub(crate) fn path(&self, target: &ContainerTarget) -> Result<PathBuf> {
+    pub(crate) fn path(
+        &self,
+        target: &ContainerTarget,
+        guest_session: Option<&GuestSessionAttachment>,
+    ) -> Result<PathBuf> {
         let generation = require_exact_generation(target, "utility-vm-recovery-report-path")?;
+        if let Some(session) = guest_session {
+            return Ok(self.session_path(session));
+        }
         Ok(self
             .directory
             .join(format!("{}-{}.json", target.id, generation.0)))
@@ -36,16 +45,21 @@ impl RecoveryStore {
         &self,
         target: &ContainerTarget,
         record: &ContainerRecord,
+        guest_session: Option<&GuestSessionAttachment>,
     ) -> Result<DriverRecovery> {
         let can_commit_stopped =
             *record.state.status() != a3s_oci_sdk::oci_spec::runtime::ContainerState::Creating;
         if !can_commit_stopped {
             // The durable create operation must resume. A stopped observation
             // is not legal while its host-side create intent is still active.
-            self.wait_until_settled(&self.path(target)?).await?;
+            self.wait_until_settled(&self.path(target, guest_session)?)
+                .await?;
             return Ok(DriverRecovery::none());
         }
-        match self.load_exit(target, &record.config_digest).await? {
+        match self
+            .load_exit(target, &record.config_digest, guest_session)
+            .await?
+        {
             Some(status) => DriverRecovery::stopped_with_exit(status),
             None => Ok(DriverRecovery::observed(DriverState::stopped())),
         }
@@ -55,8 +69,9 @@ impl RecoveryStore {
         &self,
         target: &ContainerTarget,
         expected_config_digest: &str,
+        guest_session: Option<&GuestSessionAttachment>,
     ) -> Result<Option<ExitStatus>> {
-        let path = self.path(target)?;
+        let path = self.path(target, guest_session)?;
         let Some(metadata) = self.wait_until_settled(&path).await? else {
             return Ok(None);
         };
@@ -123,10 +138,35 @@ impl RecoveryStore {
         Ok(Some(retained.init_exit_status.clone()))
     }
 
-    pub(super) async fn remove(&self, target: &ContainerTarget) -> Result<()> {
-        let path = self.path(target)?;
+    pub(super) async fn remove(
+        &self,
+        target: &ContainerTarget,
+        guest_session: Option<&GuestSessionAttachment>,
+    ) -> Result<()> {
+        let path = self.path(target, guest_session)?;
         remove_private_file(&path, "utility-VM recovery report").await?;
         remove_private_file(&pending_path(&path), "utility-VM recovery pending marker").await
+    }
+
+    pub(super) async fn remove_session(
+        &self,
+        guest_session: &GuestSessionAttachment,
+    ) -> Result<()> {
+        let path = self.session_path(guest_session);
+        remove_private_file(&path, "utility-VM guest-session recovery report").await?;
+        remove_private_file(
+            &pending_path(&path),
+            "utility-VM guest-session recovery pending marker",
+        )
+        .await
+    }
+
+    fn session_path(&self, guest_session: &GuestSessionAttachment) -> PathBuf {
+        self.directory.join(format!(
+            ".guest-session-{}-{}.json",
+            guest_session.id(),
+            guest_session.generation()
+        ))
     }
 
     async fn wait_until_settled(&self, path: &Path) -> Result<Option<std::fs::Metadata>> {
@@ -211,6 +251,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::{pending_path, RecoveryStore};
+    use a3s_oci_sdk::{ContainerId, ContainerTarget, Generation, GuestSessionAttachment};
 
     #[tokio::test]
     async fn pending_timeout_is_retryable_and_non_destructive() {
@@ -229,5 +270,43 @@ mod tests {
             .expect_err("stuck recovery must fail");
         assert!(error.retryable);
         assert!(pending.is_file());
+    }
+
+    #[test]
+    fn reusable_members_resolve_one_session_scoped_recovery_report() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let store = RecoveryStore::new(temporary.path().to_path_buf());
+        let session: GuestSessionAttachment = serde_json::from_value(serde_json::json!({
+            "id": "recovery-session",
+            "generation": 9,
+            "trustDomain": "recovery-domain",
+            "isolation": "shared-guest-kernel",
+            "capacity": 2,
+            "reset": "destroy-on-empty",
+            "ownership": "runtime"
+        }))
+        .expect("valid reusable guest session");
+        let alpha = ContainerTarget::exact(
+            ContainerId::new("recovery-alpha").expect("container ID"),
+            Generation(1),
+        );
+        let beta = ContainerTarget::exact(
+            ContainerId::new("recovery-beta").expect("container ID"),
+            Generation(4),
+        );
+
+        let alpha_path = store
+            .path(&alpha, Some(&session))
+            .expect("alpha report path");
+        let beta_path = store.path(&beta, Some(&session)).expect("beta report path");
+        assert_eq!(alpha_path, beta_path);
+        assert_ne!(
+            alpha_path,
+            store.path(&alpha, None).expect("dedicated report path")
+        );
+        assert_eq!(
+            alpha_path.file_name().and_then(|name| name.to_str()),
+            Some(".guest-session-recovery-session-9.json")
+        );
     }
 }

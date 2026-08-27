@@ -10,7 +10,7 @@ use crate::OciVmOperationReopenReplacementReport;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::oci_smoke::utility_vm::reopen_replacement) enum UpdateJournalStatus {
     Prepared,
-    Succeeded(ContainerRecord),
+    Succeeded(Box<ContainerRecord>),
 }
 
 pub(super) fn operation_id(value: &str) -> std::result::Result<OperationId, String> {
@@ -121,7 +121,7 @@ pub(in crate::oci_smoke::utility_vm::reopen_replacement) async fn update_journal
                     path.display()
                 ));
             }
-            Ok(UpdateJournalStatus::Succeeded(response))
+            Ok(UpdateJournalStatus::Succeeded(Box::new(response)))
         }
         status => Err(format!(
             "durable Update journal {} had unexpected status {status:?}",

@@ -279,6 +279,7 @@ mod tests {
             &self,
             _target: &a3s_oci_sdk::ContainerTarget,
             _runtime_share: &Path,
+            _guest_session: Option<&a3s_oci_sdk::GuestSessionAttachment>,
         ) -> Result<LaunchedUtilityVm> {
             Err(Error::new(
                 ErrorCode::Internal,

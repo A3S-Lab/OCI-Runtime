@@ -7,8 +7,9 @@ use a3s_oci_core::{DriverCapability, IsolationClass};
 use a3s_oci_sdk::{
     async_trait, AttachmentCapabilities, ContainerId, ContainerRecord, ContainerStats,
     ContainerTarget, Error, ErrorCode, ExitStatus, FileRequest, FileResponse, FilesystemRequest,
-    FilesystemResponse, OciBundle, OperationId, OutputChunk, ProcessRecord, Result,
-    RuntimeOperation, RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
+    FilesystemResponse, GuestSessionAttachment, GuestSessionId, GuestSessionReset, OciBundle,
+    OperationId, OutputChunk, ProcessRecord, Result, RuntimeOperation,
+    RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -22,17 +23,26 @@ use crate::driver::{
     DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
 };
 
+mod delegate;
 mod handoff;
 pub(crate) mod layout;
 pub(crate) mod recovery;
+mod session_lifecycle;
+mod session_marker;
+mod sessions;
 #[cfg(test)]
 pub(crate) mod tests;
 
+pub(crate) use delegate::delegate_utility_vm_runtime_driver;
 use handoff::BundleHandoffStore;
 use layout::require_exact_generation;
 use recovery::RecoveryStore;
+use sessions::{
+    ReusableGuestSession, UtilityVmAttachment, UtilityVmContainer, UtilityVmGuest,
+    UtilityVmRegistry,
+};
 
-/// Platform-neutral lifecycle for one authenticated utility VM per generation.
+/// Platform-neutral lifecycle for dedicated and explicitly bound reusable utility VMs.
 pub(crate) struct UtilityVmRuntimeDriver {
     capability: DriverCapability,
     backend_name: &'static str,
@@ -43,8 +53,9 @@ pub(crate) struct UtilityVmRuntimeDriver {
     recovery: RecoveryStore,
     handoff: BundleHandoffStore,
     factory: Arc<dyn UtilityVmFactory>,
-    sessions: Mutex<BTreeMap<ContainerId, UtilityVmAttachment>>,
+    sessions: Mutex<UtilityVmRegistry>,
     create_gates: Mutex<BTreeMap<ContainerId, Weak<Mutex<()>>>>,
+    session_gates: Mutex<BTreeMap<GuestSessionId, Weak<Mutex<()>>>>,
 }
 
 impl fmt::Debug for UtilityVmRuntimeDriver {
@@ -88,35 +99,39 @@ impl UtilityVmRuntimeDriver {
             recovery,
             handoff,
             factory,
-            sessions: Mutex::new(BTreeMap::new()),
+            sessions: Mutex::new(UtilityVmRegistry::default()),
             create_gates: Mutex::new(BTreeMap::new()),
+            session_gates: Mutex::new(BTreeMap::new()),
         }
     }
 
     /// Close every live guest connection and reap each driver-owned VM once.
     pub async fn shutdown(&self) -> Result<()> {
-        let sessions = {
-            let sessions = self.sessions.lock().await;
-            sessions
-                .values()
-                .filter_map(|attachment| match attachment {
-                    UtilityVmAttachment::Live(session) => Some(Arc::clone(session)),
-                    UtilityVmAttachment::RecoveredStopped { .. } => None,
-                })
-                .collect::<Vec<_>>()
-        };
+        let guests = self.sessions.lock().await.live_guests();
         let mut shutdowns = JoinSet::new();
-        for session in sessions {
+        for guest in guests {
             shutdowns.spawn(async move {
-                let result = shutdown_session(&session).await;
-                (session, result)
+                let result = shutdown_guest(&guest).await;
+                (guest, result)
             });
         }
         let mut failures = Vec::new();
         while let Some(completed) = shutdowns.join_next().await {
             match completed {
-                Ok((session, Ok(()))) => self.replace_with_stopped(&session, None).await,
-                Ok((_session, Err(error))) => failures.push(error.to_string()),
+                Ok((guest, Ok(()))) => {
+                    let reusable = self.replace_guest_with_stopped(&guest).await;
+                    if let Some((attachment, false)) = reusable {
+                        for cleanup in [
+                            self.recovery.remove_session(&attachment).await,
+                            self.handoff.cleanup_empty_session(&attachment).await,
+                        ] {
+                            if let Err(error) = cleanup {
+                                failures.push(error.to_string());
+                            }
+                        }
+                    }
+                }
+                Ok((_guest, Err(error))) => failures.push(error.to_string()),
                 Err(error) => failures.push(format!("utility-VM shutdown task failed: {error}")),
             }
         }
@@ -126,7 +141,7 @@ impl UtilityVmRuntimeDriver {
             Err(Error::new(
                 ErrorCode::Internal,
                 format!(
-                    "failed to shut down {} utility VM session(s): {}",
+                    "failed to shut down or clean {} utility VM session(s): {}",
                     failures.len(),
                     failures.join("; ")
                 ),
@@ -135,198 +150,9 @@ impl UtilityVmRuntimeDriver {
         }
     }
 
-    /// Number of exact generations still owning a live utility VM.
+    /// Number of driver-owned utility VMs, including retained empty sessions.
     pub async fn active_session_count(&self) -> usize {
-        self.sessions
-            .lock()
-            .await
-            .values()
-            .filter(|attachment| matches!(attachment, UtilityVmAttachment::Live(_)))
-            .count()
-    }
-
-    async fn create_gate_for(&self, id: &ContainerId) -> Arc<Mutex<()>> {
-        let mut gates = self.create_gates.lock().await;
-        gates.retain(|_, gate| gate.strong_count() > 0);
-        if let Some(gate) = gates.get(id).and_then(Weak::upgrade) {
-            return gate;
-        }
-        let gate = Arc::new(Mutex::new(()));
-        gates.insert(id.clone(), Arc::downgrade(&gate));
-        gate
-    }
-
-    fn validate_create_contract(&self, request: &DriverCreateRequest) -> Result<()> {
-        if request.isolation.class() != IsolationClass::DedicatedVm {
-            return Err(Error::new(
-                ErrorCode::Unsupported,
-                format!(
-                    "the {} driver provides only one-VM-per-generation isolation",
-                    self.backend_name
-                ),
-            )
-            .for_operation("utility-vm-create"));
-        }
-        require_exact_generation(&request.target, "utility-vm-create")?;
-        if !request.attachment_contract.uses_runtime_bundle_handoff() {
-            return Err(Error::new(
-                ErrorCode::Unsupported,
-                format!(
-                    "{} create requires runtime ownership handoff for its OCI bundle",
-                    self.backend_name
-                ),
-            )
-            .for_operation("utility-vm-create"));
-        }
-        Ok(())
-    }
-
-    async fn attachment_for(
-        &self,
-        target: &ContainerTarget,
-        operation: &'static str,
-    ) -> Result<UtilityVmAttachment> {
-        require_exact_generation(target, operation)?;
-        let sessions = self.sessions.lock().await;
-        let attachment = sessions.get(&target.id).cloned().ok_or_else(|| {
-            Error::new(
-                ErrorCode::Unavailable,
-                format!(
-                    "container {} has neither an attached utility VM nor a recovered stop record",
-                    target.id
-                ),
-            )
-            .for_operation(operation)
-        })?;
-        if attachment.target() != target {
-            return Err(Error::new(
-                ErrorCode::Conflict,
-                format!(
-                    "container {} is attached at generation {:?}, not {:?}",
-                    target.id,
-                    attachment.target().generation,
-                    target.generation
-                ),
-            )
-            .for_operation(operation));
-        }
-        Ok(attachment)
-    }
-
-    async fn live_session_for(
-        &self,
-        target: &ContainerTarget,
-        operation: &'static str,
-    ) -> Result<Arc<UtilityVmContainer>> {
-        match self.attachment_for(target, operation).await? {
-            UtilityVmAttachment::Live(session) => Ok(session),
-            UtilityVmAttachment::RecoveredStopped { .. } => {
-                Err(recovered_stopped_error(target, operation))
-            }
-        }
-    }
-
-    async fn existing_create_session(
-        &self,
-        target: &ContainerTarget,
-    ) -> Result<Option<Arc<UtilityVmContainer>>> {
-        let sessions = self.sessions.lock().await;
-        let Some(attachment) = sessions.get(&target.id) else {
-            return Ok(None);
-        };
-        if attachment.target() != target {
-            return Err(Error::new(
-                ErrorCode::Conflict,
-                format!(
-                    "container {} already owns a utility-VM attachment at generation {:?}",
-                    target.id,
-                    attachment.target().generation
-                ),
-            )
-            .for_operation("utility-vm-create"));
-        }
-        match attachment {
-            UtilityVmAttachment::Live(session) => Ok(Some(Arc::clone(session))),
-            UtilityVmAttachment::RecoveredStopped { .. } => {
-                Err(recovered_stopped_error(target, "utility-vm-create"))
-            }
-        }
-    }
-
-    async fn launch(&self, target: &ContainerTarget) -> Result<Arc<UtilityVmContainer>> {
-        let runtime_share =
-            layout::exact_runtime_share_path(&self.runtime_share_root, target).await?;
-        let launched = self.factory.launch(target, &runtime_share).await?;
-        Ok(Arc::new(UtilityVmContainer {
-            target: target.clone(),
-            client: launched.client,
-            owner: launched.owner,
-        }))
-    }
-
-    async fn remove_live(&self, expected: &Arc<UtilityVmContainer>) {
-        let mut sessions = self.sessions.lock().await;
-        if matches!(
-            sessions.get(&expected.target.id),
-            Some(UtilityVmAttachment::Live(current)) if Arc::ptr_eq(current, expected)
-        ) {
-            sessions.remove(&expected.target.id);
-        }
-    }
-
-    async fn replace_with_stopped(
-        &self,
-        expected: &Arc<UtilityVmContainer>,
-        init_exit_status: Option<ExitStatus>,
-    ) {
-        let mut sessions = self.sessions.lock().await;
-        if matches!(
-            sessions.get(&expected.target.id),
-            Some(UtilityVmAttachment::Live(current)) if Arc::ptr_eq(current, expected)
-        ) {
-            sessions.insert(
-                expected.target.id.clone(),
-                UtilityVmAttachment::RecoveredStopped {
-                    target: expected.target.clone(),
-                    init_exit_status,
-                },
-            );
-        }
-    }
-
-    async fn remove_stopped(&self, target: &ContainerTarget) {
-        let mut sessions = self.sessions.lock().await;
-        if matches!(
-            sessions.get(&target.id),
-            Some(UtilityVmAttachment::RecoveredStopped { target: current, .. }) if current == target
-        ) {
-            sessions.remove(&target.id);
-        }
-    }
-
-    async fn cleanup_terminal_create(
-        &self,
-        session: &Arc<UtilityVmContainer>,
-        mut error: Error,
-    ) -> Error {
-        match shutdown_session(session).await {
-            Ok(()) => self.remove_live(session).await,
-            Err(cleanup) => {
-                error.message = format!(
-                    "{}; failed to reap the dedicated utility VM: {}",
-                    error.message, cleanup
-                );
-            }
-        }
-        for cleanup in [
-            self.recovery.remove(&session.target).await,
-            self.handoff.cleanup(&session.target).await,
-        ] {
-            if let Err(cleanup) = cleanup {
-                error.message = format!("{}; cleanup failed: {}", error.message, cleanup);
-            }
-        }
-        error
+        self.sessions.lock().await.active_guest_count()
     }
 }
 
@@ -349,7 +175,16 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     fn attachment_capabilities(&self) -> AttachmentCapabilities {
-        AttachmentCapabilities::base_v1()
+        let capabilities = if self
+            .capability
+            .isolation_classes
+            .contains(&IsolationClass::SharedGuestKernel)
+        {
+            AttachmentCapabilities::base_v4()
+        } else {
+            AttachmentCapabilities::base_v1()
+        };
+        capabilities
             .with_extension(
                 RUNTIME_BUNDLE_HANDOFF_EXTENSION,
                 vec![RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION],
@@ -358,18 +193,9 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn acknowledge_operation(&self, operation_id: &OperationId) -> Result<()> {
-        let clients = self
-            .sessions
-            .lock()
-            .await
-            .values()
-            .filter_map(|attachment| match attachment {
-                UtilityVmAttachment::Live(session) => Some(session.client.clone()),
-                UtilityVmAttachment::RecoveredStopped { .. } => None,
-            })
-            .collect::<Vec<_>>();
-        for client in clients {
-            client.acknowledge_operation(operation_id).await?;
+        let guests = self.sessions.lock().await.live_guests();
+        for guest in guests {
+            guest.client.acknowledge_operation(operation_id).await?;
         }
         Ok(())
     }
@@ -378,21 +204,42 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
         self.validate_create_contract(request)?;
         let gate = self.create_gate_for(&request.target.id).await;
         let _guard = gate.lock().await;
+        let session_gate = match request.attachment_contract.guest_session() {
+            Some(session) => Some(self.session_gate_for(session.id()).await),
+            None => None,
+        };
+        let _session_guard = match session_gate.as_ref() {
+            Some(gate) => Some(gate.lock().await),
+            None => None,
+        };
         self.handoff.prepare(request).await
     }
 
     async fn recover(&self, record: &ContainerRecord) -> Result<crate::DriverRecovery> {
         let target =
             ContainerTarget::exact(ContainerId::new(record.state.id())?, record.generation);
+        let guest_session = record.guest_session.as_ref();
+        if (record.isolation == IsolationClass::SharedGuestKernel) != guest_session.is_some() {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "durable container {} has inconsistent shared-guest isolation evidence",
+                    target.id
+                ),
+            )
+            .for_operation("utility-vm-recover"));
+        }
 
         if *record.state.status() == a3s_oci_sdk::oci_spec::runtime::ContainerState::Creating {
             // An interrupted durable Create must resume through its original
             // operation. Wait for any owner-death report handoff to settle so
             // the replacement owner cannot race the old shim, but never
             // convert the active create intent into a stopped attachment.
-            self.recovery.recover(&target, record).await?;
+            self.recovery
+                .recover(&target, record, guest_session)
+                .await?;
             let mut sessions = self.sessions.lock().await;
-            if let Some(attachment) = sessions.get(&target.id) {
+            if let Some(attachment) = sessions.attachments.get(&target.id) {
                 if attachment.target() != &target {
                     return Err(Error::new(
                         ErrorCode::Conflict,
@@ -405,8 +252,18 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
                     )
                     .for_operation("utility-vm-recover"));
                 }
+                if attachment.guest_session() != guest_session {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        format!(
+                            "container {} has a different utility-VM guest-session binding than durable state",
+                            target.id
+                        ),
+                    )
+                    .for_operation("utility-vm-recover"));
+                }
                 if matches!(attachment, UtilityVmAttachment::RecoveredStopped { .. }) {
-                    sessions.remove(&target.id);
+                    sessions.attachments.remove(&target.id);
                 }
             }
             return Ok(crate::DriverRecovery::none());
@@ -416,9 +273,11 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
             let mut sessions = self.sessions.lock().await;
             let recovered = UtilityVmAttachment::RecoveredStopped {
                 target: target.clone(),
+                guest_session: record.guest_session.clone(),
                 init_exit_status: None,
             };
             sessions
+                .attachments
                 .entry(target.id.clone())
                 .or_insert_with(|| recovered.clone())
                 .clone()
@@ -435,22 +294,37 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
             )
             .for_operation("utility-vm-recover"));
         }
+        if attachment.guest_session() != guest_session {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                format!(
+                    "container {} has a different utility-VM guest-session binding than durable state",
+                    target.id
+                ),
+            )
+            .for_operation("utility-vm-recover"));
+        }
         match attachment {
-            UtilityVmAttachment::Live(session) => {
-                let observed = session
+            UtilityVmAttachment::Live(container) => {
+                let observed = container
+                    .guest
                     .client
                     .state_with_digest(target, Some(&record.config_digest))
                     .await?;
                 Ok(crate::DriverRecovery::observed(observed))
             }
             UtilityVmAttachment::RecoveredStopped { .. } => {
-                let recovery = self.recovery.recover(&target, record).await?;
+                let recovery = self
+                    .recovery
+                    .recover(&target, record, guest_session)
+                    .await?;
                 let init_exit_status = recovery.clone().into_parts().1;
                 let mut sessions = self.sessions.lock().await;
-                sessions.insert(
+                sessions.attachments.insert(
                     target.id.clone(),
                     UtilityVmAttachment::RecoveredStopped {
                         target,
+                        guest_session: record.guest_session.clone(),
                         init_exit_status,
                     },
                 );
@@ -461,18 +335,42 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
 
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {
         self.validate_create_contract(&request)?;
+        let guest_session = request.attachment_contract.guest_session().cloned();
         let guest_directory = self
             .handoff
-            .guest_bundle_path(&request.target, request.bundle.directory())
+            .guest_bundle_path(
+                &request.target,
+                request.bundle.directory(),
+                guest_session.as_ref(),
+            )
             .await?;
         let target = request.target.clone();
         let gate = self.create_gate_for(&target.id).await;
         let _guard = gate.lock().await;
-        let existing = match self.existing_create_session(&target).await {
+        let session_gate = match guest_session.as_ref() {
+            Some(session) => Some(self.session_gate_for(session.id()).await),
+            None => None,
+        };
+        let _session_guard = match session_gate.as_ref() {
+            Some(gate) => Some(gate.lock().await),
+            None => None,
+        };
+        let existing = match self
+            .existing_create_session(&target, guest_session.as_ref())
+            .await
+        {
             Ok(existing) => existing,
             Err(mut error) => {
                 if !error.retryable {
-                    if let Err(cleanup) = self.handoff.cleanup(&target).await {
+                    let remove_session = match guest_session.as_ref() {
+                        Some(binding) => self.session_root_is_unowned(binding).await,
+                        None => true,
+                    };
+                    if let Err(cleanup) = self
+                        .handoff
+                        .cleanup(&target, guest_session.as_ref(), remove_session)
+                        .await
+                    {
                         error.message = format!(
                             "{}; failed to remove rejected exact-generation handoff: {}",
                             error.message, cleanup
@@ -482,19 +380,24 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
                 return Err(error);
             }
         };
-        let session = match existing {
-            Some(session) => session,
-            None => match self.launch(&target).await {
-                Ok(session) => {
-                    self.sessions.lock().await.insert(
-                        target.id.clone(),
-                        UtilityVmAttachment::Live(Arc::clone(&session)),
-                    );
-                    session
-                }
+        let container = match existing {
+            Some(container) => container,
+            None => match self
+                .admit_new_container(&target, guest_session.as_ref())
+                .await
+            {
+                Ok(container) => container,
                 Err(error) if error.retryable => return Err(error),
                 Err(mut error) => {
-                    if let Err(cleanup) = self.handoff.cleanup(&target).await {
+                    let remove_session = match guest_session.as_ref() {
+                        Some(binding) => self.session_root_is_unowned(binding).await,
+                        None => true,
+                    };
+                    if let Err(cleanup) = self
+                        .handoff
+                        .cleanup(&target, guest_session.as_ref(), remove_session)
+                        .await
+                    {
                         error.message = format!(
                             "{}; failed to remove runtime-owned utility-VM bundle: {}",
                             error.message, cleanup
@@ -504,16 +407,21 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
                 }
             },
         };
-        match session.client.create(request, guest_directory).await {
+        match container
+            .guest
+            .client
+            .create(request, guest_directory)
+            .await
+        {
             Ok(state) => Ok(state),
             Err(error) if error.retryable => Err(error),
-            Err(error) => Err(self.cleanup_terminal_create(&session, error).await),
+            Err(error) => Err(self.cleanup_terminal_create(&container, error).await),
         }
     }
 
     async fn state(&self, target: ContainerTarget) -> Result<DriverState> {
         match self.attachment_for(&target, "utility-vm-state").await? {
-            UtilityVmAttachment::Live(session) => session.client.state(target).await,
+            UtilityVmAttachment::Live(container) => container.guest.client.state(target).await,
             UtilityVmAttachment::RecoveredStopped { .. } => Ok(DriverState::stopped()),
         }
     }
@@ -521,6 +429,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     async fn start(&self, request: DriverStartRequest) -> Result<DriverState> {
         self.live_session_for(&request.target, "utility-vm-start")
             .await?
+            .guest
             .client
             .start(request)
             .await
@@ -531,28 +440,127 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
             .attachment_for(&request.target, "utility-vm-kill")
             .await?
         {
-            UtilityVmAttachment::Live(session) => session.client.kill(request).await,
+            UtilityVmAttachment::Live(container) => container.guest.client.kill(request).await,
             UtilityVmAttachment::RecoveredStopped { .. } => Ok(DriverState::stopped()),
         }
     }
 
     async fn delete(&self, request: DriverDeleteRequest) -> Result<()> {
-        match self
+        let initial = self
             .attachment_for(&request.target, "utility-vm-delete")
-            .await?
-        {
-            UtilityVmAttachment::Live(session) => {
-                session.client.delete(request).await?;
-                shutdown_session(&session).await?;
-                self.replace_with_stopped(&session, None).await;
-                self.recovery.remove(&session.target).await?;
-                self.handoff.cleanup(&session.target).await?;
-                self.remove_stopped(&session.target).await;
+            .await?;
+        let guest_session = initial.guest_session().cloned();
+        let target = request.target.clone();
+        let gate = self.create_gate_for(&target.id).await;
+        let _guard = gate.lock().await;
+        let session_gate = match guest_session.as_ref() {
+            Some(session) => Some(self.session_gate_for(session.id()).await),
+            None => None,
+        };
+        let _session_guard = match session_gate.as_ref() {
+            Some(gate) => Some(gate.lock().await),
+            None => None,
+        };
+
+        match self.attachment_for(&target, "utility-vm-delete").await? {
+            UtilityVmAttachment::Live(container) => {
+                let remove_guest = match container.guest_session.as_ref() {
+                    None => true,
+                    Some(binding) => {
+                        let sessions = self.sessions.lock().await;
+                        let session = sessions.reusable.get(binding.id()).ok_or_else(|| {
+                            Error::new(
+                                ErrorCode::FailedPrecondition,
+                                format!(
+                                    "container {} has no reusable guest-session owner",
+                                    target.id
+                                ),
+                            )
+                            .for_operation("utility-vm-delete")
+                        })?;
+                        if session.attachment != *binding
+                            || !session.members.contains_key(&target.id)
+                            || !Arc::ptr_eq(&session.guest, &container.guest)
+                        {
+                            return Err(Error::new(
+                                ErrorCode::Conflict,
+                                format!(
+                                    "container {} reusable guest-session membership drifted",
+                                    target.id
+                                ),
+                            )
+                            .for_operation("utility-vm-delete"));
+                        }
+                        session.members.len() == 1
+                            && binding.reset() == GuestSessionReset::DestroyOnEmpty
+                    }
+                };
+
+                container.guest.client.delete(request).await?;
+                if remove_guest {
+                    shutdown_guest(&container.guest).await?;
+                }
+                {
+                    let mut sessions = self.sessions.lock().await;
+                    if matches!(
+                        sessions.attachments.get(&target.id),
+                        Some(UtilityVmAttachment::Live(current)) if Arc::ptr_eq(current, &container)
+                    ) {
+                        sessions.attachments.insert(
+                            target.id.clone(),
+                            UtilityVmAttachment::RecoveredStopped {
+                                target: target.clone(),
+                                guest_session: container.guest_session.clone(),
+                                init_exit_status: None,
+                            },
+                        );
+                    }
+                    if let Some(binding) = container.guest_session.as_ref() {
+                        if let Some(session) = sessions.reusable.get_mut(binding.id()) {
+                            session.members.remove(&target.id);
+                        }
+                        if remove_guest {
+                            sessions.reusable.remove(binding.id());
+                        }
+                    }
+                }
+
+                match container.guest_session.as_ref() {
+                    Some(binding) if remove_guest => {
+                        self.recovery.remove_session(binding).await?;
+                    }
+                    Some(_) => {}
+                    None => self.recovery.remove(&target, None).await?,
+                }
+                self.handoff
+                    .cleanup(&target, container.guest_session.as_ref(), remove_guest)
+                    .await?;
+                self.remove_stopped(&target).await;
                 Ok(())
             }
-            UtilityVmAttachment::RecoveredStopped { target, .. } => {
-                self.recovery.remove(&target).await?;
-                self.handoff.cleanup(&target).await?;
+            UtilityVmAttachment::RecoveredStopped {
+                target,
+                guest_session,
+                ..
+            } => {
+                let remove_session = match guest_session.as_ref() {
+                    Some(binding) => {
+                        let sessions = self.sessions.lock().await;
+                        !sessions.reusable.contains_key(binding.id())
+                            && sessions.attachment_count_for_session(binding) == 1
+                    }
+                    None => true,
+                };
+                match guest_session.as_ref() {
+                    Some(binding) if remove_session => {
+                        self.recovery.remove_session(binding).await?;
+                    }
+                    Some(_) => {}
+                    None => self.recovery.remove(&target, None).await?,
+                }
+                self.handoff
+                    .cleanup(&target, guest_session.as_ref(), remove_session)
+                    .await?;
                 self.remove_stopped(&target).await;
                 Ok(())
             }
@@ -564,7 +572,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
             .attachment_for(&request.target, "utility-vm-wait")
             .await?
         {
-            UtilityVmAttachment::Live(session) => session.client.wait(request).await,
+            UtilityVmAttachment::Live(container) => container.guest.client.wait(request).await,
             UtilityVmAttachment::RecoveredStopped {
                 init_exit_status: Some(status),
                 ..
@@ -578,6 +586,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     async fn exec(&self, request: DriverExecRequest) -> Result<DriverProcess> {
         self.live_session_for(&request.target.container, "utility-vm-exec")
             .await?
+            .guest
             .client
             .exec(request)
             .await
@@ -586,6 +595,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     async fn signal_process(&self, request: DriverSignalProcessRequest) -> Result<()> {
         self.live_session_for(&request.target.container, "utility-vm-signal-process")
             .await?
+            .guest
             .client
             .signal_process(request)
             .await
@@ -594,6 +604,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     async fn wait_process(&self, request: DriverWaitProcessRequest) -> Result<ExitStatus> {
         self.live_session_for(&request.target.container, "utility-vm-wait-process")
             .await?
+            .guest
             .client
             .wait_process(request)
             .await
@@ -602,6 +613,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     async fn pause(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
         self.live_session_for(&request.target, "utility-vm-pause")
             .await?
+            .guest
             .client
             .pause(request)
             .await
@@ -610,6 +622,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     async fn resume(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
         self.live_session_for(&request.target, "utility-vm-resume")
             .await?
+            .guest
             .client
             .resume(request)
             .await
@@ -617,7 +630,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
 
     async fn processes(&self, target: ContainerTarget) -> Result<Vec<ProcessRecord>> {
         match self.attachment_for(&target, "utility-vm-processes").await? {
-            UtilityVmAttachment::Live(session) => session.client.processes(target).await,
+            UtilityVmAttachment::Live(container) => container.guest.client.processes(target).await,
             UtilityVmAttachment::RecoveredStopped { .. } => Ok(Vec::new()),
         }
     }
@@ -625,6 +638,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     async fn update(&self, request: DriverUpdateRequest) -> Result<DriverState> {
         self.live_session_for(&request.target, "utility-vm-update")
             .await?
+            .guest
             .client
             .update(request)
             .await
@@ -633,6 +647,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     async fn stats(&self, target: ContainerTarget) -> Result<ContainerStats> {
         self.live_session_for(&target, "utility-vm-stats")
             .await?
+            .guest
             .client
             .stats(target)
             .await
@@ -641,6 +656,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     async fn read_output(&self, request: DriverReadOutputRequest) -> Result<Vec<OutputChunk>> {
         self.live_session_for(&request.target.container, "utility-vm-read-output")
             .await?
+            .guest
             .client
             .read_output(request)
             .await
@@ -649,6 +665,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     async fn write_stdin(&self, request: DriverWriteStdinRequest) -> Result<()> {
         self.live_session_for(&request.target.container, "utility-vm-write-stdin")
             .await?
+            .guest
             .client
             .write_stdin(request)
             .await
@@ -657,6 +674,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     async fn close_stdin(&self, request: DriverCloseStdinRequest) -> Result<()> {
         self.live_session_for(&request.target.container, "utility-vm-close-stdin")
             .await?
+            .guest
             .client
             .close_stdin(request)
             .await
@@ -665,6 +683,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     async fn resize(&self, request: DriverResizeRequest) -> Result<()> {
         self.live_session_for(&request.target.container, "utility-vm-resize")
             .await?
+            .guest
             .client
             .resize(request)
             .await
@@ -673,6 +692,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     async fn file(&self, request: FileRequest) -> Result<FileResponse> {
         self.live_session_for(&request.target, "utility-vm-file")
             .await?
+            .guest
             .client
             .file(request)
             .await
@@ -681,38 +701,11 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
         self.live_session_for(&request.target, "utility-vm-filesystem")
             .await?
+            .guest
             .client
             .filesystem(request)
             .await
     }
-}
-
-#[derive(Clone)]
-enum UtilityVmAttachment {
-    Live(Arc<UtilityVmContainer>),
-    RecoveredStopped {
-        target: ContainerTarget,
-        init_exit_status: Option<ExitStatus>,
-    },
-}
-
-impl UtilityVmAttachment {
-    fn target(&self) -> &ContainerTarget {
-        match self {
-            Self::Live(session) => &session.target,
-            Self::RecoveredStopped { target, .. } => target,
-        }
-    }
-}
-
-struct UtilityVmContainer {
-    target: ContainerTarget,
-    client: AgentDriverClient,
-    owner: Arc<dyn UtilityVmOwner>,
-}
-
-async fn shutdown_session(session: &UtilityVmContainer) -> Result<()> {
-    session.owner.shutdown().await
 }
 
 pub(crate) struct LaunchedUtilityVm {
@@ -726,12 +719,34 @@ pub(crate) trait UtilityVmFactory: Send + Sync {
         &self,
         target: &ContainerTarget,
         runtime_share: &Path,
+        guest_session: Option<&GuestSessionAttachment>,
     ) -> Result<LaunchedUtilityVm>;
 }
 
 #[async_trait]
 pub(crate) trait UtilityVmOwner: Send + Sync {
     async fn shutdown(&self) -> Result<()>;
+}
+
+async fn shutdown_guest(guest: &UtilityVmGuest) -> Result<()> {
+    guest.owner.shutdown().await
+}
+
+fn session_conflict(
+    requested: &GuestSessionAttachment,
+    retained: &GuestSessionAttachment,
+    reason: &str,
+) -> Error {
+    Error::new(
+        ErrorCode::Conflict,
+        format!(
+            "reusable guest session {} requested generation {}, but retained generation {} cannot be replaced because {reason}",
+            requested.id(),
+            requested.generation(),
+            retained.generation()
+        ),
+    )
+    .for_operation("utility-vm-create")
 }
 
 fn recovered_stopped_error(target: &ContainerTarget, operation: &'static str) -> Error {
@@ -755,193 +770,3 @@ fn recovered_exit_error(target: &ContainerTarget, operation: &'static str) -> Er
     )
     .for_operation(operation)
 }
-
-macro_rules! delegate_utility_vm_runtime_driver {
-    ($driver:ty, $inner:ident) => {
-        #[a3s_oci_sdk::async_trait]
-        impl $crate::RuntimeDriver for $driver {
-            fn capability(&self) -> a3s_oci_core::DriverCapability {
-                $crate::RuntimeDriver::capability(&self.$inner)
-            }
-
-            fn linux_support(&self) -> a3s_oci_sdk::Result<a3s_oci_sdk::OciLinuxSupport> {
-                $crate::RuntimeDriver::linux_support(&self.$inner)
-            }
-
-            fn operations(&self) -> &[a3s_oci_sdk::RuntimeOperation] {
-                $crate::RuntimeDriver::operations(&self.$inner)
-            }
-
-            fn hooks(&self) -> &[$crate::OciHookPhase] {
-                $crate::RuntimeDriver::hooks(&self.$inner)
-            }
-
-            fn attachment_capabilities(&self) -> a3s_oci_sdk::AttachmentCapabilities {
-                $crate::RuntimeDriver::attachment_capabilities(&self.$inner)
-            }
-
-            async fn acknowledge_operation(
-                &self,
-                operation_id: &a3s_oci_sdk::OperationId,
-            ) -> a3s_oci_sdk::Result<()> {
-                $crate::RuntimeDriver::acknowledge_operation(&self.$inner, operation_id).await
-            }
-
-            async fn prepare_create_bundle(
-                &self,
-                request: &$crate::DriverCreateRequest,
-            ) -> a3s_oci_sdk::Result<a3s_oci_sdk::OciBundle> {
-                $crate::RuntimeDriver::prepare_create_bundle(&self.$inner, request).await
-            }
-
-            async fn recover(
-                &self,
-                record: &a3s_oci_sdk::ContainerRecord,
-            ) -> a3s_oci_sdk::Result<$crate::DriverRecovery> {
-                $crate::RuntimeDriver::recover(&self.$inner, record).await
-            }
-
-            async fn create(
-                &self,
-                request: $crate::DriverCreateRequest,
-            ) -> a3s_oci_sdk::Result<$crate::DriverState> {
-                $crate::RuntimeDriver::create(&self.$inner, request).await
-            }
-
-            async fn state(
-                &self,
-                target: a3s_oci_sdk::ContainerTarget,
-            ) -> a3s_oci_sdk::Result<$crate::DriverState> {
-                $crate::RuntimeDriver::state(&self.$inner, target).await
-            }
-
-            async fn start(
-                &self,
-                request: $crate::DriverStartRequest,
-            ) -> a3s_oci_sdk::Result<$crate::DriverState> {
-                $crate::RuntimeDriver::start(&self.$inner, request).await
-            }
-
-            async fn kill(
-                &self,
-                request: $crate::DriverKillRequest,
-            ) -> a3s_oci_sdk::Result<$crate::DriverState> {
-                $crate::RuntimeDriver::kill(&self.$inner, request).await
-            }
-
-            async fn delete(
-                &self,
-                request: $crate::DriverDeleteRequest,
-            ) -> a3s_oci_sdk::Result<()> {
-                $crate::RuntimeDriver::delete(&self.$inner, request).await
-            }
-
-            async fn wait(
-                &self,
-                request: $crate::DriverWaitRequest,
-            ) -> a3s_oci_sdk::Result<a3s_oci_sdk::ExitStatus> {
-                $crate::RuntimeDriver::wait(&self.$inner, request).await
-            }
-
-            async fn exec(
-                &self,
-                request: $crate::DriverExecRequest,
-            ) -> a3s_oci_sdk::Result<$crate::DriverProcess> {
-                $crate::RuntimeDriver::exec(&self.$inner, request).await
-            }
-
-            async fn signal_process(
-                &self,
-                request: $crate::DriverSignalProcessRequest,
-            ) -> a3s_oci_sdk::Result<()> {
-                $crate::RuntimeDriver::signal_process(&self.$inner, request).await
-            }
-
-            async fn wait_process(
-                &self,
-                request: $crate::DriverWaitProcessRequest,
-            ) -> a3s_oci_sdk::Result<a3s_oci_sdk::ExitStatus> {
-                $crate::RuntimeDriver::wait_process(&self.$inner, request).await
-            }
-
-            async fn pause(
-                &self,
-                request: $crate::DriverContainerOperationRequest,
-            ) -> a3s_oci_sdk::Result<$crate::DriverState> {
-                $crate::RuntimeDriver::pause(&self.$inner, request).await
-            }
-
-            async fn resume(
-                &self,
-                request: $crate::DriverContainerOperationRequest,
-            ) -> a3s_oci_sdk::Result<$crate::DriverState> {
-                $crate::RuntimeDriver::resume(&self.$inner, request).await
-            }
-
-            async fn processes(
-                &self,
-                target: a3s_oci_sdk::ContainerTarget,
-            ) -> a3s_oci_sdk::Result<Vec<a3s_oci_sdk::ProcessRecord>> {
-                $crate::RuntimeDriver::processes(&self.$inner, target).await
-            }
-
-            async fn update(
-                &self,
-                request: $crate::DriverUpdateRequest,
-            ) -> a3s_oci_sdk::Result<$crate::DriverState> {
-                $crate::RuntimeDriver::update(&self.$inner, request).await
-            }
-
-            async fn stats(
-                &self,
-                target: a3s_oci_sdk::ContainerTarget,
-            ) -> a3s_oci_sdk::Result<a3s_oci_sdk::ContainerStats> {
-                $crate::RuntimeDriver::stats(&self.$inner, target).await
-            }
-
-            async fn read_output(
-                &self,
-                request: $crate::DriverReadOutputRequest,
-            ) -> a3s_oci_sdk::Result<Vec<a3s_oci_sdk::OutputChunk>> {
-                $crate::RuntimeDriver::read_output(&self.$inner, request).await
-            }
-
-            async fn write_stdin(
-                &self,
-                request: $crate::DriverWriteStdinRequest,
-            ) -> a3s_oci_sdk::Result<()> {
-                $crate::RuntimeDriver::write_stdin(&self.$inner, request).await
-            }
-
-            async fn close_stdin(
-                &self,
-                request: $crate::DriverCloseStdinRequest,
-            ) -> a3s_oci_sdk::Result<()> {
-                $crate::RuntimeDriver::close_stdin(&self.$inner, request).await
-            }
-
-            async fn resize(
-                &self,
-                request: $crate::DriverResizeRequest,
-            ) -> a3s_oci_sdk::Result<()> {
-                $crate::RuntimeDriver::resize(&self.$inner, request).await
-            }
-
-            async fn file(
-                &self,
-                request: a3s_oci_sdk::FileRequest,
-            ) -> a3s_oci_sdk::Result<a3s_oci_sdk::FileResponse> {
-                $crate::RuntimeDriver::file(&self.$inner, request).await
-            }
-
-            async fn filesystem(
-                &self,
-                request: a3s_oci_sdk::FilesystemRequest,
-            ) -> a3s_oci_sdk::Result<a3s_oci_sdk::FilesystemResponse> {
-                $crate::RuntimeDriver::filesystem(&self.$inner, request).await
-            }
-        }
-    };
-}
-
-pub(crate) use delegate_utility_vm_runtime_driver;

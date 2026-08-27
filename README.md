@@ -265,14 +265,18 @@ namespace release from preservation of a joined caller namespace. It never
 receives or decides IPAM, DNS, routes, aliases, or network policy.
 
 The public `a3s.oci.attachments.v4` profile establishes the reusable
-guest-session boundary without claiming that a production driver implements a
-pool. A SharedGuestKernel create or restore must bind one logical session ID,
-positive incarnation, immutable trust domain, capacity from 1 through 64,
-runtime ownership, and an explicit destroy-on-empty or same-trust-domain retain
-mode. Protocol 7 and durable `ContainerRecord` evidence fence downgrade,
-restart, and operation-ID reuse. HVF, KVM, and WHPX continue to advertise only
-their implemented attachment profiles until admission, reset, recovery, and
-leak qualification are complete.
+guest-session boundary. A SharedGuestKernel create or restore must bind one
+logical session ID, positive incarnation, immutable trust domain, capacity
+from 1 through 64, runtime ownership, and an explicit destroy-on-empty or
+same-trust-domain retain mode. Protocol 7 and durable `ContainerRecord`
+evidence fence downgrade, restart, and operation-ID reuse. The shared HVF/KVM
+driver core implements session-scoped shares and ownership markers, serialized
+admission, capacity and generation fencing, both reset modes, member-local
+failure cleanup, session recovery reports, and one-owner shutdown. Production
+HVF, KVM, and WHPX registrations continue to advertise only their qualified
+attachment profiles until the corresponding real-host restart, cleanup, and
+soak evidence is retained and their cumulative storage/network transports are
+implemented.
 
 OCI 1.3 `linux.resources.hugepageLimits` is also implemented by the shared
 executor. The SDK preserves the complete normative `uint64` range, while the
@@ -896,9 +900,11 @@ guest-session ID and positive incarnation, the request's immutable trust
 domain, a capacity bounded at 64 members, runtime ownership, and an explicit
 empty-session reset mode. Create/restore requires SDK protocol 7, and the exact
 binding is retained in `ContainerRecord` and revalidated against the durable
-manifest after reopen. No production utility-VM driver advertises v4 yet;
-session admission, pooling, reset, recovery, and leak gates must land first. See
-the
+manifest after reopen. The common HVF/KVM implementation enforces admission,
+capacity, reset, generation rotation, member cleanup, and shared-owner
+reclamation, but no production utility-VM driver advertises v4 until its
+prerequisite storage/network transport and real-host restart/leak qualification
+pass. See the
 [attachment contract](docs/attachment-contracts.md) for the fail-closed
 composition rules.
 

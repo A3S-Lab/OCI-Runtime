@@ -423,7 +423,7 @@ async fn exercise(
                 exact_record && *record.state.status() == ContainerState::Running;
             report.first_response_matches_durable_record = first_response
                 .as_ref()
-                .is_some_and(|response| response == record);
+                .is_some_and(|response| response.as_ref() == record);
             let expected_retained = if response_delivered {
                 report.durable_running_retained && report.first_response_matches_durable_record
             } else {

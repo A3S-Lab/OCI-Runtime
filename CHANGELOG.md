@@ -34,9 +34,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
   SharedGuestKernel create/restore now requires that exact binding; other
   isolation classes reject it. Protocol 7 prevents v4 downgrade, and
   `ContainerRecord` retains the binding so restart audit and operation replay
-  reject session or generation drift. Production utility-VM drivers do not
-  advertise v4 yet; admission, pooling, reset, and leak gates remain required
-  before any driver enables reusable sessions.
+  reject session or generation drift. The platform-neutral HVF/KVM lifecycle
+  now implements session-scoped private shares, immutable ownership markers,
+  serialized member admission, exact capacity and generation fences,
+  destroy-on-empty and same-trust-domain retention, session-scoped owner-death
+  reports, member-local terminal cleanup, and one-owner shutdown. Production
+  utility-VM drivers still do not advertise v4; cumulative storage/network
+  transport plus real-host restart, cleanup, and soak qualification remain
+  required before either driver enables the profile.
 - Added `a3s.oci.attachments.v3` for already-authorized Linux network
   interfaces. Each binding carries caller-issued namespace, interface, and
   cleanup incarnation IDs plus exact OCI network-namespace and
