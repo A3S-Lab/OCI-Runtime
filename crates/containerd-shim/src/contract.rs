@@ -417,6 +417,9 @@ pub(crate) fn sdk_translation_action(translation: &SdkTranslation) -> String {
 }
 
 #[cfg(test)]
+mod compatibility_record;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -531,6 +534,8 @@ mod tests {
         assert!(release_workflow.contains("-p a3s-oci-containerd-shim"));
         assert!(release_workflow.contains(&release_binary));
         assert!(release_workflow.contains("docs/containerd-runtime-v2.md"));
+        assert!(release_workflow.contains("compat/containerd-runtime-v2.json"));
+        assert!(documentation.contains("compat/containerd-runtime-v2.json"));
         assert!(documentation.contains(SDK_OPERATIONS_ANNOTATION));
         for document in [readme, documentation] {
             assert!(document.contains(RUNTIME_TYPE));

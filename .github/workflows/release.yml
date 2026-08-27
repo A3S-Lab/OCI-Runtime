@@ -95,8 +95,9 @@ jobs:
                 target/release/a3s-oci-agent \
                 target/release/containerd-shim-a3s-oci-v2 \
                 "$package/"
-              mkdir -p "$package/docs"
+              mkdir -p "$package/docs" "$package/compat"
               cp docs/containerd-runtime-v2.md "$package/docs/"
+              cp compat/containerd-runtime-v2.json "$package/compat/"
               ;;
             macOS)
               cp target/release/a3s-oci target/release/a3s-oci-krun-shim "$package/"

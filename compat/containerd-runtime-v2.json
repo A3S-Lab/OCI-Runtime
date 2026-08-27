@@ -1,0 +1,258 @@
+{
+  "schema_version": "a3s.oci.containerd-runtime-v2-compatibility.v1",
+  "contract": {
+    "version": 1,
+    "runtime_type": "io.containerd.a3s-oci.v2",
+    "task_api": "containerd.task.v2.Task",
+    "identity_encoding": "sha256-length-framed-u64be-v1"
+  },
+  "claims": [
+    {
+      "containerd": "2.2.2",
+      "host": "ubuntu-linux-arm64",
+      "profile": "shared-host-kernel",
+      "status": "development-qualified"
+    },
+    {
+      "containerd": "2.0.x,2.1.x,other-2.2.x",
+      "host": "linux",
+      "profile": "any",
+      "status": "not-qualified"
+    },
+    {
+      "containerd": "1.7.x-and-earlier",
+      "host": "linux",
+      "profile": "any",
+      "status": "not-qualified"
+    },
+    {
+      "containerd": "any",
+      "host": "linux",
+      "profile": "dedicated-vm",
+      "status": "not-qualified"
+    }
+  ],
+  "qualification_runs": [
+    {
+      "id": "2026-08-24-containerd-2.2.2-ubuntu-arm64",
+      "recorded_on": "2026-08-24",
+      "result": "passed",
+      "claim_effect": "supports-development-claim",
+      "source_commit": "5a6d5f2d817d5951929c2394dff57ef925dd5822",
+      "containerd": {
+        "version": "2.2.2"
+      },
+      "host": {
+        "contract_host": "ubuntu-linux-arm64",
+        "distribution": "Ubuntu",
+        "kernel": "7.0.11-orbstack-00360-gc9bc4d96ac70",
+        "architecture": "aarch64",
+        "environment": "orbstack"
+      },
+      "runtime_profile": {
+        "driver": "native-linux",
+        "isolation": "shared-host-kernel"
+      },
+      "protocols": {
+        "sdk": {
+          "minimum": 3,
+          "maximum": 4
+        },
+        "agent": {
+          "minimum": 1,
+          "maximum": 10
+        }
+      },
+      "artifacts": {
+        "cargo_lock_sha256": "c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727",
+        "files": [
+          {
+            "role": "cli",
+            "name": "a3s-oci",
+            "sha256": "53bf14d72adb347b35d19f936bf91d15adcc3cce65aa88f63886746f07f5ddb2"
+          },
+          {
+            "role": "agent",
+            "name": "a3s-oci-agent",
+            "sha256": "28dad74972b28b400a9e5e9f9b38ba59aeaf6662532dfefc7dd5527ff17d6b48"
+          },
+          {
+            "role": "shim",
+            "name": "containerd-shim-a3s-oci-v2",
+            "sha256": "801c6ebd6bb6a41f1049dbd64d6ae60165a0914254edb953b2eaf633c6c368f2"
+          },
+          {
+            "role": "qualification-test",
+            "name": "containerd_runtime_v2",
+            "sha256": "fa3a513bf2f5aba01a511bc953dcfc5cb1bb05080fbd58bb993d9a0a44a10363"
+          }
+        ]
+      },
+      "qualification": {
+        "test": "real_containerd_runtime_v2_qualification",
+        "passes": 3,
+        "duration_seconds": [
+          65.15,
+          66.76,
+          64.11
+        ],
+        "preflight_passed": true,
+        "isolated_containerd": true,
+        "default_containerd_preserved": true,
+        "tasks_after": 0,
+        "containers_after": 0,
+        "temporary_roots_removed": true
+      }
+    },
+    {
+      "id": "2026-08-24-containerd-2.2.3-ubuntu-x86_64",
+      "recorded_on": "2026-08-24",
+      "result": "passed",
+      "claim_effect": "observation-only",
+      "source_commit": "9726719e5a66156cd61f8be36ca00998bbcfc871",
+      "containerd": {
+        "version": "2.2.3"
+      },
+      "host": {
+        "contract_host": "ubuntu-linux-x86_64",
+        "distribution": "Ubuntu 24.04",
+        "kernel": "6.8.0-49-generic",
+        "architecture": "x86_64",
+        "environment": "native-linux"
+      },
+      "runtime_profile": {
+        "driver": "native-linux",
+        "isolation": "shared-host-kernel"
+      },
+      "protocols": {
+        "sdk": {
+          "minimum": 3,
+          "maximum": 4
+        },
+        "agent": {
+          "minimum": 1,
+          "maximum": 10
+        }
+      },
+      "artifacts": {
+        "cargo_lock_sha256": "c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727",
+        "files": [
+          {
+            "role": "cli",
+            "name": "a3s-oci",
+            "sha256": "80d0b69686c73516fc3a507f2545af77b405918584176bdb0a96ab3bcf067102"
+          },
+          {
+            "role": "agent",
+            "name": "a3s-oci-agent",
+            "sha256": "68219e592a061b9dba7f491d54716354195cd8f8005fa792ab367681dda5352e"
+          },
+          {
+            "role": "shim",
+            "name": "containerd-shim-a3s-oci-v2",
+            "sha256": "99bacac7a308e4830ca55101ef8148a511526722cf9006d8a37ef9cba89dbf50"
+          },
+          {
+            "role": "qualification-test",
+            "name": "containerd_runtime_v2",
+            "sha256": "3e752abc8ada3b8e3dae9d86e370feb7d17bf04c2245f13888d52ba7537b2fd2"
+          }
+        ]
+      },
+      "qualification": {
+        "test": "real_containerd_runtime_v2_qualification",
+        "passes": 3,
+        "duration_seconds": [
+          117.37,
+          119.36,
+          118.94
+        ],
+        "preflight_passed": true,
+        "isolated_containerd": true,
+        "default_containerd_preserved": true,
+        "tasks_after": 0,
+        "containers_after": 0,
+        "temporary_roots_removed": null
+      }
+    },
+    {
+      "id": "2026-08-28-containerd-2.2.1-wsl2-x86_64",
+      "recorded_on": "2026-08-28",
+      "result": "passed",
+      "claim_effect": "observation-only",
+      "source_commit": "45158bc9607bee4ee819d5250337154c7c4f199f",
+      "containerd": {
+        "version": "2.2.1",
+        "revision": "dea7da592f5d1d2b7755e3a161be07f43fad8f75"
+      },
+      "host": {
+        "contract_host": "ubuntu-wsl2-x86_64",
+        "distribution": "Ubuntu 24.04.3 LTS",
+        "kernel": "6.18.33.2-microsoft-standard-WSL2",
+        "architecture": "x86_64",
+        "environment": "wsl2"
+      },
+      "runtime_profile": {
+        "driver": "native-linux",
+        "isolation": "shared-host-kernel"
+      },
+      "protocols": {
+        "sdk": {
+          "minimum": 3,
+          "maximum": 9
+        },
+        "agent": {
+          "minimum": 1,
+          "maximum": 10
+        }
+      },
+      "artifacts": {
+        "cargo_lock_sha256": "1f00f4ec1b0f1ba9f3e39daf2b8782e42c922d9fa696aaa07c709c38123edca0",
+        "files": [
+          {
+            "role": "cli",
+            "name": "a3s-oci",
+            "sha256": "7136aa6c7e540f936e41a03e93cbbc9759934503337ffbd9ec99745de494a17d",
+            "size_bytes": 30336632,
+            "format": "elf-static-pie"
+          },
+          {
+            "role": "agent",
+            "name": "a3s-oci-agent",
+            "sha256": "c73cc2356552de6f2def62598a44fb370df7300a56af5c7be33e63d148b865e2",
+            "size_bytes": 14771880,
+            "format": "elf-static-pie"
+          },
+          {
+            "role": "shim",
+            "name": "containerd-shim-a3s-oci-v2",
+            "sha256": "f694adf3f6aab089c77358e84dac604a66cb0c502990c01d830743bea6d35015",
+            "size_bytes": 20350960,
+            "format": "elf-static-pie"
+          },
+          {
+            "role": "qualification-test",
+            "name": "containerd_runtime_v2-587ee35c8dd6ea07",
+            "sha256": "ba458b70cb1c879ed78095d326ccfe8992b22f12198728b45cc8d50a52e0451f",
+            "size_bytes": 219259952,
+            "format": "elf-static-pie"
+          }
+        ]
+      },
+      "qualification": {
+        "test": "real_containerd_runtime_v2_qualification",
+        "passes": 1,
+        "duration_seconds": [
+          77.06
+        ],
+        "preflight_passed": true,
+        "isolated_containerd": true,
+        "default_containerd_preserved": true,
+        "tasks_after": 0,
+        "containers_after": 0,
+        "temporary_roots_removed": true,
+        "boundary_count": 23
+      }
+    }
+  ]
+}

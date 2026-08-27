@@ -17,6 +17,15 @@ runtime-v2 contract is stable. That is not a support claim. Add a release to
 the table only after the same ignored real-host qualification passes against
 the packaged shim, SDK, host service, agent, and selected driver.
 
+The canonical machine-readable record is
+[`compat/containerd-runtime-v2.json`](../compat/containerd-runtime-v2.json).
+It mirrors the code-owned claims and retains the exact source revisions,
+protocol ranges, artifact digests, environments, pass durations, and cleanup
+results behind them. Its August 28, 2026 containerd 2.2.1 WSL2 x86_64 run is
+explicitly observation-only: one 77.06-second pass of the static-musl CLI,
+agent, shim, and qualification executable does not extend the exact 2.2.2
+Ubuntu arm64 development claim.
+
 Contract v1 owns this matrix in code and exposes it through the shim's version
 output and RuntimeInfo annotations. The accepted ttrpc service is
 `containerd.task.v2.Task`. State, Create, Start, Delete, Pids, Pause, Resume,
@@ -127,6 +136,8 @@ a3s-oci-runtime-v<version>-linux-<architecture>/
 ├── README.md
 ├── CHANGELOG.md
 ├── LICENSE
+├── compat/
+│   └── containerd-runtime-v2.json
 └── docs/
     └── containerd-runtime-v2.md
 ```
@@ -718,7 +729,6 @@ suite to restart containerd.
 
 - qualify the supported containerd version range from exact release packages;
 - publish signed or checksummed shim, host-service, agent, and driver assets;
-- retain a machine-readable compatibility record;
 - retain a three-pass real-host record for the implemented post-commit
   `ResizePty` forced-cleanup gate; Native Linux lifecycle mutations,
   `WriteStdin`, and `CloseStdin` are already qualified at this boundary;
