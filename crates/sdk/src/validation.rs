@@ -35,6 +35,7 @@ impl ValidateRequest for CreateRequest {
     fn validate(&self) -> Result<()> {
         self.bundle.validate_for_phase(OciSemanticPhase::Create)?;
         self.attachments.validate(&self.bundle)?;
+        self.attachments.validate_isolation(&self.isolation)?;
         match self.bundle.spec().process().as_ref() {
             Some(process) => self
                 .attachments
@@ -217,6 +218,7 @@ impl ValidateRequest for RestoreRequest {
     fn validate(&self) -> Result<()> {
         self.bundle.validate_for_phase(OciSemanticPhase::Create)?;
         self.attachments.validate(&self.bundle)?;
+        self.attachments.validate_isolation(&self.isolation)?;
         validate_absolute_path(&self.checkpoint_directory, "restore.checkpoint_directory")?;
         match self.bundle.spec().process().as_ref() {
             Some(process) => self

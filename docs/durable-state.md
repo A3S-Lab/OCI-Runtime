@@ -121,15 +121,18 @@ Create uses two durable stages:
    response.
 
 The create request digest excludes retry metadata but includes container ID,
-bundle, isolation request, process I/O, and the optional stable inherited
-descriptor schema. The A3S Box schema records the exec-listener, PTY-listener,
-and init-log roles, kernel-object types, and targets 3/4/5; it deliberately
-excludes ephemeral source FD numbers and inode identities so an exact retry
-after host restart may reopen equivalent resources. Reusing an `OperationId`
-for a different request or omitting a previously attached schema fails with
-`failed-precondition`. A matching prepared operation resumes the original
-generation; a matching completed operation returns its exact recorded
-response.
+bundle, isolation request, and the complete versioned attachment manifest,
+including process I/O and any stable inherited-descriptor schema. The A3S Box
+schema records the exec-listener, PTY-listener, and init-log roles,
+kernel-object types, and targets 3/4/5; it deliberately excludes ephemeral
+source FD numbers and inode identities so an exact retry after host restart may
+reopen equivalent resources. A v4 SharedGuestKernel record also retains the
+exact guest-session binding outside the digest for direct state and recovery
+evidence; loading requires it to equal the durable manifest. Reusing an
+`OperationId` for a different request, changing that session incarnation, or
+omitting a previously attached schema fails with `failed-precondition`. A
+matching prepared operation resumes the original generation; a matching
+completed operation returns its exact recorded response.
 
 Start, kill, pause, resume, update, delete, File upload, and Filesystem
 mkdir/move/remove use the same global journal and request fingerprinting. Each
@@ -295,7 +298,8 @@ state graph. It rejects unexpected root, container, process, quarantine, and
 event entries; filename/payload identity drift; operations without an
 allocated generation; duplicate Create owners; live records below or beyond
 their generation fence; missing Create or Exec ownership; incompatible active
-claims; malformed configuration or attachment evidence; quarantine entries
+claims; malformed configuration or attachment evidence, including mismatched
+v4 guest-session records; quarantine entries
 that disagree with their operation; one generation present both live and
 quarantined; and event records without an exact identity claim. Quarantined
 container snapshots and their process namespaces receive the same record and

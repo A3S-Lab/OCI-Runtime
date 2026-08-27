@@ -131,6 +131,7 @@ macro_rules! identifier {
 identifier!(ContainerId, "container ID");
 identifier!(ProcessId, "process ID");
 identifier!(OperationId, "operation ID");
+identifier!(GuestSessionId, "guest-session ID");
 identifier!(NetworkCleanupId, "network cleanup ID");
 identifier!(NetworkInterfaceId, "network interface ID");
 identifier!(NetworkNamespaceId, "network namespace ID");
@@ -163,8 +164,8 @@ pub struct Generation(pub u64);
 #[cfg(test)]
 mod tests {
     use super::{
-        ContainerId, Generation, NetworkCleanupId, NetworkInterfaceId, NetworkNamespaceId,
-        ProcessId, StorageAttachmentId,
+        ContainerId, Generation, GuestSessionId, NetworkCleanupId, NetworkInterfaceId,
+        NetworkNamespaceId, ProcessId, StorageAttachmentId,
     };
 
     #[test]
@@ -217,6 +218,10 @@ mod tests {
         let error = serde_json::from_str::<StorageAttachmentId>(r#""../volume""#)
             .expect_err("invalid serialized storage ID must be rejected");
         assert!(error.to_string().contains("storage attachment ID"));
+
+        let error = serde_json::from_str::<GuestSessionId>(r#""../guest""#)
+            .expect_err("invalid serialized guest-session ID must be rejected");
+        assert!(error.to_string().contains("guest-session ID"));
 
         for error in [
             serde_json::from_str::<NetworkNamespaceId>(r#""../namespace""#)

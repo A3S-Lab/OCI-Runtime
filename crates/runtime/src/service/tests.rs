@@ -21,14 +21,16 @@ use a3s_oci_sdk::{
     ContainerRecord, ContainerStats, ContainerTarget, CpuStats, CreateAttachments, CreateRequest,
     DeleteMode, DeleteRequest, Error, ErrorCode, EventsRequest, ExecRequest, ExitStatus, FileOp,
     FileRequest, FileResponse, FilesystemEntry, FilesystemEntryKind, FilesystemOp,
-    FilesystemRequest, FilesystemResponse, Generation, IoMode, IsolationRequest, KillRequest,
-    ListRequest, MemoryStats, OciBundle, OciLinuxSupport, OciRuntimeService, OciSchemaValidator,
-    OperationContext, OperationId, OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord,
-    ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeEventKind,
-    RuntimeNegotiationRequest, RuntimeOperation, Signal, SignalProcessRequest, StartRequest,
-    StateRequest, StatsRequest, StorageAccessMode, StorageAttachmentId, StorageCleanup,
-    StorageOwnership, TerminalSize, TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest,
-    WriteStdinRequest, ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3,
+    FilesystemRequest, FilesystemResponse, Generation, GuestSessionCapacity,
+    GuestSessionGeneration, GuestSessionId, GuestSessionReset, IoMode, IsolationRequest,
+    KillRequest, ListRequest, MemoryStats, OciBundle, OciLinuxSupport, OciRuntimeService,
+    OciSchemaValidator, OperationContext, OperationId, OutputChunk, OutputStream, ProcessId,
+    ProcessIo, ProcessRecord, ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest,
+    Result, RuntimeEventKind, RuntimeNegotiationRequest, RuntimeOperation, Signal,
+    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, StorageAccessMode,
+    StorageAttachmentId, StorageCleanup, StorageOwnership, TerminalSize, TrustDomainId,
+    UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest, ATTACHMENT_SCHEMA_V1,
+    ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3, ATTACHMENT_SCHEMA_V4,
     BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS, OCI_LINUX_CAPABILITY_NAMES,
     OCI_LINUX_MEMORY_POLICY_FLAGS, OCI_LINUX_MEMORY_POLICY_MODES, OCI_LINUX_MOUNT_OPTIONS,
     OCI_LINUX_SECCOMP_ACTIONS, OCI_LINUX_SECCOMP_ARCHITECTURES, OCI_LINUX_SECCOMP_KNOWN_FLAGS,
@@ -50,6 +52,7 @@ use crate::{
 mod agent_transport_recovery;
 mod fault_matrix;
 mod filesystem_operations;
+mod guest_sessions;
 mod io_durability;
 mod io_operations;
 mod linux_support;
@@ -198,6 +201,7 @@ impl RecordingDriver {
         let mut driver = Self::supported();
         driver.capability.driver = DriverKind::LibkrunHvf;
         driver.capability.isolation_classes = vec![IsolationClass::SharedGuestKernel];
+        driver.attachments = AttachmentCapabilities::base_v4();
         driver
     }
 
@@ -1404,6 +1408,29 @@ fn create_request(bundle_directory: &Path, operation: &str) -> CreateRequest {
     }
 }
 
+fn bind_guest_session(
+    mut request: CreateRequest,
+    trust_domain: &str,
+    session_id: &str,
+) -> CreateRequest {
+    let trust_domain = identifier(trust_domain, TrustDomainId::new);
+    request.isolation = IsolationRequest::SharedGuestKernel {
+        trust_domain: trust_domain.clone(),
+    };
+    request.attachments = CreateAttachments::from_bundle(&request.bundle, ProcessIo::default())
+        .expect("base guest-session attachment contract")
+        .attach_reusable_guest_session(
+            &request.bundle,
+            &request.isolation,
+            identifier(session_id, GuestSessionId::new),
+            GuestSessionGeneration::new(1).expect("guest-session generation"),
+            GuestSessionCapacity::new(4).expect("guest-session capacity"),
+            GuestSessionReset::RetainWithinTrustDomain,
+        )
+        .expect("guest-session attachment contract");
+    request
+}
+
 #[cfg(target_os = "linux")]
 fn native_create_request(bundle_directory: &Path, operation: &str) -> CreateRequest {
     let mut request = create_request(bundle_directory, operation);
@@ -1926,17 +1953,19 @@ async fn durable_list_is_sorted_filtered_driver_independent_and_reopen_safe() {
         .capability
         .isolation_classes
         .push(IsolationClass::SharedGuestKernel);
+    recording.attachments = AttachmentCapabilities::base_v4();
     let driver = Arc::new(recording);
     let service = open_service(&temporary, Arc::clone(&driver)).await;
 
     let mut zulu = create_request(&bundle_directory, "list-create-zulu");
     zulu.id = container_id("list-zulu");
     service.create(zulu).await.expect("create zulu");
-    let mut alpha = create_request(&bundle_directory, "list-create-alpha");
+    let mut alpha = bind_guest_session(
+        create_request(&bundle_directory, "list-create-alpha"),
+        "list-domain",
+        "list-session",
+    );
     alpha.id = container_id("list-alpha");
-    alpha.isolation = IsolationRequest::SharedGuestKernel {
-        trust_domain: TrustDomainId::new("list-domain").expect("trust-domain ID"),
-    };
     service.create(alpha).await.expect("create alpha");
 
     let driver_calls = driver.calls().len();
@@ -3133,10 +3162,11 @@ async fn launch_and_isolation_checks_fail_before_state_or_driver_mutation() {
     )
     .await
     .expect("open supported driver");
-    let mut request = create_request(&bundle_directory, "unsupported-isolation");
-    request.isolation = IsolationRequest::SharedGuestKernel {
-        trust_domain: identifier("test-domain", TrustDomainId::new),
-    };
+    let request = bind_guest_session(
+        create_request(&bundle_directory, "unsupported-isolation"),
+        "test-domain",
+        "unsupported-session",
+    );
     let error = service
         .create(request)
         .await
@@ -3166,11 +3196,12 @@ async fn multi_driver_service_routes_create_and_reopen_by_durable_driver() {
         .expect("create dedicated container");
     assert_eq!(dedicated_record.driver, DriverKind::LibkrunWhpx);
 
-    let mut shared_request = create_request(&bundle_directory, "multi-create-shared");
+    let mut shared_request = bind_guest_session(
+        create_request(&bundle_directory, "multi-create-shared"),
+        "multi-domain",
+        "multi-session",
+    );
     shared_request.id = container_id("multi-shared");
-    shared_request.isolation = IsolationRequest::SharedGuestKernel {
-        trust_domain: identifier("multi-domain", TrustDomainId::new),
-    };
     let shared_record = service
         .create(shared_request.clone())
         .await
@@ -3252,11 +3283,12 @@ async fn multi_driver_service_routes_create_and_reopen_by_durable_driver() {
         .await
         .expect("delete dedicated container");
 
-    let mut reused = create_request(&bundle_directory, "multi-recreate-shared");
+    let mut reused = bind_guest_session(
+        create_request(&bundle_directory, "multi-recreate-shared"),
+        "multi-domain",
+        "multi-session",
+    );
     reused.id = dedicated_request.id;
-    reused.isolation = IsolationRequest::SharedGuestKernel {
-        trust_domain: identifier("multi-domain", TrustDomainId::new),
-    };
     let reused_record = reopened
         .create(reused.clone())
         .await
@@ -3617,11 +3649,12 @@ async fn service_open_reconciles_each_record_with_its_recorded_driver() {
         .await
         .expect("start dedicated recovery record");
 
-    let mut shared_request = create_request(&bundle_directory, "recovery-create-shared");
+    let mut shared_request = bind_guest_session(
+        create_request(&bundle_directory, "recovery-create-shared"),
+        "recovery-domain",
+        "recovery-session",
+    );
     shared_request.id = container_id("recovery-shared");
-    shared_request.isolation = IsolationRequest::SharedGuestKernel {
-        trust_domain: identifier("recovery-domain", TrustDomainId::new),
-    };
     let shared_record = service
         .create(shared_request.clone())
         .await
@@ -3797,8 +3830,9 @@ async fn negotiates_versioned_capabilities_for_the_selected_driver_and_artifact(
     assert_eq!(info.extensions.drivers().len(), 2);
     assert!(!info.operations.contains(&RuntimeOperation::Wait));
     assert!(!info.attachments.supports_extension(NETWORK_EXTENSION, 1));
-    assert!(!info.attachments.supports_schema(ATTACHMENT_SCHEMA_V2));
-    assert!(!info.attachments.supports_schema(ATTACHMENT_SCHEMA_V3));
+    assert!(info.attachments.supports_schema(ATTACHMENT_SCHEMA_V2));
+    assert!(info.attachments.supports_schema(ATTACHMENT_SCHEMA_V3));
+    assert!(!info.attachments.supports_schema(ATTACHMENT_SCHEMA_V4));
 
     let dedicated_request = RuntimeNegotiationRequest::new(IsolationClass::DedicatedVm)
         .with_operation(RuntimeOperation::Wait, RUNTIME_OPERATION_CONTRACT_V1)

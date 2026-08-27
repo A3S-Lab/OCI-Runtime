@@ -9,11 +9,12 @@ use crate::{
     AttachmentCapabilities, ContainerId, ContainerRecord, CreateAttachments, CreateRequest,
     DeleteRequest, DriverKind, Error, ErrorCode, EventsRequest, FileOp, FileRequest, FileResponse,
     FilesystemEntry, FilesystemEntryKind, FilesystemOp, FilesystemRequest, FilesystemResponse,
-    Generation, IsolationClass, IsolationRequest, KillRequest, NetworkAttachmentIdentity,
-    NetworkCleanup, NetworkCleanupId, NetworkInterfaceId, NetworkNamespaceId, OciBundle,
-    OciRuntimeService, OperationContext, OperationId, ProcessIo, RestoreRequest, Result,
-    RuntimeFeatures, RuntimeInfo, RuntimeOperation, StartRequest, StateRequest, StorageAccessMode,
-    StorageAttachmentId, StorageCleanup, StorageOwnership,
+    Generation, GuestSessionCapacity, GuestSessionGeneration, GuestSessionId, GuestSessionReset,
+    IsolationRequest, KillRequest, NetworkAttachmentIdentity, NetworkCleanup, NetworkCleanupId,
+    NetworkInterfaceId, NetworkNamespaceId, OciBundle, OciRuntimeService, OperationContext,
+    OperationId, ProcessIo, RestoreRequest, Result, RuntimeFeatures, RuntimeInfo, RuntimeOperation,
+    StartRequest, StateRequest, StorageAccessMode, StorageAttachmentId, StorageCleanup,
+    StorageOwnership, TrustDomainId,
 };
 
 use super::wire::{read_frame, write_frame, ClientMessage, ServerMessage, WireRequest, WireResult};
@@ -63,7 +64,8 @@ impl OciRuntimeService for EchoService {
             state,
             generation: Generation(7),
             driver: DriverKind::NativeLinux,
-            isolation: IsolationClass::SharedHostKernel,
+            isolation: request.isolation.class(),
+            guest_session: request.attachments.guest_session().cloned(),
             config_digest: request.bundle.config_digest().to_string(),
             attachments_digest: Some(request.attachments.digest()?),
         })
@@ -209,6 +211,50 @@ fn network_create_request() -> CreateRequest {
     }
 }
 
+fn guest_session_create_request() -> CreateRequest {
+    let bundle = OciBundle::from_json(
+        std::env::current_dir()
+            .expect("current directory")
+            .join("protocol-seven-guest-session-bundle"),
+        serde_json::to_string(&json!({
+            "ociVersion": "1.3.0",
+            "root": {"path": "rootfs"},
+            "process": {
+                "cwd": "/",
+                "args": ["/bin/true"],
+                "user": {"uid": 0, "gid": 0}
+            }
+        }))
+        .expect("guest-session configuration"),
+    )
+    .expect("guest-session bundle");
+    let trust_domain =
+        TrustDomainId::new("protocol-guest-trust-domain").expect("guest-session trust domain");
+    let isolation = IsolationRequest::SharedGuestKernel {
+        trust_domain: trust_domain.clone(),
+    };
+    let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .expect("base attachments")
+        .attach_reusable_guest_session(
+            &bundle,
+            &isolation,
+            GuestSessionId::new("protocol-guest-session").expect("guest-session ID"),
+            GuestSessionGeneration::new(1).expect("guest-session generation"),
+            GuestSessionCapacity::new(4).expect("guest-session capacity"),
+            GuestSessionReset::DestroyOnEmpty,
+        )
+        .expect("guest-session attachments");
+    CreateRequest {
+        context: OperationContext::new(
+            OperationId::new("protocol-guest-session-create").expect("operation ID"),
+        ),
+        id: ContainerId::new("protocol-guest-session-container").expect("container ID"),
+        bundle,
+        isolation,
+        attachments,
+    }
+}
+
 #[tokio::test]
 async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
     let (client_io, server_io) = tokio::io::duplex(64 * 1024);
@@ -220,7 +266,7 @@ async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
     let client = RuntimeTransportClient::from_io(client_io)
         .await
         .expect("negotiate in-memory SDK transport");
-    assert_eq!(client.protocol_version(), 6);
+    assert_eq!(client.protocol_version(), 7);
 
     let info = client.features().await.expect("transport features");
     assert_eq!(
@@ -496,6 +542,113 @@ fn protocol_six_gates_network_create_and_restore_symmetrically() {
         attachments: create.attachments,
     };
     assert_eq!(WireRequest::Restore(restore).minimum_protocol(), 6);
+}
+
+#[tokio::test]
+async fn protocol_six_rejects_guest_session_attachments_before_dispatch() {
+    let (client_io, mut server_io) = tokio::io::duplex(4096);
+    let server = tokio::spawn(async move {
+        let hello = read_frame::<ClientMessage>(&mut server_io)
+            .await
+            .expect("read client hello")
+            .expect("client hello frame");
+        assert!(matches!(hello, ClientMessage::Hello { .. }));
+        write_frame(&mut server_io, &ServerMessage::Welcome { protocol: 6 })
+            .await
+            .expect("write protocol-six welcome");
+        assert!(read_frame::<ClientMessage>(&mut server_io)
+            .await
+            .expect("read protocol-six connection close")
+            .is_none());
+    });
+
+    let client = RuntimeTransportClient::from_io(client_io)
+        .await
+        .expect("negotiate protocol six");
+    let error = client
+        .create(guest_session_create_request())
+        .await
+        .expect_err("protocol six must reject guest-session attachments");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("requires protocol 7"));
+    drop(client);
+    server.await.expect("server task must join");
+}
+
+#[test]
+fn protocol_seven_gates_guest_session_create_and_restore_symmetrically() {
+    let create = guest_session_create_request();
+    assert_eq!(WireRequest::Create(create.clone()).minimum_protocol(), 7);
+    let restore = RestoreRequest {
+        context: create.context,
+        id: create.id,
+        bundle: create.bundle,
+        checkpoint_directory: std::env::current_dir()
+            .expect("current directory")
+            .join("protocol-seven-checkpoint"),
+        isolation: create.isolation,
+        attachments: create.attachments,
+    };
+    assert_eq!(WireRequest::Restore(restore).minimum_protocol(), 7);
+}
+
+#[tokio::test]
+async fn server_rejects_protocol_six_guest_session_before_service_dispatch() {
+    let (mut client_io, server_io) = tokio::io::duplex(16 * 1024);
+    let service = Arc::new(EchoService::default());
+    let server_service: Arc<dyn OciRuntimeService> = service.clone();
+    let server =
+        tokio::spawn(async move { serve_transport_connection(server_service, server_io).await });
+
+    write_frame(
+        &mut client_io,
+        &ClientMessage::Hello {
+            protocol_min: 6,
+            protocol_max: 6,
+        },
+    )
+    .await
+    .expect("write protocol-six hello");
+    assert_eq!(
+        read_frame::<ServerMessage>(&mut client_io)
+            .await
+            .expect("read welcome")
+            .expect("welcome frame"),
+        ServerMessage::Welcome { protocol: 6 }
+    );
+    write_frame(
+        &mut client_io,
+        &ClientMessage::Request {
+            protocol: 6,
+            request_id: 9,
+            request: Box::new(WireRequest::Create(guest_session_create_request())),
+        },
+    )
+    .await
+    .expect("write guest-session request");
+    let response = read_frame::<ServerMessage>(&mut client_io)
+        .await
+        .expect("read guest-session rejection")
+        .expect("guest-session rejection frame");
+    let ServerMessage::Response { result, .. } = response else {
+        panic!("expected SDK response");
+    };
+    let WireResult::Error { error } = *result else {
+        panic!("protocol-six guest session must fail");
+    };
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("requires protocol 7"));
+    assert!(service
+        .exact_config
+        .lock()
+        .expect("captured configuration lock")
+        .is_none());
+
+    drop(client_io);
+    server
+        .await
+        .expect("server task must join")
+        .expect("server connection must close cleanly");
 }
 
 #[tokio::test]

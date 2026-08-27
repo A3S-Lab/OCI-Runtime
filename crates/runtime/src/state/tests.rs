@@ -6,9 +6,10 @@ use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
     CloseStdinRequest, ContainerId, ContainerOperationRequest, ContainerTarget, CreateAttachments,
     CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode, ExecRequest, ExitStatus,
-    Generation, IoMode, IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId,
-    ProcessId, ProcessIo, ProcessTarget, Signal, SignalProcessRequest, StartRequest, UpdateRequest,
-    WaitProcessRequest, WriteStdinRequest,
+    Generation, GuestSessionCapacity, GuestSessionGeneration, GuestSessionId, GuestSessionReset,
+    IoMode, IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId, ProcessId,
+    ProcessIo, ProcessTarget, Signal, SignalProcessRequest, StartRequest, TrustDomainId,
+    UpdateRequest, WaitProcessRequest, WriteStdinRequest,
 };
 use tempfile::TempDir;
 
@@ -353,6 +354,101 @@ async fn durable_attachment_tampering_fails_closed_after_reopen() {
         .expect_err("startup audit must reject tampered attachment evidence");
     assert_eq!(error.code, ErrorCode::FailedPrecondition);
     assert!(error.message.contains("attachment digest"));
+}
+
+#[tokio::test]
+async fn guest_session_evidence_is_durable_and_revalidated_after_reopen() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let root = state_root(&temporary);
+    let mut request = create_request(
+        &bundle_directory,
+        "guest-session-container",
+        "guest-session-create",
+    );
+    let trust_domain =
+        TrustDomainId::new("guest-session-trust-domain").expect("guest-session trust domain");
+    request.isolation = IsolationRequest::SharedGuestKernel {
+        trust_domain: trust_domain.clone(),
+    };
+    request.attachments = CreateAttachments::from_bundle(&request.bundle, ProcessIo::default())
+        .expect("base attachment contract")
+        .attach_reusable_guest_session(
+            &request.bundle,
+            &request.isolation,
+            GuestSessionId::new("guest-session-1").expect("guest-session ID"),
+            GuestSessionGeneration::new(1).expect("guest-session generation"),
+            GuestSessionCapacity::new(4).expect("guest-session capacity"),
+            GuestSessionReset::RetainWithinTrustDomain,
+        )
+        .expect("guest-session attachment contract");
+    let expected_session = request
+        .attachments
+        .guest_session()
+        .expect("guest-session evidence")
+        .clone();
+
+    let store = DurableStateStore::open(&root)
+        .await
+        .expect("initialize state root");
+    store
+        .prepare_create(&request, DriverKind::LibkrunWhpx)
+        .await
+        .expect("prepare guest-session create");
+    let created = store
+        .complete_create(&request.context.operation_id, 4_242)
+        .await
+        .expect("complete guest-session create");
+    assert_eq!(created.guest_session.as_ref(), Some(&expected_session));
+    drop(store);
+
+    let reopened = DurableStateStore::open(&root)
+        .await
+        .expect("reopen guest-session state");
+    assert_eq!(
+        reopened
+            .state(&ContainerTarget::current(request.id.clone()))
+            .await
+            .expect("load guest-session state"),
+        created
+    );
+    drop(reopened);
+
+    let record_path = root
+        .join("containers")
+        .join(request.id.as_str())
+        .join("record.json");
+    let original = std::fs::read(&record_path).expect("read durable guest-session record");
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(&original).expect("decode durable guest-session record");
+    stored["record"]["isolation"] = serde_json::Value::String("dedicated-vm".to_string());
+    std::fs::write(
+        &record_path,
+        serde_json::to_vec_pretty(&stored).expect("encode drifted isolation record"),
+    )
+    .expect("write drifted isolation record");
+    let error = DurableStateStore::open(&root)
+        .await
+        .expect_err("startup audit must bind guest sessions to shared isolation");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(error.message.contains("guest-session evidence"));
+
+    std::fs::write(&record_path, &original).expect("restore durable guest-session record");
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(&original).expect("decode durable guest-session record");
+    stored["record"]["guest_session"]["generation"] = serde_json::Value::from(2);
+    std::fs::write(
+        &record_path,
+        serde_json::to_vec_pretty(&stored).expect("encode tampered guest-session record"),
+    )
+    .expect("write tampered guest-session record");
+
+    let error = DurableStateStore::open(&root)
+        .await
+        .expect_err("startup audit must reject guest-session evidence drift");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(error.message.contains("guest-session evidence"));
 }
 
 #[tokio::test]

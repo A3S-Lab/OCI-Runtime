@@ -291,6 +291,7 @@ fn record(
         generation,
         driver: DriverKind::NativeLinux,
         isolation: IsolationClass::SharedHostKernel,
+        guest_session: None,
         config_digest: "0".repeat(64),
         attachments_digest: Some(format!("sha256:{}", "0".repeat(64))),
     })

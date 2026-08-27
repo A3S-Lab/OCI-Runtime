@@ -5,10 +5,11 @@
 `CreateAttachments` is the public, versioned description of every resource
 attached to an OCI create or restore request. Schema
 `a3s.oci.attachments.v1` covers the original OCI and extension inventory;
-`a3s.oci.attachments.v2` adds already-authorized storage; and
-`a3s.oci.attachments.v3` adds already-authorized Linux network interfaces. The
-schemas are cumulative and the exact schema is negotiated through the selected
-driver's `RuntimeInfo::extensions` entry before product preparation begins.
+`a3s.oci.attachments.v2` adds already-authorized storage;
+`a3s.oci.attachments.v3` adds already-authorized Linux network interfaces; and
+`a3s.oci.attachments.v4` adds exact reusable guest-session identity. The schemas
+are cumulative and the exact schema is negotiated through the selected driver's
+`RuntimeInfo::extensions` entry before product preparation begins.
 
 The contract deliberately separates product policy from runtime mechanism:
 
@@ -18,6 +19,7 @@ The contract deliberately separates product policy from runtime mechanism:
 | Mounts | One ordered descriptor for every `/mounts/<index>` value | Named-volume policy, snapshot/commit ownership |
 | Networking | Exact OCI network namespace/device descriptors plus explicit extension references | Network objects, IPAM, DNS, aliases, publication policy |
 | Authorized networking (v3) | Caller-issued namespace, interface, and cleanup IDs bound to exact OCI namespace and `linux.netDevices` descriptors | IPAM, DNS, routes, aliases, network policy, and backing-network deletion |
+| Reusable guest session (v4) | Logical session ID, positive incarnation, immutable trust domain, bounded capacity, runtime ownership, and explicit empty-session reset mode | Placement policy, tenant identity, warm-pool sizing, VM handles, credentials, and cross-domain reuse authority |
 | Process I/O | Complete `ProcessIo` modes and initial terminal size | Box log retention, indexing, redaction, search policy |
 | Secrets | A classified mount index or declared runtime mechanism | Secret name, value, authorization decision, materialization credential |
 | Storage (v2) | Caller-issued immutable allocation ID, exact OCI mount descriptor, access mode, ownership, and cleanup action | Named-volume lookup, snapshot selection, authorization, retention, and backing-resource deletion |
@@ -169,6 +171,53 @@ configured namespace lifecycle. Rootless Native stays v1-v2 because its helper
 contract grants no host network-device authority. Utility-VM drivers remain v1
 until a separate caller-owned NIC transport plus cleanup/recovery gate exists.
 
+## Reusable guest-session identity
+
+A caller upgrades a derived manifest to v4 only for SharedGuestKernel
+isolation:
+
+```rust,no_run
+use a3s_oci_sdk::{
+    CreateAttachments, GuestSessionCapacity, GuestSessionGeneration,
+    GuestSessionId, GuestSessionReset, IsolationRequest, OciBundle, ProcessIo,
+    TrustDomainId,
+};
+
+fn guest_session_attachments(
+    bundle: &OciBundle,
+) -> a3s_oci_sdk::Result<(IsolationRequest, CreateAttachments)> {
+    let isolation = IsolationRequest::SharedGuestKernel {
+        trust_domain: TrustDomainId::new("tenant-7")?,
+    };
+    let attachments = CreateAttachments::from_bundle(bundle, ProcessIo::default())?
+        .attach_reusable_guest_session(
+            bundle,
+            &isolation,
+            GuestSessionId::new("guest-session-7")?,
+            GuestSessionGeneration::new(3)?,
+            GuestSessionCapacity::new(8)?,
+            GuestSessionReset::RetainWithinTrustDomain,
+        )?;
+    Ok((isolation, attachments))
+}
+```
+
+`GuestSessionId` is a caller-issued logical grouping identity, not a VM name,
+socket, path, or handle. `GuestSessionGeneration` fences one exact incarnation
+and must be positive. Capacity is fixed in the immutable request and bounded
+from 1 through 64. Runtime is the only guest-lifetime owner.
+`DestroyOnEmpty` requires reclamation when the final member is deleted;
+`RetainWithinTrustDomain` may keep that incarnation empty but never authorizes
+admission from another trust domain or reassignment under another generation.
+
+Request validation requires exactly one v4 binding for SharedGuestKernel and
+rejects a binding for DedicatedVm or SharedHostKernel. The manifest trust domain
+must equal the typed isolation request. Adding storage or network bindings after
+the session preserves v4 rather than downgrading the schema. No production
+utility-VM driver advertises v4 yet: the schema is durable admission evidence,
+while actual session pooling still requires driver-specific capacity, reset,
+recovery, and leak qualification.
+
 ## Runtime-owned bundle handoff
 
 Local products that prepare a portable bundle for a utility-VM driver may
@@ -195,10 +244,10 @@ substitute durable product record.
 SDK transport protocol 3 is the first protocol that carries v1. Protocol-2
 peers are rejected during negotiation, so an attachment-aware client cannot be
 silently downgraded to a server that ignores the field. Protocol 5 is required
-for v2 create and restore requests, and protocol 6 is required for v3. Both the
-client and server reject a versioned operation before dispatch when the
-negotiated connection predates its schema; v1 wire serialization remains
-unchanged and keeps its protocol-3 compatibility.
+for v2 create and restore requests, protocol 6 is required for v3, and protocol
+7 is required for v4. Both the client and server reject a versioned operation
+before dispatch when the negotiated connection predates its schema; v1 wire
+serialization remains unchanged and keeps its protocol-3 compatibility.
 
 The host advertises `AttachmentCapabilities`. Create fails before driver
 selection or durable reservation when the schema is unsupported or any
@@ -219,11 +268,13 @@ Every accepted manifest participates in the durable create request digest.
 The runtime stores the exact manifest with the container record and returns
 its SHA-256 digest in `ContainerRecord::attachments_digest`. On reopen it
 revalidates all pointers against the immutable configuration snapshot and
-checks the stored digest before returning state or resuming an operation.
-Changing I/O, classification, storage identity/access/lifetime, network
-namespace/interface/cleanup identity, extension version, or referenced
-configuration while reusing an operation ID therefore fails as a different
-request.
+checks the stored digest before returning state or resuming an operation. A v4
+record also retains `ContainerRecord::guest_session` and requires it to equal
+the manifest binding exactly. Changing I/O, classification, storage
+identity/access/lifetime, network namespace/interface/cleanup identity,
+guest-session identity/generation/trust domain/capacity/reset, extension
+version, or referenced configuration while reusing an operation ID therefore
+fails as a different request.
 
 Records created before protocol 3 have neither a stored manifest nor an
 attachment digest. The runtime retains that explicit legacy state for old

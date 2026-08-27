@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use a3s_oci_core::{DriverKind, LifecycleEvent, LifecycleState};
+use a3s_oci_core::{DriverKind, IsolationClass, LifecycleEvent, LifecycleState};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     ContainerId, ContainerRecord, ContainerTarget, CreateRequest, ErrorCode, FileOp, Generation,
@@ -327,6 +327,7 @@ impl DurableStateStore {
             let stored = self.load_stored_exact(&request.id, generation).await?;
             if stored.record.driver != driver
                 || stored.record.isolation != request.isolation.class()
+                || stored.record.guest_session.as_ref() != request.attachments.guest_session()
                 || stored.record.config_digest != request.bundle.config_digest()
                 || stored.record.attachments_digest.as_deref() != Some(attachments_digest.as_str())
                 || stored.attachments.as_ref() != Some(&request.attachments)
@@ -349,6 +350,7 @@ impl DurableStateStore {
             generation,
             driver,
             isolation: request.isolation.class(),
+            guest_session: request.attachments.guest_session().cloned(),
             config_digest: request.bundle.config_digest().to_string(),
             attachments_digest: Some(attachments_digest),
         };
@@ -775,6 +777,18 @@ impl DurableStateStore {
         match (&stored.attachments, &stored.record.attachments_digest) {
             (Some(attachments), Some(expected_digest)) => {
                 attachments.validate(&bundle)?;
+                if (stored.record.guest_session.is_some()
+                    && stored.record.isolation != IsolationClass::SharedGuestKernel)
+                    || stored.record.guest_session.as_ref() != attachments.guest_session()
+                {
+                    return Err(state_error(
+                        ErrorCode::FailedPrecondition,
+                        "load-container-state",
+                        format!(
+                            "container {id} guest-session evidence does not match its durable attachment contract"
+                        ),
+                    ));
+                }
                 if attachments.digest()? != *expected_digest {
                     return Err(state_error(
                         ErrorCode::FailedPrecondition,
@@ -785,7 +799,7 @@ impl DurableStateStore {
                     ));
                 }
             }
-            (None, None) => {}
+            (None, None) if stored.record.guest_session.is_none() => {}
             _ => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,

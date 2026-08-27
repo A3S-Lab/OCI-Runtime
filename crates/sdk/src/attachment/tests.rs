@@ -1,15 +1,18 @@
 use serde_json::json;
 
 use super::{
-    AttachmentCapabilities, AttachmentSource, CreateAttachments, NetworkAttachmentIdentity,
-    NetworkCleanup, NetworkOwnership, StorageAccessMode, StorageCleanup, StorageOwnership,
-    ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3,
+    AttachmentCapabilities, AttachmentSource, CreateAttachments, GuestSessionOwnership,
+    GuestSessionReset, NetworkAttachmentIdentity, NetworkCleanup, NetworkOwnership,
+    StorageAccessMode, StorageCleanup, StorageOwnership, ATTACHMENT_SCHEMA_V1,
+    ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3, ATTACHMENT_SCHEMA_V4,
     RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
     RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
 };
 use crate::{
-    ErrorCode, IoMode, NetworkCleanupId, NetworkInterfaceId, NetworkNamespaceId, OciBundle,
-    ProcessIo, StorageAttachmentId, TerminalSize,
+    ErrorCode, GuestSessionCapacity, GuestSessionGeneration, GuestSessionId, IoMode,
+    IsolationClass, IsolationRequest, NetworkCleanupId, NetworkInterfaceId, NetworkNamespaceId,
+    OciBundle, ProcessIo, StorageAttachmentId, TerminalSize, TrustDomainId,
+    MAX_GUEST_SESSION_CAPACITY,
 };
 
 fn bundle() -> OciBundle {
@@ -100,6 +103,12 @@ fn network_identity(interface: &str) -> NetworkAttachmentIdentity {
     )
 }
 
+fn shared_guest_isolation(domain: &str) -> IsolationRequest {
+    IsolationRequest::SharedGuestKernel {
+        trust_domain: TrustDomainId::new(domain).expect("trust-domain identity"),
+    }
+}
+
 #[test]
 fn derives_and_digest_binds_every_standard_attachment_category() {
     let bundle = bundle();
@@ -137,6 +146,7 @@ fn storage_attachments_are_v2_digest_bound_and_explicitly_caller_owned() {
     assert_eq!(v1.schema_version(), ATTACHMENT_SCHEMA_V1);
     assert!(!v1_json.contains("storage"));
     assert!(!v1_json.contains("networkAttachments"));
+    assert!(!v1_json.contains("guestSession"));
 
     let attachments = v1
         .attach_storage_mount(
@@ -401,6 +411,186 @@ fn network_and_storage_attachment_order_is_canonical_and_cumulative() {
         storage_first.digest().expect("storage-first digest"),
         network_first.digest().expect("network-first digest")
     );
+}
+
+#[test]
+fn reusable_guest_session_is_v4_digest_bound_and_cumulative() {
+    let bundle = storage_bundle();
+    let isolation = shared_guest_isolation("authorized-trust-domain-41");
+    let session_id = GuestSessionId::new("authorized-guest-session-41").expect("session ID");
+    let session_generation = GuestSessionGeneration::new(7).expect("session generation");
+    let capacity = GuestSessionCapacity::new(8).expect("session capacity");
+    let storage_id = StorageAttachmentId::new("authorized-storage-41").expect("storage identity");
+    let network_id = network_identity("authorized-interface-41");
+    let base =
+        CreateAttachments::from_bundle(&bundle, ProcessIo::default()).expect("base attachments");
+
+    let session_last = base
+        .clone()
+        .attach_storage_mount(
+            &bundle,
+            0,
+            storage_id.clone(),
+            StorageAccessMode::ReadOnly,
+            StorageOwnership::Caller,
+            StorageCleanup::DetachOnly,
+        )
+        .expect("attach storage")
+        .attach_linux_network_interface(
+            &bundle,
+            1,
+            "tap0",
+            network_id.clone(),
+            NetworkCleanup::ReleaseRuntimeNamespace,
+        )
+        .expect("attach network")
+        .attach_reusable_guest_session(
+            &bundle,
+            &isolation,
+            session_id.clone(),
+            session_generation,
+            capacity,
+            GuestSessionReset::RetainWithinTrustDomain,
+        )
+        .expect("attach guest session");
+    let session_first = base
+        .attach_reusable_guest_session(
+            &bundle,
+            &isolation,
+            session_id,
+            session_generation,
+            capacity,
+            GuestSessionReset::RetainWithinTrustDomain,
+        )
+        .expect("attach guest session first")
+        .attach_linux_network_interface(
+            &bundle,
+            1,
+            "tap0",
+            network_id,
+            NetworkCleanup::ReleaseRuntimeNamespace,
+        )
+        .expect("attach network after session")
+        .attach_storage_mount(
+            &bundle,
+            0,
+            storage_id,
+            StorageAccessMode::ReadOnly,
+            StorageOwnership::Caller,
+            StorageCleanup::DetachOnly,
+        )
+        .expect("attach storage after session");
+
+    assert_eq!(session_last, session_first);
+    assert_eq!(session_last.schema_version(), ATTACHMENT_SCHEMA_V4);
+    assert_eq!(
+        session_last.digest().expect("session-last digest"),
+        session_first.digest().expect("session-first digest")
+    );
+    let session = session_last.guest_session().expect("guest session binding");
+    assert_eq!(session.id().as_str(), "authorized-guest-session-41");
+    assert_eq!(session.generation(), session_generation);
+    assert_eq!(
+        session.trust_domain().as_str(),
+        "authorized-trust-domain-41"
+    );
+    assert_eq!(session.isolation(), IsolationClass::SharedGuestKernel);
+    assert_eq!(session.capacity(), capacity);
+    assert_eq!(session.reset(), GuestSessionReset::RetainWithinTrustDomain);
+    assert_eq!(session.ownership(), GuestSessionOwnership::Runtime);
+    session_last
+        .validate_isolation(&isolation)
+        .expect("matching shared-guest isolation");
+    AttachmentCapabilities::base_v4()
+        .require(&session_last)
+        .expect("v4 runtime accepts guest session schema");
+    assert_eq!(
+        AttachmentCapabilities::base_v3()
+            .require(&session_last)
+            .expect_err("v3 runtime must reject guest sessions")
+            .code,
+        ErrorCode::Unsupported
+    );
+}
+
+#[test]
+fn reusable_guest_session_fails_closed_on_boundary_drift() {
+    assert!(GuestSessionGeneration::new(0).is_err());
+    assert!(GuestSessionCapacity::new(0).is_err());
+    assert!(GuestSessionCapacity::new(MAX_GUEST_SESSION_CAPACITY + 1).is_err());
+
+    let bundle = storage_bundle();
+    let isolation = shared_guest_isolation("authorized-trust-domain-51");
+    let base =
+        CreateAttachments::from_bundle(&bundle, ProcessIo::default()).expect("base attachments");
+    let error = base
+        .clone()
+        .attach_reusable_guest_session(
+            &bundle,
+            &IsolationRequest::DedicatedVm,
+            GuestSessionId::new("must-not-bind-dedicated").expect("session ID"),
+            GuestSessionGeneration::new(1).expect("session generation"),
+            GuestSessionCapacity::new(2).expect("session capacity"),
+            GuestSessionReset::DestroyOnEmpty,
+        )
+        .expect_err("dedicated isolation cannot bind a reusable session");
+    assert!(error.message.contains("shared-guest-kernel"));
+
+    let attached = base
+        .attach_reusable_guest_session(
+            &bundle,
+            &isolation,
+            GuestSessionId::new("authorized-guest-session-51").expect("session ID"),
+            GuestSessionGeneration::new(3).expect("session generation"),
+            GuestSessionCapacity::new(4).expect("session capacity"),
+            GuestSessionReset::DestroyOnEmpty,
+        )
+        .expect("guest session attachment");
+    let mismatch = attached
+        .validate_isolation(&shared_guest_isolation("different-trust-domain"))
+        .expect_err("trust-domain drift must fail");
+    assert!(mismatch.message.contains("trust domain"));
+    let duplicate = attached
+        .clone()
+        .attach_reusable_guest_session(
+            &bundle,
+            &isolation,
+            GuestSessionId::new("another-session").expect("session ID"),
+            GuestSessionGeneration::new(4).expect("session generation"),
+            GuestSessionCapacity::new(4).expect("session capacity"),
+            GuestSessionReset::DestroyOnEmpty,
+        )
+        .expect_err("one create cannot bind two guest sessions");
+    assert!(duplicate.message.contains("one reusable guest session"));
+
+    let mut encoded = serde_json::to_value(&attached).expect("encode guest session attachments");
+    encoded["schemaVersion"] = json!(ATTACHMENT_SCHEMA_V3);
+    let downgraded: CreateAttachments =
+        serde_json::from_value(encoded).expect("decode downgraded manifest");
+    assert!(downgraded.validate(&bundle).is_err());
+
+    let mut encoded = serde_json::to_value(&attached).expect("encode guest session attachments");
+    encoded["guestSession"]["isolation"] = json!("dedicated-vm");
+    let drifted: CreateAttachments =
+        serde_json::from_value(encoded).expect("decode isolation drift");
+    assert!(drifted.validate(&bundle).is_err());
+
+    for (field, invalid) in [
+        ("generation", json!(0)),
+        ("capacity", json!(MAX_GUEST_SESSION_CAPACITY + 1)),
+    ] {
+        let mut encoded =
+            serde_json::to_value(&attached).expect("encode guest session attachments");
+        encoded["guestSession"][field] = invalid;
+        serde_json::from_value::<CreateAttachments>(encoded)
+            .expect_err("numeric guest-session boundary drift must fail during decoding");
+    }
+
+    let missing = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .expect("base attachments")
+        .validate_isolation(&isolation)
+        .expect_err("shared guest isolation requires an explicit session");
+    assert!(missing.message.contains("reusable guest session"));
 }
 
 #[test]

@@ -38,9 +38,11 @@ pub use a3s_oci_core::{
 pub use async_trait::async_trait;
 pub use attachment::{
     AttachmentCapabilities, AttachmentSource, ConfigurationAttachment, CreateAttachments,
-    NetworkAttachment, NetworkAttachmentIdentity, NetworkCleanup, NetworkOwnership,
-    RuntimeExtensionAttachment, StorageAccessMode, StorageAttachment, StorageCleanup,
-    StorageOwnership, ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3,
+    GuestSessionAttachment, GuestSessionCapacity, GuestSessionGeneration, GuestSessionOwnership,
+    GuestSessionReset, NetworkAttachment, NetworkAttachmentIdentity, NetworkCleanup,
+    NetworkOwnership, RuntimeExtensionAttachment, StorageAccessMode, StorageAttachment,
+    StorageCleanup, StorageOwnership, ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2,
+    ATTACHMENT_SCHEMA_V3, ATTACHMENT_SCHEMA_V4, MAX_GUEST_SESSION_CAPACITY,
     RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
     RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
 };
@@ -66,8 +68,8 @@ pub use handoff::{
     RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY, RUNTIME_BUNDLE_HANDOFF_ROOT_DIRECTORY,
 };
 pub use id::{
-    ContainerId, Generation, NetworkCleanupId, NetworkInterfaceId, NetworkNamespaceId, OperationId,
-    ProcessId, StorageAttachmentId, TrustDomainId,
+    ContainerId, Generation, GuestSessionId, NetworkCleanupId, NetworkInterfaceId,
+    NetworkNamespaceId, OperationId, ProcessId, StorageAttachmentId, TrustDomainId,
 };
 pub use image_annotation::{
     OCI_IMAGE_SPEC_COMMIT, OCI_IMAGE_SPEC_VERSION, OCI_IMAGE_STOP_SIGNAL_ANNOTATION,

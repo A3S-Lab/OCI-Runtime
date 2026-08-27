@@ -7,13 +7,14 @@
 runtime calls. The transport maps every trait method; it does not invoke the
 CLI or expose WHPX, libkrun, or native Linux driver internals.
 
-The current wire contract is protocol version 6. Version 6 adds
-`a3s.oci.attachments.v3` already-authorized network identity evidence to create
-and restore. A v3 request is rejected before dispatch when a connection
-negotiated protocol 5 or earlier. Version 5 added
-`a3s.oci.attachments.v2` already-authorized storage evidence; v2 requires
-protocol 5, while ordinary v1 create/restore requests remain valid on protocol
-3. Version 4 added exact-target file upload/download and filesystem
+The current wire contract is protocol version 7. Version 7 adds
+`a3s.oci.attachments.v4` reusable guest-session identity evidence to create and
+restore. A v4 request is rejected before dispatch when a connection negotiated
+protocol 6 or earlier. Version 6 added `a3s.oci.attachments.v3`
+already-authorized network identity evidence; v3 requires protocol 6. Version
+5 added `a3s.oci.attachments.v2` already-authorized storage evidence; v2
+requires protocol 5, while ordinary v1 create/restore requests remain valid on
+protocol 3. Version 4 added exact-target file upload/download and filesystem
 stat/mkdir/move/list/remove. Mutations carry stable `OperationContext`
 identities, payloads and recursive listings are bounded, and protocol-3 peers
 reject those file operations before dispatch. Version 3 made the complete

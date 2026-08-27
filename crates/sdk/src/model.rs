@@ -7,7 +7,7 @@ use serde::{de, Deserialize, Deserializer, Serialize};
 
 use crate::{
     AttachmentCapabilities, ContainerId, CreateAttachments, Error, ErrorCode, Generation,
-    OciBundle, OperationId, ProcessId, Result, TrustDomainId,
+    GuestSessionAttachment, OciBundle, OperationId, ProcessId, Result, TrustDomainId,
 };
 
 /// Runtime operation advertised through feature discovery.
@@ -551,6 +551,10 @@ pub struct ContainerRecord {
     pub generation: Generation,
     pub driver: DriverKind,
     pub isolation: IsolationClass,
+    /// Exact reusable guest-session incarnation, when this generation shares
+    /// a guest kernel. Legacy records and non-shared generations omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_session: Option<GuestSessionAttachment>,
     pub config_digest: String,
     /// Exact create-time attachment evidence. Legacy records created before
     /// attachment protocol v1 do not contain this field.

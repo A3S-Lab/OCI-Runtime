@@ -27,6 +27,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added `a3s.oci.attachments.v4` as the fail-closed public foundation for
+  reusable utility-VM guest sessions. Each shared-guest request binds a
+  path-safe logical session ID, positive incarnation, immutable trust domain,
+  bounded capacity, runtime ownership, and explicit empty-session reset mode.
+  SharedGuestKernel create/restore now requires that exact binding; other
+  isolation classes reject it. Protocol 7 prevents v4 downgrade, and
+  `ContainerRecord` retains the binding so restart audit and operation replay
+  reject session or generation drift. Production utility-VM drivers do not
+  advertise v4 yet; admission, pooling, reset, and leak gates remain required
+  before any driver enables reusable sessions.
 - Added `a3s.oci.attachments.v3` for already-authorized Linux network
   interfaces. Each binding carries caller-issued namespace, interface, and
   cleanup incarnation IDs plus exact OCI network-namespace and

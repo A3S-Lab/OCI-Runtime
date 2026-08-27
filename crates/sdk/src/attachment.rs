@@ -4,11 +4,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::{Error, ErrorCode, OciBundle, ProcessIo, Result, StorageAttachmentId};
+use crate::{
+    Error, ErrorCode, GuestSessionId, IsolationRequest, OciBundle, ProcessIo, Result,
+    StorageAttachmentId,
+};
 
+mod guest_session;
 mod network;
 mod storage;
 
+pub use guest_session::{
+    GuestSessionAttachment, GuestSessionCapacity, GuestSessionGeneration, GuestSessionOwnership,
+    GuestSessionReset, MAX_GUEST_SESSION_CAPACITY,
+};
 pub use network::{NetworkAttachment, NetworkAttachmentIdentity, NetworkCleanup, NetworkOwnership};
 pub use storage::{StorageAccessMode, StorageAttachment, StorageCleanup, StorageOwnership};
 
@@ -18,6 +26,8 @@ pub const ATTACHMENT_SCHEMA_V1: &str = "a3s.oci.attachments.v1";
 pub const ATTACHMENT_SCHEMA_V2: &str = "a3s.oci.attachments.v2";
 /// Network-aware create-time attachment contract.
 pub const ATTACHMENT_SCHEMA_V3: &str = "a3s.oci.attachments.v3";
+/// Reusable-guest-session-aware create-time attachment contract.
+pub const ATTACHMENT_SCHEMA_V4: &str = "a3s.oci.attachments.v4";
 /// Required extension declaring an operation-scoped transfer of bundle ownership.
 pub const RUNTIME_BUNDLE_HANDOFF_EXTENSION: &str = "dev.a3s.bundle-handoff";
 /// First bundle-handoff contract version.
@@ -191,6 +201,8 @@ pub struct CreateAttachments {
     network: Vec<AttachmentSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     network_attachments: Vec<NetworkAttachment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    guest_session: Option<GuestSessionAttachment>,
     process_io: ProcessIo,
     secrets: Vec<AttachmentSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -327,7 +339,12 @@ impl CreateAttachments {
             )));
         }
 
-        self.schema_version = ATTACHMENT_SCHEMA_V3.to_string();
+        if matches!(
+            self.schema_version.as_str(),
+            ATTACHMENT_SCHEMA_V1 | ATTACHMENT_SCHEMA_V2
+        ) {
+            self.schema_version = ATTACHMENT_SCHEMA_V3.to_string();
+        }
         self.network_attachments.push(NetworkAttachment::new(
             identity,
             ConfigurationAttachment::at(&configuration, namespace_pointer)?,
@@ -336,6 +353,44 @@ impl CreateAttachments {
         ));
         self.network_attachments.sort();
         self.validate(bundle)?;
+        Ok(self)
+    }
+
+    /// Bind this create to one exact reusable guest-session incarnation.
+    ///
+    /// The caller declares the trust domain and logical grouping; Runtime
+    /// owns the actual guest process, enforces capacity, and never reassigns
+    /// one retained incarnation across trust domains.
+    pub fn attach_reusable_guest_session(
+        mut self,
+        bundle: &OciBundle,
+        isolation: &IsolationRequest,
+        id: GuestSessionId,
+        generation: GuestSessionGeneration,
+        capacity: GuestSessionCapacity,
+        reset: GuestSessionReset,
+    ) -> Result<Self> {
+        self.validate(bundle)?;
+        if self.guest_session.is_some() {
+            return Err(invalid_attachment(
+                "one create request may bind only one reusable guest session",
+            ));
+        }
+        let IsolationRequest::SharedGuestKernel { trust_domain } = isolation else {
+            return Err(invalid_attachment(
+                "a reusable guest session requires shared-guest-kernel isolation",
+            ));
+        };
+        self.schema_version = ATTACHMENT_SCHEMA_V4.to_string();
+        self.guest_session = Some(GuestSessionAttachment::new(
+            id,
+            generation,
+            trust_domain.clone(),
+            capacity,
+            reset,
+        ));
+        self.validate(bundle)?;
+        self.validate_isolation(isolation)?;
         Ok(self)
     }
 
@@ -460,6 +515,23 @@ impl CreateAttachments {
         &self.network_attachments
     }
 
+    /// Exact reusable guest-session ownership contract, when requested.
+    #[must_use]
+    pub const fn guest_session(&self) -> Option<&GuestSessionAttachment> {
+        self.guest_session.as_ref()
+    }
+
+    /// Bind reusable-session evidence to the create or restore isolation request.
+    pub fn validate_isolation(&self, isolation: &IsolationRequest) -> Result<()> {
+        match (&self.guest_session, isolation) {
+            (Some(session), _) => session.validate_isolation(isolation),
+            (None, IsolationRequest::SharedGuestKernel { .. }) => Err(invalid_attachment(
+                "shared-guest-kernel isolation requires an explicit reusable guest session",
+            )),
+            (None, _) => Ok(()),
+        }
+    }
+
     /// SHA-256 evidence for the complete canonical attachment manifest.
     pub fn digest(&self) -> Result<String> {
         let encoded = serde_json::to_vec(self).map_err(|error| {
@@ -476,16 +548,20 @@ impl CreateAttachments {
     pub fn validate(&self, bundle: &OciBundle) -> Result<()> {
         match self.schema_version.as_str() {
             ATTACHMENT_SCHEMA_V1
-                if !self.storage.is_empty() || !self.network_attachments.is_empty() =>
+                if !self.storage.is_empty()
+                    || !self.network_attachments.is_empty()
+                    || self.guest_session.is_some() =>
             {
                 return Err(invalid_attachment(
-                    "attachment schema v1 cannot carry storage or authorized network attachments",
+                    "attachment schema v1 cannot carry storage, authorized network, or guest-session attachments",
                 ));
             }
             ATTACHMENT_SCHEMA_V1 => {}
-            ATTACHMENT_SCHEMA_V2 if !self.network_attachments.is_empty() => {
+            ATTACHMENT_SCHEMA_V2
+                if !self.network_attachments.is_empty() || self.guest_session.is_some() =>
+            {
                 return Err(invalid_attachment(
-                    "attachment schema v2 cannot carry authorized network attachments",
+                    "attachment schema v2 cannot carry authorized network or guest-session attachments",
                 ));
             }
             ATTACHMENT_SCHEMA_V2 if self.storage.is_empty() => {
@@ -494,12 +570,23 @@ impl CreateAttachments {
                 ));
             }
             ATTACHMENT_SCHEMA_V2 => {}
+            ATTACHMENT_SCHEMA_V3 if self.guest_session.is_some() => {
+                return Err(invalid_attachment(
+                    "attachment schema v3 cannot carry a reusable guest session",
+                ));
+            }
             ATTACHMENT_SCHEMA_V3 if self.network_attachments.is_empty() => {
                 return Err(invalid_attachment(
                     "attachment schema v3 requires at least one authorized network attachment",
                 ));
             }
             ATTACHMENT_SCHEMA_V3 => {}
+            ATTACHMENT_SCHEMA_V4 if self.guest_session.is_none() => {
+                return Err(invalid_attachment(
+                    "attachment schema v4 requires one reusable guest session",
+                ));
+            }
+            ATTACHMENT_SCHEMA_V4 => {}
             _ => {
                 return Err(invalid_attachment(format!(
                     "unsupported attachment schema {}",
@@ -588,6 +675,9 @@ impl CreateAttachments {
         }
         storage::validate_attachments(&self.storage, &self.mounts, &self.secrets, &configuration)?;
         network::validate_attachments(&self.network_attachments, &self.network, &configuration)?;
+        if let Some(session) = &self.guest_session {
+            session.validate()?;
+        }
         Ok(())
     }
 
@@ -654,6 +744,7 @@ impl CreateAttachments {
             mounts,
             network,
             network_attachments: Vec::new(),
+            guest_session: None,
             process_io,
             secrets: Vec::new(),
             storage: Vec::new(),
@@ -710,6 +801,20 @@ impl AttachmentCapabilities {
                 ATTACHMENT_SCHEMA_V1.to_string(),
                 ATTACHMENT_SCHEMA_V2.to_string(),
                 ATTACHMENT_SCHEMA_V3.to_string(),
+            ],
+            extensions: BTreeMap::new(),
+        }
+    }
+
+    /// Support cumulative v1-v4 manifests including reusable guest sessions.
+    #[must_use]
+    pub fn base_v4() -> Self {
+        Self {
+            schemas: vec![
+                ATTACHMENT_SCHEMA_V1.to_string(),
+                ATTACHMENT_SCHEMA_V2.to_string(),
+                ATTACHMENT_SCHEMA_V3.to_string(),
+                ATTACHMENT_SCHEMA_V4.to_string(),
             ],
             extensions: BTreeMap::new(),
         }

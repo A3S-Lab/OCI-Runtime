@@ -457,6 +457,7 @@ impl Fixture {
             generation: Generation(1),
             driver: DriverKind::LibkrunHvf,
             isolation: IsolationClass::DedicatedVm,
+            guest_session: None,
             config_digest: config_digest.to_string(),
             attachments_digest: None,
         }
