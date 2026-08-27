@@ -2533,6 +2533,7 @@ mod tests {
                 driver: DriverKind::LibkrunWhpx,
                 isolation: IsolationClass::DedicatedVm,
                 guest_session: None,
+                network_enforcement: None,
                 config_digest: self.bundle.config_digest().to_string(),
                 attachments_digest: Some(
                     CreateAttachments::from_bundle(&self.bundle, ProcessIo::default())

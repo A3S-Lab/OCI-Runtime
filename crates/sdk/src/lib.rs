@@ -39,12 +39,15 @@ pub use async_trait::async_trait;
 pub use attachment::{
     AttachmentCapabilities, AttachmentSource, ConfigurationAttachment, CreateAttachments,
     GuestSessionAttachment, GuestSessionCapacity, GuestSessionGeneration, GuestSessionOwnership,
-    GuestSessionReset, NetworkAttachment, NetworkAttachmentIdentity, NetworkCleanup,
-    NetworkOwnership, RuntimeExtensionAttachment, StorageAccessMode, StorageAttachment,
-    StorageCleanup, StorageOwnership, ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2,
-    ATTACHMENT_SCHEMA_V3, ATTACHMENT_SCHEMA_V4, MAX_GUEST_SESSION_CAPACITY,
-    RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
-    RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
+    GuestSessionReset, LocalNetworkRedirectAttachment, NetworkAttachment,
+    NetworkAttachmentIdentity, NetworkCleanup, NetworkEnforcementAttachment,
+    NetworkEnforcementCleanup, NetworkEnforcementOwnership, NetworkMechanismDigest,
+    NetworkMechanismGeneration, NetworkOwnership, RuntimeExtensionAttachment, StorageAccessMode,
+    StorageAttachment, StorageCleanup, StorageOwnership, ATTACHMENT_SCHEMA_V1,
+    ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3, ATTACHMENT_SCHEMA_V4, MAX_GUEST_SESSION_CAPACITY,
+    NETWORK_ENFORCEMENT_EXTENSION, NETWORK_ENFORCEMENT_EXTENSION_VERSION,
+    NETWORK_ENFORCEMENT_SCHEMA_V1, RUNTIME_BUNDLE_HANDOFF_EXTENSION,
+    RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION, RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
 };
 pub use bundle::{
     OciBundle, CONFIG_FILE_NAME, MAX_CONFIG_BYTES, OCI_RUNTIME_SPEC_VERSION_MAX,
@@ -68,8 +71,9 @@ pub use handoff::{
     RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY, RUNTIME_BUNDLE_HANDOFF_ROOT_DIRECTORY,
 };
 pub use id::{
-    ContainerId, Generation, GuestSessionId, NetworkCleanupId, NetworkInterfaceId,
-    NetworkNamespaceId, OperationId, ProcessId, StorageAttachmentId, TrustDomainId,
+    ContainerId, Generation, GuestSessionId, NetworkCleanupId, NetworkEnforcementId,
+    NetworkInterfaceId, NetworkNamespaceId, NetworkRedirectId, OperationId, ProcessId,
+    StorageAttachmentId, TrustDomainId,
 };
 pub use image_annotation::{
     OCI_IMAGE_SPEC_COMMIT, OCI_IMAGE_SPEC_VERSION, OCI_IMAGE_STOP_SIGNAL_ANNOTATION,

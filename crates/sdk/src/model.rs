@@ -7,7 +7,8 @@ use serde::{de, Deserialize, Deserializer, Serialize};
 
 use crate::{
     AttachmentCapabilities, ContainerId, CreateAttachments, Error, ErrorCode, Generation,
-    GuestSessionAttachment, OciBundle, OperationId, ProcessId, Result, TrustDomainId,
+    GuestSessionAttachment, NetworkEnforcementAttachment, OciBundle, OperationId, ProcessId,
+    Result, TrustDomainId,
 };
 
 /// Runtime operation advertised through feature discovery.
@@ -555,6 +556,10 @@ pub struct ContainerRecord {
     /// a guest kernel. Legacy records and non-shared generations omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_session: Option<GuestSessionAttachment>,
+    /// Exact opaque network-enforcement incarnation accepted by the driver.
+    /// Legacy records and generations without OAR-01 omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_enforcement: Option<NetworkEnforcementAttachment>,
     pub config_digest: String,
     /// Exact create-time attachment evidence. Legacy records created before
     /// attachment protocol v1 do not contain this field.

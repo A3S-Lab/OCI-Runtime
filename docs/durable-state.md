@@ -128,11 +128,13 @@ kernel-object types, and targets 3/4/5; it deliberately excludes ephemeral
 source FD numbers and inode identities so an exact retry after host restart may
 reopen equivalent resources. A v4 SharedGuestKernel record also retains the
 exact guest-session binding outside the digest for direct state and recovery
-evidence; loading requires it to equal the durable manifest. Reusing an
-`OperationId` for a different request, changing that session incarnation, or
-omitting a previously attached schema fails with `failed-precondition`. A
-matching prepared operation resumes the original generation; a matching
-completed operation returns its exact recorded response.
+evidence. An OAR-01 record likewise retains the opaque enforcement and optional
+local-redirect incarnation in `ContainerRecord::network_enforcement`. Loading
+requires each explicit field to equal the durable manifest and configuration
+annotation. Reusing an `OperationId` for a different request, changing either
+incarnation, or omitting a previously attached schema fails with
+`failed-precondition`. A matching prepared operation resumes the original
+generation; a matching completed operation returns its exact recorded response.
 
 For the non-advertised reusable Utility-VM profile, the driver additionally
 stores one owner-death report per guest-session incarnation rather than per
@@ -308,7 +310,7 @@ event entries; filename/payload identity drift; operations without an
 allocated generation; duplicate Create owners; live records below or beyond
 their generation fence; missing Create or Exec ownership; incompatible active
 claims; malformed configuration or attachment evidence, including mismatched
-v4 guest-session records; quarantine entries
+v4 guest-session or OAR-01 network-enforcement records; quarantine entries
 that disagree with their operation; one generation present both live and
 quarantined; and event records without an exact identity claim. Quarantined
 container snapshots and their process namespaces receive the same record and

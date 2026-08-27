@@ -743,6 +743,7 @@ mod tests {
             driver: DriverKind::NativeLinux,
             isolation: IsolationClass::SharedHostKernel,
             guest_session: None,
+            network_enforcement: None,
             config_digest: "0".repeat(64),
             attachments_digest: None,
         })

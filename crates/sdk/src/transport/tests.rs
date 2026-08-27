@@ -11,13 +11,16 @@ use crate::{
     FilesystemEntry, FilesystemEntryKind, FilesystemOp, FilesystemRequest, FilesystemResponse,
     Generation, GuestSessionCapacity, GuestSessionGeneration, GuestSessionId, GuestSessionReset,
     IsolationRequest, KillRequest, NetworkAttachmentIdentity, NetworkCleanup, NetworkCleanupId,
-    NetworkInterfaceId, NetworkNamespaceId, OciBundle, OciRuntimeService, OperationContext,
+    NetworkEnforcementAttachment, NetworkEnforcementId, NetworkInterfaceId, NetworkMechanismDigest,
+    NetworkMechanismGeneration, NetworkNamespaceId, OciBundle, OciRuntimeService, OperationContext,
     OperationId, ProcessIo, RestoreRequest, Result, RuntimeFeatures, RuntimeInfo, RuntimeOperation,
     StartRequest, StateRequest, StorageAccessMode, StorageAttachmentId, StorageCleanup,
-    StorageOwnership, TrustDomainId,
+    StorageOwnership, TrustDomainId, NETWORK_ENFORCEMENT_EXTENSION,
 };
 
-use super::wire::{read_frame, write_frame, ClientMessage, ServerMessage, WireRequest, WireResult};
+use super::wire::{
+    read_frame, write_frame, ClientMessage, ServerMessage, WireRequest, WireResponse, WireResult,
+};
 use super::{serve_transport_connection, RuntimeTransportClient};
 
 #[derive(Default)]
@@ -66,6 +69,7 @@ impl OciRuntimeService for EchoService {
             driver: DriverKind::NativeLinux,
             isolation: request.isolation.class(),
             guest_session: request.attachments.guest_session().cloned(),
+            network_enforcement: request.attachments.network_enforcement(&request.bundle)?,
             config_digest: request.bundle.config_digest().to_string(),
             attachments_digest: Some(request.attachments.digest()?),
         })
@@ -205,6 +209,72 @@ fn network_create_request() -> CreateRequest {
             OperationId::new("protocol-network-create").expect("operation ID"),
         ),
         id: ContainerId::new("protocol-network-container").expect("container ID"),
+        bundle,
+        isolation: IsolationRequest::SharedHostKernel,
+        attachments,
+    }
+}
+
+fn network_enforcement_create_request() -> CreateRequest {
+    let namespace =
+        NetworkNamespaceId::new("protocol-enforcement-namespace-1").expect("namespace identity");
+    let enforcement = NetworkEnforcementAttachment::new(
+        NetworkEnforcementId::new("protocol-enforcement-1").expect("enforcement identity"),
+        NetworkMechanismGeneration::new(1).expect("enforcement generation"),
+        NetworkMechanismDigest::new(format!("sha256:{}", "a".repeat(64)))
+            .expect("compiled-policy digest"),
+        namespace.clone(),
+        None,
+    );
+    let mut configuration = json!({
+        "ociVersion": "1.3.0",
+        "root": {"path": "rootfs"},
+        "process": {
+            "cwd": "/",
+            "args": ["/bin/true"],
+            "user": {"uid": 0, "gid": 0}
+        },
+        "linux": {
+            "namespaces": [{
+                "type": "network",
+                "path": "/run/a3s/network/protocol-enforcement-namespace-1"
+            }],
+            "netDevices": {"tap0": {"name": "eth0"}}
+        },
+        "annotations": {}
+    });
+    configuration["annotations"][NETWORK_ENFORCEMENT_EXTENSION] = json!(enforcement
+        .to_annotation_value()
+        .expect("network-enforcement annotation"));
+    let bundle = OciBundle::from_json(
+        std::env::current_dir()
+            .expect("current directory")
+            .join("protocol-six-network-enforcement-bundle"),
+        serde_json::to_string(&configuration).expect("network-enforcement configuration"),
+    )
+    .expect("network-enforcement bundle");
+    let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .expect("base attachments")
+        .attach_linux_network_interface(
+            &bundle,
+            0,
+            "tap0",
+            NetworkAttachmentIdentity::new(
+                namespace,
+                NetworkInterfaceId::new("protocol-enforcement-interface-1")
+                    .expect("interface identity"),
+                NetworkCleanupId::new("protocol-enforcement-cleanup-1").expect("cleanup identity"),
+            ),
+            NetworkCleanup::PreserveCallerNamespace,
+        )
+        .expect("joined network attachment")
+        .attach_network_enforcement(&bundle)
+        .expect("network-enforcement attachment");
+    CreateRequest {
+        context: OperationContext::new(
+            OperationId::new("protocol-network-enforcement-create").expect("operation ID"),
+        ),
+        id: ContainerId::new("protocol-network-enforcement-container").expect("container ID"),
         bundle,
         isolation: IsolationRequest::SharedHostKernel,
         attachments,
@@ -542,6 +612,70 @@ fn protocol_six_gates_network_create_and_restore_symmetrically() {
         attachments: create.attachments,
     };
     assert_eq!(WireRequest::Restore(restore).minimum_protocol(), 6);
+}
+
+#[tokio::test]
+async fn protocol_six_round_trips_network_enforcement_without_a_wire_bump() {
+    let create = network_enforcement_create_request();
+    let expected = create
+        .attachments
+        .network_enforcement(&create.bundle)
+        .expect("decode network-enforcement attachment")
+        .expect("network-enforcement attachment");
+    assert_eq!(WireRequest::Create(create.clone()).minimum_protocol(), 6);
+
+    let (mut client_io, server_io) = tokio::io::duplex(32 * 1024);
+    let service = Arc::new(EchoService::default());
+    let server_service: Arc<dyn OciRuntimeService> = service;
+    let server =
+        tokio::spawn(async move { serve_transport_connection(server_service, server_io).await });
+
+    write_frame(
+        &mut client_io,
+        &ClientMessage::Hello {
+            protocol_min: 6,
+            protocol_max: 6,
+        },
+    )
+    .await
+    .expect("write protocol-six hello");
+    assert_eq!(
+        read_frame::<ServerMessage>(&mut client_io)
+            .await
+            .expect("read protocol-six welcome")
+            .expect("protocol-six welcome frame"),
+        ServerMessage::Welcome { protocol: 6 }
+    );
+    write_frame(
+        &mut client_io,
+        &ClientMessage::Request {
+            protocol: 6,
+            request_id: 61,
+            request: Box::new(WireRequest::Create(create)),
+        },
+    )
+    .await
+    .expect("write protocol-six network-enforcement create");
+    let response = read_frame::<ServerMessage>(&mut client_io)
+        .await
+        .expect("read network-enforcement response")
+        .expect("network-enforcement response frame");
+    let ServerMessage::Response { result, .. } = response else {
+        panic!("expected SDK response");
+    };
+    let WireResult::Ok { response } = *result else {
+        panic!("protocol-six network enforcement must succeed");
+    };
+    let WireResponse::Create(record) = *response else {
+        panic!("expected create response");
+    };
+    assert_eq!(record.network_enforcement.as_ref(), Some(&expected));
+
+    drop(client_io);
+    server
+        .await
+        .expect("server task must join")
+        .expect("server connection must close cleanly");
 }
 
 #[tokio::test]

@@ -7,9 +7,12 @@ use a3s_oci_sdk::{
     CloseStdinRequest, ContainerId, ContainerOperationRequest, ContainerTarget, CreateAttachments,
     CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode, ExecRequest, ExitStatus,
     Generation, GuestSessionCapacity, GuestSessionGeneration, GuestSessionId, GuestSessionReset,
-    IoMode, IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId, ProcessId,
+    IoMode, IsolationRequest, KillRequest, LocalNetworkRedirectAttachment,
+    NetworkAttachmentIdentity, NetworkCleanup, NetworkCleanupId, NetworkEnforcementAttachment,
+    NetworkEnforcementId, NetworkInterfaceId, NetworkMechanismDigest, NetworkMechanismGeneration,
+    NetworkNamespaceId, NetworkRedirectId, OciBundle, OperationContext, OperationId, ProcessId,
     ProcessIo, ProcessTarget, Signal, SignalProcessRequest, StartRequest, TrustDomainId,
-    UpdateRequest, WaitProcessRequest, WriteStdinRequest,
+    UpdateRequest, WaitProcessRequest, WriteStdinRequest, NETWORK_ENFORCEMENT_EXTENSION,
 };
 use tempfile::TempDir;
 
@@ -449,6 +452,111 @@ async fn guest_session_evidence_is_durable_and_revalidated_after_reopen() {
         .expect_err("startup audit must reject guest-session evidence drift");
     assert_eq!(error.code, ErrorCode::FailedPrecondition);
     assert!(error.message.contains("guest-session evidence"));
+}
+
+#[tokio::test]
+async fn network_enforcement_evidence_is_durable_and_tamper_evident_after_reopen() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("network-enforcement-bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let root = state_root(&temporary);
+    let namespace =
+        NetworkNamespaceId::new("durable-network-namespace-41").expect("namespace identity");
+    let enforcement = NetworkEnforcementAttachment::new(
+        NetworkEnforcementId::new("durable-network-enforcement-41").expect("enforcement identity"),
+        NetworkMechanismGeneration::new(41).expect("enforcement generation"),
+        NetworkMechanismDigest::new(format!("sha256:{}", "a".repeat(64)))
+            .expect("compiled-policy digest"),
+        namespace.clone(),
+        Some(LocalNetworkRedirectAttachment::new(
+            NetworkRedirectId::new("durable-local-redirect-41").expect("redirect identity"),
+            NetworkMechanismGeneration::new(17).expect("redirect generation"),
+            NetworkMechanismDigest::new(format!("sha256:{}", "b".repeat(64)))
+                .expect("redirect digest"),
+        )),
+    );
+    let mut configuration: serde_json::Value =
+        serde_json::from_str(TEST_CONFIG).expect("base OCI configuration");
+    configuration["linux"] = serde_json::json!({
+        "namespaces": [{
+            "type": "network",
+            "path": "/run/a3s/network/durable-network-namespace-41"
+        }],
+        "netDevices": {"tap0": {"name": "eth0"}}
+    });
+    configuration["annotations"][NETWORK_ENFORCEMENT_EXTENSION] = serde_json::json!(enforcement
+        .to_annotation_value()
+        .expect("network-enforcement annotation"));
+    let mut request = create_request_with_config(
+        &bundle_directory,
+        "network-enforcement-container",
+        "network-enforcement-create",
+        &configuration.to_string(),
+    );
+    request.attachments = CreateAttachments::from_bundle(&request.bundle, ProcessIo::default())
+        .expect("base attachment contract")
+        .attach_linux_network_interface(
+            &request.bundle,
+            0,
+            "tap0",
+            NetworkAttachmentIdentity::new(
+                namespace,
+                NetworkInterfaceId::new("durable-network-interface-41")
+                    .expect("interface identity"),
+                NetworkCleanupId::new("durable-network-cleanup-41").expect("cleanup identity"),
+            ),
+            NetworkCleanup::PreserveCallerNamespace,
+        )
+        .expect("joined network attachment")
+        .attach_network_enforcement(&request.bundle)
+        .expect("network-enforcement attachment");
+
+    let store = DurableStateStore::open(&root)
+        .await
+        .expect("initialize state root");
+    store
+        .prepare_create(&request, DriverKind::LibkrunWhpx)
+        .await
+        .expect("prepare network-enforcement create");
+    let created = store
+        .complete_create(&request.context.operation_id, 4_242)
+        .await
+        .expect("complete network-enforcement create");
+    assert_eq!(created.network_enforcement.as_ref(), Some(&enforcement));
+    drop(store);
+
+    let reopened = DurableStateStore::open(&root)
+        .await
+        .expect("reopen network-enforcement state");
+    assert_eq!(
+        reopened
+            .prepare_create(&request, DriverKind::LibkrunWhpx)
+            .await
+            .expect("replay exact network-enforcement create"),
+        RecordOperationPreparation::Replayed(created)
+    );
+    drop(reopened);
+
+    let record_path = root
+        .join("containers")
+        .join(request.id.as_str())
+        .join("record.json");
+    let mut stored: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&record_path).expect("read durable network-enforcement record"),
+    )
+    .expect("decode durable network-enforcement record");
+    stored["record"]["network_enforcement"]["generation"] = serde_json::Value::from(42);
+    std::fs::write(
+        &record_path,
+        serde_json::to_vec_pretty(&stored).expect("encode tampered network-enforcement record"),
+    )
+    .expect("write tampered network-enforcement record");
+
+    let error = DurableStateStore::open(&root)
+        .await
+        .expect_err("startup audit must reject network-enforcement evidence drift");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(error.message.contains("network-enforcement evidence"));
 }
 
 #[tokio::test]

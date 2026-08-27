@@ -133,8 +133,10 @@ identifier!(ProcessId, "process ID");
 identifier!(OperationId, "operation ID");
 identifier!(GuestSessionId, "guest-session ID");
 identifier!(NetworkCleanupId, "network cleanup ID");
+identifier!(NetworkEnforcementId, "network enforcement ID");
 identifier!(NetworkInterfaceId, "network interface ID");
 identifier!(NetworkNamespaceId, "network namespace ID");
+identifier!(NetworkRedirectId, "network redirect ID");
 identifier!(StorageAttachmentId, "storage attachment ID");
 identifier!(TrustDomainId, "trust-domain ID");
 
@@ -164,8 +166,8 @@ pub struct Generation(pub u64);
 #[cfg(test)]
 mod tests {
     use super::{
-        ContainerId, Generation, GuestSessionId, NetworkCleanupId, NetworkInterfaceId,
-        NetworkNamespaceId, ProcessId, StorageAttachmentId,
+        ContainerId, Generation, GuestSessionId, NetworkCleanupId, NetworkEnforcementId,
+        NetworkInterfaceId, NetworkNamespaceId, NetworkRedirectId, ProcessId, StorageAttachmentId,
     };
 
     #[test]
@@ -224,12 +226,16 @@ mod tests {
         assert!(error.to_string().contains("guest-session ID"));
 
         for error in [
+            serde_json::from_str::<NetworkEnforcementId>(r#""../enforcement""#)
+                .expect_err("invalid serialized network enforcement ID must be rejected"),
             serde_json::from_str::<NetworkNamespaceId>(r#""../namespace""#)
                 .expect_err("invalid serialized network namespace ID must be rejected"),
             serde_json::from_str::<NetworkInterfaceId>(r#""../interface""#)
                 .expect_err("invalid serialized network interface ID must be rejected"),
             serde_json::from_str::<NetworkCleanupId>(r#""../cleanup""#)
                 .expect_err("invalid serialized network cleanup ID must be rejected"),
+            serde_json::from_str::<NetworkRedirectId>(r#""../redirect""#)
+                .expect_err("invalid serialized network redirect ID must be rejected"),
         ] {
             assert!(error.to_string().contains("network"));
         }

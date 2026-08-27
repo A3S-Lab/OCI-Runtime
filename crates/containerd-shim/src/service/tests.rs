@@ -337,6 +337,7 @@ fn task_state(bundle: &Path) -> TaskState {
             driver: DriverKind::NativeLinux,
             isolation: IsolationClass::SharedHostKernel,
             guest_session: None,
+            network_enforcement: None,
             config_digest: "0".repeat(64),
             attachments_digest: None,
         },
@@ -614,6 +615,7 @@ async fn delete_shim_replays_an_in_flight_create_intent_before_exact_cleanup() {
         driver: DriverKind::NativeLinux,
         isolation: IsolationClass::SharedHostKernel,
         guest_session: None,
+        network_enforcement: None,
         config_digest: "0".repeat(64),
         attachments_digest: None,
     };

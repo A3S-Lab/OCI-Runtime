@@ -286,6 +286,7 @@ impl DurableStateStore {
         generation: Generation,
     ) -> Result<StoredContainer> {
         let attachments_digest = request.attachments.digest()?;
+        let network_enforcement = request.attachments.network_enforcement(&request.bundle)?;
         let container_directory = self.container_directory(&request.id);
         if self.filesystem.path_exists(&container_directory).await? {
             self.filesystem
@@ -328,6 +329,7 @@ impl DurableStateStore {
             if stored.record.driver != driver
                 || stored.record.isolation != request.isolation.class()
                 || stored.record.guest_session.as_ref() != request.attachments.guest_session()
+                || stored.record.network_enforcement.as_ref() != network_enforcement.as_ref()
                 || stored.record.config_digest != request.bundle.config_digest()
                 || stored.record.attachments_digest.as_deref() != Some(attachments_digest.as_str())
                 || stored.attachments.as_ref() != Some(&request.attachments)
@@ -351,6 +353,7 @@ impl DurableStateStore {
             driver,
             isolation: request.isolation.class(),
             guest_session: request.attachments.guest_session().cloned(),
+            network_enforcement,
             config_digest: request.bundle.config_digest().to_string(),
             attachments_digest: Some(attachments_digest),
         };
@@ -777,15 +780,18 @@ impl DurableStateStore {
         match (&stored.attachments, &stored.record.attachments_digest) {
             (Some(attachments), Some(expected_digest)) => {
                 attachments.validate(&bundle)?;
+                let expected_network_enforcement = attachments.network_enforcement(&bundle)?;
                 if (stored.record.guest_session.is_some()
                     && stored.record.isolation != IsolationClass::SharedGuestKernel)
                     || stored.record.guest_session.as_ref() != attachments.guest_session()
+                    || stored.record.network_enforcement.as_ref()
+                        != expected_network_enforcement.as_ref()
                 {
                     return Err(state_error(
                         ErrorCode::FailedPrecondition,
                         "load-container-state",
                         format!(
-                            "container {id} guest-session evidence does not match its durable attachment contract"
+                            "container {id} guest-session evidence or network-enforcement evidence does not match its durable attachment contract"
                         ),
                     ));
                 }
@@ -799,7 +805,9 @@ impl DurableStateStore {
                     ));
                 }
             }
-            (None, None) if stored.record.guest_session.is_none() => {}
+            (None, None)
+                if stored.record.guest_session.is_none()
+                    && stored.record.network_enforcement.is_none() => {}
             _ => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,

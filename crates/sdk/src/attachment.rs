@@ -11,6 +11,7 @@ use crate::{
 
 mod guest_session;
 mod network;
+mod network_enforcement;
 mod storage;
 
 pub use guest_session::{
@@ -18,6 +19,12 @@ pub use guest_session::{
     GuestSessionReset, MAX_GUEST_SESSION_CAPACITY,
 };
 pub use network::{NetworkAttachment, NetworkAttachmentIdentity, NetworkCleanup, NetworkOwnership};
+pub use network_enforcement::{
+    LocalNetworkRedirectAttachment, NetworkEnforcementAttachment, NetworkEnforcementCleanup,
+    NetworkEnforcementOwnership, NetworkMechanismDigest, NetworkMechanismGeneration,
+    NETWORK_ENFORCEMENT_EXTENSION, NETWORK_ENFORCEMENT_EXTENSION_VERSION,
+    NETWORK_ENFORCEMENT_SCHEMA_V1,
+};
 pub use storage::{StorageAccessMode, StorageAttachment, StorageCleanup, StorageOwnership};
 
 /// First public create-time attachment contract understood by A3S OCI Runtime.
@@ -356,6 +363,47 @@ impl CreateAttachments {
         Ok(self)
     }
 
+    /// Bind an opaque caller-compiled policy and optional local redirect to the exact namespace.
+    ///
+    /// Rule contents, hostnames, addresses, credentials, and route decisions
+    /// remain outside Runtime. Version 1 requires every configured Linux
+    /// network interface to use one joined, caller-owned namespace whose
+    /// mechanism survives container cleanup.
+    pub fn attach_network_enforcement(mut self, bundle: &OciBundle) -> Result<Self> {
+        self.validate(bundle)?;
+        if self.extensions.contains_key(NETWORK_ENFORCEMENT_EXTENSION) {
+            return Err(invalid_attachment(
+                "network enforcement extension is declared more than once",
+            ));
+        }
+        let configuration = decode_configuration(bundle)?;
+        let encoded = configuration
+            .pointer(&format!("/annotations/{NETWORK_ENFORCEMENT_EXTENSION}"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                invalid_attachment(format!(
+                    "network enforcement requires annotation {NETWORK_ENFORCEMENT_EXTENSION}"
+                ))
+            })?;
+        let attachment = NetworkEnforcementAttachment::from_annotation_value(encoded)?;
+        attachment.validate_bindings(&self.network_attachments, &self.network)?;
+        let extension = RuntimeExtensionAttachment::from_annotation(
+            &configuration,
+            NETWORK_ENFORCEMENT_EXTENSION,
+            NETWORK_ENFORCEMENT_EXTENSION_VERSION,
+            true,
+        )?;
+        self.extensions
+            .insert(NETWORK_ENFORCEMENT_EXTENSION.to_string(), extension);
+        insert_unique_source(
+            &mut self.network,
+            AttachmentSource::extension(NETWORK_ENFORCEMENT_EXTENSION),
+            "network",
+        )?;
+        self.validate(bundle)?;
+        Ok(self)
+    }
+
     /// Bind this create to one exact reusable guest-session incarnation.
     ///
     /// The caller declares the trust domain and logical grouping; Runtime
@@ -521,6 +569,21 @@ impl CreateAttachments {
         self.guest_session.as_ref()
     }
 
+    /// Decode the exact OAR-01 enforcement binding, when requested.
+    pub fn network_enforcement(
+        &self,
+        bundle: &OciBundle,
+    ) -> Result<Option<NetworkEnforcementAttachment>> {
+        let configuration = decode_configuration(bundle)?;
+        network_enforcement::decode_extension(
+            &self.extensions,
+            &self.network,
+            &self.secrets,
+            &self.network_attachments,
+            &configuration,
+        )
+    }
+
     /// Bind reusable-session evidence to the create or restore isolation request.
     pub fn validate_isolation(&self, isolation: &IsolationRequest) -> Result<()> {
         match (&self.guest_session, isolation) {
@@ -675,6 +738,13 @@ impl CreateAttachments {
         }
         storage::validate_attachments(&self.storage, &self.mounts, &self.secrets, &configuration)?;
         network::validate_attachments(&self.network_attachments, &self.network, &configuration)?;
+        network_enforcement::decode_extension(
+            &self.extensions,
+            &self.network,
+            &self.secrets,
+            &self.network_attachments,
+            &configuration,
+        )?;
         if let Some(session) = &self.guest_session {
             session.validate()?;
         }

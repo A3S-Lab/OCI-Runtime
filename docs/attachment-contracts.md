@@ -19,6 +19,7 @@ The contract deliberately separates product policy from runtime mechanism:
 | Mounts | One ordered descriptor for every `/mounts/<index>` value | Named-volume policy, snapshot/commit ownership |
 | Networking | Exact OCI network namespace/device descriptors plus explicit extension references | Network objects, IPAM, DNS, aliases, publication policy |
 | Authorized networking (v3) | Caller-issued namespace, interface, and cleanup IDs bound to exact OCI namespace and `linux.netDevices` descriptors | IPAM, DNS, routes, aliases, network policy, and backing-network deletion |
+| Network enforcement extension v1 | Opaque enforcement and optional local-redirect IDs, positive generations, lowercase SHA-256 mechanism digests, and one exact caller-owned joined namespace | Hostnames, addresses, rules, routes, credentials, tenant identity, destination choice, and mechanism mutation |
 | Reusable guest session (v4) | Logical session ID, positive incarnation, immutable trust domain, bounded capacity, runtime ownership, and explicit empty-session reset mode | Placement policy, tenant identity, warm-pool sizing, VM handles, credentials, and cross-domain reuse authority |
 | Process I/O | Complete `ProcessIo` modes and initial terminal size | Box log retention, indexing, redaction, search policy |
 | Secrets | A classified mount index or declared runtime mechanism | Secret name, value, authorization decision, materialization credential |
@@ -201,6 +202,44 @@ must pass destructive real-host v2/v3 restart, cleanup, replay, read-only, and
 soak qualification before advertising either cumulative profile. HVF remains
 v1 until it has equivalent storage and NIC transports and evidence.
 
+## Opaque network enforcement and local redirect
+
+OAR-01 uses the required `dev.a3s.network.enforcement` extension version 1 on
+top of attachment schema v3. It does not introduce attachment schema v5 or a
+new SDK transport version. A caller places the canonical JSON returned by
+`NetworkEnforcementAttachment::to_annotation_value` in the OCI annotation
+whose key is the extension name, binds every configured network interface with
+`NetworkCleanup::PreserveCallerNamespace`, and then calls
+`attach_network_enforcement`.
+
+The typed value contains only an opaque enforcement ID, a positive generation,
+the lowercase `sha256:` digest of the caller-compiled policy artifact, and the
+exact `NetworkNamespaceId` already present in the v3 binding. An optional
+`LocalNetworkRedirectAttachment` adds only an opaque redirect ID, positive
+generation, and mechanism digest. Both resources are caller-owned and use
+`PreserveCallerMechanism`; Runtime cannot mutate or delete them.
+
+Version 1 requires one joined OCI network namespace with a non-empty `path`,
+requires every configured OCI network descriptor to be covered exactly, and
+requires all authorized interfaces to bind that same namespace. The annotation
+rejects unknown fields, so hostname rules, IP ranges, DNS data, endpoints,
+route decisions, credentials, or tenant metadata cannot cross this boundary.
+The caller, currently A3S Box, remains the policy compiler and allocation
+authority.
+
+The Host independently negotiates the exact required extension version, passes
+the immutable attachment contract to the selected driver, and records the
+decoded evidence in `ContainerRecord::network_enforcement`. Restart validation
+requires that field, the durable manifest, annotation, configuration snapshot,
+and attachment digest to agree exactly. Reusing an operation ID with a changed
+generation or digest fails closed.
+
+No production driver advertises `dev.a3s.network.enforcement@1` yet. The public
+contract and deterministic Host gates are available for consumer integration,
+but a caller must treat missing per-driver extension support as unavailable.
+Advertisement requires a driver-specific namespace attachment implementation
+plus retained real-host restart, cleanup, redirect, and enforcement evidence.
+
 ## Reusable guest-session identity
 
 A caller upgrades a derived manifest to v4 only for SharedGuestKernel
@@ -333,12 +372,14 @@ The runtime stores the exact manifest with the container record and returns
 its SHA-256 digest in `ContainerRecord::attachments_digest`. On reopen it
 revalidates all pointers against the immutable configuration snapshot and
 checks the stored digest before returning state or resuming an operation. A v4
-record also retains `ContainerRecord::guest_session` and requires it to equal
-the manifest binding exactly. Changing I/O, classification, storage
+record also retains `ContainerRecord::guest_session`; an OAR-01 record retains
+`ContainerRecord::network_enforcement`. Each explicit field must equal its
+manifest and annotation binding exactly. Changing I/O, classification, storage
 identity/access/lifetime, network namespace/interface/cleanup identity,
-guest-session identity/generation/trust domain/capacity/reset, extension
-version, or referenced configuration while reusing an operation ID therefore
-fails as a different request.
+enforcement or redirect identity/generation/digest, guest-session
+identity/generation/trust domain/capacity/reset, extension version, or
+referenced configuration while reusing an operation ID therefore fails as a
+different request.
 
 Records created before protocol 3 have neither a stored manifest nor an
 attachment digest. The runtime retains that explicit legacy state for old

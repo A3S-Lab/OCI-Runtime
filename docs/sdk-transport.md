@@ -14,7 +14,10 @@ protocol 6 or earlier. Version 6 added `a3s.oci.attachments.v3`
 already-authorized network identity evidence; v3 requires protocol 6. Version
 5 added `a3s.oci.attachments.v2` already-authorized storage evidence; v2
 requires protocol 5, while ordinary v1 create/restore requests remain valid on
-protocol 3. Version 4 added exact-target file upload/download and filesystem
+protocol 3. The required `dev.a3s.network.enforcement@1` extension reuses the
+existing extension wire and per-driver negotiation; because it requires v3
+network bindings, protocol 6 is its minimum and no protocol-8 message is
+introduced. Version 4 added exact-target file upload/download and filesystem
 stat/mkdir/move/list/remove. Mutations carry stable `OperationContext`
 identities, payloads and recursive listings are bounded, and protocol-3 peers
 reject those file operations before dispatch. Version 3 made the complete
@@ -107,6 +110,13 @@ to an explicitly empty catalog and fails the same negotiation instead of
 falling back to the flat union. No new mutation route or wire message is
 introduced by this discovery schema, so protocol-3 and protocol-4 framing stay
 unchanged.
+
+The OAR-01 network-enforcement contract must be requested as the exact required
+extension version in addition to attachment schema v3. Schema support alone
+does not imply enforcement support, and no production driver currently
+advertises the extension. The Host retains the decoded opaque incarnation in
+`ContainerRecord::network_enforcement`; it never transports policy rules,
+hostnames, addresses, routes, endpoints, credentials, or tenant metadata.
 
 ## A3S Box Client
 

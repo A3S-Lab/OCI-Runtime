@@ -102,7 +102,7 @@ and `experimental` or `supported` readiness.
 
 | Layer | Implemented boundary |
 | --- | --- |
-| Public SDK | Async `Send + Sync` Rust contract using official OCI `Spec`, `Process`, `LinuxResources`, `State`, and `Features` types; typed IDs, generations, operation contexts, exact-artifact per-driver capability negotiation, versioned attachments including already-authorized storage, Linux network interfaces, and reusable guest-session identity, I/O, filesystem sessions, stats, events, and stable errors |
+| Public SDK | Async `Send + Sync` Rust contract using official OCI `Spec`, `Process`, `LinuxResources`, `State`, and `Features` types; typed IDs, generations, operation contexts, exact-artifact per-driver capability negotiation, versioned attachments including already-authorized storage, Linux network interfaces, opaque network-enforcement/local-redirect evidence, and reusable guest-session identity, I/O, filesystem sessions, stats, events, and stable errors |
 | Validation and transport | OCI 1.0.0–1.3.0 schema and semantic validation with forward-compatible unknown-property retention and ignore semantics, an exact 79-item common configuration and 278-requirement owner gate, an exhaustive 19-case pinned upstream JSON Schema suite, four launch-profile configuration/State/Features matrices, immutable configuration and attachment SHA-256 binding, and bounded protocol-7 local IPC over Unix sockets or protected Windows named pipes |
 | Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals including File upload and Filesystem mkdir/move/remove, replay, generation fencing, startup recovery, startup-wide cross-journal orphan auditing, quarantine, capability-rooted state traversal with Unix mount-identity fencing, post-commit replay-record acknowledgement for local and utility-VM drivers, sorted list, ordered events, and same-UID multi-container owners for Native Linux and Apple Silicon HVF |
 | Shared Linux executor | Namespace create/join, declared-root directory admission before namespace entry, `pivot_root`, ordered OCI mounts with root-relative legacy destinations and optional-field handling, the complete OCI 1.3 Linux mount-option control registry, exact init/exec argv, environment, cwd, terminal default, UID/GID, supplementary groups, and umask, conditional `/dev/fd`, `/dev/stdin`, `/dev/stdout`, and `/dev/stderr` links after mount processing, OCI hooks, user mappings, exact absolute and stable relative `cgroupsPath` resolution plus a private generation-fenced path on omission, complete cgroup v2 CPU shares/quota/burst/period/cpuset/idle mapping with explicit cgroup v1 realtime rejection, exact memory limit/reservation/swap and PIDs create/update mapping with zero preserved and OCI `-1` encoded as `max`, finite total-swap validation, complete cgroup v2 Block I/O default/per-device weight and read/write BPS/IOPS throttle mapping with zero-rate clearing, keyed read-back, partial-update preservation, reverse rollback, and explicit leaf-weight rejection, dynamic HugeTLB usage/reservation controls, keyed RDMA HCA handle/object limits, bounded OCI 1.3 unified control-file writes with dynamic controller enablement, kernel-defined formatting, typed-file conflict rejection, readable no-op/rollback snapshots, and write-only control support, typed rejection of cgroup v1-only memory and network `net_cls`/`net_prio` controls, all five capability sets with kernel read-back, exact `no_new_privileges` verification, all 16 OCI rlimit types with exact kernel read-back, `oomScoreAdj`, scheduler policy, I/O priority, exact `LINUX`/`LINUX32` init personality, all seven OCI NUMA memory-policy modes and three flags with kernel read-back, parent-owned Intel RDT CLOS, ordered schemata, process assignment, monitoring, and owner-death cleanup, exec CPU affinity applied around cgroup membership, transactional namespaced sysctls with descriptor-confined apply, read-back, and rollback, exact rootful block/character/FIFO nodes, the six default devices, `/dev/ptmx`, PTY-backed `/dev/console`, durable placeholder cleanup, immutable declared/default device inventory BPF with ordered resource-rule narrowing, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY with OCI `consoleSize` initialization, a bounded Host-acknowledged mutation replay journal, parent-bound launch/session helpers, PID-start-time-bound owner-death tombstones, descriptor-confined file/filesystem sessions, pause/resume, resource updates, normalized CPU/memory/PID/block-I/O stats, and scoped cleanup for the qualified profile |
@@ -263,6 +263,15 @@ requires an exact target interface name rather than `%d`, binds all three
 identities into durable replay evidence, and distinguishes runtime-created
 namespace release from preservation of a joined caller namespace. It never
 receives or decides IPAM, DNS, routes, aliases, or network policy.
+
+The required `dev.a3s.network.enforcement@1` extension adds an opaque,
+generation- and SHA-256-bound caller enforcement identity plus an optional
+node-local redirect identity to one exact joined caller namespace. Its closed
+schema cannot carry hostname/IP rules, routes, endpoints, credentials, tenant
+metadata, or policy decisions. The Host negotiates it independently, passes it
+unchanged to the driver, and revalidates exact `ContainerRecord` evidence after
+restart. No production driver advertises the extension until its real-host
+namespace attachment, cleanup, redirect, and enforcement gates pass.
 
 The public `a3s.oci.attachments.v4` profile establishes the reusable
 guest-session boundary. A SharedGuestKernel create or restore must bind one
@@ -904,6 +913,17 @@ sessions are rejected. KVM nevertheless continues to advertise v1 until its
 cumulative v2/v3 destructive real-host restart, cleanup, replay, and soak
 qualification passes. HVF remains v1 until it gains equivalent independent
 transports and evidence.
+
+`dev.a3s.network.enforcement@1` is an independently negotiated required
+extension over v3. It binds one opaque caller-compiled enforcement incarnation
+and optional opaque local-redirect incarnation to the exact joined,
+caller-owned namespace, using only positive generations and lowercase SHA-256
+digests. Runtime neither receives policy contents nor gains mechanism cleanup
+authority. The exact decoded binding is retained in
+`ContainerRecord::network_enforcement` and checked against the durable manifest
+and configuration snapshot after reopen. The SDK/Host contract is implemented;
+production drivers continue to omit this capability pending driver-specific
+real-host qualification.
 
 `a3s.oci.attachments.v4` binds a SharedGuestKernel request to one reusable
 guest-session ID and positive incarnation, the request's immutable trust

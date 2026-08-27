@@ -530,6 +530,7 @@ impl Fixture {
             driver: DriverKind::LibkrunHvf,
             isolation: IsolationClass::DedicatedVm,
             guest_session: None,
+            network_enforcement: None,
             config_digest: config_digest.to_string(),
             attachments_digest: None,
         }

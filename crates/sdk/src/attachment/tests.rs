@@ -2,17 +2,20 @@ use serde_json::json;
 
 use super::{
     AttachmentCapabilities, AttachmentSource, CreateAttachments, GuestSessionOwnership,
-    GuestSessionReset, NetworkAttachmentIdentity, NetworkCleanup, NetworkOwnership,
-    StorageAccessMode, StorageCleanup, StorageOwnership, ATTACHMENT_SCHEMA_V1,
-    ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3, ATTACHMENT_SCHEMA_V4,
+    GuestSessionReset, LocalNetworkRedirectAttachment, NetworkAttachmentIdentity, NetworkCleanup,
+    NetworkEnforcementAttachment, NetworkEnforcementCleanup, NetworkEnforcementOwnership,
+    NetworkMechanismDigest, NetworkMechanismGeneration, NetworkOwnership, StorageAccessMode,
+    StorageCleanup, StorageOwnership, ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2,
+    ATTACHMENT_SCHEMA_V3, ATTACHMENT_SCHEMA_V4, NETWORK_ENFORCEMENT_EXTENSION,
+    NETWORK_ENFORCEMENT_EXTENSION_VERSION, NETWORK_ENFORCEMENT_SCHEMA_V1,
     RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
     RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
 };
 use crate::{
     ErrorCode, GuestSessionCapacity, GuestSessionGeneration, GuestSessionId, IoMode,
-    IsolationClass, IsolationRequest, NetworkCleanupId, NetworkInterfaceId, NetworkNamespaceId,
-    OciBundle, ProcessIo, StorageAttachmentId, TerminalSize, TrustDomainId,
-    MAX_GUEST_SESSION_CAPACITY,
+    IsolationClass, IsolationRequest, NetworkCleanupId, NetworkEnforcementId, NetworkInterfaceId,
+    NetworkNamespaceId, NetworkRedirectId, OciBundle, ProcessIo, StorageAttachmentId, TerminalSize,
+    TrustDomainId, MAX_GUEST_SESSION_CAPACITY,
 };
 
 fn bundle() -> OciBundle {
@@ -95,12 +98,220 @@ fn multi_interface_network_bundle() -> OciBundle {
     .expect("network attachment fixture bundle")
 }
 
+fn network_enforcement_attachment(namespace: &str) -> NetworkEnforcementAttachment {
+    NetworkEnforcementAttachment::new(
+        NetworkEnforcementId::new("compiled-egress-7").expect("enforcement identity"),
+        NetworkMechanismGeneration::new(7).expect("enforcement generation"),
+        NetworkMechanismDigest::new(format!("sha256:{}", "a".repeat(64))).expect("policy digest"),
+        NetworkNamespaceId::new(namespace).expect("namespace identity"),
+        Some(LocalNetworkRedirectAttachment::new(
+            NetworkRedirectId::new("local-redirect-11").expect("redirect identity"),
+            NetworkMechanismGeneration::new(11).expect("redirect generation"),
+            NetworkMechanismDigest::new(format!("sha256:{}", "b".repeat(64)))
+                .expect("redirect digest"),
+        )),
+    )
+}
+
+fn network_enforcement_bundle() -> OciBundle {
+    let mut configuration: serde_json::Value =
+        serde_json::from_str(bundle().config_json()).expect("base configuration");
+    configuration["linux"]["namespaces"][1]["path"] =
+        json!("/run/a3s/network/authorized-namespace-7");
+    configuration["annotations"][NETWORK_ENFORCEMENT_EXTENSION] = json!(
+        network_enforcement_attachment("authorized-network-namespace-7")
+            .to_annotation_value()
+            .expect("network enforcement annotation")
+    );
+    OciBundle::from_json(
+        std::env::temp_dir().join("a3s-network-enforcement-bundle"),
+        serde_json::to_string(&configuration).expect("network enforcement configuration"),
+    )
+    .expect("network enforcement bundle")
+}
+
+fn network_enforcement_attachments(bundle: &OciBundle) -> CreateAttachments {
+    CreateAttachments::from_bundle(bundle, ProcessIo::default())
+        .expect("base attachments")
+        .attach_linux_network_interface(
+            bundle,
+            1,
+            "tap0",
+            network_identity("authorized-network-interface-7"),
+            NetworkCleanup::PreserveCallerNamespace,
+        )
+        .expect("authorized joined network")
+        .attach_network_enforcement(bundle)
+        .expect("network enforcement")
+}
+
 fn network_identity(interface: &str) -> NetworkAttachmentIdentity {
     NetworkAttachmentIdentity::new(
         NetworkNamespaceId::new("authorized-network-namespace-7").expect("namespace identity"),
         NetworkInterfaceId::new(interface).expect("interface identity"),
         NetworkCleanupId::new("authorized-network-cleanup-7").expect("cleanup identity"),
     )
+}
+
+#[test]
+fn network_enforcement_is_opaque_digest_bound_and_independently_negotiated() {
+    let bundle = network_enforcement_bundle();
+    let attachments = network_enforcement_attachments(&bundle);
+    attachments
+        .validate(&bundle)
+        .expect("valid network enforcement attachments");
+
+    assert_eq!(attachments.schema_version(), ATTACHMENT_SCHEMA_V3);
+    let enforcement = attachments
+        .network_enforcement(&bundle)
+        .expect("decode network enforcement")
+        .expect("network enforcement attachment");
+    assert_eq!(enforcement.schema_version(), NETWORK_ENFORCEMENT_SCHEMA_V1);
+    assert_eq!(enforcement.identity().as_str(), "compiled-egress-7");
+    assert_eq!(enforcement.generation().get(), 7);
+    assert_eq!(
+        enforcement.namespace().as_str(),
+        "authorized-network-namespace-7"
+    );
+    assert_eq!(enforcement.ownership(), NetworkEnforcementOwnership::Caller);
+    assert_eq!(
+        enforcement.cleanup(),
+        NetworkEnforcementCleanup::PreserveCallerMechanism
+    );
+    let redirect = enforcement.local_redirect().expect("local redirect");
+    assert_eq!(redirect.identity().as_str(), "local-redirect-11");
+    assert_eq!(redirect.generation().get(), 11);
+
+    let encoded = enforcement
+        .to_annotation_value()
+        .expect("encode network enforcement");
+    for forbidden in ["hostname", "address", "credential", "allow", "deny", "rule"] {
+        assert!(!encoded.contains(forbidden), "{forbidden}");
+    }
+
+    let unsupported = AttachmentCapabilities::base_v3()
+        .require(&attachments)
+        .expect_err("extension must be independently capability gated");
+    assert_eq!(unsupported.code, ErrorCode::Unsupported);
+    AttachmentCapabilities::base_v3()
+        .with_extension(
+            NETWORK_ENFORCEMENT_EXTENSION,
+            vec![NETWORK_ENFORCEMENT_EXTENSION_VERSION],
+        )
+        .expect("network enforcement capability")
+        .require(&attachments)
+        .expect("independently supported network enforcement");
+}
+
+#[test]
+fn network_enforcement_rejects_unbound_or_mutable_namespace_mechanisms() {
+    let bundle = network_enforcement_bundle();
+    let base = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .expect("base attachments")
+        .attach_linux_network_interface(
+            &bundle,
+            1,
+            "tap0",
+            network_identity("authorized-network-interface-7"),
+            NetworkCleanup::PreserveCallerNamespace,
+        )
+        .expect("authorized joined network");
+
+    let advisory = base
+        .clone()
+        .add_extension_from_annotation(
+            &bundle,
+            NETWORK_ENFORCEMENT_EXTENSION,
+            NETWORK_ENFORCEMENT_EXTENSION_VERSION,
+            false,
+        )
+        .expect_err("known network enforcement cannot be advisory");
+    assert_eq!(advisory.code, ErrorCode::InvalidArgument);
+
+    let mut configuration: serde_json::Value =
+        serde_json::from_str(bundle.config_json()).expect("network enforcement configuration");
+    configuration["annotations"][NETWORK_ENFORCEMENT_EXTENSION] =
+        json!(network_enforcement_attachment("another-network-namespace")
+            .to_annotation_value()
+            .expect("mismatched annotation"));
+    let mismatched = OciBundle::from_json(
+        std::env::temp_dir().join("a3s-network-enforcement-mismatch"),
+        configuration.to_string(),
+    )
+    .expect("mismatched network enforcement bundle");
+    let error = CreateAttachments::from_bundle(&mismatched, ProcessIo::default())
+        .expect("mismatched base attachments")
+        .attach_linux_network_interface(
+            &mismatched,
+            1,
+            "tap0",
+            network_identity("authorized-network-interface-7"),
+            NetworkCleanup::PreserveCallerNamespace,
+        )
+        .expect("authorized joined network")
+        .attach_network_enforcement(&mismatched)
+        .expect_err("namespace identity drift must fail closed");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+
+    let mut configuration: serde_json::Value =
+        serde_json::from_str(bundle.config_json()).expect("network enforcement configuration");
+    configuration["linux"]["namespaces"][1]
+        .as_object_mut()
+        .expect("network namespace")
+        .remove("path");
+    let runtime_owned = OciBundle::from_json(
+        std::env::temp_dir().join("a3s-network-enforcement-runtime-namespace"),
+        configuration.to_string(),
+    )
+    .expect("runtime namespace bundle");
+    let error = CreateAttachments::from_bundle(&runtime_owned, ProcessIo::default())
+        .expect("runtime namespace attachments")
+        .attach_linux_network_interface(
+            &runtime_owned,
+            1,
+            "tap0",
+            network_identity("authorized-network-interface-7"),
+            NetworkCleanup::ReleaseRuntimeNamespace,
+        )
+        .expect("runtime-owned namespace attachment")
+        .attach_network_enforcement(&runtime_owned)
+        .expect_err("runtime-owned namespace cannot stand in for caller enforcement");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+}
+
+#[test]
+fn network_enforcement_wire_values_reject_tampering_and_policy_content() {
+    let attachment = network_enforcement_attachment("authorized-network-namespace-7");
+    let encoded = attachment
+        .to_annotation_value()
+        .expect("network enforcement annotation");
+
+    for (pointer, replacement) in [
+        ("/generation", json!(0)),
+        (
+            "/compiledPolicyDigest",
+            json!(format!("sha256:{}", "A".repeat(64))),
+        ),
+        ("/localRedirect/generation", json!(0)),
+    ] {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encoded).expect("network enforcement JSON");
+        *value.pointer_mut(pointer).expect("mutated field") = replacement;
+        assert!(NetworkEnforcementAttachment::from_annotation_value(&value.to_string()).is_err());
+    }
+
+    let mut value: serde_json::Value =
+        serde_json::from_str(&encoded).expect("network enforcement JSON");
+    value["hostnameRules"] = json!(["example.com"]);
+    let error = NetworkEnforcementAttachment::from_annotation_value(&value.to_string())
+        .expect_err("policy content must not enter the attachment contract");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+
+    let non_canonical = format!(" {encoded}");
+    let error = NetworkEnforcementAttachment::from_annotation_value(&non_canonical)
+        .expect_err("wire evidence must use one canonical representation");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("canonical"));
 }
 
 fn shared_guest_isolation(domain: &str) -> IsolationRequest {

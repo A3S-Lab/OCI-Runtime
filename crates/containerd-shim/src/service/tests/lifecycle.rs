@@ -691,6 +691,7 @@ async fn durable_new_task_generation_consumes_stale_task_delete_receipt() {
         driver: DriverKind::NativeLinux,
         isolation: IsolationClass::SharedHostKernel,
         guest_session: None,
+        network_enforcement: None,
         config_digest: "0".repeat(64),
         attachments_digest: None,
     };
