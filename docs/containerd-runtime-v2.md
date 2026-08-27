@@ -144,7 +144,12 @@ a3s-oci-runtime-v<version>-linux-<architecture>/
 
 The archive entry is installed at
 `/usr/local/bin/containerd-shim-a3s-oci-v2`; it is not renamed or wrapped.
-The release workflow includes the complete archive in `SHA256SUMS`.
+Linux x86_64 and arm64 archives build the CLI, agent, and shim for the exact
+musl target with Rust's bundled linker. Packaging rejects an executable with
+an ELF interpreter or `NEEDED` dependency, so these entries do not inherit a
+host glibc requirement. Static packaging is a portability property, not a
+driver or containerd support claim. The release workflow includes the complete
+archive in `SHA256SUMS`.
 
 The shim does not execute a driver directly. It connects to the long-lived
 A3S OCI host service through the SDK endpoint. The default Unix socket is:

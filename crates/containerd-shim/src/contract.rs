@@ -518,7 +518,7 @@ mod tests {
         let readme = include_str!("../../../README.md");
         let documentation = include_str!("../../../docs/containerd-runtime-v2.md");
         let binary_declaration = format!("name = \"{SHIM_BINARY}\"");
-        let release_binary = format!("target/release/{SHIM_BINARY}");
+        let release_binary = format!("$release/{SHIM_BINARY}");
         let install_path = format!("{SHIM_INSTALL_DIRECTORY}/{SHIM_BINARY}");
 
         assert!(cargo_manifest.contains(&binary_declaration));
@@ -531,7 +531,9 @@ mod tests {
         ] {
             assert!(!cargo_manifest.contains(forbidden_dependency));
         }
-        assert!(release_workflow.contains("-p a3s-oci-containerd-shim"));
+        assert!(release_workflow.contains("a3s-oci-containerd-shim"));
+        assert!(release_workflow.contains("build-static-musl.sh"));
+        assert!(release_workflow.contains("verify-static-elf.sh"));
         assert!(release_workflow.contains(&release_binary));
         assert!(release_workflow.contains("docs/containerd-runtime-v2.md"));
         assert!(release_workflow.contains("compat/containerd-runtime-v2.json"));

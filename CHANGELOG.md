@@ -27,6 +27,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added a canonical machine-readable containerd runtime-v2 compatibility
+  record that is schema-checked against the code-owned support matrix and
+  retains exact qualification environments, protocol ranges, digests,
+  durations, and cleanup evidence without promoting observation-only runs.
+  Tagged Linux x86_64 and arm64 host archives now build the CLI, agent, and
+  containerd shim against musl with the bundled Rust linker and reject ELF
+  interpreters or dynamic dependencies before packaging the record.
 - Bridged containerd runtime-v2 `Task.Checkpoint` and checkpoint-backed
   `Task.Create` into the SDK checkpoint and restore contracts. The shim now
   commits a digest-verified immutable checkpoint package, restores into a

@@ -50,26 +50,42 @@ jobs:
         include:
           - name: linux-x86_64
             os: ubuntu-latest
+            rust_target: x86_64-unknown-linux-musl
           - name: linux-aarch64
             os: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-musl
           - name: macos-aarch64
             os: macos-14
+            rust_target: aarch64-apple-darwin
           - name: windows-x86_64
             os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.name }}
       - name: Build Linux host runtime
         if: runner.os == 'Linux'
         run: >-
-          cargo build --release
-          -p a3s-oci-cli
-          -p a3s-oci-agent
-          -p a3s-oci-containerd-shim
+          .github/scripts/build-static-musl.sh
+          "${{ matrix.rust_target }}"
+          a3s-oci-cli
+          a3s-oci-agent
+          a3s-oci-containerd-shim
+      - name: Verify static Linux host runtime
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          release="target/${{ matrix.rust_target }}/release"
+          .github/scripts/verify-static-elf.sh \
+            "$release/a3s-oci" \
+            "$release/a3s-oci-agent" \
+            "$release/containerd-shim-a3s-oci-v2"
       - name: Build macOS or Windows host runtime
         if: runner.os != 'Linux'
         run: cargo build --release -p a3s-oci-cli -p a3s-oci-krun
@@ -91,9 +107,10 @@ jobs:
           cp README.md CHANGELOG.md LICENSE "$package/"
           case "${{ runner.os }}" in
             Linux)
-              cp target/release/a3s-oci \
-                target/release/a3s-oci-agent \
-                target/release/containerd-shim-a3s-oci-v2 \
+              release="target/${{ matrix.rust_target }}/release"
+              cp "$release/a3s-oci" \
+                "$release/a3s-oci-agent" \
+                "$release/containerd-shim-a3s-oci-v2" \
                 "$package/"
               mkdir -p "$package/docs" "$package/compat"
               cp docs/containerd-runtime-v2.md "$package/docs/"
@@ -134,17 +151,11 @@ jobs:
         run: |
           package="a3s-oci-runtime-${GITHUB_REF_NAME}-guest-agents"
           mkdir -p "$package"
+          .github/scripts/verify-static-elf.sh \
+            target/x86_64-unknown-linux-musl/release/a3s-oci-agent \
+            target/aarch64-unknown-linux-musl/release/a3s-oci-agent
           for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
             agent="target/$target/release/a3s-oci-agent"
-            file "$agent"
-            if readelf --program-headers "$agent" | grep --quiet INTERP; then
-              echo "$agent contains a dynamic interpreter" >&2
-              exit 1
-            fi
-            if readelf --dynamic "$agent" | grep --quiet NEEDED; then
-              echo "$agent contains a dynamic dependency" >&2
-              exit 1
-            fi
             cp "$agent" "$package/a3s-oci-agent-$target"
           done
           cp README.md CHANGELOG.md LICENSE "$package/"

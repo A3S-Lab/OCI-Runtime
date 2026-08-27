@@ -1137,8 +1137,10 @@ cargo clippy --target aarch64-unknown-linux-gnu \
 ```
 
 Tagged archives contain host diagnostics and the matching platform assets.
-Package availability never overrides the readiness reported by the exact
-binary's `features` result.
+Linux x86_64 and arm64 archives carry statically linked musl CLI, agent, and
+containerd shim executables whose release gate rejects ELF interpreters and
+dynamic dependencies. Package availability never overrides the readiness
+reported by the exact binary's `features` result.
 
 ## License
 

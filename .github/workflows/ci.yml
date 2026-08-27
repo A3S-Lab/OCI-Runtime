@@ -1170,18 +1170,9 @@ jobs:
       - name: Verify static guest artifact
         shell: bash
         run: |
-          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
-            agent="target/$target/release/a3s-oci-agent"
-            file "$agent"
-            if readelf --program-headers "$agent" | grep --quiet INTERP; then
-              echo "$agent contains a dynamic interpreter" >&2
-              exit 1
-            fi
-            if readelf --dynamic "$agent" | grep --quiet NEEDED; then
-              echo "$agent contains a dynamic dependency" >&2
-              exit 1
-            fi
-          done
+          .github/scripts/verify-static-elf.sh \
+            target/x86_64-unknown-linux-musl/release/a3s-oci-agent \
+            target/aarch64-unknown-linux-musl/release/a3s-oci-agent
       - name: Build reproducible immutable macOS system image
         shell: bash
         run: |
