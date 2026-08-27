@@ -4,7 +4,7 @@ use a3s_oci_sdk::{ErrorCode, Result};
 
 use super::{
     event_identity_hash, is_transaction_file, parse_event_claim_name, parse_event_record_name,
-    validate_event_record, validate_exact_event_target,
+    validate_event_identity, validate_event_record, validate_exact_event_target,
 };
 use crate::state::filesystem::state_error;
 use crate::state::model::{StoredEventClaim, StoredEventRecord, EVENT_CLAIM_SCHEMA_VERSION};
@@ -49,6 +49,7 @@ impl DurableStateStore {
                 ));
             }
             validate_exact_event_target(&claim.event)?;
+            validate_event_identity(&claim.identity, &claim.event)?;
             if claims.insert(claim.event.sequence, claim.event).is_some() {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,

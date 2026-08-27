@@ -273,6 +273,16 @@ unchanged to the driver, and revalidates exact `ContainerRecord` evidence after
 restart. No production driver advertises the extension until its real-host
 namespace attachment, cleanup, redirect, and enforcement gates pass.
 
+Pause and resume remain separately negotiated runtime operations with stable
+`OperationContext` identities, exact-generation fencing, durable replay, and
+restart reconciliation. Their committed `ContainerPaused` and
+`ContainerResumed` observations now expose the exact mutation through typed
+`RuntimeEvent::operation_id`; the Host validates it against both the durable
+event claim and the legacy `operation-id` attribute. Older event-v1 records
+without the typed projection remain readable through that validated attribute.
+The Runtime does not decide when a workload is idle or should wake; callers own
+that policy and issue the explicit operations.
+
 The public `a3s.oci.attachments.v4` profile establishes the reusable
 guest-session boundary. A SharedGuestKernel create or restore must bind one
 logical session ID, positive incarnation, immutable trust domain, capacity

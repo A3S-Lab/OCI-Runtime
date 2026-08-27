@@ -290,6 +290,21 @@ async fn poll_events(
 }
 ```
 
+`pause` and `resume` are negotiated independently, so a driver that omits
+either operation is rejected before dispatch. Each accepted mutation carries
+an exact `OperationContext::operation_id`. When its durable freezer transition
+is committed, the corresponding `ContainerPaused` or `ContainerResumed` event
+projects that identity through the typed `RuntimeEvent::operation_id`, together
+with the exact container generation, event kind, sequence, and Host timestamp.
+The legacy `attributes["operation-id"]` projection remains on the wire for
+older consumers; new events require both representations to match. Event-v1
+records written before the typed field was added remain readable only when the
+compatibility attribute matches their durable operation claim.
+
+The Runtime owns this exact mutation and observation boundary. It does not own
+an idle timer, suspend policy, or wake decision; those remain caller policy and
+must invoke the separately negotiated operations with their own stable IDs.
+
 The protocol-v10 shared Linux executor implements exact-target exec,
 pidfd-backed per-process signal, stable per-process wait, cgroup-v2
 pause/resume, exact live process inventory, partial live CPU/memory/cpuset/PID

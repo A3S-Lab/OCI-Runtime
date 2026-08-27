@@ -66,7 +66,7 @@ impl DurableStateStore {
         attributes: BTreeMap<String, String>,
     ) -> Result<RuntimeEvent> {
         let identity = format!("container:{}:{identity_suffix}", exact_target_key(target)?);
-        self.append_event(identity, target, None, kind, attributes)
+        self.append_event(identity, target, None, None, kind, attributes)
             .await
     }
 
@@ -83,8 +83,15 @@ impl DurableStateStore {
             exact_target_key(target)?,
             process_id.as_str()
         );
-        self.append_event(identity, target, Some(process_id.clone()), kind, attributes)
-            .await
+        self.append_event(
+            identity,
+            target,
+            None,
+            Some(process_id.clone()),
+            kind,
+            attributes,
+        )
+        .await
     }
 
     pub(super) async fn append_operation_event(
@@ -97,14 +104,22 @@ impl DurableStateStore {
         attributes: BTreeMap<String, String>,
     ) -> Result<RuntimeEvent> {
         let identity = format!("operation:{}:{identity_suffix}", operation_id.as_str());
-        self.append_event(identity, target, process_id, kind, attributes)
-            .await
+        self.append_event(
+            identity,
+            target,
+            Some(operation_id.clone()),
+            process_id,
+            kind,
+            attributes,
+        )
+        .await
     }
 
     async fn append_event(
         &self,
         identity: String,
         target: &ContainerTarget,
+        operation_id: Option<OperationId>,
         process_id: Option<ProcessId>,
         kind: RuntimeEventKind,
         attributes: BTreeMap<String, String>,
@@ -113,7 +128,14 @@ impl DurableStateStore {
         let claim_path = self.event_claim_path(&identity);
         if self.filesystem.path_exists(&claim_path).await? {
             let claim = self.load_event_claim(&claim_path, &identity).await?;
-            validate_claimed_event(&claim.event, target, process_id.as_ref(), kind, &attributes)?;
+            validate_claimed_event(
+                &claim.event,
+                target,
+                operation_id.as_ref(),
+                process_id.as_ref(),
+                kind,
+                &attributes,
+            )?;
             self.ensure_event_record(&claim.event).await?;
             self.event_notify.notify_waiters();
             return Ok(claim.event);
@@ -158,6 +180,7 @@ impl DurableStateStore {
             sequence,
             timestamp_unix_ns,
             container: target.clone(),
+            operation_id,
             process_id,
             kind,
             attributes,
@@ -288,6 +311,7 @@ impl DurableStateStore {
                 ));
             }
             validate_exact_event_target(&claim.event)?;
+            validate_event_identity(&claim.identity, &claim.event)?;
             if !claimed_sequences.insert(claim.event.sequence) {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
@@ -337,6 +361,7 @@ impl DurableStateStore {
             ));
         }
         validate_exact_event_target(&claim.event)?;
+        validate_event_identity(&claim.identity, &claim.event)?;
         let cursor = self.load_event_cursor().await?;
         if claim.event.sequence == 0 || claim.event.sequence > cursor.last_sequence {
             return Err(state_error(
@@ -414,11 +439,19 @@ fn exact_target_key(target: &ContainerTarget) -> Result<String> {
 fn validate_claimed_event(
     event: &RuntimeEvent,
     target: &ContainerTarget,
+    operation_id: Option<&OperationId>,
     process_id: Option<&ProcessId>,
     kind: RuntimeEventKind,
     attributes: &BTreeMap<String, String>,
 ) -> Result<()> {
+    let operation_matches = event.operation_id.as_ref() == operation_id
+        || (event.operation_id.is_none()
+            && operation_id.is_some_and(|operation_id| {
+                event.attributes.get("operation-id").map(String::as_str)
+                    == Some(operation_id.as_str())
+            }));
     if &event.container == target
+        && operation_matches
         && event.process_id.as_ref() == process_id
         && event.kind == kind
         && &event.attributes == attributes
@@ -461,6 +494,15 @@ fn validate_exact_event_target(event: &RuntimeEvent) -> Result<()> {
             "runtime event sequence and timestamp must be nonzero",
         ));
     }
+    if let Some(operation_id) = &event.operation_id {
+        if event.attributes.get("operation-id").map(String::as_str) != Some(operation_id.as_str()) {
+            return Err(state_error(
+                ErrorCode::FailedPrecondition,
+                "validate-runtime-event",
+                "typed runtime event operation identity does not match its compatibility attribute",
+            ));
+        }
+    }
     match event.kind {
         RuntimeEventKind::ProcessCreated
         | RuntimeEventKind::ProcessStarted
@@ -490,6 +532,53 @@ fn validate_exact_event_target(event: &RuntimeEvent) -> Result<()> {
             ));
         }
         _ => {}
+    }
+    Ok(())
+}
+
+fn validate_event_identity(identity: &str, event: &RuntimeEvent) -> Result<()> {
+    let Some(operation_identity) = identity.strip_prefix("operation:") else {
+        if event.operation_id.is_some() || event.attributes.contains_key("operation-id") {
+            return Err(state_error(
+                ErrorCode::FailedPrecondition,
+                "validate-runtime-event",
+                "non-operation runtime event carries an operation identity projection",
+            ));
+        }
+        return Ok(());
+    };
+    let Some((operation_id, suffix)) = operation_identity.rsplit_once(':') else {
+        return Err(state_error(
+            ErrorCode::FailedPrecondition,
+            "validate-runtime-event",
+            "operation runtime event has an invalid durable identity",
+        ));
+    };
+    if suffix.is_empty() {
+        return Err(state_error(
+            ErrorCode::FailedPrecondition,
+            "validate-runtime-event",
+            "operation runtime event has an empty identity suffix",
+        ));
+    }
+    OperationId::new(operation_id.to_string()).map_err(|error| {
+        state_error(
+            ErrorCode::FailedPrecondition,
+            "validate-runtime-event",
+            format!("operation runtime event has an invalid operation identity: {error}"),
+        )
+    })?;
+    let observed = event
+        .operation_id
+        .as_ref()
+        .map(OperationId::as_str)
+        .or_else(|| event.attributes.get("operation-id").map(String::as_str));
+    if observed != Some(operation_id) {
+        return Err(state_error(
+            ErrorCode::FailedPrecondition,
+            "validate-runtime-event",
+            "operation runtime event does not match its durable identity",
+        ));
     }
     Ok(())
 }

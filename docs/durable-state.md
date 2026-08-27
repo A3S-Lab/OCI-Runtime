@@ -230,6 +230,15 @@ polling, while an unclaimed record, duplicate claimed sequence, invalid event
 kind/process pairing, or conflicting replay fails closed. The operation
 outcome is committed only after its required events exist.
 
+Every operation-scoped event now binds its exact mutation through typed
+`RuntimeEvent::operation_id`. New records also retain the legacy
+`attributes["operation-id"]` projection, and the two values must match the
+operation ID encoded by the durable event-claim identity. Existing event-v1
+records without the typed field remain readable when that compatibility
+attribute is exact. A missing or conflicting identity on a new record, or any
+claim/record identity drift, fails startup audit and event polling instead of
+silently attributing the observation to another mutation.
+
 `EventsRequest.after_sequence` is an exclusive cursor. Polling returns at
 most the requested bounded number of matching events and a `next_sequence`
 that can advance across events excluded by a container filter. A target

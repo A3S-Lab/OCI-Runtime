@@ -840,6 +840,10 @@ pub struct RuntimeEvent {
     pub timestamp_unix_ns: u64,
     /// Exact container generation that produced the event.
     pub container: ContainerTarget,
+    /// Exact durable mutation that committed this observation, when the event
+    /// is operation-scoped. Legacy events omit this typed projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<OperationId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_id: Option<ProcessId>,
     pub kind: RuntimeEventKind,
@@ -861,7 +865,7 @@ mod tests {
 
     use super::{
         ContainerId, ContainerStats, ContainerTarget, CpuStats, ExitStatus, Generation,
-        MemoryStats, Signal,
+        MemoryStats, OperationId, RuntimeEvent, RuntimeEventKind, Signal,
     };
 
     #[test]
@@ -874,6 +878,37 @@ mod tests {
         );
         assert!(serde_json::from_str::<Signal>("0").is_err());
         assert!(serde_json::from_str::<Signal>("-9").is_err());
+    }
+
+    #[test]
+    fn runtime_event_operation_identity_is_additive_and_validated() {
+        let legacy = serde_json::json!({
+            "sequence": 1,
+            "timestamp_unix_ns": 2,
+            "container": {"id": "event-container", "generation": 3},
+            "kind": "container-paused",
+            "attributes": {"operation-id": "event-pause-operation"}
+        });
+        let decoded: RuntimeEvent =
+            serde_json::from_value(legacy.clone()).expect("legacy runtime event");
+        assert_eq!(decoded.operation_id, None);
+        assert!(serde_json::to_value(&decoded)
+            .expect("encode legacy runtime event")
+            .get("operation_id")
+            .is_none());
+
+        let mut current = legacy;
+        current["operation_id"] = serde_json::json!("event-pause-operation");
+        let decoded: RuntimeEvent =
+            serde_json::from_value(current.clone()).expect("typed runtime event");
+        assert_eq!(
+            decoded.operation_id,
+            Some(OperationId::new("event-pause-operation").expect("operation ID"))
+        );
+
+        current["operation_id"] = serde_json::json!("../unsafe-operation");
+        assert!(serde_json::from_value::<RuntimeEvent>(current).is_err());
+        assert_eq!(decoded.kind, RuntimeEventKind::ContainerPaused);
     }
 
     #[test]

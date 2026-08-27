@@ -219,6 +219,26 @@ async fn lifecycle_and_process_events_are_durable_ordered_and_replay_safe() {
         .all(|(index, event)| event.sequence == index as u64 + 1));
     assert!(all.events.iter().all(|event| event.container == target));
     assert_eq!(
+        all.events
+            .iter()
+            .map(|event| event.operation_id.as_ref())
+            .collect::<Vec<_>>(),
+        [
+            None,
+            None,
+            None,
+            Some(&pause.context.operation_id),
+            Some(&resume.context.operation_id),
+            Some(&update.context.operation_id),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ]
+    );
+    assert_eq!(
         all.events[8]
             .attributes
             .get("exit-code")
@@ -440,6 +460,179 @@ async fn event_poll_rejects_a_process_kind_without_process_identity() {
         .expect_err("a process event without process identity must fail closed");
     assert_eq!(error.code, ErrorCode::FailedPrecondition);
     assert!(error.message.contains("has no process identity"));
+}
+
+#[tokio::test]
+async fn non_operation_event_rejects_an_operation_identity_projection() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let root = state_root(&temporary);
+    let store = DurableStateStore::open(&root)
+        .await
+        .expect("initialize state root");
+    let create = create_request(
+        &bundle_directory,
+        "non-operation-identity",
+        "non-operation-identity-create",
+    );
+    store
+        .prepare_create(&create, DriverKind::LibkrunWhpx)
+        .await
+        .expect("prepare create");
+
+    let claim = std::fs::read_dir(root.join("events/keys"))
+        .expect("open event claims")
+        .next()
+        .expect("one event claim")
+        .expect("read event claim")
+        .path();
+    let mut contents: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&claim).expect("read durable event claim"))
+            .expect("decode durable event claim");
+    contents["event"]["attributes"]["operation-id"] =
+        serde_json::json!("forged-operation-identity");
+    std::fs::write(
+        claim,
+        serde_json::to_vec(&contents).expect("encode forged event claim"),
+    )
+    .expect("write forged event claim");
+
+    let error = store
+        .events(&events_request(None, 0, 16, None))
+        .await
+        .expect_err("a non-operation event must reject operation identity projections");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(error.message.contains("identity projection"));
+}
+
+#[tokio::test]
+async fn operation_event_identity_tampering_fails_closed() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let root = state_root(&temporary);
+    let store = DurableStateStore::open(&root)
+        .await
+        .expect("initialize state root");
+    let create = create_request(
+        &bundle_directory,
+        "operation-event-tampering",
+        "operation-event-tampering-create",
+    );
+    let prepared = store
+        .prepare_create(&create, DriverKind::LibkrunWhpx)
+        .await
+        .expect("prepare create");
+    let RecordOperationPreparation::Prepared(prepared) = prepared else {
+        panic!("create must prepare");
+    };
+    let target = ContainerTarget::exact(create.id.clone(), prepared.generation);
+    store
+        .complete_create(&create.context.operation_id, 4_242)
+        .await
+        .expect("complete create");
+    let start = StartRequest {
+        context: OperationContext::new(operation_id("operation-event-tampering-start")),
+        target: target.clone(),
+    };
+    store.prepare_start(&start).await.expect("prepare start");
+    store
+        .complete_start(
+            &start.context.operation_id,
+            ContainerState::Running,
+            Some(4_242),
+        )
+        .await
+        .expect("complete start");
+    let pause = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("operation-event-tampering-pause")),
+        target,
+    };
+    store.prepare_pause(&pause).await.expect("prepare pause");
+    store
+        .complete_pause(
+            &pause.context.operation_id,
+            ContainerState::Running,
+            Some(4_242),
+            true,
+        )
+        .await
+        .expect("complete pause");
+
+    let identity = format!("operation:{}:pause", pause.context.operation_id.as_str());
+    let identity_hash = Sha256::digest(identity.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let claim_path = root
+        .join("events/keys")
+        .join(format!("{identity_hash}.json"));
+    let original_claim = std::fs::read(&claim_path).expect("read pause event claim");
+    let mut claim: serde_json::Value =
+        serde_json::from_slice(&original_claim).expect("decode pause event claim");
+    let event_sequence = claim["event"]["sequence"]
+        .as_u64()
+        .expect("pause event sequence");
+    let record_path = root
+        .join("events/records")
+        .join(format!("{event_sequence:020}.json"));
+    let original_record = std::fs::read(&record_path).expect("read pause event record");
+    let mut legacy_claim = claim.clone();
+    legacy_claim["event"]
+        .as_object_mut()
+        .expect("pause claim event")
+        .remove("operation_id");
+    let mut legacy_record: serde_json::Value =
+        serde_json::from_slice(&original_record).expect("decode pause event record");
+    legacy_record["event"]
+        .as_object_mut()
+        .expect("pause sequence event")
+        .remove("operation_id");
+    std::fs::write(
+        &claim_path,
+        serde_json::to_vec(&legacy_claim).expect("encode legacy pause event claim"),
+    )
+    .expect("write legacy pause event claim");
+    std::fs::write(
+        &record_path,
+        serde_json::to_vec(&legacy_record).expect("encode legacy pause event record"),
+    )
+    .expect("write legacy pause event record");
+    let legacy = store
+        .events(&events_request(None, 0, 16, None))
+        .await
+        .expect("legacy operation attribute remains valid");
+    let legacy_pause = legacy
+        .events
+        .iter()
+        .find(|event| event.kind == RuntimeEventKind::ContainerPaused)
+        .expect("legacy pause event");
+    assert_eq!(legacy_pause.operation_id, None);
+    assert_eq!(
+        legacy_pause
+            .attributes
+            .get("operation-id")
+            .map(String::as_str),
+        Some(pause.context.operation_id.as_str())
+    );
+
+    std::fs::write(&claim_path, &original_claim).expect("restore pause event claim");
+    std::fs::write(&record_path, &original_record).expect("restore pause event record");
+    claim["event"]["operation_id"] = serde_json::json!("another-pause-operation");
+    claim["event"]["attributes"]["operation-id"] = serde_json::json!("another-pause-operation");
+    std::fs::write(
+        &claim_path,
+        serde_json::to_vec(&claim).expect("encode tampered pause event claim"),
+    )
+    .expect("write tampered pause event claim");
+
+    let error = store
+        .events(&events_request(None, 0, 16, None))
+        .await
+        .expect_err("operation event identity drift must fail closed");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(error.message.contains("durable identity"));
 }
 
 #[tokio::test]

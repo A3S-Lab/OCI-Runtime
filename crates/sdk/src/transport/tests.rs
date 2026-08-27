@@ -7,15 +7,16 @@ use serde_json::json;
 
 use crate::{
     AttachmentCapabilities, ContainerId, ContainerRecord, CreateAttachments, CreateRequest,
-    DeleteRequest, DriverKind, Error, ErrorCode, EventsRequest, FileOp, FileRequest, FileResponse,
-    FilesystemEntry, FilesystemEntryKind, FilesystemOp, FilesystemRequest, FilesystemResponse,
-    Generation, GuestSessionCapacity, GuestSessionGeneration, GuestSessionId, GuestSessionReset,
-    IsolationRequest, KillRequest, NetworkAttachmentIdentity, NetworkCleanup, NetworkCleanupId,
-    NetworkEnforcementAttachment, NetworkEnforcementId, NetworkInterfaceId, NetworkMechanismDigest,
-    NetworkMechanismGeneration, NetworkNamespaceId, OciBundle, OciRuntimeService, OperationContext,
-    OperationId, ProcessIo, RestoreRequest, Result, RuntimeFeatures, RuntimeInfo, RuntimeOperation,
-    StartRequest, StateRequest, StorageAccessMode, StorageAttachmentId, StorageCleanup,
-    StorageOwnership, TrustDomainId, NETWORK_ENFORCEMENT_EXTENSION,
+    DeleteRequest, DriverKind, Error, ErrorCode, EventBatch, EventsRequest, FileOp, FileRequest,
+    FileResponse, FilesystemEntry, FilesystemEntryKind, FilesystemOp, FilesystemRequest,
+    FilesystemResponse, Generation, GuestSessionCapacity, GuestSessionGeneration, GuestSessionId,
+    GuestSessionReset, IsolationRequest, KillRequest, NetworkAttachmentIdentity, NetworkCleanup,
+    NetworkCleanupId, NetworkEnforcementAttachment, NetworkEnforcementId, NetworkInterfaceId,
+    NetworkMechanismDigest, NetworkMechanismGeneration, NetworkNamespaceId, OciBundle,
+    OciRuntimeService, OperationContext, OperationId, ProcessIo, RestoreRequest, Result,
+    RuntimeEvent, RuntimeEventKind, RuntimeFeatures, RuntimeInfo, RuntimeOperation, StartRequest,
+    StateRequest, StorageAccessMode, StorageAttachmentId, StorageCleanup, StorageOwnership,
+    TrustDomainId, NETWORK_ENFORCEMENT_EXTENSION,
 };
 
 use super::wire::{
@@ -997,6 +998,55 @@ fn state_wire_request_requires_container_id() {
     let error = serde_json::from_value::<ClientMessage>(encoded)
         .expect_err("state request without a container ID must fail decoding");
     assert!(error.to_string().contains("id"));
+}
+
+#[test]
+fn runtime_event_operation_identity_round_trips_on_existing_protocol() {
+    let operation_id = OperationId::new("transport-pause-operation").expect("operation ID");
+    let event = RuntimeEvent {
+        sequence: 17,
+        timestamp_unix_ns: 23,
+        container: crate::ContainerTarget::exact(
+            ContainerId::new("transport-event-container").expect("container ID"),
+            Generation(5),
+        ),
+        operation_id: Some(operation_id.clone()),
+        process_id: None,
+        kind: RuntimeEventKind::ContainerPaused,
+        attributes: BTreeMap::from([(
+            "operation-id".to_string(),
+            operation_id.as_str().to_string(),
+        )]),
+    };
+    let message = ServerMessage::Response {
+        protocol: 3,
+        request_id: 11,
+        result: Box::new(WireResult::Ok {
+            response: Box::new(WireResponse::Events(EventBatch {
+                events: vec![event.clone()],
+                next_sequence: event.sequence,
+            })),
+        }),
+    };
+
+    let encoded = serde_json::to_value(&message).expect("encode event response");
+    let decoded = serde_json::from_value::<ServerMessage>(encoded).expect("decode event response");
+    assert_eq!(decoded, message);
+
+    let ServerMessage::Response {
+        protocol, result, ..
+    } = decoded
+    else {
+        panic!("expected SDK response");
+    };
+    assert_eq!(protocol, 3);
+    let WireResult::Ok { response } = *result else {
+        panic!("expected successful event response");
+    };
+    let WireResponse::Events(batch) = *response else {
+        panic!("expected event response");
+    };
+    assert_eq!(batch.events[0].operation_id.as_ref(), Some(&operation_id));
 }
 
 #[test]
