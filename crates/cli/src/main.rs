@@ -266,6 +266,39 @@ enum Command {
         #[arg(long, requires = "delegated_cgroup_root")]
         rootless_device_bootstrap: bool,
     },
+    /// Hold a Native startContainer Hook for exact owner-death qualification.
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    NativeLinuxHookOwnerDeathOwner {
+        #[arg(long, value_name = "FILE")]
+        agent: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        root: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        #[arg(long, value_name = "ID")]
+        container_id: a3s_oci_sdk::ContainerId,
+        #[arg(long, value_name = "FILE")]
+        ready_file: PathBuf,
+    },
+    /// Reconcile a Native owner killed inside startContainer and retain Hook evidence.
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    NativeLinuxHookOwnerDeathResume {
+        #[arg(long, value_name = "FILE")]
+        agent: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        root: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        #[arg(long, value_name = "ID")]
+        container_id: a3s_oci_sdk::ContainerId,
+        #[arg(long)]
+        generation: u64,
+        /// Root-owned JSON captured while the Hook process group was live.
+        #[arg(long, value_name = "FILE")]
+        evidence: PathBuf,
+    },
     /// Own one A3S Box container through the native Linux SDK service.
     #[cfg(target_os = "linux")]
     NativeLinuxService {
@@ -728,6 +761,20 @@ enum CliError {
     Runtime(#[from] a3s_oci_sdk::Error),
     #[error("failed to serialize command output: {0}")]
     Serialize(#[from] serde_json::Error),
+    #[cfg(target_os = "linux")]
+    #[error("failed to read Hook owner-death evidence {path}: {source}")]
+    ReadHookOwnerDeathEvidence {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[cfg(target_os = "linux")]
+    #[error("failed to parse Hook owner-death evidence {path}: {source}")]
+    ParseHookOwnerDeathEvidence {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
     #[cfg(any(
         all(target_os = "macos", target_arch = "aarch64"),
         all(

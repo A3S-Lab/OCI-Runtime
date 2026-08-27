@@ -11,13 +11,16 @@ use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Hook, Hooks};
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 use serde::Serialize;
 
+#[cfg(test)]
+mod owner_death_tests;
+mod watchdog;
+
 const MAX_HOOKS_PER_PHASE: usize = 256;
 const MAX_HOOK_ARGUMENTS: usize = 4_096;
 const MAX_HOOK_ENVIRONMENT: usize = 4_096;
 const MAX_HOOK_BYTES: usize = 1024 * 1024;
 const MAX_HOOK_STATE_BYTES: usize = 2 * 1024 * 1024;
 const HOOK_WAIT_INTERVAL: Duration = Duration::from_millis(10);
-const FIRST_PRIVATE_DESCRIPTOR: u32 = 3;
 
 /// OCI hook phases in their normative lifecycle order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -443,13 +446,24 @@ fn run_hook(phase: HookPhase, index: usize, hook: &HookPlan, state: &[u8]) -> Re
         command.envs(environment.iter().map(|(name, value)| (name, value)));
     }
     command.stdin(Stdio::piped()).process_group(0);
-    isolate_hook_descriptors(&mut command);
-    let mut child = command.spawn().map_err(|error| {
+    watchdog::configure(&mut command).map_err(|error| {
         hook_error(
             ErrorCode::FailedPrecondition,
             phase,
             format!(
-                "hook {index} {} failed to spawn with private descriptor isolation: {error}",
+                "hook {index} {} failed to prepare private descriptor and owner-death isolation: {error}",
+                hook.path.display()
+            ),
+        )
+    })?;
+    let spawned = command.spawn();
+    drop(command);
+    let mut child = spawned.map_err(|error| {
+        hook_error(
+            ErrorCode::FailedPrecondition,
+            phase,
+            format!(
+                "hook {index} {} failed to spawn with private descriptor and owner-death isolation: {error}",
                 hook.path.display()
             ),
         )
@@ -515,28 +529,6 @@ fn run_hook(phase: HookPhase, index: usize, hook: &HookPlan, state: &[u8]) -> Re
             phase,
             format!("hook {index} {} exited with {status}", hook.path.display()),
         ))
-    }
-}
-
-fn isolate_hook_descriptors(command: &mut Command) {
-    // SAFETY: this closure runs in the forked child before exec. It invokes one
-    // allocation-free Linux syscall and touches only the child's descriptor
-    // table. CLOEXEC preserves the process-spawn error channel until exec while
-    // ensuring that no runtime-private descriptor reaches untrusted hook code.
-    unsafe {
-        command.pre_exec(|| {
-            let result = libc::syscall(
-                libc::SYS_close_range,
-                FIRST_PRIVATE_DESCRIPTOR,
-                u32::MAX,
-                libc::CLOSE_RANGE_CLOEXEC,
-            );
-            if result == 0 {
-                Ok(())
-            } else {
-                Err(io::Error::last_os_error())
-            }
-        });
     }
 }
 

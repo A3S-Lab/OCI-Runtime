@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+# shellcheck source=.github/scripts/native-linux-hook-owner-death.sh
+source .github/scripts/native-linux-hook-owner-death.sh
+
 qualification_root=""
 saved_kvm="/dev/a3s-oci-kvm-$$"
 kvm_original_moved=false
@@ -22,6 +25,7 @@ rootless_cgroup_process_pid=""
 rootless_cgroup_process_launcher_pid=""
 recovery_owner_pid=""
 recovery_runtime_owner_pid=""
+hook_recovery_group_pid=""
 soak_bundles=()
 soak_iterations="${A3S_OCI_NATIVE_SOAK_ITERATIONS:-25}"
 native_focus="${A3S_OCI_NATIVE_FOCUS:-}"
@@ -151,6 +155,10 @@ restore_host() {
   if [[ -n "$recovery_owner_pid" ]] && kill -0 "$recovery_owner_pid" 2>/dev/null; then
     sudo kill -KILL "$recovery_owner_pid"
     wait "$recovery_owner_pid" 2>/dev/null
+  fi
+  if [[ -n "$hook_recovery_group_pid" ]]; then
+    sudo kill -KILL -- "-$hook_recovery_group_pid" 2>/dev/null || true
+    hook_recovery_group_pid=""
   fi
 
   for network_device in "${network_device_sources[@]}"; do
@@ -340,6 +348,7 @@ device_boundary_bundle="$qualification_root/device-boundary-bundle"
 cgroup_ownership_bundle="$qualification_root/cgroup-ownership-bundle"
 cgroup_ownership_readonly_bundle="$qualification_root/cgroup-ownership-readonly-bundle"
 recovery_bundle="$qualification_root/recovery-bundle"
+hook_recovery_bundle="$qualification_root/hook-recovery-bundle"
 rootless_bundle="$qualification_root/rootless-bundle"
 network_device_bundle="$qualification_root/network-device-bundle"
 network_device_conflict_bundle="$qualification_root/network-device-conflict-bundle"
@@ -356,9 +365,17 @@ mkdir -p \
   "$terminal_bundle/rootfs/bin" "$terminal_bundle/rootfs/dev" \
   "$terminal_bundle/rootfs/proc" "$terminal_bundle/rootfs/run/a3s" \
   "$recovery_bundle/rootfs/bin" "$recovery_bundle/rootfs/dev" "$recovery_bundle/rootfs/proc" \
+  "$hook_recovery_bundle/rootfs/bin" "$hook_recovery_bundle/rootfs/dev" \
+  "$hook_recovery_bundle/rootfs/proc" \
   "$rootless_bundle/rootfs/bin" "$rootless_bundle/rootfs/dev" "$rootless_bundle/rootfs/proc" \
   "$rootless_bin" "$work_parent" "$rootless_work_parent"
-for candidate in "$bundle" "$bundle_b" "$control_bundle" "$terminal_bundle" "$recovery_bundle"; do
+for candidate in \
+  "$bundle" \
+  "$bundle_b" \
+  "$control_bundle" \
+  "$terminal_bundle" \
+  "$recovery_bundle" \
+  "$hook_recovery_bundle"; do
   cp fixtures/native-linux/config.json "$candidate/config.json"
   cp "$(command -v busybox)" "$candidate/rootfs/bin/busybox"
   ln -s busybox "$candidate/rootfs/bin/sh"
@@ -366,6 +383,7 @@ done
 jq '.linux.cgroupsPath = "a3s-oci-owner-recovery" | del(.hooks)' \
   "$recovery_bundle/config.json" >"$recovery_bundle/config.json.tmp"
 mv "$recovery_bundle/config.json.tmp" "$recovery_bundle/config.json"
+prepare_hook_owner_death_bundle "$hook_recovery_bundle"
 for slot in 0 1 2 3; do
   candidate="$qualification_root/soak-bundle-$slot"
   mkdir -p "$candidate/rootfs/bin" "$candidate/rootfs/dev" "$candidate/rootfs/proc"
@@ -744,6 +762,7 @@ sudo chown -R 100000:200000 "$device_boundary_bundle/rootfs"
 sudo chown -R 100000:200000 "$cgroup_ownership_bundle/rootfs"
 sudo chown -R 100000:200000 "$cgroup_ownership_readonly_bundle/rootfs"
 sudo chown -R 100000:200000 "$recovery_bundle/rootfs"
+sudo chown -R 100000:200000 "$hook_recovery_bundle/rootfs"
 for candidate in "${soak_bundles[@]}"; do
   sudo chown -R 100000:200000 "$candidate/rootfs"
   test "$(stat --format '%u:%g' "$candidate/rootfs")" = '100000:200000'
@@ -777,6 +796,7 @@ test "$(stat --format '%u:%g' "$terminal_bundle/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$terminal_existing_bundle/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$device_boundary_bundle/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$recovery_bundle/rootfs")" = '100000:200000'
+test "$(stat --format '%u:%g' "$hook_recovery_bundle/rootfs")" = '100000:200000'
 
 # shellcheck disable=SC2016 # Expanded inside the network-device workload.
 network_device_command_prefix='test -e /sys/class/net/a3seth0; test "$(/bin/busybox cat /sys/class/net/a3seth0/mtu)" = 1450; network_flags=$(/bin/busybox cat /sys/class/net/a3seth0/flags); test "$((network_flags & 1))" = 1; test "$(/bin/busybox cat /sys/class/net/a3seth0/address)" = 02:00:00:00:00:10; /bin/busybox ip -4 address show dev a3seth0 | /bin/busybox grep -q "inet 192.0.2.10/24"; '
@@ -1951,11 +1971,13 @@ run_owner_death_recovery() {
   test "$(sudo stat --format '%u:%g:%a' "$ready_file")" = '0:0:600'
   ready_json="$(sudo cat -- "$ready_file")"
   jq --exit-status \
-    '.schema_version == "a3s.oci.native-linux-recovery-owner-ready.v2"
+    '.schema_version == "a3s.oci.native-linux-recovery-owner-ready.v3"
      and .status == "available" and .platform == "linux"
      and .target.id == "native-owner-recovery"
      and .target.generation == 1
-     and (.owner_pid > 0) and (.init_pid > 0)
+     and .recovery_point == "running"
+     and (.owner_pid > 0) and (.owner_start_time_ticks > 0)
+     and (.init_pid > 0)
      and .effective_uid == 0 and .effective_gid == 0
      and (.cgroup_delegation_requested | not)
      and (.cgroup_delegation_verified | not)
@@ -2100,11 +2122,13 @@ run_rootless_owner_death_recovery() {
   jq --exit-status \
     --argjson uid "$rootless_uid" \
     --argjson gid "$rootless_gid" \
-    '.schema_version == "a3s.oci.native-linux-recovery-owner-ready.v2"
+    '.schema_version == "a3s.oci.native-linux-recovery-owner-ready.v3"
      and .status == "available" and .platform == "linux"
      and .target.id == "native-rootless-owner-recovery"
      and .target.generation == 1
-     and (.owner_pid > 0) and (.init_pid > 0)
+     and .recovery_point == "running"
+     and (.owner_pid > 0) and (.owner_start_time_ticks > 0)
+     and (.init_pid > 0)
      and .effective_uid == $uid and .effective_gid == $gid
      and .cgroup_delegation_requested
      and .cgroup_delegation_verified
@@ -2378,6 +2402,12 @@ elif [[ "$native_focus" == control-workload ]]; then
 elif [[ "$native_focus" == multi-container ]]; then
   run_multi_container_smoke false
   exit 0
+elif [[ "$native_focus" == owner-death ]]; then
+  run_owner_death_recovery
+  exit 0
+elif [[ "$native_focus" == hook-owner-death ]]; then
+  run_hook_owner_death_recovery
+  exit 0
 elif [[ "$native_focus" == rootless-device-boundary ]]; then
   run_rootless_smoke
   run_rootless_device_policy_smoke
@@ -2533,6 +2563,7 @@ run_smoke false "$control_bundle" "$control_hook_trace"
 run_service_smoke false
 run_service_signal_cleanup
 run_owner_death_recovery
+run_hook_owner_death_recovery
 run_multi_container_smoke false
 run_soak false
 run_fault_cleanup

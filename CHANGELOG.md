@@ -1291,6 +1291,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Prevent OCI Hook process groups from surviving an uncatchable runtime or
+  Agent-owner exit. Every Hook now starts a detached, descriptor-minimal
+  watchdog bound to exact owner and Hook-leader pidfds before `exec`; owner
+  death kills the private group, including signal-resistant descendants, while
+  setup failures reject the Hook. The new
+  `a3s.oci.native-linux-hook-owner-death-smoke.v1` real-host gate interrupts a
+  live `startContainer` Hook, binds PID-reuse-safe process evidence, and requires
+  the existing stopped-only Native replacement recovery and complete cleanup.
 - Prevent OCI Hooks from inheriting runtime-private file descriptors even when
   a future caller accidentally omits `FD_CLOEXEC`. Every Hook child now marks
   the complete descriptor range above standard error close-on-exec with one

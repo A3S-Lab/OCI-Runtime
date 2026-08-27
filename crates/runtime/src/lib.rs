@@ -75,6 +75,8 @@ mod namespace_join;
 #[cfg(target_os = "linux")]
 mod native_control;
 #[cfg(target_os = "linux")]
+mod native_hook_recovery_smoke;
+#[cfg(target_os = "linux")]
 mod native_linux_driver;
 #[cfg(target_os = "linux")]
 mod native_recovery_smoke;
@@ -221,15 +223,23 @@ pub use native_control::{
     NativeControlDescriptors, EXEC_LISTENER_FD, INIT_LOG_FD, PTY_LISTENER_FD,
 };
 #[cfg(target_os = "linux")]
+pub use native_hook_recovery_smoke::{
+    native_linux_hook_owner_death_resume, NativeLinuxHookOwnerDeathEvidence,
+    NativeLinuxHookOwnerDeathSmokeReport, NativeLinuxProcessIdentity,
+    NATIVE_LINUX_HOOK_OWNER_DEATH_EVIDENCE_SCHEMA_VERSION,
+    NATIVE_LINUX_HOOK_OWNER_DEATH_SMOKE_SCHEMA_VERSION,
+};
+#[cfg(target_os = "linux")]
 pub use native_linux_driver::NativeLinuxDriver;
 #[cfg(target_os = "linux")]
 pub use native_recovery_smoke::{
-    native_linux_recovery_owner, native_linux_recovery_owner_with_cgroup_delegation,
+    native_linux_hook_owner_death_owner, native_linux_recovery_owner,
+    native_linux_recovery_owner_with_cgroup_delegation,
     native_linux_recovery_owner_with_device_bootstrap, native_linux_recovery_resume,
     native_linux_recovery_resume_with_cgroup_delegation,
     native_linux_recovery_resume_with_device_bootstrap, NativeLinuxRecoveryOwnerReady,
-    NativeLinuxRecoverySmokeReport, NATIVE_LINUX_RECOVERY_OWNER_READY_SCHEMA_VERSION,
-    NATIVE_LINUX_RECOVERY_SMOKE_SCHEMA_VERSION,
+    NativeLinuxRecoveryPoint, NativeLinuxRecoverySmokeReport,
+    NATIVE_LINUX_RECOVERY_OWNER_READY_SCHEMA_VERSION, NATIVE_LINUX_RECOVERY_SMOKE_SCHEMA_VERSION,
 };
 #[cfg(target_os = "linux")]
 pub use native_service::{

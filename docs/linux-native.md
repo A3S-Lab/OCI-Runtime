@@ -586,9 +586,9 @@ A3S_OCI_NATIVE_FOCUS=rootless-device-boundary \
 ```
 
 The accepted focus values are `terminal-init`, `device-boundary`,
-`cgroup-ownership`, `control-workload`, and `rootless-device-boundary`; any
-other nonempty value is rejected. The default remains the complete Native Linux
-matrix.
+`cgroup-ownership`, `control-workload`, `multi-container`, `owner-death`,
+`hook-owner-death`, and `rootless-device-boundary`; any other nonempty value is
+rejected. The default remains the complete Native Linux matrix.
 
 The qualification wrapper also runs four OCI 1.3 `linux.netDevices` profiles.
 For the positive profile it creates a down dummy interface with MTU 1450, a
@@ -919,6 +919,17 @@ cannot establish this boundary fails the Hook before `exec`. The portable
 subprocess regression deliberately clears `FD_CLOEXEC` on a live descriptor
 and requires it to be absent from the Hook's `/proc/self/fd` inventory.
 
+The same pre-exec boundary opens a pidfd for the exact process invoking the
+Hook, requires the Hook child to lead a private process group, opens its pidfd,
+and double-forks a detached watchdog. That watchdog closes every descriptor
+except the two pidfds and its one readiness byte, closes standard I/O after
+readiness, and polls both exact process incarnations. Owner death sends
+`SIGKILL` to the private Hook process group before the watchdog exits. The
+intermediate process is synchronously reaped, and failure to create, detach, or
+authenticate the watchdog rejects the Hook before `exec`. A subprocess
+regression kills the exact Hook owner and requires both a signal-resistant
+leader and descendant to disappear.
+
 GitHub Actions runs the gate on x86_64 and aarch64 both without `/dev/kvm` and
 with a present but unusable placeholder at that path.
 
@@ -991,9 +1002,10 @@ PID equality alone is never accepted.
 
 `.github/scripts/native-linux-smoke.sh` starts the hidden
 `native-linux-recovery-owner` command with a real long-running bundle, waits for
-`a3s.oci.native-linux-recovery-owner-ready.v2`, and sends `SIGKILL` to that exact
-owner. A distinct `native-linux-recovery-resume` process then opens the same
-durable state. Its `a3s.oci.native-linux-recovery-smoke.v2` report requires:
+`a3s.oci.native-linux-recovery-owner-ready.v3`, requires the `running` recovery
+point and a positive owner start time, and sends `SIGKILL` to that exact owner.
+A distinct `native-linux-recovery-resume` process then opens the same durable
+state. Its `a3s.oci.native-linux-recovery-smoke.v2` report requires:
 
 1. the replacement host service opens only after the exact old workload has
    disappeared;
@@ -1020,6 +1032,37 @@ explicit delegation. Its result is retained via
 helper replacement, and exact cleanup. They deliberately do not claim live
 process-I/O session reattachment; that requires a persistent authenticated
 supervisor and remains a promotion gate.
+
+### Hook owner-death crash boundary
+
+The separate `hook-owner-death` focus creates a durable generation whose
+`startContainer` Hook retains a signal-resistant background descendant. The
+hidden owner publishes readiness before Start completes with recovery point
+`start-container-hook`. The wrapper waits for the Hook's rootfs sentinels, then
+uses host `/proc` to capture the exact owner, Hook leader, and Hook descendant
+PID, process-group ID, and start time. It requires the leader to own a private
+group and the descendant to belong to that same group before killing the exact
+runtime owner.
+
+The replacement command consumes
+`a3s.oci.native-linux-hook-owner-death-evidence.v1` and emits
+`a3s.oci.native-linux-hook-owner-death-smoke.v1`. Success requires:
+
+1. the evidence to bind the exact generation and one private Hook process
+   group without duplicate identities;
+2. a different replacement-owner incarnation;
+3. termination of the exact old owner, Hook leader, and signal-resistant
+   descendant without accepting PID reuse as cleanup;
+4. a nested successful `a3s.oci.native-linux-recovery-smoke.v2` report proving
+   stopped reconciliation, idempotent kill, explicit missing-exit behavior,
+   stopped-only delete, driver shutdown, and empty executor/cgroup state.
+
+The default Native matrix invokes this gate, while
+`A3S_OCI_NATIVE_FOCUS=hook-owner-death` runs it independently and
+`A3S_OCI_NATIVE_HOOK_RECOVERY_REPORT` retains its JSON. This evidence covers an
+owner crash inside `startContainer` for descendants that remain in the Hook's
+private process group. Hooks that deliberately create a new session or process
+group remain part of the broader security-negative and adversarial soak gate.
 
 Runtime commit `49cea11` passed both real-host lanes in CI run `31674526443`.
 The retained x86_64 and aarch64 rootless reports both record `available`, exact
@@ -1074,8 +1117,9 @@ following pass:
   kernel-compatibility and security-negative profiles;
 - live real-driver reattachment after runtime-process restart, plus generic SDK
   inherited process-I/O modes beyond the fixed A3S Box init-control profile;
-- Hook crash-recovery, security-negative, and adversarial soak beyond the
-  retained six-phase failure/timeout and descriptor-inheritance matrices,
+- additional Hook crash points, process-group escape security negatives, and
+  adversarial soak beyond the retained `startContainer` owner-death,
+  six-phase failure/timeout, and descriptor-inheritance matrices,
   durable recovery for the remaining mutating operations, descriptor-relative
   path handling,
   transport-level fault injection, and adversarial cleanup beyond the bounded

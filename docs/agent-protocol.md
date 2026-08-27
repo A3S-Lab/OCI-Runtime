@@ -167,6 +167,13 @@ feature discovery separately advertises the six enforced hook phases. Every
 Hook child marks all descriptors above standard error close-on-exec with one
 fail-closed Linux `close_range` operation, so neither an in-process Native
 executor nor a Guest agent can leak runtime-private handles into Hook code.
+Before the Hook is allowed to `exec`, the executor also opens pidfds for the
+exact current owner and Hook process-group leader and starts a detached,
+descriptor-minimal watchdog. If that owner incarnation exits, the watchdog
+sends `SIGKILL` to the complete private Hook process group. This applies both
+when the Hook runs in the runtime namespace and when it runs from configured
+init; failure to establish either pidfd boundary rejects the Hook before
+untrusted code executes.
 
 Mutating guest operations must be idempotent by `OperationId`. Production
 promotion also requires recovery after an agent or host restart; the current

@@ -17,19 +17,27 @@ use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 
 use crate::{
-    DriverKillRequest, HostRuntimeService, NativeLinuxDriver, RootlessDevicePolicyBootstrap,
-    RuntimeDriver,
+    native_hook_recovery_smoke::capture_native_process_identity, DriverKillRequest,
+    HostRuntimeService, NativeLinuxDriver, RootlessDevicePolicyBootstrap, RuntimeDriver,
 };
 
 /// Versioned readiness handoff written by the live Native Linux owner.
 pub const NATIVE_LINUX_RECOVERY_OWNER_READY_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-recovery-owner-ready.v2";
+    "a3s.oci.native-linux-recovery-owner-ready.v3";
 /// Versioned evidence emitted after real owner death and driver reopen.
 pub const NATIVE_LINUX_RECOVERY_SMOKE_SCHEMA_VERSION: &str =
     "a3s.oci.native-linux-recovery-smoke.v2";
 
 const OWNER_MAX_LIFETIME: Duration = Duration::from_secs(300);
 const LINUX_SIGKILL: i32 = 9;
+
+/// Exact lifecycle boundary published by a Native recovery owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NativeLinuxRecoveryPoint {
+    Running,
+    StartContainerHook,
+}
 
 /// Machine-readable point at which a qualification parent may kill the owner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,7 +47,9 @@ pub struct NativeLinuxRecoveryOwnerReady {
     pub platform: HostPlatform,
     pub target: ContainerTarget,
     pub config_digest: String,
+    pub recovery_point: NativeLinuxRecoveryPoint,
     pub owner_pid: u32,
+    pub owner_start_time_ticks: u64,
     pub init_pid: i32,
     pub effective_uid: u32,
     pub effective_gid: u32,
@@ -77,7 +87,7 @@ pub struct NativeLinuxRecoverySmokeReport {
 }
 
 impl NativeLinuxRecoverySmokeReport {
-    fn initial(target: ContainerTarget, cgroup_delegation_requested: bool) -> Self {
+    pub(crate) fn initial(target: ContainerTarget, cgroup_delegation_requested: bool) -> Self {
         // SAFETY: these credential queries have no pointer arguments or failure
         // return values.
         let (effective_uid, effective_gid) = unsafe { (libc::geteuid(), libc::getegid()) };
@@ -168,6 +178,7 @@ pub async fn native_linux_recovery_owner_with_cgroup_delegation(
         container_id,
         ready_file,
         RecoveryDriverAccess::from_delegation(delegated_cgroup_root),
+        NativeLinuxRecoveryPoint::Running,
     )
     .await
 }
@@ -189,6 +200,29 @@ pub async fn native_linux_recovery_owner_with_device_bootstrap(
         container_id,
         ready_file,
         RecoveryDriverAccess::DeviceBootstrap(bootstrap),
+        NativeLinuxRecoveryPoint::Running,
+    )
+    .await
+}
+
+/// Create one durable Native generation, publish its exact owner identity, and
+/// enter a configured `startContainer` Hook until the qualification parent
+/// terminates this owner.
+pub async fn native_linux_hook_owner_death_owner(
+    agent: &Path,
+    root: &Path,
+    bundle_directory: &Path,
+    container_id: ContainerId,
+    ready_file: &Path,
+) -> Result<()> {
+    native_linux_recovery_owner_with_driver(
+        agent,
+        root,
+        bundle_directory,
+        container_id,
+        ready_file,
+        RecoveryDriverAccess::Host,
+        NativeLinuxRecoveryPoint::StartContainerHook,
     )
     .await
 }
@@ -200,6 +234,7 @@ async fn native_linux_recovery_owner_with_driver(
     container_id: ContainerId,
     ready_file: &Path,
     access: RecoveryDriverAccess<'_>,
+    recovery_point: NativeLinuxRecoveryPoint,
 ) -> Result<()> {
     let cgroup_delegation_requested = access.delegation_root().is_some();
     prepare_layout(root).await?;
@@ -226,38 +261,56 @@ async fn native_linux_recovery_owner_with_driver(
         owner_error("native recovery owner create returned no configured init PID")
     })?;
     let target = ContainerTarget::exact(container_id, created.generation);
+    let owner_pid = std::process::id();
+    let owner_start_time_ticks = capture_native_process_identity(owner_pid)
+        .map_err(owner_error)?
+        .start_time_ticks;
+    let mut ready = NativeLinuxRecoveryOwnerReady {
+        schema_version: NATIVE_LINUX_RECOVERY_OWNER_READY_SCHEMA_VERSION.to_string(),
+        status: CapabilityStatus::Available,
+        platform: HostPlatform::Linux,
+        target: target.clone(),
+        config_digest: created.config_digest,
+        recovery_point,
+        owner_pid,
+        owner_start_time_ticks,
+        init_pid,
+        // SAFETY: these credential queries have no pointer arguments or failure
+        // return values.
+        effective_uid: unsafe { libc::geteuid() },
+        // SAFETY: see the effective UID query above.
+        effective_gid: unsafe { libc::getegid() },
+        cgroup_delegation_requested,
+        cgroup_delegation_verified: cgroup_delegation_requested,
+        running_observed: false,
+    };
+    if recovery_point == NativeLinuxRecoveryPoint::StartContainerHook {
+        write_ready(ready_file, &ready)?;
+    }
     let started = service
         .start(StartRequest {
             context: operation("native-recovery-owner-start")?,
             target: target.clone(),
         })
-        .await?;
+        .await;
+    if recovery_point == NativeLinuxRecoveryPoint::StartContainerHook {
+        cleanup_uninterrupted_hook_owner(&service, &driver, &target).await;
+        return Err(owner_error(match started {
+            Ok(_) => "startContainer Hook completed before qualification owner death".to_string(),
+            Err(error) => {
+                format!("startContainer Hook stopped retaining the qualification owner: {error}")
+            }
+        }));
+    }
+    let started = started?;
     if *started.state.status() != ContainerState::Running || *started.state.pid() != Some(init_pid)
     {
         return Err(owner_error(
             "native recovery owner start did not retain the exact running init",
         ));
     }
-    write_ready(
-        ready_file,
-        &NativeLinuxRecoveryOwnerReady {
-            schema_version: NATIVE_LINUX_RECOVERY_OWNER_READY_SCHEMA_VERSION.to_string(),
-            status: CapabilityStatus::Available,
-            platform: HostPlatform::Linux,
-            target: target.clone(),
-            config_digest: created.config_digest,
-            owner_pid: std::process::id(),
-            init_pid,
-            // SAFETY: these credential queries have no pointer arguments or
-            // failure return values.
-            effective_uid: unsafe { libc::geteuid() },
-            // SAFETY: see the effective UID query above.
-            effective_gid: unsafe { libc::getegid() },
-            cgroup_delegation_requested,
-            cgroup_delegation_verified: cgroup_delegation_requested,
-            running_observed: true,
-        },
-    )?;
+    ready.running_observed = true;
+    write_ready(ready_file, &ready)?;
 
     sleep(OWNER_MAX_LIFETIME).await;
     let _ = service
@@ -281,6 +334,35 @@ async fn native_linux_recovery_owner_with_driver(
         "the native recovery owner was not externally terminated within five minutes",
     )
     .for_operation("native-linux-recovery-owner"))
+}
+
+async fn cleanup_uninterrupted_hook_owner(
+    service: &HostRuntimeService,
+    driver: &NativeLinuxDriver,
+    target: &ContainerTarget,
+) {
+    if let Ok(context) = operation("native-hook-owner-uninterrupted-kill") {
+        if let Ok(signal) = Signal::new(LINUX_SIGKILL) {
+            let _ = service
+                .kill(KillRequest {
+                    context,
+                    target: target.clone(),
+                    signal,
+                    all: true,
+                })
+                .await;
+        }
+    }
+    if let Ok(context) = operation("native-hook-owner-uninterrupted-delete") {
+        let _ = service
+            .delete(DeleteRequest {
+                context,
+                target: target.clone(),
+                mode: DeleteMode::Force,
+            })
+            .await;
+    }
+    let _ = driver.shutdown().await;
 }
 
 /// Reopen a real Native Linux driver after owner death and finish stopped-only

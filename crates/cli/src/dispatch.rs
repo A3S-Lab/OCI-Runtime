@@ -393,6 +393,66 @@ fn dispatch(
             })
         }),
         #[cfg(target_os = "linux")]
+        Command::NativeLinuxHookOwnerDeathOwner {
+            agent,
+            root,
+            bundle,
+            container_id,
+            ready_file,
+        } => command_future!({
+            a3s_oci_runtime::native_linux_hook_owner_death_owner(
+                &agent,
+                &root,
+                &bundle,
+                container_id,
+                &ready_file,
+            )
+            .await?;
+            Ok(ExitCode::SUCCESS)
+        }),
+        #[cfg(target_os = "linux")]
+        Command::NativeLinuxHookOwnerDeathResume {
+            agent,
+            root,
+            bundle,
+            container_id,
+            generation,
+            evidence,
+        } => command_future!({
+            let encoded = std::fs::read(&evidence).map_err(|source| {
+                CliError::ReadHookOwnerDeathEvidence {
+                    path: evidence.clone(),
+                    source,
+                }
+            })?;
+            let evidence_record: a3s_oci_runtime::NativeLinuxHookOwnerDeathEvidence =
+                serde_json::from_slice(&encoded).map_err(|source| {
+                    CliError::ParseHookOwnerDeathEvidence {
+                        path: evidence.clone(),
+                        source,
+                    }
+                })?;
+            let target = a3s_oci_sdk::ContainerTarget::exact(
+                container_id,
+                a3s_oci_sdk::Generation(generation),
+            );
+            let report = a3s_oci_runtime::native_linux_hook_owner_death_resume(
+                &agent,
+                &root,
+                &bundle,
+                target,
+                evidence_record,
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }),
+        #[cfg(target_os = "linux")]
         Command::NativeLinuxService {
             root,
             agent,
