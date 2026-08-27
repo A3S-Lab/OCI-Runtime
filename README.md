@@ -825,6 +825,13 @@ cargo test --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+Full Runtime tags produced by the current release workflow include signed SLSA
+build provenance for all five archives and `SHA256SUMS`, plus a portable
+Sigstore bundle. Follow
+[Release verification](docs/release-verification.md) to enforce the repository,
+workflow, tag, and digest identity. Successful verification does not promote
+the selected driver's advertised readiness or replace its real-host gates.
+
 Real execution gates require a prepared host and isolated runtime root.
 
 | Host | Entry point | Guide |
@@ -1099,7 +1106,8 @@ exact release-artifact qualification must all pass before a driver becomes
 - production checkpoint/restore driver execution and real-host qualification;
 - production SEV-SNP/TDX launch and attestation drivers, hardware evidence
   qualification, and verifier-policy integration outside Runtime;
-- signed-package, upgrade, rollback, security, and long-duration release gates.
+- exact published-package qualification, upgrade, rollback, security, and
+  long-duration release gates.
 
 ## Workspace map
 
@@ -1116,6 +1124,7 @@ crates/cli/             capability inspection and real-host qualification gates
 ## Documentation
 
 - [Roadmap and release gates](ROADMAP.md)
+- [Release verification](docs/release-verification.md)
 - [Durable lifecycle and recovery](docs/durable-state.md)
 - [SDK transport](docs/sdk-transport.md)
 - [Immutable checkpoint and restore contract](docs/checkpoint-contract.md)

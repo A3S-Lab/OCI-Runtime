@@ -2,8 +2,10 @@
 
 ## Current support matrix
 
-The shim is a development adapter. It does not make any runtime driver
-`supported` and it is not yet a signed release artifact.
+The shim is a development adapter and does not make any runtime driver
+`supported`. Tags produced by the current release workflow are covered by
+`SHA256SUMS` and signed SLSA build provenance, but exact published-package
+qualification remains open.
 
 | containerd | Host | Runtime profile | Status | Retained gate |
 | --- | --- | --- | --- | --- |
@@ -154,7 +156,8 @@ musl target with Rust's bundled linker. Packaging rejects an executable with
 an ELF interpreter or `NEEDED` dependency, so these entries do not inherit a
 host glibc requirement. Static packaging is a portability property, not a
 driver or containerd support claim. The release workflow includes the complete
-archive in `SHA256SUMS`.
+archive in `SHA256SUMS` and the signed provenance described in
+[release verification](release-verification.md).
 
 The shim does not execute a driver directly. It connects to the long-lived
 A3S OCI host service through the SDK endpoint. The default Unix socket is:
@@ -739,7 +742,8 @@ suite to restart containerd.
 ## Open release gates
 
 - qualify the supported containerd version range from exact release packages;
-- publish signed or checksummed shim, host-service, agent, and driver assets;
+- qualify the exact signed and checksummed published shim, host-service, agent,
+  and driver archives;
 - qualify Checkpoint, checkpoint-backed Create, restored Start, package
   handoff, containerd content-store import, restart, and leak cleanup with a
   production driver that explicitly advertises Checkpoint and Restore;

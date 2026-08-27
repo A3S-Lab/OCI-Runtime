@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -103,8 +103,9 @@ jobs:
         shell: bash
         run: |
           package="a3s-oci-runtime-${GITHUB_REF_NAME}-${{ matrix.name }}"
-          mkdir -p "$package"
+          mkdir -p "$package/docs"
           cp README.md CHANGELOG.md LICENSE "$package/"
+          cp docs/release-verification.md "$package/docs/"
           case "${{ runner.os }}" in
             Linux)
               release="target/${{ matrix.rust_target }}/release"
@@ -112,7 +113,7 @@ jobs:
                 "$release/a3s-oci-agent" \
                 "$release/containerd-shim-a3s-oci-v2" \
                 "$package/"
-              mkdir -p "$package/docs" "$package/compat"
+              mkdir -p "$package/compat"
               cp docs/containerd-runtime-v2.md "$package/docs/"
               cp compat/containerd-runtime-v2.json "$package/compat/"
               ;;
@@ -150,7 +151,7 @@ jobs:
         shell: bash
         run: |
           package="a3s-oci-runtime-${GITHUB_REF_NAME}-guest-agents"
-          mkdir -p "$package"
+          mkdir -p "$package/docs"
           .github/scripts/verify-static-elf.sh \
             target/x86_64-unknown-linux-musl/release/a3s-oci-agent \
             target/aarch64-unknown-linux-musl/release/a3s-oci-agent
@@ -159,6 +160,7 @@ jobs:
             cp "$agent" "$package/a3s-oci-agent-$target"
           done
           cp README.md CHANGELOG.md LICENSE "$package/"
+          cp docs/release-verification.md "$package/docs/"
           tar -czf "${package}.tar.gz" "$package"
       - uses: actions/upload-artifact@v4
         with:
@@ -170,6 +172,11 @@ jobs:
     name: Publish GitHub Release
     needs: [build-host, build-guest-agents]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -181,7 +188,22 @@ jobs:
           find artifacts -type f -name '*.tar.gz' -exec cp {} dist/ \;
           test "$(find dist -type f -name '*.tar.gz' | wc -l)" -eq 5
           (cd dist && sha256sum *.tar.gz > SHA256SUMS)
-      - name: Create immutable release
+      - name: Generate signed build provenance
+        id: provenance
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+      - name: Retain portable Sigstore bundle
+        shell: bash
+        env:
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          test -f "$PROVENANCE_BUNDLE"
+          cp "$PROVENANCE_BUNDLE" \
+            "dist/a3s-oci-runtime-${GITHUB_REF_NAME}-provenance.sigstore.json"
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           name: A3S OCI Runtime ${{ github.ref_name }}
