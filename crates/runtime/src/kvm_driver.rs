@@ -7,14 +7,14 @@ use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, Isolatio
 use a3s_oci_sdk::{async_trait, Error, ErrorCode, Result};
 
 use crate::agent_driver::AgentDriverClient;
-use crate::agent_session::UtilityVmSession;
+use crate::agent_session::{UtilityVmSession, VerifiedLinuxUtilityVmConnectOptions};
 use crate::utility_vm_driver::layout::{
     validate_absolute_normalized_path, PreparedUtilityVmLayout, UtilityVmBootstrap,
 };
 use crate::utility_vm_driver::recovery::RecoveryStore;
 use crate::utility_vm_driver::{
-    delegate_utility_vm_runtime_driver, LaunchedUtilityVm, UtilityVmFactory, UtilityVmOwner,
-    UtilityVmRuntimeDriver,
+    delegate_utility_vm_runtime_driver, LaunchedUtilityVm, UtilityVmFactory,
+    UtilityVmLaunchRequest, UtilityVmOwner, UtilityVmRuntimeDriver,
 };
 
 pub(crate) const LINUX_KVM_RECOVERY_QUALIFICATION_SCOPE: &str =
@@ -275,12 +275,15 @@ struct LiveKvmVmFactory {
 
 #[async_trait]
 impl UtilityVmFactory for LiveKvmVmFactory {
-    async fn launch(
-        &self,
-        target: &a3s_oci_sdk::ContainerTarget,
-        runtime_share: &Path,
-        attachment_contract: &a3s_oci_sdk::CreateAttachments,
-    ) -> Result<LaunchedUtilityVm> {
+    async fn launch(&self, request: UtilityVmLaunchRequest<'_>) -> Result<LaunchedUtilityVm> {
+        let vm_attachment_manifest_sha256 =
+            crate::utility_vm_driver::kvm_network::prepare(&request).await?;
+        let UtilityVmLaunchRequest {
+            target,
+            runtime_share,
+            attachment_contract,
+            ..
+        } = request;
         let generation = target.generation.ok_or_else(|| {
             Error::new(
                 ErrorCode::InvalidArgument,
@@ -298,14 +301,17 @@ impl UtilityVmFactory for LiveKvmVmFactory {
             .recovery
             .path(target, attachment_contract.guest_session())?;
         let session = Arc::new(
-            UtilityVmSession::connect_with_verified_runtime_share(
+            UtilityVmSession::connect_with_verified_runtime_share_and_vm_attachments(
                 &self.shim,
-                &self.bootstrap_root,
-                &self.system_image_manifest,
-                &self.system_image_manifest_sha256,
-                runtime_share,
-                &console,
-                Some(&recovery_report),
+                VerifiedLinuxUtilityVmConnectOptions {
+                    rootfs: &self.bootstrap_root,
+                    system_image_manifest: &self.system_image_manifest,
+                    expected_system_image_manifest_sha256: &self.system_image_manifest_sha256,
+                    runtime_share,
+                    console: &console,
+                    recovery_report: Some(&recovery_report),
+                    vm_attachment_manifest_sha256: vm_attachment_manifest_sha256.as_deref(),
+                },
             )
             .await
             .map_err(kvm_launch_error)?,
@@ -360,12 +366,7 @@ mod tests {
 
     #[async_trait]
     impl UtilityVmFactory for NoLaunchFactory {
-        async fn launch(
-            &self,
-            _target: &a3s_oci_sdk::ContainerTarget,
-            _runtime_share: &Path,
-            _attachment_contract: &a3s_oci_sdk::CreateAttachments,
-        ) -> Result<LaunchedUtilityVm> {
+        async fn launch(&self, _request: UtilityVmLaunchRequest<'_>) -> Result<LaunchedUtilityVm> {
             Err(Error::new(
                 ErrorCode::Internal,
                 "contract-only KVM driver must never launch",

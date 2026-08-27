@@ -8,7 +8,7 @@ use std::time::Duration;
 use a3s_oci_agent_protocol::{
     AgentTransportQualificationRequest, AgentVsockEndpoint, AGENT_RECOVERY_REPORT_ENV,
     AGENT_RUNTIME_SHARE_ENV, AGENT_RUNTIME_SHARE_TAG, AGENT_SESSION_TOKEN_FILE_ENV,
-    AGENT_TRANSPORT_QUALIFICATION_ENV, AGENT_VSOCK_PORT,
+    AGENT_TRANSPORT_QUALIFICATION_ENV, AGENT_VM_ATTACHMENT_MANIFEST_SHA256_ENV, AGENT_VSOCK_PORT,
 };
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,7 @@ use crate::linux_context::{KrunContext, LinuxKrunApi};
 use crate::linux_kvm_device::LinuxKvmDevice;
 use crate::linux_runtime_share::LinuxRuntimeShare;
 use crate::linux_system_image::LinuxSystemImage;
+use crate::linux_vm_attachment::LinuxVmAttachmentManifest;
 use crate::unix_process::{
     read_bounded_worker_output, resolve_agent_socket, resolve_console, terminate_and_wait,
     wait_for_worker,
@@ -26,7 +27,7 @@ use crate::{KrunAgentVmSmokeReport, LinuxBootAssetsEvidence, VmConfig};
 
 const AGENT_GUEST_PATH: &str = "/usr/bin/a3s-oci-agent";
 const WORKER_COMMAND: &str = "__linux-agent-vm-worker";
-const WORKER_SCHEMA_VERSION: &str = "a3s.oci.linux-kvm-agent-vm-worker.v2";
+const WORKER_SCHEMA_VERSION: &str = "a3s.oci.linux-kvm-agent-vm-worker.v3";
 const POST_PROBE_FAILURE_REASON: &str =
     "injected Linux KVM failure after device verification and before native VM entry";
 const WORKER_TIMEOUT: Duration = Duration::from_secs(90);
@@ -40,6 +41,8 @@ struct WorkerEvidence {
     vm_configured: bool,
     rootfs_configured: bool,
     runtime_share_configured: bool,
+    vm_attachment_manifest_verified: bool,
+    network_devices_configured: usize,
     kvm_device_opened: bool,
     kvm_api_verified: bool,
     kvm_post_probe_failure_injected: bool,
@@ -63,6 +66,8 @@ impl WorkerEvidence {
             vm_configured: false,
             rootfs_configured: false,
             runtime_share_configured: false,
+            vm_attachment_manifest_verified: false,
+            network_devices_configured: 0,
             kvm_device_opened: false,
             kvm_api_verified: false,
             kvm_post_probe_failure_injected: false,
@@ -88,6 +93,7 @@ pub(crate) struct LinuxAgentVmConfig<'a> {
     pub(crate) transport_qualification: Option<&'a AgentTransportQualificationRequest>,
     pub(crate) qualify_kvm_post_probe_failure: bool,
     pub(crate) qualify_kvm_compatibility_drift: Option<&'a str>,
+    pub(crate) vm_attachment_manifest_sha256: Option<&'a str>,
     pub(crate) vm: VmConfig,
 }
 
@@ -103,6 +109,7 @@ pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgent
         transport_qualification,
         qualify_kvm_post_probe_failure,
         qualify_kvm_compatibility_drift,
+        vm_attachment_manifest_sha256,
         vm: config,
     } = configuration;
     let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Linux, config);
@@ -164,6 +171,7 @@ pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgent
         .arg("--socket-path")
         .arg(&socket)
         .env_remove(AGENT_TRANSPORT_QUALIFICATION_ENV)
+        .env_remove(AGENT_VM_ATTACHMENT_MANIFEST_SHA256_ENV)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -188,6 +196,9 @@ pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgent
     }
     if let Some(case) = qualify_kvm_compatibility_drift {
         command.arg("--qualify-kvm-compatibility-drift").arg(case);
+    }
+    if let Some(digest) = vm_attachment_manifest_sha256 {
+        command.arg("--vm-attachment-manifest-sha256").arg(digest);
     }
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -299,6 +310,9 @@ pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgent
         && report.vm_entered
         && report.guest_exit_code == Some(0)
         && report.console_created
+        && evidence.as_ref().is_some_and(|evidence| {
+            evidence.vm_attachment_manifest_verified == (evidence.network_devices_configured > 0)
+        })
     {
         report.status = CapabilityStatus::Available;
         report.reason = None;
@@ -318,6 +332,7 @@ pub(crate) struct LinuxAgentVmWorkerConfig<'a> {
     pub(crate) transport_qualification: Option<&'a AgentTransportQualificationRequest>,
     pub(crate) qualify_kvm_post_probe_failure: bool,
     pub(crate) qualify_kvm_compatibility_drift: Option<&'a str>,
+    pub(crate) vm_attachment_manifest_sha256: Option<&'a str>,
 }
 
 pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
@@ -331,6 +346,7 @@ pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
         transport_qualification,
         qualify_kvm_post_probe_failure,
         qualify_kvm_compatibility_drift,
+        vm_attachment_manifest_sha256,
     } = configuration;
     let mut evidence = WorkerEvidence::initial();
     let runtime_share = match LinuxRuntimeShare::open(runtime_share) {
@@ -338,6 +354,12 @@ pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
         Err(error) => return fail_worker(&mut evidence, error.to_string()),
     };
     let runtime_share_path = runtime_share.path().to_path_buf();
+    let mut vm_attachments =
+        match LinuxVmAttachmentManifest::open(&runtime_share, vm_attachment_manifest_sha256) {
+            Ok(attachments) => attachments,
+            Err(error) => return fail_worker(&mut evidence, error.to_string()),
+        };
+    evidence.vm_attachment_manifest_verified = vm_attachments.is_some();
     let console = match resolve_console(console) {
         Ok(console) => console,
         Err(reason) => return fail_worker(&mut evidence, reason),
@@ -390,6 +412,16 @@ pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.runtime_share_configured = true;
+    if let Some(attachments) = vm_attachments.as_ref() {
+        for attachment in attachments.manifest().network() {
+            if let Err(error) =
+                context.add_network_tap(attachment.tap_name(), attachment.mac_address().as_bytes())
+            {
+                return fail_worker(&mut evidence, error.to_string());
+            }
+            evidence.network_devices_configured += 1;
+        }
+    }
     if let Err(error) = context.set_agent_vsock(&socket, AGENT_VSOCK_PORT) {
         return fail_worker(&mut evidence, error.to_string());
     }
@@ -418,6 +450,12 @@ pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
         };
         environment.push((AGENT_TRANSPORT_QUALIFICATION_ENV.to_string(), encoded));
     }
+    if let Some(digest) = vm_attachment_manifest_sha256 {
+        environment.push((
+            AGENT_VM_ATTACHMENT_MANIFEST_SHA256_ENV.to_string(),
+            digest.to_string(),
+        ));
+    }
     if let Err(error) = context.set_exec(AGENT_GUEST_PATH, &[], &environment) {
         return fail_worker(&mut evidence, error.to_string());
     }
@@ -431,7 +469,13 @@ pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
             Ok(barrier) => barrier,
             Err(reason) => return fail_worker(&mut evidence, reason),
         };
-        let verification = context.reverify_entry_assets();
+        let verification = context.reverify_entry_assets().and_then(|()| {
+            if let Some(attachments) = vm_attachments.as_mut() {
+                attachments.reverify()
+            } else {
+                Ok(())
+            }
+        });
         drop(barrier);
         return match verification {
             Err(error) => fail_worker(
@@ -450,6 +494,11 @@ pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
     }
     if let Err(error) = context.reverify_entry_assets() {
         return fail_worker(&mut evidence, error.to_string());
+    }
+    if let Some(attachments) = vm_attachments.as_mut() {
+        if let Err(error) = attachments.reverify() {
+            return fail_worker(&mut evidence, error.to_string());
+        }
     }
     let kvm_device = match LinuxKvmDevice::open() {
         Ok(device) => {

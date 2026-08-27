@@ -269,18 +269,15 @@ mod tests {
     };
 
     use super::*;
-    use crate::utility_vm_driver::{LaunchedUtilityVm, UtilityVmFactory, UtilityVmRuntimeDriver};
+    use crate::utility_vm_driver::{
+        LaunchedUtilityVm, UtilityVmFactory, UtilityVmLaunchRequest, UtilityVmRuntimeDriver,
+    };
 
     struct NoLaunchFactory;
 
     #[async_trait]
     impl UtilityVmFactory for NoLaunchFactory {
-        async fn launch(
-            &self,
-            _target: &a3s_oci_sdk::ContainerTarget,
-            _runtime_share: &Path,
-            _attachment_contract: &a3s_oci_sdk::CreateAttachments,
-        ) -> Result<LaunchedUtilityVm> {
+        async fn launch(&self, _request: UtilityVmLaunchRequest<'_>) -> Result<LaunchedUtilityVm> {
             Err(Error::new(
                 ErrorCode::Internal,
                 "KVM Host Service contract fixture must not launch",

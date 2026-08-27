@@ -13,6 +13,7 @@ mod recovery;
 mod server;
 mod transport;
 mod validation;
+mod vm_attachment;
 mod wire;
 
 pub use client::AgentClient;
@@ -57,6 +58,11 @@ pub use server::{
 pub use transport::{
     AgentVsockEndpoint, AGENT_RUNTIME_SHARE_ENV, AGENT_RUNTIME_SHARE_GUEST_ROOT,
     AGENT_RUNTIME_SHARE_STATE_GUEST_ROOT, AGENT_RUNTIME_SHARE_TAG, AGENT_VSOCK_PORT,
+};
+pub use vm_attachment::{
+    AgentVmAttachmentManifest, AgentVmMacAddress, AgentVmNetworkAttachment,
+    AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME, AGENT_VM_ATTACHMENT_MANIFEST_MAX_BYTES,
+    AGENT_VM_ATTACHMENT_MANIFEST_SCHEMA_VERSION, AGENT_VM_ATTACHMENT_MANIFEST_SHA256_ENV,
 };
 
 #[cfg(test)]

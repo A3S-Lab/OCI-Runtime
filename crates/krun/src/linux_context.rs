@@ -35,6 +35,7 @@ type KrunAddDisk = unsafe extern "C" fn(u32, *const c_char, *const c_char, u32, 
 type KrunSetRootDiskRemount =
     unsafe extern "C" fn(u32, *const c_char, *const c_char, *const c_char) -> i32;
 type KrunAddVirtiofs = unsafe extern "C" fn(u32, *const c_char, *const c_char) -> i32;
+type KrunAddNetTap = unsafe extern "C" fn(u32, *const c_char, *const u8, u32, u32) -> i32;
 type KrunSetWorkdir = unsafe extern "C" fn(u32, *const c_char) -> i32;
 type KrunSetExec =
     unsafe extern "C" fn(u32, *const c_char, *const *const c_char, *const *const c_char) -> i32;
@@ -53,6 +54,7 @@ pub(crate) struct LinuxKrunApi {
     add_disk: KrunAddDisk,
     set_root_disk_remount: KrunSetRootDiskRemount,
     add_virtiofs: KrunAddVirtiofs,
+    add_net_tap: Option<KrunAddNetTap>,
     set_workdir: KrunSetWorkdir,
     set_exec: KrunSetExec,
     set_console_output: KrunSetConsoleOutput,
@@ -138,6 +140,7 @@ impl LinuxKrunApi {
                 "krun_set_root_disk_remount",
             )?,
             add_virtiofs: load_symbol(&krun, b"krun_add_virtiofs\0", "krun_add_virtiofs")?,
+            add_net_tap: load_optional_symbol(&krun, b"krun_add_net_tap\0"),
             set_workdir: load_symbol(&krun, b"krun_set_workdir\0", "krun_set_workdir")?,
             set_exec: load_symbol(&krun, b"krun_set_exec\0", "krun_set_exec")?,
             set_console_output: load_symbol(
@@ -180,6 +183,7 @@ pub(crate) struct KrunContext {
     api: LinuxKrunApi,
     system_image: Option<LinuxSystemImage>,
     runtime_share: Option<LinuxRuntimeShare>,
+    network_taps: Vec<String>,
     not_thread_safe: PhantomData<Rc<()>>,
 }
 
@@ -202,6 +206,7 @@ impl KrunContext {
             api,
             system_image: None,
             runtime_share: None,
+            network_taps: Vec::new(),
             not_thread_safe: PhantomData,
         })
     }
@@ -349,6 +354,38 @@ impl KrunContext {
             status,
             "failed to map the guest agent port to a Linux Unix socket",
         )
+    }
+
+    pub(crate) fn add_network_tap(&mut self, tap_name: &str, mac_address: &[u8; 6]) -> Result<()> {
+        let id = self.active_id("krun_add_net_tap")?;
+        if self.network_taps.iter().any(|known| known == tap_name) {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                format!("Linux KVM TAP {tap_name} has already been configured"),
+            )
+            .for_operation("krun_add_net_tap"));
+        }
+        let add_net_tap = self.api.add_net_tap.ok_or_else(|| {
+            Error::new(
+                ErrorCode::Unsupported,
+                "the pinned Linux libkrun runtime does not export krun_add_net_tap",
+            )
+            .for_operation("krun_add_net_tap")
+        })?;
+        self.api.reverify_runtime()?;
+        let retained_tap_name = tap_name.to_string();
+        let tap_name = value_to_cstring("krun_add_net_tap", "TAP name", tap_name)?;
+        // SAFETY: the live context is exclusively owned, both pointers remain
+        // valid for the complete call, the MAC is exactly six bytes, and the
+        // pinned TAP backend supports neither optional features nor flags.
+        let status = unsafe { add_net_tap(id, tap_name.as_ptr(), mac_address.as_ptr(), 0, 0) };
+        check_status(
+            "krun_add_net_tap",
+            status,
+            "failed to attach an authorized TAP to the Linux KVM guest",
+        )?;
+        self.network_taps.push(retained_tap_name);
+        Ok(())
     }
 
     pub(crate) fn set_workdir(&mut self, workdir: &str) -> Result<()> {
@@ -721,6 +758,12 @@ fn load_symbol<T: Copy>(
         )
     })?;
     Ok(*symbol)
+}
+
+fn load_optional_symbol<T: Copy>(library: &Library, name: &'static [u8]) -> Option<T> {
+    // SAFETY: callers supply the exact C ABI type from the pinned header. The
+    // copied pointer cannot outlive `library`, which remains owned by the API.
+    unsafe { library.get::<T>(name) }.ok().map(|symbol| *symbol)
 }
 
 fn check_status(operation: &'static str, status: i32, message: &'static str) -> Result<()> {

@@ -168,8 +168,32 @@ Create. Rootful Native Linux advertises cumulative v1-v3 because its executor
 already type-checks namespace descriptors, moves and verifies interfaces,
 rolls back failed Create in reverse order, and scopes normal cleanup to the
 configured namespace lifecycle. Rootless Native stays v1-v2 because its helper
-contract grants no host network-device authority. Utility-VM drivers remain v1
-until a separate caller-owned NIC transport plus cleanup/recovery gate exists.
+contract grants no host network-device authority.
+
+Dedicated Linux KVM contains an internal v3 transport for the
+`ReleaseRuntimeNamespace` form. Before the shim starts, the Host validates the
+exact bundle and public attachment digest, requires every source name to be a
+live TAP in the runtime network namespace, derives a locally administered
+unicast MAC from the attachment identities and TAP name, and atomically writes
+the canonical `a3s.oci.agent-vm-attachments.v1` manifest as a mode-`0600` file
+inside the exact-generation share. Exact replay retains identical evidence;
+stale, non-private, or drifted evidence conflicts.
+
+The isolated shim opens that file through its descriptor-pinned runtime share,
+verifies its raw SHA-256 and inode before KVM access, and supplies each TAP and
+MAC through `krun_add_net_tap`. The Guest independently checks the raw digest,
+the exact Guest bundle and configuration pointers, locates each VMM NIC by MAC,
+and stages all renames through collision-free temporary names before the Agent
+protocol starts. The resulting binding accepts only the matching exact target,
+Guest bundle, and configuration on Create. A joined caller namespace cannot be
+represented across the VM boundary, and reusable Guest sessions do not support
+NIC hotplug, so both forms are rejected.
+
+This implementation is deliberately not an advertised capability yet. The
+attachment versions are cumulative, so KVM must first gain the independent v2
+caller-owned storage transport. It must then pass destructive real-host v3
+restart, cleanup, replay, and soak qualification before advertising v3. HVF
+remains v1 until it has equivalent storage and NIC transports and evidence.
 
 ## Reusable guest-session identity
 
@@ -235,17 +259,18 @@ named by session incarnation so every member can recover its own retained
 record without pretending the first container owns the VM.
 
 No production utility-VM driver advertises v4 yet. The common mechanism and
-deterministic driver tests are present, while cumulative v2/v3 transport and
-per-driver real-host restart, cleanup, and soak qualification remain the
-enablement gates.
+deterministic driver tests are present, while cumulative v2/v3 advertisement
+and per-driver real-host restart, cleanup, and soak qualification remain the
+enablement gates. KVM's internal dedicated v3 transport does not bypass its
+missing v2 transport or those qualification gates.
 
 Utility-VM attachment capabilities are explicit driver configuration, not an
 inference from the advertised isolation classes. The driver repeats schema
 negotiation at its own preflight boundary and passes the complete immutable
 `CreateAttachments` value into the platform VM factory. Production HVF and KVM
 still configure v1, while the reusable-session test profile opts into v4. This
-keeps unimplemented storage and NIC transport fail-closed without discarding
-their typed contracts at the future launch boundary.
+keeps unsupported or unqualified storage and NIC surfaces fail-closed without
+discarding their typed contracts at the future launch boundary.
 
 ## Runtime-owned bundle handoff
 

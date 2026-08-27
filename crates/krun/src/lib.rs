@@ -48,6 +48,11 @@ mod linux_runtime_share;
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 mod linux_system_image;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod linux_vm_attachment;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_agent_smoke;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -593,9 +598,129 @@ pub fn run_macos_agent_vm_worker(
     )
 }
 
-/// Run the private Linux KVM guest-agent VM worker.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[doc(hidden)]
+pub struct LinuxAgentVmWorkerHandoff<'a> {
+    system_image_manifest: &'a Path,
+    runtime_share: &'a Path,
+    guest_token_file: &'a str,
+    console: &'a Path,
+    socket: &'a Path,
+    guest_recovery_report: Option<&'a str>,
+    vm_attachment_manifest_sha256: Option<&'a str>,
+    transport_qualification: Option<&'a a3s_oci_agent_protocol::AgentTransportQualificationRequest>,
+    qualify_kvm_post_probe_failure: bool,
+    qualify_kvm_compatibility_drift: Option<&'a str>,
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[doc(hidden)]
+impl<'a> LinuxAgentVmWorkerHandoff<'a> {
+    #[must_use]
+    pub const fn new(
+        system_image_manifest: &'a Path,
+        runtime_share: &'a Path,
+        guest_token_file: &'a str,
+        console: &'a Path,
+        socket: &'a Path,
+    ) -> Self {
+        Self {
+            system_image_manifest,
+            runtime_share,
+            guest_token_file,
+            console,
+            socket,
+            guest_recovery_report: None,
+            vm_attachment_manifest_sha256: None,
+            transport_qualification: None,
+            qualify_kvm_post_probe_failure: false,
+            qualify_kvm_compatibility_drift: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_guest_recovery_report(mut self, path: Option<&'a str>) -> Self {
+        self.guest_recovery_report = path;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_vm_attachment_manifest_sha256(mut self, digest: Option<&'a str>) -> Self {
+        self.vm_attachment_manifest_sha256 = digest;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_transport_qualification(
+        mut self,
+        request: Option<&'a a3s_oci_agent_protocol::AgentTransportQualificationRequest>,
+    ) -> Self {
+        self.transport_qualification = request;
+        self.qualify_kvm_compatibility_drift = None;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_kvm_post_probe_failure(mut self) -> Self {
+        self.qualify_kvm_post_probe_failure = true;
+        self.qualify_kvm_compatibility_drift = None;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_kvm_compatibility_drift(mut self, case: &'a str) -> Self {
+        self.transport_qualification = None;
+        self.qualify_kvm_post_probe_failure = false;
+        self.qualify_kvm_compatibility_drift = Some(case);
+        self
+    }
+}
+
+/// Run one exact private Linux KVM guest-agent worker handoff.
 ///
 /// This is exported only for the hidden shim process boundary.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[doc(hidden)]
+#[must_use]
+pub fn run_linux_agent_vm_worker_handoff(handoff: LinuxAgentVmWorkerHandoff<'_>) -> bool {
+    let LinuxAgentVmWorkerHandoff {
+        system_image_manifest,
+        runtime_share,
+        guest_token_file,
+        console,
+        socket,
+        guest_recovery_report,
+        vm_attachment_manifest_sha256,
+        transport_qualification,
+        qualify_kvm_post_probe_failure,
+        qualify_kvm_compatibility_drift,
+    } = handoff;
+    linux_agent_smoke::run_worker(linux_agent_smoke::LinuxAgentVmWorkerConfig {
+        system_image_manifest,
+        runtime_share,
+        guest_token_file,
+        console,
+        socket,
+        guest_recovery_report,
+        vm_attachment_manifest_sha256,
+        transport_qualification,
+        qualify_kvm_post_probe_failure,
+        qualify_kvm_compatibility_drift,
+    })
+}
+
+/// Run the private Linux KVM guest-agent VM worker.
+///
+/// This compatibility entry point omits production VM attachments.
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
@@ -611,17 +736,17 @@ pub fn run_linux_agent_vm_worker(
     guest_recovery_report: Option<&str>,
     transport_qualification: Option<&a3s_oci_agent_protocol::AgentTransportQualificationRequest>,
 ) -> bool {
-    linux_agent_smoke::run_worker(linux_agent_smoke::LinuxAgentVmWorkerConfig {
-        system_image_manifest,
-        runtime_share,
-        guest_token_file,
-        console,
-        socket,
-        guest_recovery_report,
-        transport_qualification,
-        qualify_kvm_post_probe_failure: false,
-        qualify_kvm_compatibility_drift: None,
-    })
+    run_linux_agent_vm_worker_handoff(
+        LinuxAgentVmWorkerHandoff::new(
+            system_image_manifest,
+            runtime_share,
+            guest_token_file,
+            console,
+            socket,
+        )
+        .with_guest_recovery_report(guest_recovery_report)
+        .with_transport_qualification(transport_qualification),
+    )
 }
 
 /// Run the private Linux KVM guest-agent worker with the qualification-only
@@ -643,17 +768,18 @@ pub fn run_linux_agent_vm_worker_with_kvm_post_probe_failure(
     guest_recovery_report: Option<&str>,
     transport_qualification: Option<&a3s_oci_agent_protocol::AgentTransportQualificationRequest>,
 ) -> bool {
-    linux_agent_smoke::run_worker(linux_agent_smoke::LinuxAgentVmWorkerConfig {
-        system_image_manifest,
-        runtime_share,
-        guest_token_file,
-        console,
-        socket,
-        guest_recovery_report,
-        transport_qualification,
-        qualify_kvm_post_probe_failure: true,
-        qualify_kvm_compatibility_drift: None,
-    })
+    run_linux_agent_vm_worker_handoff(
+        LinuxAgentVmWorkerHandoff::new(
+            system_image_manifest,
+            runtime_share,
+            guest_token_file,
+            console,
+            socket,
+        )
+        .with_guest_recovery_report(guest_recovery_report)
+        .with_transport_qualification(transport_qualification)
+        .with_kvm_post_probe_failure(),
+    )
 }
 
 /// Run the private Linux KVM guest-agent worker with a qualification-only
@@ -675,17 +801,17 @@ pub fn run_linux_agent_vm_worker_with_compatibility_drift(
     guest_recovery_report: Option<&str>,
     case: &str,
 ) -> bool {
-    linux_agent_smoke::run_worker(linux_agent_smoke::LinuxAgentVmWorkerConfig {
-        system_image_manifest,
-        runtime_share,
-        guest_token_file,
-        console,
-        socket,
-        guest_recovery_report,
-        transport_qualification: None,
-        qualify_kvm_post_probe_failure: false,
-        qualify_kvm_compatibility_drift: Some(case),
-    })
+    run_linux_agent_vm_worker_handoff(
+        LinuxAgentVmWorkerHandoff::new(
+            system_image_manifest,
+            runtime_share,
+            guest_token_file,
+            console,
+            socket,
+        )
+        .with_guest_recovery_report(guest_recovery_report)
+        .with_kvm_compatibility_drift(case),
+    )
 }
 
 pub(crate) fn fallback_config() -> VmConfig {

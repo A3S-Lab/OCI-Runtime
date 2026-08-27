@@ -169,6 +169,13 @@ enum Command {
             conflicts_with = "qualify_kvm_post_probe_failure"
         )]
         qualify_kvm_compatibility_drift: Option<String>,
+        /// SHA-256 digest of the fixed network-attachment manifest in the runtime share.
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        #[arg(long, value_name = "SHA256")]
+        vm_attachment_manifest_sha256: Option<String>,
     },
     /// Internal process-takeover boundary for the macOS VM smoke.
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -228,6 +235,8 @@ enum Command {
             conflicts_with = "qualify_kvm_post_probe_failure"
         )]
         qualify_kvm_compatibility_drift: Option<String>,
+        #[arg(long, value_name = "SHA256")]
+        vm_attachment_manifest_sha256: Option<String>,
     },
 }
 
@@ -352,6 +361,11 @@ fn main() -> ExitCode {
                 any(target_arch = "x86_64", target_arch = "aarch64")
             ))]
             qualify_kvm_compatibility_drift,
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            vm_attachment_manifest_sha256,
         } => {
             let endpoint = match a3s_oci_krun::AgentVsockEndpoint::new(pipe_name) {
                 Ok(endpoint) => endpoint,
@@ -531,6 +545,12 @@ fn main() -> ExitCode {
                 ))]
                 let handoff = handoff
                     .with_kvm_compatibility_drift(qualify_kvm_compatibility_drift.as_deref());
+                #[cfg(all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                ))]
+                let handoff = handoff
+                    .with_vm_attachment_manifest_sha256(vm_attachment_manifest_sha256.as_deref());
                 let mut report = a3s_oci_krun::agent_vm_smoke(
                     &rootfs,
                     Some(&system_image_manifest),
@@ -645,6 +665,7 @@ fn main() -> ExitCode {
             guest_recovery_report,
             qualify_kvm_post_probe_failure,
             qualify_kvm_compatibility_drift,
+            vm_attachment_manifest_sha256,
         } => {
             let transport_qualification = match take_transport_qualification() {
                 Ok(request) => request,
@@ -653,37 +674,24 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            let succeeded = if let Some(case) = qualify_kvm_compatibility_drift.as_deref() {
-                a3s_oci_krun::run_linux_agent_vm_worker_with_compatibility_drift(
-                    &system_image_manifest,
-                    &runtime_share,
-                    &guest_token_file,
-                    &console,
-                    &socket_path,
-                    guest_recovery_report.as_deref(),
-                    case,
-                )
+            let handoff = a3s_oci_krun::LinuxAgentVmWorkerHandoff::new(
+                &system_image_manifest,
+                &runtime_share,
+                &guest_token_file,
+                &console,
+                &socket_path,
+            )
+            .with_guest_recovery_report(guest_recovery_report.as_deref())
+            .with_vm_attachment_manifest_sha256(vm_attachment_manifest_sha256.as_deref())
+            .with_transport_qualification(transport_qualification.as_ref());
+            let handoff = if let Some(case) = qualify_kvm_compatibility_drift.as_deref() {
+                handoff.with_kvm_compatibility_drift(case)
             } else if qualify_kvm_post_probe_failure {
-                a3s_oci_krun::run_linux_agent_vm_worker_with_kvm_post_probe_failure(
-                    &system_image_manifest,
-                    &runtime_share,
-                    &guest_token_file,
-                    &console,
-                    &socket_path,
-                    guest_recovery_report.as_deref(),
-                    transport_qualification.as_ref(),
-                )
+                handoff.with_kvm_post_probe_failure()
             } else {
-                a3s_oci_krun::run_linux_agent_vm_worker(
-                    &system_image_manifest,
-                    &runtime_share,
-                    &guest_token_file,
-                    &console,
-                    &socket_path,
-                    guest_recovery_report.as_deref(),
-                    transport_qualification.as_ref(),
-                )
+                handoff
             };
+            let succeeded = a3s_oci_krun::run_linux_agent_vm_worker_handoff(handoff);
             if succeeded {
                 ExitCode::SUCCESS
             } else {

@@ -31,6 +31,11 @@ pub struct AgentVmHandoff<'a> {
         any(target_arch = "x86_64", target_arch = "aarch64")
     ))]
     qualify_kvm_compatibility_drift: Option<&'a str>,
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    vm_attachment_manifest_sha256: Option<&'a str>,
 }
 
 impl<'a> AgentVmHandoff<'a> {
@@ -56,6 +61,11 @@ impl<'a> AgentVmHandoff<'a> {
                 any(target_arch = "x86_64", target_arch = "aarch64")
             ))]
             qualify_kvm_compatibility_drift: None,
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            vm_attachment_manifest_sha256: None,
         }
     }
 
@@ -90,6 +100,17 @@ impl<'a> AgentVmHandoff<'a> {
     #[must_use]
     pub const fn with_kvm_compatibility_drift(mut self, case: Option<&'a str>) -> Self {
         self.qualify_kvm_compatibility_drift = case;
+        self
+    }
+
+    /// Bind one exact network-attachment manifest staged in the runtime share.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[must_use]
+    pub const fn with_vm_attachment_manifest_sha256(mut self, digest: Option<&'a str>) -> Self {
+        self.vm_attachment_manifest_sha256 = digest;
         self
     }
 }
@@ -215,6 +236,7 @@ pub fn agent_vm_smoke(
             transport_qualification: handoff.transport_qualification,
             qualify_kvm_post_probe_failure: handoff.qualify_kvm_post_probe_failure,
             qualify_kvm_compatibility_drift: handoff.qualify_kvm_compatibility_drift,
+            vm_attachment_manifest_sha256: handoff.vm_attachment_manifest_sha256,
             vm: config,
         })
     }

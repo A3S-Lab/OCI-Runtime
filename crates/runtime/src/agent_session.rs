@@ -88,10 +88,25 @@ struct AgentVmConnectOptions<'a> {
     expected_system_image_manifest_sha256: Option<&'a str>,
     runtime_share: Option<&'a Path>,
     recovery_report: Option<&'a Path>,
+    vm_attachment_manifest_sha256: Option<&'a str>,
     faults: Arc<dyn AgentTransportFaultInjector>,
     guest_qualification: Option<&'a AgentTransportQualificationRequest>,
     qualify_kvm_post_probe_failure: bool,
     qualify_kvm_compatibility_drift: Option<&'a str>,
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+pub(crate) struct VerifiedLinuxUtilityVmConnectOptions<'a> {
+    pub(crate) rootfs: &'a Path,
+    pub(crate) system_image_manifest: &'a Path,
+    pub(crate) expected_system_image_manifest_sha256: &'a str,
+    pub(crate) runtime_share: &'a Path,
+    pub(crate) console: &'a Path,
+    pub(crate) recovery_report: Option<&'a Path>,
+    pub(crate) vm_attachment_manifest_sha256: Option<&'a str>,
 }
 
 // Connection failures intentionally return the complete retained qualification
@@ -171,13 +186,7 @@ impl UtilityVmSession {
         .await
     }
 
-    #[cfg(any(
-        all(target_os = "macos", target_arch = "aarch64"),
-        all(
-            target_os = "linux",
-            any(target_arch = "x86_64", target_arch = "aarch64")
-        )
-    ))]
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     pub(crate) async fn connect_with_verified_runtime_share(
         shim: &Path,
         rootfs: &Path,
@@ -195,6 +204,49 @@ impl UtilityVmSession {
             Some(runtime_share),
             console,
             recovery_report,
+        )
+        .await?;
+        Ok(Self {
+            client: owner.client().clone(),
+            state: Mutex::new(UtilityVmSessionState {
+                owner: Some(owner),
+                completed: None,
+            }),
+        })
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    pub(crate) async fn connect_with_verified_runtime_share_and_vm_attachments(
+        shim: &Path,
+        options: VerifiedLinuxUtilityVmConnectOptions<'_>,
+    ) -> std::result::Result<Self, AgentVmSmokeReport> {
+        let VerifiedLinuxUtilityVmConnectOptions {
+            rootfs,
+            system_image_manifest,
+            expected_system_image_manifest_sha256,
+            runtime_share,
+            console,
+            recovery_report,
+            vm_attachment_manifest_sha256,
+        } = options;
+        let owner = AgentVmSession::connect_inner(
+            shim,
+            rootfs,
+            console,
+            AgentVmConnectOptions {
+                system_image_manifest: Some(system_image_manifest),
+                expected_system_image_manifest_sha256: Some(expected_system_image_manifest_sha256),
+                runtime_share: Some(runtime_share),
+                recovery_report,
+                vm_attachment_manifest_sha256,
+                faults: Arc::new(NoAgentTransportFaultInjector),
+                guest_qualification: None,
+                qualify_kvm_post_probe_failure: false,
+                qualify_kvm_compatibility_drift: None,
+            },
         )
         .await?;
         Ok(Self {
@@ -281,6 +333,7 @@ impl UtilityVmSession {
                 expected_system_image_manifest_sha256: None,
                 runtime_share: Some(runtime_share),
                 recovery_report: None,
+                vm_attachment_manifest_sha256: None,
                 faults,
                 guest_qualification: None,
                 qualify_kvm_post_probe_failure: false,
@@ -322,6 +375,7 @@ impl UtilityVmSession {
                 expected_system_image_manifest_sha256: None,
                 runtime_share: Some(runtime_share),
                 recovery_report: None,
+                vm_attachment_manifest_sha256: None,
                 faults: Arc::new(NoAgentTransportFaultInjector),
                 guest_qualification: Some(qualification),
                 qualify_kvm_post_probe_failure: false,
@@ -433,6 +487,7 @@ impl AgentVmSession {
                 expected_system_image_manifest_sha256,
                 runtime_share,
                 recovery_report,
+                vm_attachment_manifest_sha256: None,
                 faults: Arc::new(NoAgentTransportFaultInjector),
                 guest_qualification: None,
                 qualify_kvm_post_probe_failure: false,
@@ -462,6 +517,7 @@ impl AgentVmSession {
                 expected_system_image_manifest_sha256: None,
                 runtime_share,
                 recovery_report: None,
+                vm_attachment_manifest_sha256: None,
                 faults: Arc::new(NoAgentTransportFaultInjector),
                 guest_qualification: None,
                 qualify_kvm_post_probe_failure: true,
@@ -492,6 +548,7 @@ impl AgentVmSession {
                 expected_system_image_manifest_sha256: None,
                 runtime_share,
                 recovery_report: None,
+                vm_attachment_manifest_sha256: None,
                 faults: Arc::new(NoAgentTransportFaultInjector),
                 guest_qualification: None,
                 qualify_kvm_post_probe_failure: false,
@@ -522,6 +579,7 @@ impl AgentVmSession {
                 expected_system_image_manifest_sha256: None,
                 runtime_share,
                 recovery_report: None,
+                vm_attachment_manifest_sha256: None,
                 faults,
                 guest_qualification: None,
                 qualify_kvm_post_probe_failure: false,
@@ -552,6 +610,7 @@ impl AgentVmSession {
                 expected_system_image_manifest_sha256: None,
                 runtime_share,
                 recovery_report: None,
+                vm_attachment_manifest_sha256: None,
                 faults: Arc::new(NoAgentTransportFaultInjector),
                 guest_qualification: Some(qualification),
                 qualify_kvm_post_probe_failure: false,
@@ -572,6 +631,7 @@ impl AgentVmSession {
             expected_system_image_manifest_sha256,
             runtime_share,
             recovery_report,
+            vm_attachment_manifest_sha256,
             faults,
             guest_qualification,
             qualify_kvm_post_probe_failure,
@@ -587,6 +647,11 @@ impl AgentVmSession {
         );
         let platform = HostPlatform::current();
         let mut report = AgentVmSmokeReport::initial(platform);
+        if let Some(digest) = vm_attachment_manifest_sha256 {
+            if let Err(reason) = validate_vm_attachment_manifest_digest(digest) {
+                return Err(failed(report, reason));
+            }
+        }
         let shim = match canonical_file(shim, "libkrun shim").await {
             Ok(path) => path,
             Err(reason) => return Err(failed(report, reason)),
@@ -899,6 +964,13 @@ impl AgentVmSession {
         if let Some(case) = qualify_kvm_compatibility_drift {
             command.arg("--qualify-kvm-compatibility-drift").arg(case);
         }
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        if let Some(digest) = vm_attachment_manifest_sha256 {
+            command.arg("--vm-attachment-manifest-sha256").arg(digest);
+        }
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         {
             command
@@ -1178,6 +1250,21 @@ fn require_expected_manifest_digest(actual: &str, expected: Option<&str>) -> Res
         return Err(format!(
             "system-image manifest changed after the runtime driver was opened: expected {expected}, found {actual}"
         ));
+    }
+    Ok(())
+}
+
+fn validate_vm_attachment_manifest_digest(value: &str) -> Result<(), String> {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return Err(
+            "KVM attachment manifest digest must use the canonical sha256 form".to_string(),
+        );
+    };
+    if !is_canonical_hex(hex, 64) {
+        return Err(
+            "KVM attachment manifest digest must contain 64 lowercase hexadecimal characters"
+                .to_string(),
+        );
     }
     Ok(())
 }

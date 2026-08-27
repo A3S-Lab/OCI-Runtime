@@ -187,6 +187,7 @@ pub struct LinuxExecutor {
     bundle_directory_scope: BundleDirectoryScope,
     user_mapping_runtime: namespace::UserMappingRuntime,
     rootless_cgroup_delegation: Option<RootlessCgroupDelegation>,
+    vm_attachments: Option<crate::UtilityVmAttachmentBinding>,
     state: Arc<Mutex<ExecutorState>>,
 }
 
@@ -205,12 +206,16 @@ impl LinuxExecutor {
             BundleDirectoryScope::unrestricted(),
             RecoveryMode::Transient,
             None,
+            None,
         )
         .await
     }
 
     /// Open the transient utility-VM executor inside its mounted writable share.
-    pub(crate) async fn new_utility_vm(runtime_parent: impl AsRef<Path>) -> Result<Self> {
+    pub(crate) async fn new_utility_vm(
+        runtime_parent: impl AsRef<Path>,
+        vm_attachments: Option<crate::UtilityVmAttachmentBinding>,
+    ) -> Result<Self> {
         let executable = std::env::current_exe().map_err(|error| {
             executor_error(
                 ErrorCode::Internal,
@@ -226,6 +231,7 @@ impl LinuxExecutor {
             bundle_directory_scope,
             RecoveryMode::Transient,
             Some(Path::new(UTILITY_VM_DEVICE_SOURCE_PARENT)),
+            vm_attachments,
         )
         .await
     }
@@ -247,6 +253,7 @@ impl LinuxExecutor {
             BundleDirectoryScope::unrestricted(),
             RecoveryMode::DurableNative,
             None,
+            None,
         )
         .await
     }
@@ -266,6 +273,7 @@ impl LinuxExecutor {
             RootfsScope::NativeAbsolute,
             BundleDirectoryScope::unrestricted(),
             RecoveryMode::DurableNative,
+            None,
             None,
         )
         .await
@@ -287,6 +295,7 @@ impl LinuxExecutor {
             RootfsScope::NativeAbsolute,
             BundleDirectoryScope::unrestricted(),
             RecoveryMode::DurableNative,
+            None,
             None,
         )
         .await?;
@@ -312,6 +321,7 @@ impl LinuxExecutor {
             RootfsScope::NativeAbsolute,
             BundleDirectoryScope::unrestricted(),
             RecoveryMode::DurableNative,
+            None,
             None,
         )
         .await?;
@@ -371,6 +381,7 @@ impl LinuxExecutor {
         bundle_directory_scope: BundleDirectoryScope,
         recovery_mode: RecoveryMode,
         device_source_parent: Option<&Path>,
+        vm_attachments: Option<crate::UtilityVmAttachmentBinding>,
     ) -> Result<Self> {
         pidfd::verify_support()?;
         let parent = runtime_parent.as_ref();
@@ -525,6 +536,7 @@ impl LinuxExecutor {
             bundle_directory_scope,
             user_mapping_runtime,
             rootless_cgroup_delegation: None,
+            vm_attachments,
             state: Arc::new(Mutex::new(ExecutorState::default())),
         })
     }
@@ -1242,6 +1254,9 @@ impl GuestAgentService for LinuxExecutor {
     }
 
     async fn create(&self, request: AgentCreateRequest) -> Result<AgentState> {
+        if let Some(attachments) = &self.vm_attachments {
+            attachments.validate_create(&request)?;
+        }
         self.create_with_inherited_descriptors(request, InheritedDescriptorPlan::empty())
             .await
     }
@@ -1772,6 +1787,7 @@ mod rootless_device_tests {
                 newgidmap: PathBuf::from("/usr/bin/newgidmap"),
             },
             rootless_cgroup_delegation: None,
+            vm_attachments: None,
             state: Arc::new(Mutex::new(ExecutorState::default())),
         };
 
@@ -1858,6 +1874,7 @@ mod rootless_device_tests {
                 newgidmap: PathBuf::from("/usr/bin/newgidmap"),
             },
             rootless_cgroup_delegation: None,
+            vm_attachments: None,
             state: Arc::new(Mutex::new(ExecutorState::default())),
         };
 

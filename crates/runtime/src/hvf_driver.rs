@@ -13,8 +13,8 @@ use crate::utility_vm_driver::layout::{
 };
 use crate::utility_vm_driver::recovery::RecoveryStore;
 use crate::utility_vm_driver::{
-    delegate_utility_vm_runtime_driver, LaunchedUtilityVm, UtilityVmFactory, UtilityVmOwner,
-    UtilityVmRuntimeDriver,
+    delegate_utility_vm_runtime_driver, LaunchedUtilityVm, UtilityVmFactory,
+    UtilityVmLaunchRequest, UtilityVmOwner, UtilityVmRuntimeDriver,
 };
 
 /// Runtime-owned host paths for the Apple Silicon HVF driver.
@@ -177,12 +177,13 @@ struct LiveHvfVmFactory {
 
 #[async_trait]
 impl UtilityVmFactory for LiveHvfVmFactory {
-    async fn launch(
-        &self,
-        target: &a3s_oci_sdk::ContainerTarget,
-        runtime_share: &Path,
-        attachment_contract: &a3s_oci_sdk::CreateAttachments,
-    ) -> Result<LaunchedUtilityVm> {
+    async fn launch(&self, request: UtilityVmLaunchRequest<'_>) -> Result<LaunchedUtilityVm> {
+        let UtilityVmLaunchRequest {
+            target,
+            runtime_share,
+            attachment_contract,
+            ..
+        } = request;
         let generation = target.generation.ok_or_else(|| {
             Error::new(
                 ErrorCode::InvalidArgument,

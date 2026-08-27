@@ -36,6 +36,8 @@ use zeroize::Zeroizing;
 mod executor;
 mod linux_device;
 mod transport_qualification;
+#[cfg(any(target_os = "linux", test))]
+mod vm_attachment;
 #[cfg(target_os = "linux")]
 mod vsock;
 
@@ -44,6 +46,30 @@ pub use executor::{
     InheritedDescriptorPlan, LinuxExecutor, LinuxExecutorTombstone, RootlessDevicePolicyBootstrap,
 };
 pub use linux_device::{OciLinuxDefaultDeviceNode, OCI_LINUX_DEFAULT_DEVICE_NODES};
+#[cfg(target_os = "linux")]
+pub use vm_attachment::{take_vm_attachment_manifest, UtilityVmAttachmentBinding};
+
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug)]
+pub struct UtilityVmAttachmentBinding;
+
+/// Reject utility-VM attachment bootstrap on non-Linux Guests.
+#[cfg(not(target_os = "linux"))]
+pub fn take_vm_attachment_manifest(
+    _runtime_parent: Option<&Path>,
+) -> Result<Option<UtilityVmAttachmentBinding>> {
+    match std::env::var_os(a3s_oci_agent_protocol::AGENT_VM_ATTACHMENT_MANIFEST_SHA256_ENV) {
+        None => Ok(None),
+        Some(_) => {
+            std::env::remove_var(a3s_oci_agent_protocol::AGENT_VM_ATTACHMENT_MANIFEST_SHA256_ENV);
+            Err(Error::new(
+                ErrorCode::Unsupported,
+                "VM attachment bootstrap requires a Linux Guest",
+            )
+            .for_operation("bootstrap-agent-vm-attachments"))
+        }
+    }
+}
 
 /// Verify that the Linux kernel supports PID-reuse-safe pidfd signaling.
 #[cfg(target_os = "linux")]
@@ -367,7 +393,17 @@ fn invalid_token_path() -> Error {
 /// Connect to the host bridge and serve the fail-closed Linux executor.
 #[cfg(target_os = "linux")]
 pub fn run(token: SessionToken, runtime_parent: Option<PathBuf>) -> Result<()> {
-    run_linux(token, None, runtime_parent)
+    run_linux(token, None, runtime_parent, None)
+}
+
+/// Connect with one already-verified utility-VM attachment binding.
+#[cfg(target_os = "linux")]
+pub fn run_with_vm_attachments(
+    token: SessionToken,
+    runtime_parent: Option<PathBuf>,
+    attachments: Option<UtilityVmAttachmentBinding>,
+) -> Result<()> {
+    run_linux(token, None, runtime_parent, attachments)
 }
 
 /// Run one explicitly armed real-VM guest transport qualification session.
@@ -377,7 +413,7 @@ pub fn run_transport_qualification(
     request: AgentTransportQualificationRequest,
     runtime_parent: Option<PathBuf>,
 ) -> Result<()> {
-    run_linux(token, Some(request), runtime_parent)
+    run_linux(token, Some(request), runtime_parent, None)
 }
 
 #[cfg(target_os = "linux")]
@@ -385,6 +421,7 @@ fn run_linux(
     token: SessionToken,
     qualification: Option<AgentTransportQualificationRequest>,
     runtime_parent: Option<PathBuf>,
+    attachments: Option<UtilityVmAttachmentBinding>,
 ) -> Result<()> {
     let recovery_path = take_recovery_report_path()?;
     let recovery_token = token.clone();
@@ -409,7 +446,9 @@ fn run_linux(
             .for_operation("run-guest-agent")
         })?;
         let service = Arc::new(match runtime_parent {
-            Some(runtime_parent) => LinuxExecutor::new_utility_vm(runtime_parent).await?,
+            Some(runtime_parent) => {
+                LinuxExecutor::new_utility_vm(runtime_parent, attachments).await?
+            }
             None => LinuxExecutor::new().await?,
         });
         let protocol_service: Arc<dyn GuestAgentService> = service.clone();
@@ -602,6 +641,20 @@ pub fn run(_token: SessionToken, _runtime_parent: Option<PathBuf>) -> Result<()>
     Err(Error::new(
         ErrorCode::Unsupported,
         "the OCI guest agent requires Linux AF_VSOCK",
+    )
+    .for_operation("run-guest-agent"))
+}
+
+/// Report that VM attachments require the Linux guest agent.
+#[cfg(not(target_os = "linux"))]
+pub fn run_with_vm_attachments(
+    _token: SessionToken,
+    _runtime_parent: Option<PathBuf>,
+    _attachments: Option<UtilityVmAttachmentBinding>,
+) -> Result<()> {
+    Err(Error::new(
+        ErrorCode::Unsupported,
+        "the A3S OCI guest agent supports VM attachments only on Linux",
     )
     .for_operation("run-guest-agent"))
 }

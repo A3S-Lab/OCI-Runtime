@@ -3,6 +3,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
+use a3s_oci_agent_protocol::{GuestPath, AGENT_RUNTIME_SHARE_GUEST_ROOT};
 use a3s_oci_core::{DriverCapability, IsolationClass};
 use a3s_oci_sdk::{
     async_trait, AttachmentCapabilities, ContainerId, ContainerRecord, ContainerStats,
@@ -25,6 +26,11 @@ use crate::driver::{
 
 mod delegate;
 mod handoff;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+pub(crate) mod kvm_network;
 pub(crate) mod layout;
 pub(crate) mod recovery;
 mod session_lifecycle;
@@ -378,7 +384,12 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
         let container = match existing {
             Some(container) => container,
             None => match self
-                .admit_new_container(&target, &request.attachment_contract)
+                .admit_new_container(
+                    &target,
+                    &request.bundle,
+                    &guest_directory,
+                    &request.attachment_contract,
+                )
                 .await
             {
                 Ok(container) => container,
@@ -708,14 +719,52 @@ pub(crate) struct LaunchedUtilityVm {
     pub(crate) owner: Arc<dyn UtilityVmOwner>,
 }
 
+pub(crate) struct UtilityVmLaunchRequest<'a> {
+    pub(crate) target: &'a ContainerTarget,
+    pub(crate) runtime_share: &'a Path,
+    pub(crate) bundle: &'a OciBundle,
+    pub(crate) guest_bundle: &'a GuestPath,
+    pub(crate) attachment_contract: &'a CreateAttachments,
+}
+
+impl UtilityVmLaunchRequest<'_> {
+    fn validate(&self) -> Result<()> {
+        self.attachment_contract.validate(self.bundle)?;
+        let prefix = format!("{AGENT_RUNTIME_SHARE_GUEST_ROOT}/");
+        let relative = self
+            .guest_bundle
+            .as_str()
+            .strip_prefix(&prefix)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "utility-VM Guest bundle must remain below {AGENT_RUNTIME_SHARE_GUEST_ROOT}: {}",
+                        self.guest_bundle.as_str()
+                    ),
+                )
+                .for_operation("validate-utility-vm-launch")
+            })?;
+        let expected_bundle = self.runtime_share.join(relative);
+        if expected_bundle != self.bundle.directory() {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "utility-VM Guest bundle {} maps to {}, not exact Host bundle {}",
+                    self.guest_bundle.as_str(),
+                    expected_bundle.display(),
+                    self.bundle.directory().display()
+                ),
+            )
+            .for_operation("validate-utility-vm-launch"));
+        }
+        Ok(())
+    }
+}
+
 #[async_trait]
 pub(crate) trait UtilityVmFactory: Send + Sync {
-    async fn launch(
-        &self,
-        target: &ContainerTarget,
-        runtime_share: &Path,
-        attachment_contract: &CreateAttachments,
-    ) -> Result<LaunchedUtilityVm>;
+    async fn launch(&self, request: UtilityVmLaunchRequest<'_>) -> Result<LaunchedUtilityVm>;
 }
 
 #[async_trait]

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use super::{
     AgentDriverClient, DriverCreateRequest, DriverDeleteRequest, LaunchedUtilityVm, RuntimeDriver,
-    UtilityVmFactory, UtilityVmOwner, UtilityVmRuntimeDriver,
+    UtilityVmFactory, UtilityVmLaunchRequest, UtilityVmOwner, UtilityVmRuntimeDriver,
 };
 use crate::DriverCreateAttachments;
 use a3s_oci_agent_protocol::{
@@ -307,21 +307,16 @@ impl FakeFactory {
 
 #[async_trait]
 impl UtilityVmFactory for FakeFactory {
-    async fn launch(
-        &self,
-        _target: &ContainerTarget,
-        runtime_share: &Path,
-        attachment_contract: &CreateAttachments,
-    ) -> Result<LaunchedUtilityVm> {
+    async fn launch(&self, request: UtilityVmLaunchRequest<'_>) -> Result<LaunchedUtilityVm> {
         self.launches.fetch_add(1, Ordering::Relaxed);
         self.launch_shares
             .lock()
             .expect("launch shares lock")
-            .push(runtime_share.to_path_buf());
+            .push(request.runtime_share.to_path_buf());
         self.launch_contracts
             .lock()
             .expect("launch contracts lock")
-            .push(attachment_contract.clone());
+            .push(request.attachment_contract.clone());
         if let Some(error) = self
             .next_launch_failure
             .lock()

@@ -27,6 +27,21 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added a fail-closed, dedicated-VM Linux KVM transport implementation for
+  authorized v3 network attachments without widening the production capability
+  advertisement. The Host validates the exact attachment contract and TAP,
+  derives a locally administered unicast MAC from immutable attachment
+  evidence, and atomically persists a private digest-bound manifest in the
+  exact-generation runtime share. The isolated shim descriptor-pins and
+  reverifies that manifest before `/dev/kvm`, configures each TAP through the
+  pinned `krun_add_net_tap` ABI when available, and passes only the manifest
+  digest into the Guest. The Guest revalidates the manifest, bundle, JSON
+  pointers, and configuration digests, identifies each VMM NIC by MAC, stages
+  collision-safe interface renames, and binds the result to the later exact
+  Create target. Joined caller namespaces, reusable Guest sessions, stale
+  evidence, replay drift, duplicate MACs, and partial bootstrap all fail
+  closed. KVM still advertises v1 until cumulative v2 storage transport and a
+  destructive real-host v3 restart/cleanup/soak gate pass; HVF remains v1.
 - Added `a3s.oci.attachments.v4` as the fail-closed public foundation for
   reusable utility-VM guest sessions. Each shared-guest request binds a
   path-safe logical session ID, positive incarnation, immutable trust domain,
@@ -54,9 +69,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
   descriptor reuse, and non-canonical wire inventories. Protocol 6 prevents
   v3 create/restore downgrade. Rootful Native Linux advertises cumulative
   v1-v3; rootless Native stays v1-v2 because it has no host network-device
-  authority, and utility-VM drivers stay v1 until an independent NIC transport
-  and cleanup gate exists. IPAM, DNS, routes, aliases, policy, and
-  backing-network deletion remain outside Runtime.
+  authority. Utility-VM drivers stay v1: dedicated KVM has the internal
+  transport described above but still lacks cumulative v2 and real-host v3
+  qualification, while HVF has no independent NIC transport. IPAM, DNS,
+  routes, aliases, policy, and backing-network deletion remain outside Runtime.
 - Added `a3s.oci.attachments.v2` for already-authorized storage. Each entry
   binds one validated OCI mount to a caller-issued immutable allocation ID,
   exact read-only/read-write mode, caller ownership, and detach-only cleanup.

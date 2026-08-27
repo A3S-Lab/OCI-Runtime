@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use super::canonical_file;
 use super::{
     bounded_unverified_shim_report, parse_shim_report, paths_overlap,
-    require_expected_manifest_digest, BoundedOutput,
+    require_expected_manifest_digest, validate_vm_attachment_manifest_digest, BoundedOutput,
 };
 
 fn valid_output(platform: &str) -> BoundedOutput {
@@ -284,6 +284,15 @@ fn driver_bound_manifest_digest_rejects_prelaunch_drift() {
         .expect_err("manifest drift after driver open must fail closed");
     assert!(error.contains("changed after the runtime driver was opened"));
     assert!(require_expected_manifest_digest(&expected, Some("not-a-digest")).is_err());
+}
+
+#[test]
+fn vm_attachment_manifest_digest_requires_canonical_sha256() {
+    validate_vm_attachment_manifest_digest(&format!("sha256:{}", "a".repeat(64)))
+        .expect("canonical digest");
+    assert!(validate_vm_attachment_manifest_digest(&"a".repeat(64)).is_err());
+    assert!(validate_vm_attachment_manifest_digest(&format!("sha256:{}", "A".repeat(64))).is_err());
+    assert!(validate_vm_attachment_manifest_digest(&format!("sha256:{}", "a".repeat(63))).is_err());
 }
 
 #[cfg(unix)]
