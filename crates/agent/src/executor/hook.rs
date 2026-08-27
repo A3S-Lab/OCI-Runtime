@@ -17,6 +17,7 @@ const MAX_HOOK_ENVIRONMENT: usize = 4_096;
 const MAX_HOOK_BYTES: usize = 1024 * 1024;
 const MAX_HOOK_STATE_BYTES: usize = 2 * 1024 * 1024;
 const HOOK_WAIT_INTERVAL: Duration = Duration::from_millis(10);
+const FIRST_PRIVATE_DESCRIPTOR: u32 = 3;
 
 /// OCI hook phases in their normative lifecycle order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -442,12 +443,13 @@ fn run_hook(phase: HookPhase, index: usize, hook: &HookPlan, state: &[u8]) -> Re
         command.envs(environment.iter().map(|(name, value)| (name, value)));
     }
     command.stdin(Stdio::piped()).process_group(0);
+    isolate_hook_descriptors(&mut command);
     let mut child = command.spawn().map_err(|error| {
         hook_error(
             ErrorCode::FailedPrecondition,
             phase,
             format!(
-                "hook {index} {} failed to spawn: {error}",
+                "hook {index} {} failed to spawn with private descriptor isolation: {error}",
                 hook.path.display()
             ),
         )
@@ -513,6 +515,28 @@ fn run_hook(phase: HookPhase, index: usize, hook: &HookPlan, state: &[u8]) -> Re
             phase,
             format!("hook {index} {} exited with {status}", hook.path.display()),
         ))
+    }
+}
+
+fn isolate_hook_descriptors(command: &mut Command) {
+    // SAFETY: this closure runs in the forked child before exec. It invokes one
+    // allocation-free Linux syscall and touches only the child's descriptor
+    // table. CLOEXEC preserves the process-spawn error channel until exec while
+    // ensuring that no runtime-private descriptor reaches untrusted hook code.
+    unsafe {
+        command.pre_exec(|| {
+            let result = libc::syscall(
+                libc::SYS_close_range,
+                FIRST_PRIVATE_DESCRIPTOR,
+                u32::MAX,
+                libc::CLOSE_RANGE_CLOEXEC,
+            );
+            if result == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        });
     }
 }
 
@@ -619,13 +643,72 @@ fn hook_error(code: ErrorCode, phase: HookPhase, message: impl Into<String>) -> 
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+    use std::os::fd::AsRawFd;
     use std::path::PathBuf;
+    use std::process::Command;
     use std::time::{Duration, Instant};
 
     use a3s_oci_sdk::oci_spec::runtime::ContainerState;
     use a3s_oci_sdk::ErrorCode;
 
     use super::{HookPhase, HookPlan, HookSet, HookStateTemplate};
+
+    const DESCRIPTOR_CHILD_ENV: &str = "A3S_OCI_TEST_HOOK_DESCRIPTOR_CHILD";
+    const DESCRIPTOR_CHILD_TEST: &str = "executor::hook::tests::hook_descriptor_isolation_child";
+
+    #[test]
+    fn hook_descriptor_isolation_child() {
+        if std::env::var_os(DESCRIPTOR_CHILD_ENV).is_none() {
+            return;
+        }
+
+        let descriptor = File::open("/dev/null").expect("open descriptor inheritance probe");
+        let raw_descriptor = descriptor.as_raw_fd();
+        // SAFETY: the descriptor is owned by `descriptor`; this deliberately
+        // removes CLOEXEC so the hook boundary must restore isolation.
+        let flags = unsafe { libc::fcntl(raw_descriptor, libc::F_GETFD) };
+        assert!(flags >= 0, "read descriptor flags");
+        // SAFETY: the descriptor remains live and F_SETFD changes only its
+        // close-on-exec flag.
+        assert_eq!(
+            unsafe { libc::fcntl(raw_descriptor, libc::F_SETFD, flags & !libc::FD_CLOEXEC) },
+            0,
+            "clear descriptor CLOEXEC"
+        );
+
+        let hooks = HookSet {
+            prestart: vec![HookPlan {
+                path: PathBuf::from("/bin/sh"),
+                args: Some(vec![
+                    "a3s-hook".to_string(),
+                    "-c".to_string(),
+                    format!("/bin/cat >/dev/null; test ! -e /proc/self/fd/{raw_descriptor}"),
+                ]),
+                environment: Some(Vec::new()),
+                timeout: Some(Duration::from_secs(2)),
+            }],
+            ..HookSet::default()
+        };
+        hooks
+            .run_sync(HookPhase::Prestart, b"{}")
+            .expect("hook must not inherit runtime descriptors");
+    }
+
+    #[test]
+    fn hook_process_cannot_inherit_runtime_descriptors() {
+        let output = Command::new(std::env::current_exe().expect("resolve test executable"))
+            .args(["--exact", DESCRIPTOR_CHILD_TEST, "--nocapture"])
+            .env(DESCRIPTOR_CHILD_ENV, "1")
+            .output()
+            .expect("launch descriptor isolation child");
+        assert!(
+            output.status.success(),
+            "descriptor isolation child failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn hook_planning_accepts_every_phase_and_rejects_unsafe_inputs() {

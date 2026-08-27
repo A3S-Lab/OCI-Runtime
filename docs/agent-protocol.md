@@ -163,7 +163,10 @@ the 20 workload operations or their maintenance acknowledgement.
 
 OCI hooks do not add guest protocol operations: they travel inside the exact
 digest-bound `config.json` and execute in the shared Linux executor. Native
-feature discovery separately advertises the six enforced hook phases.
+feature discovery separately advertises the six enforced hook phases. Every
+Hook child marks all descriptors above standard error close-on-exec with one
+fail-closed Linux `close_range` operation, so neither an in-process Native
+executor nor a Guest agent can leak runtime-private handles into Hook code.
 
 Mutating guest operations must be idempotent by `OperationId`. Production
 promotion also requires recovery after an agent or host restart; the current

@@ -904,6 +904,15 @@ matrices:
   termination; and warning-only poststop failure. The service list and every
   exact target must be empty afterward.
 
+Before every Hook `exec`, the shared Linux executor applies
+`close_range(3, UINT_MAX, CLOSE_RANGE_CLOEXEC)` in the forked child. Standard
+input, output, and error remain available, while runtime control, namespace,
+root, cgroup, pidfd, and journal descriptors cannot reach Hook code even if a
+future caller accidentally omits `FD_CLOEXEC`. A kernel or seccomp profile that
+cannot establish this boundary fails the Hook before `exec`. The portable
+subprocess regression deliberately clears `FD_CLOEXEC` on a live descriptor
+and requires it to be absent from the Hook's `/proc/self/fd` inventory.
+
 GitHub Actions runs the gate on x86_64 and aarch64 both without `/dev/kvm` and
 with a present but unusable placeholder at that path.
 
@@ -1060,8 +1069,9 @@ following pass:
 - live real-driver reattachment after runtime-process restart, plus generic SDK
   inherited process-I/O modes beyond the fixed A3S Box init-control profile;
 - Hook crash-recovery, security-negative, and adversarial soak beyond the
-  retained six-phase failure/timeout matrix, durable recovery for the remaining
-  mutating operations, descriptor-relative path handling,
+  retained six-phase failure/timeout and descriptor-inheritance matrices,
+  durable recovery for the remaining mutating operations, descriptor-relative
+  path handling,
   transport-level fault injection, and adversarial cleanup beyond the bounded
   native lifecycle churn gate;
 - the complete A3S Box Rust, Python, and TypeScript Sandbox SDK suites on

@@ -1286,6 +1286,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Prevent OCI Hooks from inheriting runtime-private file descriptors even when
+  a future caller accidentally omits `FD_CLOEXEC`. Every Hook child now marks
+  the complete descriptor range above standard error close-on-exec with one
+  fail-closed Linux `close_range` operation before executing untrusted code. A
+  subprocess regression clears `FD_CLOEXEC` on a live descriptor and verifies
+  that the Hook cannot observe it.
 - Retry Windows handle-relative file replacement for at most one second when
   an existing destination is transiently held without delete sharing. The
   retry is limited to access, sharing, and lock violations and runs only on
