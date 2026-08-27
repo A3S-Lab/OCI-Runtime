@@ -892,15 +892,18 @@ namespaces are released with the container; joined caller namespaces are
 preserved. IPAM, DNS, routes, aliases, policy, and backing-network cleanup stay
 in A3S Box. Network create/restore requires SDK protocol 6. Rootful Native
 Linux advertises cumulative v1-v3; rootless Native stays v1-v2 because it has
-no host network-device authority. Dedicated Linux KVM now has an internal,
-fail-closed TAP transport: an exact-generation private manifest binds the
-authorized JSON pointers and attachment digest to deterministic Guest MACs,
-the shim descriptor-pins and reverifies it before KVM access, and the Guest
-renames only the uniquely matching VMM NICs before serving Create. Joined
-caller namespaces and reusable Guest sessions are rejected. KVM nevertheless
-continues to advertise v1 until cumulative v2 storage transport and destructive
-real-host v3 restart, cleanup, and soak qualification pass. HVF remains v1
-until it gains equivalent independent transports and evidence.
+no host network-device authority. Dedicated Linux KVM now has internal,
+fail-closed v2/v3 transports. Caller-owned non-bind `ext4` raw images remain
+outside the runtime share and are descriptor-pinned into read-only or
+read-write virtio-blk devices; the Guest matches their libkrun serial, size,
+and read-only state before rewriting only the authorized OCI mount source. An
+exact-generation private manifest also binds authorized network JSON pointers
+and attachment evidence to deterministic Guest MACs; the Guest renames only
+uniquely matching VMM NICs. Joined caller namespaces and reusable Guest
+sessions are rejected. KVM nevertheless continues to advertise v1 until its
+cumulative v2/v3 destructive real-host restart, cleanup, replay, and soak
+qualification passes. HVF remains v1 until it gains equivalent independent
+transports and evidence.
 
 `a3s.oci.attachments.v4` binds a SharedGuestKernel request to one reusable
 guest-session ID and positive incarnation, the request's immutable trust

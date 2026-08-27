@@ -27,7 +27,7 @@ use crate::{KrunAgentVmSmokeReport, LinuxBootAssetsEvidence, VmConfig};
 
 const AGENT_GUEST_PATH: &str = "/usr/bin/a3s-oci-agent";
 const WORKER_COMMAND: &str = "__linux-agent-vm-worker";
-const WORKER_SCHEMA_VERSION: &str = "a3s.oci.linux-kvm-agent-vm-worker.v3";
+const WORKER_SCHEMA_VERSION: &str = "a3s.oci.linux-kvm-agent-vm-worker.v4";
 const POST_PROBE_FAILURE_REASON: &str =
     "injected Linux KVM failure after device verification and before native VM entry";
 const WORKER_TIMEOUT: Duration = Duration::from_secs(90);
@@ -42,6 +42,7 @@ struct WorkerEvidence {
     rootfs_configured: bool,
     runtime_share_configured: bool,
     vm_attachment_manifest_verified: bool,
+    storage_devices_configured: usize,
     network_devices_configured: usize,
     kvm_device_opened: bool,
     kvm_api_verified: bool,
@@ -67,6 +68,7 @@ impl WorkerEvidence {
             rootfs_configured: false,
             runtime_share_configured: false,
             vm_attachment_manifest_verified: false,
+            storage_devices_configured: 0,
             network_devices_configured: 0,
             kvm_device_opened: false,
             kvm_api_verified: false,
@@ -311,7 +313,8 @@ pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgent
         && report.guest_exit_code == Some(0)
         && report.console_created
         && evidence.as_ref().is_some_and(|evidence| {
-            evidence.vm_attachment_manifest_verified == (evidence.network_devices_configured > 0)
+            evidence.vm_attachment_manifest_verified
+                == (evidence.storage_devices_configured + evidence.network_devices_configured > 0)
         })
     {
         report.status = CapabilityStatus::Available;
@@ -412,7 +415,13 @@ pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.runtime_share_configured = true;
-    if let Some(attachments) = vm_attachments.as_ref() {
+    if let Some(attachments) = vm_attachments.as_mut() {
+        for image in attachments.take_storage_images() {
+            if let Err(error) = context.add_storage_disk(image) {
+                return fail_worker(&mut evidence, error.to_string());
+            }
+            evidence.storage_devices_configured += 1;
+        }
         for attachment in attachments.manifest().network() {
             if let Err(error) =
                 context.add_network_tap(attachment.tap_name(), attachment.mac_address().as_bytes())

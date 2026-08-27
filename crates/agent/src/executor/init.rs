@@ -38,6 +38,7 @@ struct ContainerInitInvocation {
     expected_owner_pid: libc::pid_t,
     rootless: bool,
     device_source_directory: PathBuf,
+    vm_storage_sources: crate::vm_attachment::UtilityVmStorageSources,
     process_io: ProcessIo,
 }
 
@@ -55,6 +56,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     let expected_owner_pid = arguments.next();
     let mapping_mode = arguments.next();
     let device_source_directory = arguments.next().map(PathBuf::from);
+    let vm_storage_sources = arguments.next();
     let process_io = arguments.next();
     let extra = arguments.next();
     let (
@@ -67,6 +69,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         Some(expected_owner_pid),
         Some(mapping_mode),
         Some(device_source_directory),
+        Some(vm_storage_sources),
         Some(process_io),
         None,
     ) = (
@@ -79,13 +82,14 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         expected_owner_pid,
         mapping_mode,
         device_source_directory,
+        vm_storage_sources,
         process_io,
         extra,
     )
     else {
         return Some(Err(init_error(
             ErrorCode::InvalidArgument,
-            "container-init requires CONFIG BUNDLE CONTROL ID ROOTFS_SCOPE BUNDLE_ACCESS OWNER_PID MAPPING_MODE DEVICE_SOURCE_DIRECTORY PROCESS_IO and no extra arguments",
+            "container-init requires CONFIG BUNDLE CONTROL ID ROOTFS_SCOPE BUNDLE_ACCESS OWNER_PID MAPPING_MODE DEVICE_SOURCE_DIRECTORY VM_STORAGE_SOURCES PROCESS_IO and no extra arguments",
         )));
     };
     let container_id = match container_id.into_string() {
@@ -155,6 +159,18 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
             ),
         )));
     }
+    let vm_storage_sources = match vm_storage_sources.to_str() {
+        Some(encoded) => match crate::vm_attachment::UtilityVmStorageSources::from_json(encoded) {
+            Ok(sources) => sources,
+            Err(error) => return Some(Err(error)),
+        },
+        None => {
+            return Some(Err(init_error(
+                ErrorCode::InvalidArgument,
+                "container-init VM storage sources must be valid UTF-8",
+            )));
+        }
+    };
     let process_io = match process_io.to_str() {
         Some(encoded) if encoded.len() <= super::MAX_INTERNAL_PROCESS_IO_BYTES => {
             match serde_json::from_str::<ProcessIo>(encoded) {
@@ -195,6 +211,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         expected_owner_pid,
         rootless,
         device_source_directory,
+        vm_storage_sources,
         process_io,
     }))
 }
@@ -211,6 +228,7 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
         expected_owner_pid,
         rootless,
         device_source_directory,
+        vm_storage_sources,
         process_io,
     } = invocation;
     pid_supervisor::verify_and_arm_parent_death_signal(expected_owner_pid, "container launcher")?;
@@ -247,6 +265,7 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
         rootfs_scope,
         pinned_bundle.as_ref(),
         pinned_rootfs,
+        &vm_storage_sources,
         &process_io,
     ) {
         Ok(prepared) => prepared,
@@ -499,6 +518,7 @@ fn prepare_container_init(
     rootfs_scope: RootfsScope,
     pinned_bundle: Option<&PinnedBundleDirectory>,
     pinned_rootfs: Option<File>,
+    vm_storage_sources: &crate::vm_attachment::UtilityVmStorageSources,
     process_io: &ProcessIo,
 ) -> Result<(InitPlan, PathBuf, PathBuf, File, File)> {
     let config_json = read_bounded_config(&config_snapshot)?;
@@ -509,6 +529,7 @@ fn prepare_container_init(
         .as_ref()
         .is_some_and(|root| root.path().is_absolute());
     let mut plan = InitPlan::from_bundle(&bundle, process_io)?;
+    mount::rewrite_vm_storage_sources(&mut plan.mounts, vm_storage_sources)?;
     plan.resolve_joined_user_namespace()?;
     let canonical_bundle = if pinned_bundle.is_some() {
         plan.bundle_directory.clone()

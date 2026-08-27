@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use a3s_oci_sdk::{ErrorCode, IoMode, OciBundle, ProcessIo, OCI_LINUX_MOUNT_OPTIONS};
 use tempfile::tempdir;
 
-use super::mount::{BindSourceResolver, MountTargetKind};
+use super::mount::{rewrite_vm_storage_sources, BindSourceResolver, MountTargetKind};
 use super::plan::InitPlan;
+use crate::vm_attachment::UtilityVmStorageSources;
 
 const MOUNT_CONFIG: &str = r#"{
   "ociVersion": "1.3.0",
@@ -111,6 +112,46 @@ fn preserves_mount_order_and_normalizes_relative_destinations() {
     assert_eq!(
         plan.default_filesystems.late_destinations(),
         [Path::new("/dev/pts"), Path::new("/dev/shm")]
+    );
+}
+
+#[test]
+fn rewrites_only_the_exact_authorized_vm_storage_mount() {
+    let mut configuration: serde_json::Value =
+        serde_json::from_str(MOUNT_CONFIG).expect("decode mount configuration");
+    configuration["mounts"] = serde_json::json!([{
+        "destination": "/data",
+        "type": "ext4",
+        "source": "/srv/authorized.raw",
+        "options": ["ro", "nodev"]
+    }]);
+    let configuration = serde_json::to_string(&configuration).expect("encode storage mount");
+    let storage = UtilityVmStorageSources::from_json(
+        r#"[{"mountIndex":0,"configuredSource":"/srv/authorized.raw","guestSource":"/dev/vdb"}]"#,
+    )
+    .expect("verified VM storage source");
+    let mut plan =
+        InitPlan::from_bundle(&bundle(&configuration), &null_io()).expect("raw ext4 mount plan");
+
+    rewrite_vm_storage_sources(&mut plan.mounts, &storage)
+        .expect("rewrite exact authorized source");
+    assert_eq!(
+        plan.mounts[0].source.as_deref(),
+        Some(Path::new("/dev/vdb"))
+    );
+
+    let drifted = UtilityVmStorageSources::from_json(
+        r#"[{"mountIndex":0,"configuredSource":"/srv/rebound.raw","guestSource":"/dev/vdb"}]"#,
+    )
+    .expect("well-formed drift fixture");
+    let mut plan = InitPlan::from_bundle(&bundle(&configuration), &null_io())
+        .expect("fresh raw ext4 mount plan");
+    let error = rewrite_vm_storage_sources(&mut plan.mounts, &drifted)
+        .expect_err("configured source rebinding must fail closed");
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
+    assert_eq!(
+        plan.mounts[0].source.as_deref(),
+        Some(Path::new("/srv/authorized.raw"))
     );
 }
 

@@ -70,6 +70,7 @@ pub(super) struct ProcessSpawnContext<'a> {
     pub(super) rootfs_scope: RootfsScope,
     pub(super) user_mapping_runtime: &'a UserMappingRuntime,
     pub(super) device_source_directory: &'a Path,
+    pub(super) vm_storage_sources: &'a crate::vm_attachment::UtilityVmStorageSources,
 }
 
 impl PreparedProcess {
@@ -89,6 +90,7 @@ impl PreparedProcess {
             rootfs_scope,
             user_mapping_runtime,
             device_source_directory,
+            vm_storage_sources,
         } = context;
         let rootless = user_mapping_runtime.is_rootless();
         let (original_rootfs, pinned_rootfs) =
@@ -127,6 +129,7 @@ impl PreparedProcess {
                 ),
             ));
         }
+        let vm_storage_sources_json = vm_storage_sources.to_json()?;
         let mut command = Command::new(init_executable);
         command
             .arg("container-init")
@@ -143,6 +146,7 @@ impl PreparedProcess {
             .arg(expected_owner_pid.to_string())
             .arg(if rootless { "rootless" } else { "privileged" })
             .arg(device_source_directory)
+            .arg(vm_storage_sources_json)
             .arg(process_io_json)
             .env_clear()
             .kill_on_drop(true);

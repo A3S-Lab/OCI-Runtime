@@ -4,10 +4,12 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use a3s_oci_agent_protocol::{
-    AgentVmAttachmentManifest, AGENT_RUNTIME_SHARE_GUEST_ROOT,
+    AgentVmAttachmentManifest, AgentVmStorageAttachment, AGENT_RUNTIME_SHARE_GUEST_ROOT,
     AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME, AGENT_VM_ATTACHMENT_MANIFEST_MAX_BYTES,
 };
-use a3s_oci_sdk::{Error, ErrorCode, Result, RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY};
+use a3s_oci_sdk::{
+    Error, ErrorCode, Result, StorageAccessMode, RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY,
+};
 use sha2::{Digest, Sha256};
 
 use crate::linux_runtime_share::LinuxRuntimeShare;
@@ -23,6 +25,97 @@ pub(crate) struct LinuxVmAttachmentManifest {
     inode: u64,
     expected_digest: String,
     file: File,
+    storage_images: Vec<LinuxVmStorageImage>,
+}
+
+/// Descriptor-pinned raw image retained through libkrun VM entry.
+pub(crate) struct LinuxVmStorageImage {
+    attachment: AgentVmStorageAttachment,
+    path: PathBuf,
+    file: File,
+}
+
+impl LinuxVmStorageImage {
+    fn open(attachment: &AgentVmStorageAttachment) -> Result<Self> {
+        let path = PathBuf::from(attachment.host_source());
+        let path_metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+            storage_error(
+                attachment,
+                format!("failed to inspect authorized raw image: {error}"),
+            )
+        })?;
+        validate_storage_metadata(attachment, &path_metadata)?;
+        let canonical = path.canonicalize().map_err(|error| {
+            storage_error(
+                attachment,
+                format!("failed to canonicalize authorized raw image: {error}"),
+            )
+        })?;
+        if canonical != path {
+            return Err(storage_error(
+                attachment,
+                "raw image path traverses an alias or symbolic link",
+            ));
+        }
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .write(attachment.access_mode() == StorageAccessMode::ReadWrite)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+        let file = options.open(&path).map_err(|error| {
+            storage_error(
+                attachment,
+                format!("failed to pin authorized raw image: {error}"),
+            )
+        })?;
+        let opened = file.metadata().map_err(|error| {
+            storage_error(
+                attachment,
+                format!("failed to inspect pinned raw image: {error}"),
+            )
+        })?;
+        validate_storage_metadata(attachment, &opened)?;
+        if opened.dev() != path_metadata.dev() || opened.ino() != path_metadata.ino() {
+            return Err(storage_error(
+                attachment,
+                "raw image changed while the shim pinned it",
+            ));
+        }
+        validate_access_mode(attachment, &file)?;
+        Ok(Self {
+            attachment: attachment.clone(),
+            path,
+            file,
+        })
+    }
+
+    pub(crate) const fn attachment(&self) -> &AgentVmStorageAttachment {
+        &self.attachment
+    }
+
+    pub(crate) fn pinned_path(&self) -> PathBuf {
+        use std::os::fd::AsRawFd;
+
+        PathBuf::from(format!("/proc/self/fd/{}", self.file.as_raw_fd()))
+    }
+
+    pub(crate) fn reverify(&self) -> Result<()> {
+        let path_metadata = std::fs::symlink_metadata(&self.path).map_err(|error| {
+            storage_error(
+                &self.attachment,
+                format!("failed to re-inspect authorized raw image: {error}"),
+            )
+        })?;
+        let opened = self.file.metadata().map_err(|error| {
+            storage_error(
+                &self.attachment,
+                format!("failed to re-inspect pinned raw image: {error}"),
+            )
+        })?;
+        validate_storage_metadata(&self.attachment, &path_metadata)?;
+        validate_storage_metadata(&self.attachment, &opened)?;
+        validate_access_mode(&self.attachment, &self.file)
+    }
 }
 
 impl LinuxVmAttachmentManifest {
@@ -123,6 +216,11 @@ impl LinuxVmAttachmentManifest {
                 ),
             ));
         }
+        let storage_images = manifest
+            .storage()
+            .iter()
+            .map(LinuxVmStorageImage::open)
+            .collect::<Result<Vec<_>>>()?;
         Ok(Some(Self {
             manifest,
             path,
@@ -131,11 +229,16 @@ impl LinuxVmAttachmentManifest {
             inode: opened.ino(),
             expected_digest: expected_digest.to_string(),
             file,
+            storage_images,
         }))
     }
 
     pub(crate) const fn manifest(&self) -> &AgentVmAttachmentManifest {
         &self.manifest
+    }
+
+    pub(crate) fn take_storage_images(&mut self) -> Vec<LinuxVmStorageImage> {
+        std::mem::take(&mut self.storage_images)
     }
 
     pub(crate) fn reverify(&mut self) -> Result<()> {
@@ -194,8 +297,77 @@ impl LinuxVmAttachmentManifest {
                 "VM attachment manifest content changed before VM entry",
             ));
         }
+        for image in &self.storage_images {
+            image.reverify()?;
+        }
         Ok(())
     }
+}
+
+fn validate_storage_metadata(
+    attachment: &AgentVmStorageAttachment,
+    metadata: &std::fs::Metadata,
+) -> Result<()> {
+    let expected = attachment.source_identity();
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.nlink() != 1
+        || metadata.dev() != expected.device()
+        || metadata.rdev() != expected.raw_device()
+        || metadata.ino() != expected.inode()
+        || metadata.len() != expected.size()
+    {
+        return Err(storage_error(
+            attachment,
+            format!(
+                "raw image identity differs from device {} raw-device {} inode {} size {}",
+                expected.device(),
+                expected.raw_device(),
+                expected.inode(),
+                expected.size()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_access_mode(attachment: &AgentVmStorageAttachment, file: &File) -> Result<()> {
+    use std::os::fd::AsRawFd;
+
+    // SAFETY: F_GETFL reads status flags from the retained live descriptor.
+    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0 {
+        return Err(storage_error(
+            attachment,
+            format!(
+                "failed to inspect raw-image descriptor access: {}",
+                std::io::Error::last_os_error()
+            ),
+        ));
+    }
+    let actual = flags & libc::O_ACCMODE;
+    let expected = match attachment.access_mode() {
+        StorageAccessMode::ReadOnly => libc::O_RDONLY,
+        StorageAccessMode::ReadWrite => libc::O_RDWR,
+    };
+    if actual != expected {
+        return Err(storage_error(
+            attachment,
+            "raw-image descriptor access differs from its authorized mode",
+        ));
+    }
+    Ok(())
+}
+
+fn storage_error(attachment: &AgentVmStorageAttachment, message: impl std::fmt::Display) -> Error {
+    attachment_error(
+        ErrorCode::FailedPrecondition,
+        format!(
+            "KVM storage {} at {}: {message}",
+            attachment.identity(),
+            attachment.host_source()
+        ),
+    )
 }
 
 fn validate_metadata(path: &Path, metadata: &std::fs::Metadata) -> Result<()> {
@@ -274,17 +446,18 @@ fn attachment_error(code: ErrorCode, message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::path::{Path, PathBuf};
 
     use a3s_oci_agent_protocol::{
-        AgentVmMacAddress, AgentVmNetworkAttachment, GuestPath,
-        AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME,
+        AgentVmMacAddress, AgentVmNetworkAttachment, AgentVmStorageAttachment,
+        AgentVmStorageSourceIdentity, GuestPath, AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME,
     };
     use a3s_oci_sdk::{
         oci_spec::runtime::Spec, ContainerId, ContainerTarget, CreateAttachments, Generation,
         NetworkAttachmentIdentity, NetworkCleanup, NetworkCleanupId, NetworkInterfaceId,
-        NetworkNamespaceId, OciBundle, ProcessIo,
+        NetworkNamespaceId, OciBundle, ProcessIo, StorageAccessMode, StorageAttachmentId,
+        StorageCleanup, StorageOwnership,
     };
     use serde_json::json;
 
@@ -349,6 +522,65 @@ mod tests {
             bundle.config_digest(),
             attachment_digest,
             vec![network],
+            Vec::new(),
+        )
+        .expect("VM attachment manifest")
+    }
+
+    fn storage_manifest(image: &Path) -> AgentVmAttachmentManifest {
+        let mut value = serde_json::to_value(Spec::default()).expect("default OCI spec");
+        value["mounts"] = json!([{
+            "destination": "/data",
+            "type": "ext4",
+            "source": image.to_str().expect("UTF-8 image path"),
+            "options": ["ro", "nodev"]
+        }]);
+        let bundle = OciBundle::from_json(
+            std::env::temp_dir().join("a3s-krun-vm-storage-attachment"),
+            serde_json::to_string(&value).expect("fixture JSON"),
+        )
+        .expect("valid bundle");
+        let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+            .expect("base attachments")
+            .attach_storage_mount(
+                &bundle,
+                0,
+                StorageAttachmentId::new("volume-1").expect("storage ID"),
+                StorageAccessMode::ReadOnly,
+                StorageOwnership::Caller,
+                StorageCleanup::DetachOnly,
+            )
+            .expect("storage attachment");
+        let attachment_digest = attachments.digest().expect("attachment digest");
+        let public = &attachments.storage()[0];
+        let metadata = image.metadata().expect("raw image metadata");
+        let storage = AgentVmStorageAttachment::new(
+            public.identity().clone(),
+            public.mount().clone(),
+            public.access_mode(),
+            public.ownership(),
+            public.cleanup(),
+            image.to_str().expect("UTF-8 image path"),
+            AgentVmStorageSourceIdentity::new(
+                metadata.dev(),
+                metadata.rdev(),
+                metadata.ino(),
+                metadata.len(),
+            )
+            .expect("source identity"),
+            &attachment_digest,
+        )
+        .expect("VM storage transport");
+        AgentVmAttachmentManifest::new(
+            ContainerTarget::exact(
+                ContainerId::new("stored").expect("container ID"),
+                Generation(1),
+            ),
+            GuestPath::new("/run/a3s-oci-runtime/bundle").expect("guest bundle"),
+            bundle.config_digest(),
+            attachment_digest,
+            Vec::new(),
+            vec![storage],
         )
         .expect("VM attachment manifest")
     }
@@ -400,5 +632,37 @@ mod tests {
         std::fs::rename(&path, share.join("displaced-manifest")).expect("displace manifest");
         write_manifest(&share, &manifest);
         assert!(retained.reverify().is_err());
+    }
+
+    #[test]
+    fn pins_storage_access_and_rejects_path_replacement() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let share = runtime_share(temporary.path());
+        let image = temporary.path().join("caller-owned.raw");
+        let file = std::fs::File::create(&image).expect("raw image");
+        file.set_len(4096).expect("aligned raw image");
+        drop(file);
+        let manifest = storage_manifest(&image);
+        write_manifest(&share, &manifest);
+        let runtime_share = LinuxRuntimeShare::open(&share).expect("runtime share");
+        let mut retained = LinuxVmAttachmentManifest::open(
+            &runtime_share,
+            Some(&manifest.digest().expect("manifest digest")),
+        )
+        .expect("open manifest")
+        .expect("requested manifest");
+        retained.reverify().expect("reverify storage manifest");
+
+        let storage = retained.take_storage_images();
+        assert_eq!(storage.len(), 1);
+        assert!(storage[0].pinned_path().starts_with("/proc/self/fd"));
+        storage[0].reverify().expect("reverify pinned image");
+
+        std::fs::rename(&image, temporary.path().join("displaced.raw"))
+            .expect("displace authorized image");
+        let replacement = std::fs::File::create(&image).expect("replacement image");
+        replacement.set_len(4096).expect("aligned replacement");
+        drop(replacement);
+        assert!(storage[0].reverify().is_err());
     }
 }

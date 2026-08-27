@@ -1,6 +1,8 @@
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
+use std::os::unix::fs::MetadataExt;
+
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
 use crate::runtime_assets::{RuntimeBundle, RuntimeFileRole};
@@ -149,6 +151,26 @@ impl LinuxSystemImage {
 
     pub(crate) fn image_path(&self) -> &Path {
         &self.image.path
+    }
+
+    pub(crate) fn conflicts_with_storage(
+        &self,
+        identity: a3s_oci_agent_protocol::AgentVmStorageSourceIdentity,
+    ) -> Result<bool> {
+        let metadata = self.image.file.metadata().map_err(|error| {
+            image_error(format!(
+                "failed to inspect pinned Linux system image for storage separation: {error}"
+            ))
+        })?;
+        let serial = a3s_oci_agent_protocol::AgentVmStorageSourceIdentity::virtio_serial_for(
+            metadata.dev(),
+            metadata.rdev(),
+            metadata.ino(),
+        );
+        Ok(
+            (metadata.dev() == identity.device() && metadata.ino() == identity.inode())
+                || serial == identity.virtio_serial(),
+        )
     }
 
     pub(crate) fn evidence(&self) -> LinuxBootAssetsEvidence {

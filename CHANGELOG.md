@@ -28,6 +28,22 @@ All notable changes to A3S OCI Runtime are documented in this file.
 ### Added
 
 - Added a fail-closed, dedicated-VM Linux KVM transport implementation for
+  authorized v2 storage attachments without widening the production capability
+  advertisement. The Host accepts only caller-owned, detach-only, non-bind
+  `ext4` mounts backed by canonical single-link raw images outside the
+  runtime-owned bundle and share, binds exact inode, size, access, and public
+  attachment evidence into the internal v2 manifest, and never copies or
+  deletes the backing image. The isolated shim reopens each image with
+  `O_NOFOLLOW`, retains descriptor-pinned access through VM entry, rejects
+  system-disk aliases and virtio serial collisions, and configures a raw
+  `krun_add_disk2` device with VMM-enforced read-only state. The Guest locates
+  disks by the libkrun serial instead of enumeration order, verifies size and
+  read-only state, and rewrites only the exact authorized OCI mount source to
+  the matched block device. Source replacement, hard links, size or access
+  drift, duplicate disks, stale manifests, and reusable Guest sessions fail
+  closed. KVM still advertises v1 until destructive real-host v2/v3 restart,
+  cleanup, replay, and soak gates pass; HVF remains v1.
+- Added a fail-closed, dedicated-VM Linux KVM transport implementation for
   authorized v3 network attachments without widening the production capability
   advertisement. The Host validates the exact attachment contract and TAP,
   derives a locally administered unicast MAC from immutable attachment
@@ -40,8 +56,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   collision-safe interface renames, and binds the result to the later exact
   Create target. Joined caller namespaces, reusable Guest sessions, stale
   evidence, replay drift, duplicate MACs, and partial bootstrap all fail
-  closed. KVM still advertises v1 until cumulative v2 storage transport and a
-  destructive real-host v3 restart/cleanup/soak gate pass; HVF remains v1.
+  closed. KVM still advertises v1 until the cumulative v2/v3 destructive
+  real-host restart, cleanup, replay, and soak gates pass; HVF remains v1.
 - Added `a3s.oci.attachments.v4` as the fail-closed public foundation for
   reusable utility-VM guest sessions. Each shared-guest request binds a
   path-safe logical session ID, positive incarnation, immutable trust domain,
@@ -80,9 +96,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
   overlap, runtime-owned bundle handoff, and non-canonical wire inventories.
   Protocol 5 prevents v2 create/restore requests from downgrading to older
   peers; v1 serialization and protocol-3 compatibility remain unchanged. The
-  Native Linux driver advertises v2; utility-VM drivers remain v1 until they
-  have a separate caller-owned storage transport and detach-cleanup gate. The
-  legacy aggregate capability remains the safe driver intersection.
+  Native Linux driver advertises v2. Dedicated Linux KVM now has a separate
+  internal raw-disk transport but remains v1 until its destructive real-host
+  qualification gate passes; the other utility-VM drivers remain v1 until they
+  have equivalent transports and evidence. The legacy aggregate capability
+  remains the safe driver intersection.
 - Added `a3s.oci.extensions.v1`, an exact-artifact, per-driver capability
   catalog returned by `RuntimeInfo`. Every entry binds canonical v1 operation
   contracts and attachment versions to one launch-ready driver and its unique

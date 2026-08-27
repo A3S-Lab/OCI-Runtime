@@ -14,6 +14,7 @@ use crate::ffi::{path_to_cstring, value_to_cstring, FfiStringArray};
 use crate::linux_kvm_device::LinuxKvmDevice;
 use crate::linux_runtime_share::LinuxRuntimeShare;
 use crate::linux_system_image::LinuxSystemImage;
+use crate::linux_vm_attachment::LinuxVmStorageImage;
 use crate::runtime_assets::{
     runtime_bundle, RuntimeBundle, RuntimeFile, RuntimeFileRole, RuntimeKernel,
 };
@@ -183,6 +184,7 @@ pub(crate) struct KrunContext {
     api: LinuxKrunApi,
     system_image: Option<LinuxSystemImage>,
     runtime_share: Option<LinuxRuntimeShare>,
+    storage_images: Vec<LinuxVmStorageImage>,
     network_taps: Vec<String>,
     not_thread_safe: PhantomData<Rc<()>>,
 }
@@ -206,6 +208,7 @@ impl KrunContext {
             api,
             system_image: None,
             runtime_share: None,
+            storage_images: Vec::new(),
             network_taps: Vec::new(),
             not_thread_safe: PhantomData,
         })
@@ -319,6 +322,71 @@ impl KrunContext {
             "failed to attach the protected Linux KVM runtime share",
         )?;
         self.runtime_share = Some(runtime_share);
+        Ok(())
+    }
+
+    pub(crate) fn add_storage_disk(&mut self, image: LinuxVmStorageImage) -> Result<()> {
+        let id = self.active_id("krun_add_disk2")?;
+        if self
+            .system_image
+            .as_ref()
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "Linux KVM storage requires the immutable system image to be configured first",
+                )
+                .for_operation("krun_add_disk2")
+            })?
+            .conflicts_with_storage(image.attachment().source_identity())?
+        {
+            return Err(Error::new(
+                ErrorCode::PermissionDenied,
+                "an authorized storage image cannot alias or share a virtio-blk serial with the immutable Linux system image",
+            )
+            .for_operation("krun_add_disk2"));
+        }
+        if self
+            .storage_images
+            .iter()
+            .any(|known| known.attachment().block_id() == image.attachment().block_id())
+        {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                format!(
+                    "Linux KVM storage block {} has already been configured",
+                    image.attachment().block_id()
+                ),
+            )
+            .for_operation("krun_add_disk2"));
+        }
+        self.api.reverify_runtime()?;
+        image.reverify()?;
+        let block_id = value_to_cstring(
+            "krun_add_disk2",
+            "storage block identifier",
+            image.attachment().block_id(),
+        )?;
+        let image_path = path_to_cstring("krun_add_disk2", &image.pinned_path())?;
+        let read_only =
+            image.attachment().access_mode() == a3s_oci_sdk::StorageAccessMode::ReadOnly;
+        // SAFETY: the retained descriptor pins the exact regular raw image,
+        // both strings remain live for the call, and the public access grant
+        // selects libkrun's native read-only enforcement bit.
+        let status = unsafe {
+            (self.api.add_disk)(
+                id,
+                block_id.as_ptr(),
+                image_path.as_ptr(),
+                KRUN_DISK_FORMAT_RAW,
+                read_only,
+            )
+        };
+        check_status(
+            "krun_add_disk2",
+            status,
+            "failed to attach an authorized raw storage image",
+        )?;
+        self.storage_images.push(image);
         Ok(())
     }
 
@@ -470,7 +538,11 @@ impl KrunContext {
             )
             .for_operation("reverify-linux-kvm-entry-assets")
         })?;
-        runtime_share.reverify()
+        runtime_share.reverify()?;
+        for image in &self.storage_images {
+            image.reverify()?;
+        }
+        Ok(())
     }
 
     pub(crate) fn start_enter(mut self, kvm_device: &LinuxKvmDevice) -> Result<i32> {

@@ -4,6 +4,7 @@ use a3s_oci_sdk::{ErrorCode, IoMode, ProcessIo, TerminalSize};
 use tempfile::tempdir;
 
 use super::{prepare_container_init, RootfsScope};
+use crate::vm_attachment::UtilityVmStorageSources;
 
 fn configuration(rootfs: &Path) -> String {
     serde_json::json!({
@@ -44,6 +45,7 @@ fn native_scope_accepts_an_explicit_absolute_rootfs_outside_the_bundle() {
         RootfsScope::NativeAbsolute,
         None,
         None,
+        &UtilityVmStorageSources::default(),
         &ProcessIo::default(),
     )
     .expect("native absolute rootfs");
@@ -71,6 +73,7 @@ fn rejects_missing_or_non_directory_rootfs_before_namespace_entry() {
         RootfsScope::BundleOnly,
         None,
         None,
+        &UtilityVmStorageSources::default(),
         &ProcessIo::default(),
     )
     .expect_err("the declared rootfs directory must exist");
@@ -87,6 +90,7 @@ fn rejects_missing_or_non_directory_rootfs_before_namespace_entry() {
         RootfsScope::BundleOnly,
         None,
         None,
+        &UtilityVmStorageSources::default(),
         &ProcessIo::default(),
     )
     .expect_err("the declared rootfs path must resolve to a directory");
@@ -109,6 +113,7 @@ fn bundle_scope_rejects_the_same_external_absolute_rootfs() {
         RootfsScope::BundleOnly,
         None,
         None,
+        &UtilityVmStorageSources::default(),
         &ProcessIo::default(),
     )
     .expect_err("guest rootfs must remain bundle-confined");
@@ -133,6 +138,7 @@ fn native_scope_does_not_let_a_relative_symlink_escape_the_bundle() {
         RootfsScope::NativeAbsolute,
         None,
         None,
+        &UtilityVmStorageSources::default(),
         &ProcessIo::default(),
     )
     .expect_err("relative rootfs must remain bundle-confined");
@@ -173,6 +179,7 @@ fn prepared_init_reloads_terminal_bundle_with_forwarded_process_io() {
         RootfsScope::NativeAbsolute,
         None,
         None,
+        &UtilityVmStorageSources::default(),
         &terminal_io,
     )
     .expect("prepared terminal init");
@@ -221,6 +228,7 @@ async fn descriptor_pinned_rootfs_rejects_an_entry_swap_before_namespace_entry()
         RootfsScope::BundleOnly,
         Some(&pinned),
         Some(pinned_rootfs),
+        &UtilityVmStorageSources::default(),
         &ProcessIo::default(),
     )
     .expect_err("changed rootfs entry must fail closed");

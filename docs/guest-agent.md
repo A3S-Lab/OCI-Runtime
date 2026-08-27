@@ -24,17 +24,20 @@ dropped.
 On Windows, the host verifies that the connected named-pipe client is the
 exact libkrun shim PID before it sends the token.
 
-For an internal dedicated Linux KVM v3 network handoff, the agent processes a
-fixed attachment manifest before consuming the session token. It removes the
-expected SHA-256 environment entry, rejects an unrequested or missing manifest,
-validates the bounded mounted bytes without following the file symlink, and
-rechecks the exact Guest bundle, `config.json` digest, and every namespace and
-`linux.netDevices` pointer. Each VMM NIC must match exactly one deterministic
-MAC. All required interface renames are staged through unused temporary names
-so cycles are safe; a missing, ambiguous, or unrelated occupied name aborts
-bootstrap. The resulting in-memory binding permits only the matching exact
-Create target, Guest bundle path, and configuration. This path does not enable
-production KVM v3 advertisement until its cumulative storage and real-host
+For internal dedicated Linux KVM v2/v3 handoff, the agent processes a fixed
+attachment manifest before consuming the session token. It removes the expected
+SHA-256 environment entry, rejects an unrequested or missing manifest, validates
+the bounded mounted bytes without following the file symlink, and rechecks the
+exact Guest bundle, `config.json` digest, and every storage, namespace, and
+`linux.netDevices` pointer. Each raw-storage device must uniquely match the
+libkrun serial derived from its pinned Host identity, exact byte size, and
+read-only state; only then is the selected non-bind `ext4` mount source rewritten
+to its Guest block node. Each VMM NIC must match exactly one deterministic MAC.
+All required interface renames are staged through unused temporary names so
+cycles are safe; a missing, ambiguous, drifted, or unrelated occupied device
+aborts bootstrap. The resulting in-memory binding permits only the matching
+exact Create target, Guest bundle path, and configuration. These paths do not
+enable production KVM v2/v3 advertisement until their destructive real-host
 qualification gates pass.
 
 ## Current Executor Boundary

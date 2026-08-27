@@ -16,6 +16,7 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 
 use super::namespace::{collect_mappings, IdmapPlan, NamespacePlan};
 use super::PinnedBundleDirectory;
+use crate::vm_attachment::UtilityVmStorageSources;
 
 pub(super) use default_filesystem::DefaultFilesystemPlan;
 pub(super) use idmap::DetachedMountSources;
@@ -186,6 +187,36 @@ pub(super) fn plan_all(
         .enumerate()
         .map(|(index, mount)| MountPlan::new(index, mount, namespaces))
         .collect()
+}
+
+pub(super) fn rewrite_vm_storage_sources(
+    plans: &mut [MountPlan],
+    sources: &UtilityVmStorageSources,
+) -> Result<()> {
+    for source in sources.as_slice() {
+        let plan = plans.get_mut(source.mount_index()).ok_or_else(|| {
+            permission_denied(format!(
+                "VM storage source references missing OCI mount index {}",
+                source.mount_index()
+            ))
+        })?;
+        if plan.index != source.mount_index()
+            || plan.source.as_deref() != Some(Path::new(source.configured_source()))
+        {
+            return Err(permission_denied(format!(
+                "VM storage source for OCI mount index {} differs from its immutable configuration",
+                source.mount_index()
+            )));
+        }
+        if plan.bind || plan.filesystem_type.as_deref() != Some("ext4") {
+            return Err(permission_denied(format!(
+                "VM storage source for OCI mount index {} requires a non-bind ext4 mount",
+                source.mount_index()
+            )));
+        }
+        plan.source = Some(PathBuf::from(source.guest_source()));
+    }
+    Ok(())
 }
 
 pub(super) fn validate_control_workload_cgroup_mount(plans: &[MountPlan]) -> Result<()> {

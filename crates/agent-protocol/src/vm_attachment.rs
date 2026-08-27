@@ -10,8 +10,14 @@ use sha2::{Digest, Sha256};
 
 use crate::{GuestPath, AGENT_RUNTIME_SHARE_GUEST_ROOT};
 
-/// Immutable Host-to-shim-to-Guest network transport manifest schema.
-pub const AGENT_VM_ATTACHMENT_MANIFEST_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-attachments.v1";
+mod storage;
+
+pub use storage::{AgentVmStorageAttachment, AgentVmStorageSourceIdentity};
+
+/// Current immutable Host-to-shim-to-Guest attachment transport schema.
+pub const AGENT_VM_ATTACHMENT_MANIFEST_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-attachments.v2";
+/// Network-only transport schema emitted before raw storage transport existed.
+pub const AGENT_VM_ATTACHMENT_MANIFEST_SCHEMA_VERSION_V1: &str = "a3s.oci.agent-vm-attachments.v1";
 /// Fixed file name inside one exact utility-VM runtime share.
 pub const AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME: &str = ".a3s-oci-agent-vm-attachments.json";
 /// Guest environment key carrying the exact encoded-manifest SHA-256 digest.
@@ -21,6 +27,7 @@ pub const AGENT_VM_ATTACHMENT_MANIFEST_SHA256_ENV: &str =
 pub const AGENT_VM_ATTACHMENT_MANIFEST_MAX_BYTES: usize = 64 * 1024;
 
 const MAX_NETWORK_ATTACHMENTS: usize = 256;
+const MAX_STORAGE_ATTACHMENTS: usize = 128;
 const LINUX_INTERFACE_NAME_BYTES: usize = 15;
 const TRANSPORT_MAC_DOMAIN: &[u8] = b"a3s.oci.agent-vm-network-mac.v1\0";
 
@@ -203,7 +210,7 @@ impl AgentVmNetworkAttachment {
     }
 }
 
-/// Complete immutable network transport authority for one dedicated utility VM.
+/// Complete immutable storage/network transport authority for one dedicated utility VM.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentVmAttachmentManifest {
@@ -213,24 +220,33 @@ pub struct AgentVmAttachmentManifest {
     config_digest: String,
     attachment_digest: String,
     network: Vec<AgentVmNetworkAttachment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    storage: Vec<AgentVmStorageAttachment>,
 }
 
 impl AgentVmAttachmentManifest {
-    /// Construct and validate one canonical, non-empty network transport manifest.
+    /// Construct and validate one canonical, non-empty attachment transport manifest.
     pub fn new(
         target: ContainerTarget,
         guest_bundle: GuestPath,
         config_digest: impl Into<String>,
         attachment_digest: impl Into<String>,
         network: Vec<AgentVmNetworkAttachment>,
+        storage: Vec<AgentVmStorageAttachment>,
     ) -> Result<Self> {
+        let schema_version = if storage.is_empty() {
+            AGENT_VM_ATTACHMENT_MANIFEST_SCHEMA_VERSION_V1
+        } else {
+            AGENT_VM_ATTACHMENT_MANIFEST_SCHEMA_VERSION
+        };
         let manifest = Self {
-            schema_version: AGENT_VM_ATTACHMENT_MANIFEST_SCHEMA_VERSION.to_string(),
+            schema_version: schema_version.to_string(),
             target,
             guest_bundle,
             config_digest: config_digest.into(),
             attachment_digest: attachment_digest.into(),
             network,
+            storage,
         };
         manifest.validate()?;
         Ok(manifest)
@@ -264,6 +280,12 @@ impl AgentVmAttachmentManifest {
     #[must_use]
     pub fn network(&self) -> &[AgentVmNetworkAttachment] {
         &self.network
+    }
+
+    /// Canonically ordered VMM raw-storage transports.
+    #[must_use]
+    pub fn storage(&self) -> &[AgentVmStorageAttachment] {
+        &self.storage
     }
 
     /// Encode the exact bounded JSON representation used for persistence and hashing.
@@ -326,12 +348,17 @@ impl AgentVmAttachmentManifest {
         for attachment in &self.network {
             attachment.validate_configuration(&configuration)?;
         }
+        for attachment in &self.storage {
+            attachment.validate_configuration(&configuration)?;
+        }
         Ok(())
     }
 
     /// Validate schema, target, digests, canonical order, and transport uniqueness.
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != AGENT_VM_ATTACHMENT_MANIFEST_SCHEMA_VERSION {
+        if self.schema_version != AGENT_VM_ATTACHMENT_MANIFEST_SCHEMA_VERSION
+            && self.schema_version != AGENT_VM_ATTACHMENT_MANIFEST_SCHEMA_VERSION_V1
+        {
             return Err(manifest_error(format!(
                 "unsupported utility-VM attachment manifest schema {}",
                 self.schema_version
@@ -356,14 +383,43 @@ impl AgentVmAttachmentManifest {
         }
         validate_digest(&self.config_digest, "configuration digest")?;
         validate_digest(&self.attachment_digest, "attachment digest")?;
-        if self.network.is_empty() || self.network.len() > MAX_NETWORK_ATTACHMENTS {
+        if self.network.len() > MAX_NETWORK_ATTACHMENTS {
             return Err(manifest_error(format!(
-                "utility-VM attachment manifest must carry 1..={MAX_NETWORK_ATTACHMENTS} network entries"
+                "utility-VM attachment manifest carries more than {MAX_NETWORK_ATTACHMENTS} network entries"
             )));
+        }
+        if self.storage.len() > MAX_STORAGE_ATTACHMENTS {
+            return Err(manifest_error(format!(
+                "utility-VM attachment manifest carries more than {MAX_STORAGE_ATTACHMENTS} storage entries"
+            )));
+        }
+        if self.network.is_empty() && self.storage.is_empty() {
+            return Err(manifest_error(
+                "utility-VM attachment manifest must carry at least one storage or network entry",
+            ));
+        }
+        if self.schema_version == AGENT_VM_ATTACHMENT_MANIFEST_SCHEMA_VERSION_V1
+            && (!self.storage.is_empty() || self.network.is_empty())
+        {
+            return Err(manifest_error(
+                "utility-VM attachment manifest v1 requires network entries and cannot carry storage",
+            ));
+        }
+        if self.schema_version == AGENT_VM_ATTACHMENT_MANIFEST_SCHEMA_VERSION
+            && self.storage.is_empty()
+        {
+            return Err(manifest_error(
+                "utility-VM attachment manifest v2 requires at least one storage entry",
+            ));
         }
         if self.network.windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err(manifest_error(
                 "utility-VM network attachments must be unique and canonically ordered",
+            ));
+        }
+        if self.storage.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(manifest_error(
+                "utility-VM storage attachments must be unique and canonically ordered",
             ));
         }
 
@@ -392,6 +448,40 @@ impl AgentVmAttachmentManifest {
                 return Err(manifest_error(format!(
                     "KVM TAP {} collides with another derived transport MAC",
                     attachment.tap_name()
+                )));
+            }
+        }
+
+        let mut storage_mounts = BTreeSet::new();
+        let mut storage_sources = BTreeSet::new();
+        let mut storage_serials = BTreeSet::new();
+        let mut block_ids = BTreeSet::new();
+        for attachment in &self.storage {
+            attachment.validate_shape(&self.attachment_digest)?;
+            if !storage_mounts.insert(attachment.mount()) {
+                return Err(manifest_error(format!(
+                    "storage mount {} is transported more than once",
+                    attachment.mount().json_pointer()
+                )));
+            }
+            if !storage_sources.insert(attachment.host_source()) {
+                return Err(manifest_error(format!(
+                    "Host storage source {} is transported more than once",
+                    attachment.host_source()
+                )));
+            }
+            let serial = attachment.virtio_serial();
+            if !storage_serials.insert(serial.clone()) {
+                return Err(manifest_error(format!(
+                    "storage attachment {} collides on virtio-blk serial {serial}",
+                    attachment.identity()
+                )));
+            }
+            if !block_ids.insert(attachment.block_id()) {
+                return Err(manifest_error(format!(
+                    "storage attachment {} collides on libkrun block ID {}",
+                    attachment.identity(),
+                    attachment.block_id()
                 )));
             }
         }
@@ -474,13 +564,15 @@ mod tests {
     use a3s_oci_sdk::{
         oci_spec::runtime::Spec, ContainerTarget, CreateAttachments, Generation,
         NetworkAttachmentIdentity, NetworkCleanup, NetworkCleanupId, NetworkInterfaceId,
-        NetworkNamespaceId, OciBundle, ProcessIo,
+        NetworkNamespaceId, OciBundle, ProcessIo, StorageAccessMode, StorageAttachmentId,
+        StorageCleanup, StorageOwnership,
     };
     use serde_json::{json, Value};
 
     use super::{
         AgentVmAttachmentManifest, AgentVmMacAddress, AgentVmNetworkAttachment,
-        AGENT_VM_ATTACHMENT_MANIFEST_MAX_BYTES,
+        AgentVmStorageAttachment, AgentVmStorageSourceIdentity,
+        AGENT_VM_ATTACHMENT_MANIFEST_MAX_BYTES, AGENT_VM_ATTACHMENT_MANIFEST_SCHEMA_VERSION,
     };
     use crate::GuestPath;
 
@@ -532,8 +624,62 @@ mod tests {
             bundle.config_digest(),
             digest,
             vec![network],
+            Vec::new(),
         )
         .expect("VM attachment manifest");
+        (bundle, attachments, manifest)
+    }
+
+    fn storage_fixture() -> (OciBundle, CreateAttachments, AgentVmAttachmentManifest) {
+        let mut value = serde_json::to_value(Spec::default()).expect("default OCI spec");
+        value["mounts"] = json!([{
+            "destination": "/data",
+            "type": "ext4",
+            "source": "/var/lib/a3s/authorized-volume.raw",
+            "options": ["ro", "nodev"]
+        }]);
+        let bundle = OciBundle::from_json(
+            std::env::temp_dir().join("a3s-agent-vm-storage-manifest"),
+            serde_json::to_string(&value).expect("fixture JSON"),
+        )
+        .expect("valid storage bundle");
+        let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+            .expect("base attachments")
+            .attach_storage_mount(
+                &bundle,
+                0,
+                StorageAttachmentId::new("authorized-volume-7").expect("storage identity"),
+                StorageAccessMode::ReadOnly,
+                StorageOwnership::Caller,
+                StorageCleanup::DetachOnly,
+            )
+            .expect("storage attachment");
+        let digest = attachments.digest().expect("attachment digest");
+        let public = &attachments.storage()[0];
+        let storage = AgentVmStorageAttachment::new(
+            public.identity().clone(),
+            public.mount().clone(),
+            public.access_mode(),
+            public.ownership(),
+            public.cleanup(),
+            "/var/lib/a3s/authorized-volume.raw",
+            AgentVmStorageSourceIdentity::new(17, 0, 4_203, 8 * 1024 * 1024)
+                .expect("source identity"),
+            &digest,
+        )
+        .expect("storage transport");
+        let manifest = AgentVmAttachmentManifest::new(
+            ContainerTarget::exact(
+                a3s_oci_sdk::ContainerId::new("stored").expect("container ID"),
+                Generation(3),
+            ),
+            GuestPath::new("/run/a3s-oci-runtime/bundle").expect("guest bundle"),
+            bundle.config_digest(),
+            digest,
+            Vec::new(),
+            vec![storage],
+        )
+        .expect("storage VM attachment manifest");
         (bundle, attachments, manifest)
     }
 
@@ -572,6 +718,60 @@ mod tests {
     }
 
     #[test]
+    fn raw_storage_round_trips_with_exact_serial_access_and_schema() {
+        let (bundle, _, manifest) = storage_fixture();
+        manifest.validate_bundle(&bundle).expect("storage bundle");
+        let encoded = manifest.to_bytes().expect("storage manifest bytes");
+        let decoded = AgentVmAttachmentManifest::from_bytes(&encoded).expect("storage manifest");
+
+        assert_eq!(decoded, manifest);
+        assert_eq!(
+            decoded.schema_version,
+            AGENT_VM_ATTACHMENT_MANIFEST_SCHEMA_VERSION
+        );
+        assert!(decoded.network().is_empty());
+        assert_eq!(decoded.storage().len(), 1);
+        assert_eq!(decoded.storage()[0].mount_index().unwrap(), 0);
+        assert_eq!(
+            decoded.storage()[0].access_mode(),
+            StorageAccessMode::ReadOnly
+        );
+        assert_eq!(decoded.storage()[0].virtio_serial(), "1704203");
+        assert!(decoded.storage()[0]
+            .block_id()
+            .starts_with("a3s-oci-storage-"));
+    }
+
+    #[test]
+    fn raw_storage_rejects_source_access_identity_and_block_rebinding() {
+        let (_, _, manifest) = storage_fixture();
+        let bytes = manifest.to_bytes().expect("storage manifest bytes");
+
+        for (field, replacement) in [
+            ("hostSource", json!("relative.raw")),
+            ("accessMode", json!("read-write")),
+            ("blockId", json!("a3s-oci-storage-unbound")),
+        ] {
+            let mut encoded: Value = serde_json::from_slice(&bytes).expect("manifest JSON");
+            encoded["storage"][0][field] = replacement;
+            assert!(
+                AgentVmAttachmentManifest::from_bytes(
+                    &serde_json::to_vec(&encoded).expect("mutated manifest")
+                )
+                .is_err(),
+                "{field}"
+            );
+        }
+
+        let mut encoded: Value = serde_json::from_slice(&bytes).expect("manifest JSON");
+        encoded["storage"][0]["sourceIdentity"]["size"] = json!(513);
+        assert!(AgentVmAttachmentManifest::from_bytes(
+            &serde_json::to_vec(&encoded).expect("misaligned storage manifest")
+        )
+        .is_err());
+    }
+
+    #[test]
     fn rejects_joined_namespaces_and_configuration_drift() {
         let (bundle, _, manifest) = fixture();
         let mut joined: Value = serde_json::from_str(bundle.config_json()).expect("fixture JSON");
@@ -603,6 +803,15 @@ mod tests {
         let mut noncanonical = manifest.to_bytes().expect("manifest bytes");
         noncanonical.push(b'\n');
         assert!(AgentVmAttachmentManifest::from_bytes(&noncanonical).is_err());
+
+        let mut encoded: Value =
+            serde_json::from_slice(&manifest.to_bytes().expect("manifest bytes"))
+                .expect("manifest JSON");
+        encoded["schemaVersion"] = json!(AGENT_VM_ATTACHMENT_MANIFEST_SCHEMA_VERSION);
+        assert!(AgentVmAttachmentManifest::from_bytes(
+            &serde_json::to_vec(&encoded).expect("v2 network-only manifest")
+        )
+        .is_err());
 
         let mut encoded: Value =
             serde_json::from_slice(&manifest.to_bytes().expect("manifest bytes"))

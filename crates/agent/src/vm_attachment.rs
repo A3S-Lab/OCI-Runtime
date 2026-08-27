@@ -22,11 +22,16 @@ use a3s_oci_sdk::{OciBundle, CONFIG_FILE_NAME, MAX_CONFIG_BYTES};
 use sha2::{Digest, Sha256};
 
 mod network;
+mod storage;
+
+pub(crate) use storage::UtilityVmStorageSources;
 
 #[derive(Debug)]
 #[cfg(any(target_os = "linux", test))]
 pub struct UtilityVmAttachmentBinding {
     manifest: AgentVmAttachmentManifest,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    storage_sources: UtilityVmStorageSources,
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -55,6 +60,11 @@ impl UtilityVmAttachmentBinding {
         }
         let bundle = request.bundle.to_guest_bundle()?;
         self.manifest.validate_bundle(&bundle)
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) const fn storage_sources(&self) -> &UtilityVmStorageSources {
+        &self.storage_sources
     }
 }
 
@@ -130,8 +140,12 @@ pub fn take_vm_attachment_manifest(
     let manifest = AgentVmAttachmentManifest::from_bytes(&encoded)
         .map_err(|error| attachment_error(format!("invalid VM attachment manifest: {error}")))?;
     validate_guest_bundle(&manifest)?;
+    let storage_sources = storage::configure_guest_storage(&manifest)?;
     network::configure_guest_interfaces(&manifest)?;
-    Ok(Some(UtilityVmAttachmentBinding { manifest }))
+    Ok(Some(UtilityVmAttachmentBinding {
+        manifest,
+        storage_sources,
+    }))
 }
 
 #[cfg(target_os = "linux")]
@@ -249,7 +263,7 @@ mod tests {
     };
     use serde_json::json;
 
-    use super::{network::rename_plan, UtilityVmAttachmentBinding};
+    use super::{network::rename_plan, UtilityVmAttachmentBinding, UtilityVmStorageSources};
 
     fn manifest(names: &[&str]) -> AgentVmAttachmentManifest {
         manifest_fixture(names).0
@@ -326,6 +340,7 @@ mod tests {
             bundle.config_digest(),
             digest,
             network,
+            Vec::new(),
         )
         .expect("manifest");
         (manifest, bundle, target, guest_bundle)
@@ -370,7 +385,10 @@ mod tests {
     #[test]
     fn binding_accepts_only_the_manifest_target_bundle_and_configuration() {
         let (manifest, bundle, target, guest_bundle) = manifest_fixture(&["tap0"]);
-        let binding = UtilityVmAttachmentBinding { manifest };
+        let binding = UtilityVmAttachmentBinding {
+            manifest,
+            storage_sources: UtilityVmStorageSources::default(),
+        };
         let request = AgentCreateRequest {
             context: OperationContext::new(
                 OperationId::new("network-create").expect("operation ID"),

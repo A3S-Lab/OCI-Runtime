@@ -448,26 +448,33 @@ generation share. A terminal preflight rejection therefore leaves neither a
 share nor a launchable VM attachment.
 
 The dedicated Linux KVM path can additionally carry the internal
-`a3s.oci.agent-vm-attachments.v1` bootstrap manifest for an authorized v3 TAP
-contract. The Host writes one canonical, mode-`0600` file in the protected
-runtime share and passes its raw SHA-256 as a shim argument. The manifest binds
-the exact container generation, Guest bundle, OCI configuration digest, public
-attachment digest, namespace and `linux.netDevices` JSON pointers, cleanup
-identities, source TAP names, and deterministic Guest MACs. It rejects joined
-network namespaces and reusable Guest sessions.
+`a3s.oci.agent-vm-attachments.v2` bootstrap manifest for authorized v2 raw
+storage together with a v3 TAP contract. Network-only handoff retains the
+byte-compatible v1 schema. The Host writes one canonical, mode-`0600` file in
+the protected runtime share and passes its raw SHA-256 as a shim argument. The
+manifest binds the exact container generation, Guest bundle, OCI configuration
+and public attachment digests; storage mount pointers, caller-owned raw-image
+paths, inode/size/access evidence, and deterministic block IDs; plus namespace
+and `linux.netDevices` pointers, cleanup identities, source TAP names, and
+deterministic Guest MACs. It rejects joined network namespaces and reusable
+Guest sessions.
 
 The worker opens the manifest through the descriptor-pinned share, rejects an
 unrequested file, and reverifies file identity and content before `/dev/kvm`.
-After libkrun creates the NICs, the Guest consumes only the digest environment
-entry, revalidates the mounted bytes and exact bundle, identifies the NICs by
-MAC, and completes collision-safe source-name restoration before reading the
-session token or serving protocol requests. The retained binding then fences
-the first and replayed Create to that target, bundle path, and configuration.
-This bootstrap is outside the Agent request/response wire protocol, so it does
-not change protocol v10. The private Linux worker evidence schema is v3; the
-public shim report remains `a3s.oci.krun-agent-vm-smoke.v7`. KVM continues to
-advertise attachment v1 pending cumulative storage transport and real-host v3
-qualification.
+It independently reopens every single-link raw image with `O_NOFOLLOW`, pins
+the exact inode and access mode, rejects system-disk alias or serial collision,
+and adds a raw virtio-blk device with VMM-enforced read-only state. After
+libkrun creates the devices, the Guest consumes only the digest environment
+entry, revalidates the mounted bytes and exact bundle, locates storage by
+libkrun serial/size/read-only state and NICs by MAC, rewrites only authorized
+OCI mount sources, and completes collision-safe interface restoration before
+reading the session token or serving protocol requests. The retained binding
+then fences the first and replayed Create to that target, bundle path, and
+configuration. This bootstrap is outside the Agent request/response wire
+protocol, so it does not change protocol v10. The private Linux worker evidence
+schema is v4; the public shim report remains
+`a3s.oci.krun-agent-vm-smoke.v7`. KVM continues to advertise attachment v1
+pending destructive real-host cumulative v2/v3 qualification.
 
 The Linux real-host gate also has a hidden qualification-only failure path. It
 uses the normal Host endpoint and one-time token setup, creates the isolated

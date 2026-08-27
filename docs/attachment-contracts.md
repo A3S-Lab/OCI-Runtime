@@ -107,12 +107,12 @@ reinterpreted to grant that authority.
 Caller-owned storage cannot be combined with `dev.a3s.bundle-handoff`, because
 that extension transfers and later deletes the bundle tree. The Native Linux
 driver advertises v2 as part of cumulative v1-v3 because its mount namespace
-cleanup preserves external bind sources. The current utility-VM drivers
-deliberately remain v1: their
-exact-generation share is runtime-owned and removed as one subtree. They must
-gain a separate caller-owned storage transport plus detach-cleanup evidence
-before advertising v2; the runtime will not absorb the allocation into an
-owned bundle as an implicit fallback.
+cleanup preserves external bind sources. Dedicated Linux KVM now has a
+separate internal raw-disk transport: the allocation remains outside its
+runtime-owned exact-generation share and is never absorbed into the bundle.
+KVM deliberately continues to advertise v1 until the destructive real-host
+v2/v3 restart, cleanup, replay, and soak gates pass. Other utility-VM drivers
+remain v1 until they gain equivalent transport and detach-cleanup evidence.
 
 ## Already-authorized Linux networking
 
@@ -170,30 +170,36 @@ rolls back failed Create in reverse order, and scopes normal cleanup to the
 configured namespace lifecycle. Rootless Native stays v1-v2 because its helper
 contract grants no host network-device authority.
 
-Dedicated Linux KVM contains an internal v3 transport for the
-`ReleaseRuntimeNamespace` form. Before the shim starts, the Host validates the
-exact bundle and public attachment digest, requires every source name to be a
-live TAP in the runtime network namespace, derives a locally administered
-unicast MAC from the attachment identities and TAP name, and atomically writes
-the canonical `a3s.oci.agent-vm-attachments.v1` manifest as a mode-`0600` file
-inside the exact-generation share. Exact replay retains identical evidence;
-stale, non-private, or drifted evidence conflicts.
+Dedicated Linux KVM contains internal cumulative v2/v3 transports. For v2,
+each selected OCI mount must be non-bind `ext4` backed by a canonical,
+single-link, 512-byte-aligned raw image outside the runtime-owned bundle and
+share. The Host records its exact inode, size, access grant, and deterministic
+libkrun block identity without copying or taking cleanup ownership. For the v3
+`ReleaseRuntimeNamespace` form, the Host requires every source name to be a
+live TAP in the runtime network namespace and derives a locally administered
+unicast MAC from the attachment identities and TAP name. It atomically writes
+the canonical `a3s.oci.agent-vm-attachments.v2` manifest when storage is
+present, retaining v1 bytes for network-only handoff, as a mode-`0600` file in
+the exact-generation share. Exact replay retains identical evidence; stale,
+non-private, or drifted evidence conflicts.
 
-The isolated shim opens that file through its descriptor-pinned runtime share,
-verifies its raw SHA-256 and inode before KVM access, and supplies each TAP and
-MAC through `krun_add_net_tap`. The Guest independently checks the raw digest,
-the exact Guest bundle and configuration pointers, locates each VMM NIC by MAC,
-and stages all renames through collision-free temporary names before the Agent
-protocol starts. The resulting binding accepts only the matching exact target,
-Guest bundle, and configuration on Create. A joined caller namespace cannot be
-represented across the VM boundary, and reusable Guest sessions do not support
-NIC hotplug, so both forms are rejected.
+The isolated shim opens that file through its descriptor-pinned runtime share
+and verifies its raw SHA-256 and inode before KVM access. It reopens each raw
+image with the authorized access and `O_NOFOLLOW`, rejects replacement, hard
+links, system-image alias or serial collision, and attaches it through
+`krun_add_disk2` with the VMM read-only bit. It supplies each TAP and MAC through
+`krun_add_net_tap`. The Guest independently checks the manifest, exact bundle,
+and configuration pointers; maps each disk by libkrun serial, byte size, and
+read-only state; rewrites only its selected OCI mount source; locates each VMM
+NIC by MAC; and stages all interface renames through collision-free temporary
+names before the Agent protocol starts. The resulting binding accepts only the
+matching exact target, Guest bundle, and configuration on Create. Joined caller
+network namespaces and reusable Guest storage or NIC hotplug are rejected.
 
-This implementation is deliberately not an advertised capability yet. The
-attachment versions are cumulative, so KVM must first gain the independent v2
-caller-owned storage transport. It must then pass destructive real-host v3
-restart, cleanup, replay, and soak qualification before advertising v3. HVF
-remains v1 until it has equivalent storage and NIC transports and evidence.
+These implementations are deliberately not advertised capabilities yet. KVM
+must pass destructive real-host v2/v3 restart, cleanup, replay, read-only, and
+soak qualification before advertising either cumulative profile. HVF remains
+v1 until it has equivalent storage and NIC transports and evidence.
 
 ## Reusable guest-session identity
 
@@ -261,14 +267,14 @@ record without pretending the first container owns the VM.
 No production utility-VM driver advertises v4 yet. The common mechanism and
 deterministic driver tests are present, while cumulative v2/v3 advertisement
 and per-driver real-host restart, cleanup, and soak qualification remain the
-enablement gates. KVM's internal dedicated v3 transport does not bypass its
-missing v2 transport or those qualification gates.
+enablement gates. KVM's internal dedicated v2/v3 transports do not bypass
+those qualification gates.
 
 Utility-VM attachment capabilities are explicit driver configuration, not an
 inference from the advertised isolation classes. The driver repeats schema
 negotiation at its own preflight boundary and passes the complete immutable
 `CreateAttachments` value into the platform VM factory. Production HVF and KVM
-still configure v1, while the reusable-session test profile opts into v4. This
+still advertise v1, while the reusable-session test profile opts into v4. This
 keeps unsupported or unqualified storage and NIC surfaces fail-closed without
 discarding their typed contracts at the future launch boundary.
 

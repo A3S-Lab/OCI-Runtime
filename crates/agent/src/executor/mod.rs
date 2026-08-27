@@ -701,7 +701,14 @@ impl LinuxExecutor {
             None => request.io.clone(),
         };
         let rootless = self.user_mapping_runtime.is_rootless();
+        let vm_storage_sources = self
+            .vm_attachments
+            .as_ref()
+            .map(crate::UtilityVmAttachmentBinding::storage_sources)
+            .cloned()
+            .unwrap_or_default();
         let mut plan = InitPlan::from_bundle(&bundle, &process_io)?;
+        mount::rewrite_vm_storage_sources(&mut plan.mounts, &vm_storage_sources)?;
         mount::validate_bundle_source_syntax(&plan.mounts, self.rootfs_scope)?;
         plan.cgroup.ensure_runtime_path(&key.id, key.generation)?;
         plan.resolve_cgroup_ownership(
@@ -828,6 +835,7 @@ impl LinuxExecutor {
                 rootfs_scope: self.rootfs_scope,
                 user_mapping_runtime: &self.user_mapping_runtime,
                 device_source_directory: &device_source_directory,
+                vm_storage_sources: &vm_storage_sources,
             },
         )
         .await
