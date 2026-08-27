@@ -7,7 +7,8 @@ use a3s_oci_sdk::{
     CreateAttachments, DeleteMode, Error, ErrorCode, ExitStatus, FileRequest, FileResponse,
     FilesystemRequest, FilesystemResponse, IsolationRequest, OciBundle, OciLinuxSupport,
     OperationContext, OperationId, OutputChunk, ProcessIo, ProcessRecord, ProcessTarget, Result,
-    RuntimeArtifact, RuntimeOperation, Signal, TerminalSize,
+    RuntimeArtifact, RuntimeOperation, Signal, TeeEvidence, TeeLaunchRequest, TeeMeasurement,
+    TeeReportData, TeeSha256Digest, TerminalSize,
 };
 
 const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
@@ -406,6 +407,8 @@ pub struct DriverCreateRequest {
     pub io: ProcessIo,
     /// Versioned, digest-bound public attachment contract.
     pub attachment_contract: CreateAttachments,
+    /// Parsed TEE launch mechanism that the driver must enforce exactly.
+    pub tee_launch: Option<TeeLaunchRequest>,
     /// Process-local native resources, excluded from the wire protocol.
     pub attachments: DriverCreateAttachments,
 }
@@ -657,10 +660,80 @@ pub struct DriverRestoreRequest {
     pub io: ProcessIo,
     /// New versioned, digest-bound attachment contract for this generation.
     pub attachment_contract: CreateAttachments,
+    /// Parsed TEE launch mechanism that the driver must enforce exactly.
+    pub tee_launch: Option<TeeLaunchRequest>,
     /// Exact immutable checkpoint evidence consumed by this operation.
     pub reference: CheckpointReference,
     /// Exact Host executable invoking this attempt.
     pub runtime_artifact: RuntimeArtifact,
+}
+
+/// Exact policy-neutral attestation input passed to one TEE-capable driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverAttestationRequest {
+    /// Stable idempotency and deadline metadata.
+    pub context: OperationContext,
+    /// Unchanged exact live container record bound by this operation.
+    pub source: ContainerRecord,
+    /// TEE launch mechanism durably bound at create or restore time.
+    pub launch: TeeLaunchRequest,
+    /// Exact caller binding copied into provider report data.
+    pub report_data: TeeReportData,
+    /// Exact Host executable invoking this attempt.
+    ///
+    /// A fresh effect binds this artifact. Replay may return the retained
+    /// artifact from the original successful attempt after a Host upgrade.
+    pub runtime_artifact: RuntimeArtifact,
+}
+
+/// Opaque provider evidence returned by one TEE-capable driver invocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverAttestationResult {
+    runtime_artifact: RuntimeArtifact,
+    driver_build_digest: TeeSha256Digest,
+    measurement: TeeMeasurement,
+    evidence: TeeEvidence,
+}
+
+impl DriverAttestationResult {
+    /// Construct complete exact-artifact, measurement, and opaque evidence binding.
+    #[must_use]
+    pub fn new(
+        runtime_artifact: RuntimeArtifact,
+        driver_build_digest: TeeSha256Digest,
+        measurement: TeeMeasurement,
+        evidence: TeeEvidence,
+    ) -> Self {
+        Self {
+            runtime_artifact,
+            driver_build_digest,
+            measurement,
+            evidence,
+        }
+    }
+
+    #[must_use]
+    pub const fn runtime_artifact(&self) -> &RuntimeArtifact {
+        &self.runtime_artifact
+    }
+
+    /// Consume this result into its immutable evidence fields.
+    #[must_use]
+    pub fn into_parts(
+        self,
+    ) -> (
+        RuntimeArtifact,
+        TeeSha256Digest,
+        TeeMeasurement,
+        TeeEvidence,
+    ) {
+        (
+            self.runtime_artifact,
+            self.driver_build_digest,
+            self.measurement,
+            self.evidence,
+        )
+    }
 }
 
 /// Driver-reported process identity returned after exec.
@@ -926,5 +999,15 @@ pub trait RuntimeDriver: Send + Sync {
     /// created for this target has been removed or detached.
     async fn restore(&self, _request: DriverRestoreRequest) -> Result<DriverState> {
         Err(Error::unsupported("restore"))
+    }
+
+    /// Collect opaque provider evidence for one exact TEE-backed generation.
+    ///
+    /// Implementations must copy `report_data` exactly, bind the returned
+    /// measurement and evidence to the supplied live generation and launch
+    /// mechanism, and durably retain the result by operation ID before
+    /// returning. Runtime does not interpret provider claims or policy.
+    async fn attest(&self, _request: DriverAttestationRequest) -> Result<DriverAttestationResult> {
+        Err(Error::unsupported("attest"))
     }
 }

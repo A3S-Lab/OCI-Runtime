@@ -317,6 +317,55 @@ still advertise v1, while the reusable-session test profile opts into v4. This
 keeps unsupported or unqualified storage and NIC surfaces fail-closed without
 discarding their typed contracts at the future launch boundary.
 
+## TEE launch mechanism
+
+A dedicated utility VM may carry exactly one policy-neutral TEE launch
+extension. AMD SEV-SNP uses `dev.a3s.tee.amd-sev-snp@1`; Intel TDX uses
+`dev.a3s.tee.intel-tdx@1`. The matching OCI annotation value is canonical JSON
+for `a3s.oci.tee-launch.v1` and selects an explicit `hardware` or `simulated`
+mode. Simulated mode is mechanically testable evidence and is never a hardware
+security claim.
+
+The annotation alone is inert. Only the matching required manifest extension
+creates a TEE request, and a driver must use the separately supplied typed
+launch field rather than interpret an undeclared annotation.
+
+```rust,no_run
+use a3s_oci_sdk::{
+    CreateAttachments, OciBundle, ProcessIo, TeeLaunchRequest, TeeMode,
+    TeeTechnology, AMD_SEV_SNP_LAUNCH_EXTENSION,
+};
+
+fn tee_attachments(bundle: &OciBundle) -> a3s_oci_sdk::Result<CreateAttachments> {
+    let expected = TeeLaunchRequest::new(TeeTechnology::AmdSevSnp, TeeMode::Hardware)
+        .to_annotation_value()?;
+    assert_eq!(
+        bundle
+            .spec()
+            .annotations()
+            .as_ref()
+            .and_then(|annotations| annotations.get(AMD_SEV_SNP_LAUNCH_EXTENSION)),
+        Some(&expected),
+    );
+    CreateAttachments::from_bundle(bundle, ProcessIo::default())?.attach_tee_launch(bundle)
+}
+```
+
+Construction rejects both technology extensions in one bundle, a technology
+that differs from its annotation key, a missing or advisory manifest entry,
+an extension classified as network or secret material, non-canonical JSON, or
+an annotation larger than 4 KiB. Request validation additionally rejects TEE
+launch on SharedGuestKernel or SharedHostKernel. The exact extension,
+annotation, configuration, and attachment digest remain in durable create or
+restore state and are decoded again before driver dispatch and attestation.
+
+TEE launch create and restore require SDK protocol 9. A selected driver must
+advertise `Attest`, dedicated-VM isolation, and at least one exact known TEE
+extension as one capability set. No production driver currently advertises
+that set; the SDK, Host orchestration, durable replay, and simulated recording
+driver do not constitute SEV-SNP or TDX hardware support. See
+[TEE launch and attestation](tee-attestation-contract.md).
+
 ## Runtime-owned bundle handoff
 
 Local products that prepare a portable bundle for a utility-VM driver may
@@ -348,8 +397,9 @@ SDK transport protocol 3 is the first protocol that carries v1. Protocol-2
 peers are rejected during negotiation, so an attachment-aware client cannot be
 silently downgraded to a server that ignores the field. Protocol 5 is required
 for v2 create requests, protocol 6 for v3 create requests, and protocol 7 for
-v4 create requests. Every restore requires protocol 8 because it also carries
-an immutable checkpoint reference and typed response. Both the client and
+v4 create requests. A non-TEE restore requires protocol 8 because it also
+carries an immutable checkpoint reference and typed response; a TEE create or
+restore requires protocol 9. Both the client and
 server reject a versioned operation before dispatch when the negotiated
 connection predates its schema; v1 create wire serialization remains unchanged
 and keeps its protocol-3 compatibility.
@@ -379,7 +429,8 @@ record also retains `ContainerRecord::guest_session`; an OAR-01 record retains
 manifest and annotation binding exactly. Changing I/O, classification, storage
 identity/access/lifetime, network namespace/interface/cleanup identity,
 enforcement or redirect identity/generation/digest, guest-session
-identity/generation/trust domain/capacity/reset, extension version, or
+identity/generation/trust domain/capacity/reset, TEE technology/mode,
+extension version, or
 referenced configuration while reusing an operation ID therefore fails as a
 different request.
 

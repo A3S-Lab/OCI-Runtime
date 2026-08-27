@@ -478,6 +478,7 @@ impl Fixture {
             isolation,
             io: ProcessIo::default(),
             attachment_contract,
+            tee_launch: None,
             attachments: DriverCreateAttachments::None,
         }
     }

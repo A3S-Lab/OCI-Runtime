@@ -14,27 +14,27 @@ use a3s_oci_sdk::{
     OciRuntimeService, OutputChunk, ProcessId, ProcessRecord, ProcessTarget, ProcessesRequest,
     ReadOutputRequest, ResizeRequest, RestoreRequest, RestoreResponse, Result, RuntimeExtensions,
     RuntimeInfo, RuntimeOperation, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
-    UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
-    MAX_FILE_TRANSFER_BYTES,
+    TeeAttestationRequest, TeeAttestationResponse, TeeSha256Digest, UpdateRequest, ValidateRequest,
+    WaitProcessRequest, WaitRequest, WriteStdinRequest, MAX_FILE_TRANSFER_BYTES,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use crate::driver::{
-    DriverCheckpointRequest, DriverCloseStdinRequest, DriverContainerOperationRequest,
-    DriverCreateAttachments, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverReadOutputRequest, DriverResizeRequest, DriverRestoreRequest,
-    DriverRestoreValidationRequest, DriverSignalProcessRequest, DriverStartRequest,
-    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
-    RecreatedProcess, RuntimeDriver,
+    DriverAttestationRequest, DriverCheckpointRequest, DriverCloseStdinRequest,
+    DriverContainerOperationRequest, DriverCreateAttachments, DriverCreateRequest,
+    DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverReadOutputRequest,
+    DriverResizeRequest, DriverRestoreRequest, DriverRestoreValidationRequest,
+    DriverSignalProcessRequest, DriverStartRequest, DriverUpdateRequest, DriverWaitProcessRequest,
+    DriverWaitRequest, DriverWriteStdinRequest, RecreatedProcess, RuntimeDriver,
 };
 use crate::fault::{
     DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint, NoFaultInjector,
 };
 use crate::state::{
-    CheckpointOperationPreparation, DeletePreparation, DurableStateStore,
-    FilesystemMutationPreparation, ProcessIoPreparation, ProcessOperationPreparation,
-    ProcessWaitPreparation, RecordOperationPreparation, RestoreOperationLookup,
-    RestoreOperationPreparation, SignalProcessPreparation,
+    AttestationOperationLookup, AttestationOperationPreparation, CheckpointOperationPreparation,
+    DeletePreparation, DurableStateStore, FilesystemMutationPreparation, ProcessIoPreparation,
+    ProcessOperationPreparation, ProcessWaitPreparation, RecordOperationPreparation,
+    RestoreOperationLookup, RestoreOperationPreparation, SignalProcessPreparation,
 };
 
 mod artifact;
@@ -163,7 +163,10 @@ impl HostRuntimeService {
         let store =
             DurableStateStore::open_with_fault_injector(state_root, Arc::clone(&faults)).await?;
         for record in store.list(&ListRequest::default()).await? {
-            let registered = drivers.validate_durable_record(&record)?;
+            let target =
+                ContainerTarget::exact(ContainerId::new(record.state.id())?, record.generation);
+            let attachments = store.attachment_contract(&target).await?;
+            let registered = drivers.validate_durable_record(&record, attachments.as_ref())?;
             faults.check(FaultPoint::DriverBoundary {
                 operation: DriverOperation::Recover,
                 stage: DriverBoundaryStage::BeforeCall,
@@ -175,8 +178,6 @@ impl HostRuntimeService {
             })?;
             let recreated_process = recovery.recreated_process();
             let recreated_exec_processes = recovery.recreated_exec_processes().to_vec();
-            let target =
-                ContainerTarget::exact(ContainerId::new(record.state.id())?, record.generation);
             let (observation, init_exit_status) = recovery.into_parts();
             if let Some(observation) = observation {
                 match recreated_process {
@@ -280,6 +281,7 @@ impl HostRuntimeService {
         attachments: DriverCreateAttachments,
     ) -> Result<ContainerRecord> {
         request.validate()?;
+        let tee_launch = request.attachments.tee_launch(&request.bundle)?;
         let lifecycle = self.lifecycle("create")?;
         let registered = lifecycle
             .drivers
@@ -322,6 +324,7 @@ impl HostRuntimeService {
             isolation: request.isolation,
             io: request.attachments.process_io().clone(),
             attachment_contract: request.attachments,
+            tee_launch,
             attachments,
         };
         lifecycle.driver_boundary(DriverOperation::Create, DriverBoundaryStage::BeforeCall)?;
@@ -1468,6 +1471,7 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn restore(&self, request: RestoreRequest) -> Result<RestoreResponse> {
         request.validate()?;
+        let tee_launch = request.attachments().tee_launch(request.bundle())?;
         let lifecycle = self.lifecycle("restore")?;
         lifecycle.ensure_operation(RuntimeOperation::Restore, "restore")?;
         let operation_id = request.context().operation_id.clone();
@@ -1560,6 +1564,7 @@ impl OciRuntimeService for HostRuntimeService {
             isolation: request.isolation().clone(),
             io: request.attachments().process_io().clone(),
             attachment_contract: request.attachments().clone(),
+            tee_launch,
             reference,
             runtime_artifact,
         };
@@ -1611,6 +1616,103 @@ impl OciRuntimeService for HostRuntimeService {
             .retryable(true));
         }
         let completed = lifecycle.store.complete_restore(&operation_id, pid).await;
+        lifecycle.acknowledge_result(&operation_id, completed).await
+    }
+
+    async fn attest(&self, request: TeeAttestationRequest) -> Result<TeeAttestationResponse> {
+        request.validate()?;
+        let lifecycle = self.lifecycle("attest")?;
+        let operation_id = request.context.operation_id.clone();
+        if let AttestationOperationLookup::Replayed(response) =
+            lifecycle.store.lookup_attestation(&request).await?
+        {
+            return lifecycle
+                .acknowledge_result(&operation_id, Ok(*response))
+                .await;
+        }
+        if !lifecycle
+            .drivers
+            .any_driver_supports(RuntimeOperation::Attest)
+        {
+            return Err(Error::unsupported("attest"));
+        }
+
+        // Capability and exact durable launch checks happen before reserving a
+        // mutation so unsupported callers never leave an operation journal.
+        let preview = lifecycle.store.attestation_source(&request.target).await?;
+        let registered = lifecycle.driver(preview.record.driver, "attest")?;
+        registered.ensure_operation(RuntimeOperation::Attest, "attest")?;
+        if !registered.attachment_capabilities().supports_extension(
+            preview.launch.technology().extension_name(),
+            a3s_oci_sdk::TEE_LAUNCH_EXTENSION_VERSION,
+        ) {
+            return Err(Error::unsupported("attest"));
+        }
+        let runtime_artifact = artifact::current()
+            .await
+            .map_err(|error| error.for_operation("attest"))?;
+
+        let (source, fresh) = match lifecycle.store.prepare_attestation(&request).await? {
+            AttestationOperationPreparation::Replayed(response) => {
+                return lifecycle
+                    .acknowledge_result(&operation_id, Ok(*response))
+                    .await;
+            }
+            AttestationOperationPreparation::Prepared(source) => (source, true),
+            AttestationOperationPreparation::Resume(source) => (source, false),
+        };
+        let driver_request = DriverAttestationRequest {
+            context: request.context.clone(),
+            source: source.record.clone(),
+            launch: source.launch.clone(),
+            report_data: request.report_data,
+            runtime_artifact: runtime_artifact.clone(),
+        };
+        lifecycle.driver_boundary(DriverOperation::Attest, DriverBoundaryStage::BeforeCall)?;
+        let result = registered.driver().attest(driver_request).await;
+        lifecycle.driver_boundary(DriverOperation::Attest, DriverBoundaryStage::AfterCall)?;
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => return lifecycle.fail_driver_operation(&operation_id, error).await,
+        };
+        if fresh && result.runtime_artifact() != &runtime_artifact {
+            let error = Error::new(
+                ErrorCode::FailedPrecondition,
+                "fresh TEE attestation evidence is not bound to the invoking Host artifact",
+            )
+            .for_operation("attest");
+            return lifecycle.fail_driver_operation(&operation_id, error).await;
+        }
+        let (result_artifact, driver_build_digest, measurement, evidence) = result.into_parts();
+        let attachments_digest = source.record.attachments_digest.clone().ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                "TEE attestation source has no attachment-manifest digest",
+            )
+            .for_operation("attest")
+        });
+        let response = attachments_digest.and_then(|attachments_digest| {
+            TeeAttestationResponse::new(
+                request.target.clone(),
+                source.launch,
+                request.report_data,
+                TeeSha256Digest::new(source.record.config_digest)?,
+                TeeSha256Digest::new(attachments_digest)?,
+                source.record.driver,
+                result_artifact,
+                driver_build_digest,
+                measurement,
+                evidence,
+            )
+        });
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => return lifecycle.fail_driver_operation(&operation_id, error).await,
+        };
+        let completed = lifecycle
+            .store
+            .complete_attestation(&operation_id, response)
+            .await;
         lifecycle.acknowledge_result(&operation_id, completed).await
     }
 }

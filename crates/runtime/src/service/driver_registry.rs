@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use a3s_oci_core::{DriverCapability, DriverKind, HostPlatform, IsolationClass};
 use a3s_oci_sdk::{
-    AttachmentCapabilities, ContainerRecord, Error, ErrorCode, OciLinuxSupport, OperationId,
-    Result, RuntimeArtifact, RuntimeDriverCapabilities, RuntimeExtensions, RuntimeOperation,
-    RuntimeOperationCapability, ATTACHMENT_SCHEMA_V1,
+    AttachmentCapabilities, ContainerRecord, CreateAttachments, Error, ErrorCode, OciLinuxSupport,
+    OperationId, Result, RuntimeArtifact, RuntimeDriverCapabilities, RuntimeExtensions,
+    RuntimeOperation, RuntimeOperationCapability, AMD_SEV_SNP_LAUNCH_EXTENSION,
+    ATTACHMENT_SCHEMA_V1, INTEL_TDX_LAUNCH_EXTENSION, TEE_LAUNCH_EXTENSION_VERSION,
 };
 
 use crate::{OciHookPhase, RuntimeDriver};
@@ -106,12 +107,14 @@ impl DriverRegistry {
             if operations.iter().any(|operation| {
                 matches!(
                     operation,
-                    RuntimeOperation::Checkpoint | RuntimeOperation::Restore
+                    RuntimeOperation::Checkpoint
+                        | RuntimeOperation::Restore
+                        | RuntimeOperation::Attest
                 )
             }) && driver_platform(capability.driver) != HostPlatform::current()
             {
                 return Err(open_error(format!(
-                    "runtime driver {:?} cannot advertise checkpoint or restore on {:?}",
+                    "runtime driver {:?} cannot advertise checkpoint, restore, or attestation on {:?}",
                     capability.driver,
                     HostPlatform::current()
                 )));
@@ -163,6 +166,35 @@ impl DriverRegistry {
             if !attachments.supports_schema(ATTACHMENT_SCHEMA_V1) {
                 return Err(open_error(format!(
                     "runtime driver {:?} does not support required attachment schema {ATTACHMENT_SCHEMA_V1}",
+                    capability.driver
+                )));
+            }
+            let mut supports_tee = false;
+            for name in [AMD_SEV_SNP_LAUNCH_EXTENSION, INTEL_TDX_LAUNCH_EXTENSION] {
+                let Some(versions) = attachments.extension_versions(name) else {
+                    continue;
+                };
+                if versions != [TEE_LAUNCH_EXTENSION_VERSION] {
+                    return Err(open_error(format!(
+                        "runtime driver {:?} advertises unsupported TEE launch extension versions {versions:?} for {name}",
+                        capability.driver
+                    )));
+                }
+                supports_tee = true;
+            }
+            if operations.contains(&RuntimeOperation::Attest) != supports_tee {
+                return Err(open_error(format!(
+                    "runtime driver {:?} must advertise attestation together with at least one exact TEE launch extension",
+                    capability.driver
+                )));
+            }
+            if supports_tee
+                && !capability
+                    .isolation_classes
+                    .contains(&IsolationClass::DedicatedVm)
+            {
+                return Err(open_error(format!(
+                    "runtime driver {:?} cannot advertise a TEE launch extension without dedicated-vm isolation",
                     capability.driver
                 )));
             }
@@ -236,6 +268,7 @@ impl DriverRegistry {
     pub(super) fn validate_durable_record(
         &self,
         record: &ContainerRecord,
+        attachments: Option<&CreateAttachments>,
     ) -> Result<&RegisteredDriver> {
         let registered = self
             .entries
@@ -251,22 +284,38 @@ impl DriverRegistry {
                 )
                 .for_operation("open-host-runtime")
             })?;
-        if registered
+        if !registered
             .capability()
             .isolation_classes
             .contains(&record.isolation)
         {
-            return Ok(registered);
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "durable container {} generation {} records runtime driver {:?} for isolation {:?}, but the registered driver no longer provides that isolation",
+                    record.state.id(), record.generation.0, record.driver, record.isolation
+                ),
+            )
+            .for_operation("open-host-runtime"));
         }
 
-        Err(Error::new(
-            ErrorCode::FailedPrecondition,
-            format!(
-                "durable container {} generation {} records runtime driver {:?} for isolation {:?}, but the registered driver no longer provides that isolation",
-                record.state.id(), record.generation.0, record.driver, record.isolation
-            ),
-        )
-        .for_operation("open-host-runtime"))
+        if let Some(attachments) = attachments {
+            registered
+                .attachment_capabilities()
+                .require(attachments)
+                .map_err(|error| {
+                    Error::new(
+                        ErrorCode::FailedPrecondition,
+                        format!(
+                            "durable container {} generation {} requires an attachment contract that runtime driver {:?} no longer provides: {}",
+                            record.state.id(), record.generation.0, record.driver, error.message
+                        ),
+                    )
+                    .for_operation("open-host-runtime")
+                })?;
+        }
+
+        Ok(registered)
     }
 
     pub(super) fn capabilities(&self) -> impl Iterator<Item = &DriverCapability> {
@@ -286,6 +335,12 @@ impl DriverRegistry {
 
     pub(super) const fn operations(&self) -> &BTreeSet<RuntimeOperation> {
         &self.operations
+    }
+
+    pub(super) fn any_driver_supports(&self, operation: RuntimeOperation) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.operations.contains(&operation))
     }
 
     pub(super) fn hooks(&self) -> &[OciHookPhase] {
@@ -380,7 +435,7 @@ fn validate_driver_operations(
         RuntimeOperation::Kill,
         RuntimeOperation::Delete,
     ];
-    const HOST_SUPPORTED: [RuntimeOperation; 22] = [
+    const HOST_SUPPORTED: [RuntimeOperation; 23] = [
         RuntimeOperation::Create,
         RuntimeOperation::State,
         RuntimeOperation::Start,
@@ -403,6 +458,7 @@ fn validate_driver_operations(
         RuntimeOperation::Filesystem,
         RuntimeOperation::Checkpoint,
         RuntimeOperation::Restore,
+        RuntimeOperation::Attest,
     ];
     let reported = operations.iter().copied().collect::<BTreeSet<_>>();
     if reported.len() != operations.len() {

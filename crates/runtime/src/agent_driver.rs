@@ -558,16 +558,21 @@ mod tests {
     use a3s_oci_sdk::oci_spec::runtime::ContainerState;
     use a3s_oci_sdk::{
         async_trait, ContainerId, ContainerTarget, Error, Generation, OperationContext,
-        OperationId, ProcessId, ProcessTarget, Result,
+        OperationId, ProcessId, ProcessTarget, Result, RuntimeOperation,
     };
 
     use crate::driver::DriverWriteStdinRequest;
 
-    use super::{process_io_chunk_context, AgentDriverClient};
+    use super::{process_io_chunk_context, AgentDriverClient, AGENT_DRIVER_OPERATIONS};
 
     const DIGEST: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
     const OTHER_DIGEST: &str =
         "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+
+    #[test]
+    fn production_agent_driver_contract_does_not_claim_tee_attestation() {
+        assert!(!AGENT_DRIVER_OPERATIONS.contains(&RuntimeOperation::Attest));
+    }
 
     #[derive(Default)]
     struct MappingOnlyGuest {

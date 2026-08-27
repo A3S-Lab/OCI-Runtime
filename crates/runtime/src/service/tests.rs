@@ -30,8 +30,10 @@ use a3s_oci_sdk::{
     ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result, RuntimeEventKind,
     RuntimeNegotiationRequest, RuntimeOperation, Signal, SignalProcessRequest, StartRequest,
     StateRequest, StatsRequest, StorageAccessMode, StorageAttachmentId, StorageCleanup,
-    StorageOwnership, TerminalSize, TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest,
-    WriteStdinRequest, ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3,
+    StorageOwnership, TeeAttestationRequest, TeeEvidence, TeeLaunchRequest, TeeMeasurement,
+    TeeMode, TeeReportData, TeeSha256Digest, TeeTechnology, TerminalSize, TrustDomainId,
+    UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    AMD_SEV_SNP_LAUNCH_EXTENSION, ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3,
     ATTACHMENT_SCHEMA_V4, BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS,
     OCI_LINUX_CAPABILITY_NAMES, OCI_LINUX_MEMORY_POLICY_FLAGS, OCI_LINUX_MEMORY_POLICY_MODES,
     OCI_LINUX_MOUNT_OPTIONS, OCI_LINUX_SECCOMP_ACTIONS, OCI_LINUX_SECCOMP_ARCHITECTURES,
@@ -46,15 +48,17 @@ use super::HostRuntimeService;
 #[cfg(target_os = "linux")]
 use crate::DriverCreateAttachments;
 use crate::{
-    DriverCheckpointRequest, DriverCheckpointResult, DriverCloseStdinRequest,
-    DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverRecovery, DriverResizeRequest,
-    DriverRestoreRequest, DriverRestoreValidationRequest, DriverSignalProcessRequest,
-    DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
-    DriverWaitRequest, DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
+    DriverAttestationRequest, DriverAttestationResult, DriverCheckpointRequest,
+    DriverCheckpointResult, DriverCloseStdinRequest, DriverContainerOperationRequest,
+    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
+    DriverReadOutputRequest, DriverRecovery, DriverResizeRequest, DriverRestoreRequest,
+    DriverRestoreValidationRequest, DriverSignalProcessRequest, DriverStartRequest, DriverState,
+    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
+    OciHookPhase, RuntimeDriver,
 };
 
 mod agent_transport_recovery;
+mod attestation_operations;
 mod checkpoint_operations;
 mod fault_matrix;
 mod filesystem_operations;
@@ -107,6 +111,7 @@ enum DriverCall {
     Checkpoint(Box<DriverCheckpointRequest>),
     RestoreValidation(Box<DriverRestoreValidationRequest>),
     Restore(Box<DriverRestoreRequest>),
+    Attest(Box<DriverAttestationRequest>),
 }
 
 type DriverProcessKey = (ContainerId, Generation, ProcessId);
@@ -144,6 +149,9 @@ struct RecordingDriver {
     checkpoint_runtime_artifact: Mutex<Option<a3s_oci_sdk::RuntimeArtifact>>,
     restore_replays: Mutex<HashMap<OperationId, (DriverRestoreRequest, DriverState)>>,
     restore_gate: tokio::sync::Mutex<()>,
+    attestation_replays:
+        Mutex<HashMap<OperationId, (DriverAttestationRequest, DriverAttestationResult)>>,
+    attestation_gate: tokio::sync::Mutex<()>,
     output_responses: Mutex<VecDeque<Vec<OutputChunk>>>,
     recovery: Mutex<DriverRecovery>,
     failures: Mutex<HashMap<&'static str, Vec<Error>>>,
@@ -191,6 +199,8 @@ impl RecordingDriver {
             checkpoint_runtime_artifact: Mutex::new(None),
             restore_replays: Mutex::new(HashMap::new()),
             restore_gate: tokio::sync::Mutex::new(()),
+            attestation_replays: Mutex::new(HashMap::new()),
+            attestation_gate: tokio::sync::Mutex::new(()),
             output_responses: Mutex::new(VecDeque::new()),
             recovery: Mutex::new(DriverRecovery::none()),
             failures: Mutex::new(HashMap::new()),
@@ -287,6 +297,23 @@ impl RecordingDriver {
     fn with_restore_operations() -> Self {
         let mut driver = Self::with_checkpoint_operations();
         driver.operations.push(RuntimeOperation::Restore);
+        driver
+    }
+
+    fn with_attestation_operations() -> Self {
+        let mut driver = Self::with_control_operations();
+        if cfg!(target_os = "linux") {
+            driver.capability.driver = DriverKind::LibkrunKvm;
+        } else if cfg!(target_os = "macos") {
+            driver.capability.driver = DriverKind::LibkrunHvf;
+        } else {
+            driver.capability.driver = DriverKind::LibkrunWhpx;
+        }
+        driver.capability.isolation_classes = vec![IsolationClass::DedicatedVm];
+        driver.operations.push(RuntimeOperation::Attest);
+        driver.attachments = AttachmentCapabilities::base_v1()
+            .with_extension(AMD_SEV_SNP_LAUNCH_EXTENSION, vec![1])
+            .expect("TEE attachment capability");
         driver
     }
 
@@ -1761,6 +1788,76 @@ impl RuntimeDriver for RecordingDriver {
             .insert(request.context.operation_id.clone(), (request, state));
         Ok(state)
     }
+
+    async fn attest(&self, request: DriverAttestationRequest) -> Result<DriverAttestationResult> {
+        let _attestation_guard = self.attestation_gate.lock().await;
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::Attest(Box::new(request.clone())));
+        if let Some((recorded, response)) = self
+            .attestation_replays
+            .lock()
+            .expect("driver attestation replay lock")
+            .get(&request.context.operation_id)
+            .cloned()
+        {
+            if recorded != request {
+                return Err(Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "driver attestation operation ID was reused for a different request",
+                )
+                .for_operation("driver-attest"));
+            }
+            return Ok(response);
+        }
+        if let Some(error) = self.take_failure("attest") {
+            return Err(error);
+        }
+        let generation = request.source.generation;
+        let source_id = container_id(request.source.state.id());
+        let states = self.states.lock().expect("driver states lock");
+        let (actual_generation, state) = states.get(&source_id).ok_or_else(|| {
+            Error::new(
+                ErrorCode::NotFound,
+                "driver attestation source does not exist",
+            )
+            .for_operation("driver-attest")
+        })?;
+        if generation != *actual_generation
+            || generation != request.source.generation
+            || !matches!(
+                state.status(),
+                ContainerState::Created | ContainerState::Running
+            )
+            || request.launch.technology() != TeeTechnology::AmdSevSnp
+        {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "driver attestation source or launch mechanism does not match live state",
+            )
+            .for_operation("driver-attest"));
+        }
+        drop(states);
+
+        let result = DriverAttestationResult::new(
+            request.runtime_artifact.clone(),
+            TeeSha256Digest::new(format!("sha256:{}", "c".repeat(64)))?,
+            TeeMeasurement::new(format!("sha384:{}", "d".repeat(96)))?,
+            TeeEvidence::new(
+                "application/vnd.amd.sev-snp.report",
+                request.report_data.as_bytes().to_vec(),
+            )?,
+        );
+        self.attestation_replays
+            .lock()
+            .expect("driver attestation replay lock")
+            .insert(
+                request.context.operation_id.clone(),
+                (request, result.clone()),
+            );
+        Ok(result)
+    }
 }
 
 impl RecordingDriver {
@@ -1817,6 +1914,32 @@ fn create_request(bundle_directory: &Path, operation: &str) -> CreateRequest {
         id: container_id("sdk-container"),
         attachments: CreateAttachments::from_bundle(&bundle, ProcessIo::default())
             .expect("valid attachment contract"),
+        bundle,
+        isolation: IsolationRequest::DedicatedVm,
+    }
+}
+
+fn tee_create_request(bundle_directory: &Path, operation: &str) -> CreateRequest {
+    let launch = TeeLaunchRequest::new(TeeTechnology::AmdSevSnp, TeeMode::Simulated);
+    let mut configuration: serde_json::Value =
+        serde_json::from_str(TEST_CONFIG).expect("TEE test configuration");
+    configuration["annotations"] = serde_json::json!({
+        AMD_SEV_SNP_LAUNCH_EXTENSION: launch
+            .to_annotation_value()
+            .expect("TEE launch annotation")
+    });
+    let bundle = OciBundle::from_json(
+        bundle_directory.to_path_buf(),
+        serde_json::to_string_pretty(&configuration).expect("TEE configuration"),
+    )
+    .expect("valid TEE OCI bundle");
+    CreateRequest {
+        context: OperationContext::new(operation_id(operation)),
+        id: container_id("tee-container"),
+        attachments: CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+            .expect("base TEE attachments")
+            .attach_tee_launch(&bundle)
+            .expect("TEE launch attachment"),
         bundle,
         isolation: IsolationRequest::DedicatedVm,
     }
@@ -2341,6 +2464,33 @@ async fn rejects_invalid_driver_operation_inventories_before_opening_state() {
         let error = HostRuntimeService::open(&root, Arc::new(driver))
             .await
             .expect_err("invalid driver operation inventory must fail");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert!(!root.exists(), "{name} created durable state");
+    }
+
+    let mut attest_without_extension = RecordingDriver::with_attestation_operations();
+    attest_without_extension.attachments = AttachmentCapabilities::base_v1();
+    let mut extension_without_attest = RecordingDriver::with_attestation_operations();
+    extension_without_attest
+        .operations
+        .retain(|operation| *operation != RuntimeOperation::Attest);
+    let mut tee_without_dedicated_vm = RecordingDriver::with_attestation_operations();
+    tee_without_dedicated_vm.capability.isolation_classes = vec![IsolationClass::SharedGuestKernel];
+    let mut tee_with_future_version = RecordingDriver::with_attestation_operations();
+    tee_with_future_version.attachments = AttachmentCapabilities::base_v1()
+        .with_extension(AMD_SEV_SNP_LAUNCH_EXTENSION, vec![1, 2])
+        .expect("future TEE test capability");
+
+    for (name, driver) in [
+        ("attest-without-extension", attest_without_extension),
+        ("extension-without-attest", extension_without_attest),
+        ("tee-without-dedicated-vm", tee_without_dedicated_vm),
+        ("tee-with-future-version", tee_with_future_version),
+    ] {
+        let root = temporary.path().join(name);
+        let error = HostRuntimeService::open(&root, Arc::new(driver))
+            .await
+            .expect_err("invalid TEE driver inventory must fail");
         assert_eq!(error.code, ErrorCode::FailedPrecondition);
         assert!(!root.exists(), "{name} created durable state");
     }

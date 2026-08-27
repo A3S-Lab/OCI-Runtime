@@ -12,7 +12,7 @@ async fn every_host_driver_boundary_recovers_without_duplicate_effects() {
     let registry = FaultPoint::driver_registry();
     assert_eq!(
         registry.len(),
-        50,
+        52,
         "update the host/driver fault contract when the registry changes"
     );
     for point in registry {
@@ -95,8 +95,16 @@ async fn exercise_driver_boundary(point: FaultPoint) {
     let bundle_directory = temporary.path().join("bundle");
     fs::create_dir(&bundle_directory).expect("bundle directory");
     let state_root = temporary.path().join("state");
-    let driver = Arc::new(RecordingDriver::with_restore_operations());
-    let mut create = create_request(&bundle_directory, "boundary-create");
+    let driver = Arc::new(if operation == DriverOperation::Attest {
+        RecordingDriver::with_attestation_operations()
+    } else {
+        RecordingDriver::with_restore_operations()
+    });
+    let mut create = if operation == DriverOperation::Attest {
+        tee_create_request(&bundle_directory, "boundary-create")
+    } else {
+        create_request(&bundle_directory, "boundary-create")
+    };
     create.isolation = match driver.capability.isolation_classes[0] {
         IsolationClass::SharedHostKernel => IsolationRequest::SharedHostKernel,
         IsolationClass::DedicatedVm => IsolationRequest::DedicatedVm,
@@ -331,6 +339,7 @@ const fn operation_requires_created_container(operation: DriverOperation) -> boo
             | DriverOperation::Checkpoint
             | DriverOperation::RestoreValidation
             | DriverOperation::Restore
+            | DriverOperation::Attest
     )
 }
 
@@ -364,6 +373,7 @@ const fn call_matches_operation(call: &DriverCall, operation: DriverOperation) -
                 DriverOperation::RestoreValidation
             )
             | (DriverCall::Restore(_), DriverOperation::Restore)
+            | (DriverCall::Attest(_), DriverOperation::Attest)
     )
 }
 
@@ -631,6 +641,19 @@ async fn invoke_operation(
                         checkpoint.reference().clone(),
                     )
                     .expect("restore request"),
+                )
+                .await?;
+            Ok(())
+        }
+        DriverOperation::Attest => {
+            service
+                .attest(
+                    TeeAttestationRequest::new(
+                        OperationContext::new(operation_id("boundary-attest")),
+                        target.expect("attestation target").clone(),
+                        TeeReportData::new([0x7a; a3s_oci_sdk::TEE_REPORT_DATA_BYTES]),
+                    )
+                    .expect("attestation request"),
                 )
                 .await?;
             Ok(())

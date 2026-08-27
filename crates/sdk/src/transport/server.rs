@@ -202,6 +202,11 @@ async fn dispatch(service: &dyn OciRuntimeService, request: WireRequest) -> Resu
             response.validate_for_request(&request)?;
             Ok(WireResponse::Restore(response))
         }
+        WireRequest::Attest(request) => {
+            let response = service.attest(request.clone()).await?;
+            response.validate_for_request(&request)?;
+            Ok(WireResponse::Attest(response))
+        }
     }
 }
 
@@ -220,6 +225,7 @@ mod tests {
         assert_eq!(select_protocol(6, 6), Some(6));
         assert_eq!(select_protocol(7, 7), Some(7));
         assert_eq!(select_protocol(8, 8), Some(8));
-        assert_eq!(select_protocol(9, 9), None);
+        assert_eq!(select_protocol(9, 9), Some(9));
+        assert_eq!(select_protocol(10, 10), None);
     }
 }

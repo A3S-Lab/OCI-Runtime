@@ -1566,6 +1566,7 @@ impl QualificationHvfDriver {
             isolation: self.recovery_create.isolation.clone(),
             io: self.recovery_create.attachments.process_io().clone(),
             attachment_contract: self.recovery_create.attachments.clone(),
+            tee_launch: None,
             attachments: DriverCreateAttachments::None,
         })
     }

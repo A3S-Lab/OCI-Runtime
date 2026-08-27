@@ -91,6 +91,10 @@ pub(crate) enum DurableMutation {
     ClaimRestoreOperation,
     CompleteRestoreContainer,
     CompleteRestoreOperation,
+    PrepareAttestationOperation,
+    ClaimAttestationOperation,
+    CompleteAttestationContainer,
+    CompleteAttestationOperation,
     CacheInitWait,
     CacheProcessWait,
     AdvanceEventSequence,
@@ -128,13 +132,15 @@ pub(crate) enum DurableMutation {
     RecordCheckpointFailure,
     RecordRestoreFailure,
     MoveFailedRestoreTombstone,
+    ReleaseFailedAttestationClaim,
+    RecordAttestationFailure,
     ObserveContainer,
     CompleteObservedOperation,
 }
 
 impl DurableMutation {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 121] = [
+    pub(crate) const ALL: [Self; 127] = [
         Self::RuntimeRootMarker,
         Self::AllocateGeneration,
         Self::PrepareCreateOperation,
@@ -217,6 +223,10 @@ impl DurableMutation {
         Self::ClaimRestoreOperation,
         Self::CompleteRestoreContainer,
         Self::CompleteRestoreOperation,
+        Self::PrepareAttestationOperation,
+        Self::ClaimAttestationOperation,
+        Self::CompleteAttestationContainer,
+        Self::CompleteAttestationOperation,
         Self::CacheInitWait,
         Self::CacheProcessWait,
         Self::AdvanceEventSequence,
@@ -254,6 +264,8 @@ impl DurableMutation {
         Self::RecordCheckpointFailure,
         Self::RecordRestoreFailure,
         Self::MoveFailedRestoreTombstone,
+        Self::ReleaseFailedAttestationClaim,
+        Self::RecordAttestationFailure,
         Self::ObserveContainer,
         Self::CompleteObservedOperation,
     ];
@@ -339,11 +351,12 @@ pub(crate) enum DriverOperation {
     Checkpoint,
     RestoreValidation,
     Restore,
+    Attest,
 }
 
 impl DriverOperation {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 25] = [
+    pub(crate) const ALL: [Self; 26] = [
         Self::Capability,
         Self::Recover,
         Self::Create,
@@ -369,6 +382,7 @@ impl DriverOperation {
         Self::Checkpoint,
         Self::RestoreValidation,
         Self::Restore,
+        Self::Attest,
     ];
 }
 

@@ -343,10 +343,12 @@ claimed durably before dispatch, and replayed with the same runtime operation
 after a lost response. Runtime acknowledgement updates Box restart intent
 atomically without changing the original create identity.
 
-New mutation records use `a3s.oci.operation.v5`. Version 3 File uploads and
+New mutation records use `a3s.oci.operation.v6`. Version 3 File uploads and
 Filesystem mkdir/move/remove remain readable; version 4 additionally retains
 each exact checkpoint request and typed immutable response; version 5 adds the
-exact restore request, allocated generation, and paused-running response.
+exact restore request, allocated generation, and paused-running response; and
+version 6 retains each exact TEE attestation challenge and immutable evidence
+response. Versions 1 through 5 remain readable for the operations they encode.
 The Host commits a journaled result before acknowledging driver replay
 evidence, so a disconnect returns a retryable error and the next owner replays
 the Host result without dispatching the mutation again. The Host journal
@@ -961,16 +963,31 @@ a new paused running generation and requires an explicit later `resume`.
 Artifact storage, lineage, retention, and object policy remain caller-owned.
 The Host now owns durable checkpoint and restore orchestration. Checkpoint
 fences the exact paused source and all process I/O. Restore first replays any
-committed v5 outcome without reopening caller data; otherwise it validates the
-immutable artifact and exact runtime/driver compatibility before allocating a
-generation, dispatches an idempotent driver restore, and commits a paused
-running record. Terminal restore failures quarantine only their allocated
+committed v5 or v6 outcome without reopening caller data; otherwise it
+validates the immutable artifact and exact runtime/driver compatibility before
+allocating a generation, dispatches an idempotent driver restore, and commits
+a paused running record. Terminal restore failures quarantine only their allocated
 generation so the ID can be reused monotonically. The registry accepts
 `Checkpoint` only from an explicitly advertising current-platform driver and
 accepts `Restore` only together with `Checkpoint`. No production driver
 advertises either operation yet; atomic driver execution and real-host
 qualification remain required. See the [immutable checkpoint
 contract](docs/checkpoint-contract.md).
+
+SDK protocol 9 adds the policy-neutral TEE mechanism boundary. A dedicated-VM
+create or restore may require exactly one `dev.a3s.tee.amd-sev-snp@1` or
+`dev.a3s.tee.intel-tdx@1` launch extension in explicit `hardware` or
+`simulated` mode. The separate durable `attest` operation carries an exact
+64-byte report-data binding and returns bounded opaque provider evidence plus
+the launch measurement, configuration and attachment digests, driver and
+driver-build identity, and exact Host artifact. Runtime validates and replays
+those bindings but does not verify provider claims or make authorization
+decisions; Box or Cloud owns appraisal and policy. A driver may advertise
+`Attest` only together with at least one exact TEE extension and dedicated-VM
+isolation. No production driver advertises either TEE extension or `Attest`
+until hardware execution, evidence collection, restart, upgrade, and
+destructive real-host qualification pass. See the [TEE launch and attestation
+contract](docs/tee-attestation-contract.md).
 
 These commands can require root privileges, hypervisor access, signed
 artifacts, or destructive cleanup within an explicitly supplied test root.
@@ -992,7 +1009,7 @@ The repository turns release claims into checked inventories:
 | Typed semantic validation rules | 95 |
 | Owner-bound non-semantic rules | 156 |
 | OCI normative dispositions | 578 enforced · 51 validated · 12 conformant · 14 reviewed external · 0 pending review |
-| Registered durable commit fault stages | 835 |
+| Registered durable commit fault stages | 877 |
 | Durable-state replacement qualification | macOS/Linux/Windows complete, including a real Linux bind mount and the Windows reparse-point matrix |
 | Live containerd terminal init-Kill rehydration | 3 / 3 consecutive same-Host Ubuntu arm64/containerd 2.2.2 matrices on August 24, 2026 |
 | Live containerd `DeleteProcess` response replay | 3 / 3 consecutive same-Host Ubuntu arm64/containerd 2.2.2 matrices on August 24, 2026 |
@@ -1000,7 +1017,7 @@ The repository turns release claims into checked inventories:
 | Post-commit containerd `WriteStdin` forced cleanup | 3 / 3 consecutive same-Host Ubuntu x86_64/containerd 2.2.3 matrices on August 24, 2026 |
 | Post-commit containerd `CloseStdin` forced cleanup | 3 / 3 consecutive same-Host Ubuntu x86_64/containerd 2.2.3 matrices on August 24, 2026 |
 | Post-commit containerd `ResizePty` forced cleanup | Automated gate implemented; 3-pass real-host qualification pending |
-| Before/after `RuntimeDriver` fault boundaries | 50 |
+| Before/after `RuntimeDriver` fault boundaries | 52 |
 | Authenticated agent operation-stage fault pairs | 180 |
 | Portable Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host-service reopen pairs | 180 |
 | Real HVF Create Host/Guest plus Host shutdown interruption and cleanup stages | 11 |
@@ -1053,8 +1070,9 @@ exact release-artifact qualification must all pass before a driver becomes
 - utility-VM hook recovery and security certification;
 - the default and cross-platform A3S Box cutover, plus the remaining
   containerd compatibility, packaging, and cross-driver gates;
-- production checkpoint/restore driver execution and real-host qualification,
-  plus later attachment extensions;
+- production checkpoint/restore driver execution and real-host qualification;
+- production SEV-SNP/TDX launch and attestation drivers, hardware evidence
+  qualification, and verifier-policy integration outside Runtime;
 - signed-package, upgrade, rollback, security, and long-duration release gates.
 
 ## Workspace map
@@ -1075,6 +1093,7 @@ crates/cli/             capability inspection and real-host qualification gates
 - [Durable lifecycle and recovery](docs/durable-state.md)
 - [SDK transport](docs/sdk-transport.md)
 - [Immutable checkpoint and restore contract](docs/checkpoint-contract.md)
+- [TEE launch and attestation contract](docs/tee-attestation-contract.md)
 - [Versioned attachment contracts](docs/attachment-contracts.md)
 - [Guest-agent protocol](docs/agent-protocol.md)
 - [OCI 1.3 conformance contract](docs/oci-conformance.md)

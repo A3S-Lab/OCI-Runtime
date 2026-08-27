@@ -7,21 +7,35 @@
 runtime calls. The transport maps every trait method; it does not invoke the
 CLI or expose WHPX, libkrun, or native Linux driver internals.
 
-The current wire contract is protocol version 8. Version 8 replaces the legacy
-checkpoint directory and `leave_running` boolean with an immutable
+The current wire contract is protocol version 9. Version 9 carries the typed
+TEE attestation request and response and prevents a TEE launch extension on
+create or restore from downgrading to a peer that does not understand it.
+`Attest` and every TEE-backed create or restore require protocol 9 and are
+rejected before service dispatch on protocol 8 or earlier. Ordinary create
+retains its attachment-dependent minimum, and a non-TEE restore retains its
+protocol-8 minimum.
+
+Version 8 replaced the legacy checkpoint directory and `leave_running` boolean with an immutable
 `a3s.oci.checkpoint-reference.v1`, typed single-file artifact paths, paused
 quiescence, exact driver/build compatibility evidence, and request-bound
-checkpoint/restore responses. Every checkpoint and restore requires protocol
-8 regardless of attachment schema; protocol 7 and earlier reject it before
-service dispatch.
+checkpoint/restore responses. Every checkpoint and non-TEE restore requires
+protocol 8 regardless of attachment schema; protocol 7 and earlier reject it
+before service dispatch.
 
 The Host implements checkpoint and restore through durable journals and
 dispatches them only to a current-platform driver that explicitly advertises
 the operation. Restore capability is cumulative: the same driver must also
-advertise checkpoint. A committed v5 restore replays without reopening its
+advertise checkpoint. A committed v5 or v6 restore replays without reopening its
 artifact; a pending restore validates the caller-owned file and exact
 compatibility evidence before allocating lifecycle state. No production driver
 advertises either operation yet.
+
+The Host implements TEE attestation through a v6 durable journal and dispatches
+it only to the exact driver that owns the durable generation and advertises
+`Attest` plus its technology-specific launch extension. A committed response
+replays byte-for-byte without another driver call. Runtime treats evidence as
+opaque and does not appraise provider claims; no production driver advertises
+the TEE operation or extensions yet.
 
 Version 7 added `a3s.oci.attachments.v4` reusable guest-session identity
 evidence to create. A v4 create is rejected before dispatch when a connection
@@ -134,6 +148,13 @@ does not imply enforcement support, and no production driver currently
 advertises the extension. The Host retains the decoded opaque incarnation in
 `ContainerRecord::network_enforcement`; it never transports policy rules,
 hostnames, addresses, routes, endpoints, credentials, or tenant metadata.
+
+TEE negotiation likewise requires more than `DedicatedVm`. A caller requests
+`RuntimeOperation::Attest` and exactly one
+`dev.a3s.tee.amd-sev-snp@1` or `dev.a3s.tee.intel-tdx@1` extension from the
+same per-driver catalog entry. The registry rejects an `Attest` operation
+without a known TEE extension, a TEE extension without `Attest`, or either on a
+driver that lacks dedicated-VM isolation.
 
 ## A3S Box Client
 
@@ -353,9 +374,10 @@ acknowledgement is retryable, and replaying the completed Host operation sends
 it again without redispatching the workload mutation. Protocol-v1 through
 protocol-v9 Guests retain a compatibility no-op. File upload and Filesystem
 mkdir/move/remove retain their exact v3 request and typed response. New Host
-mutations use v5; checkpoint retains its v4-compatible exact normalized path,
+mutations use v6; checkpoint retains its v4-compatible exact normalized path,
 paused source target, and immutable typed response. Restore adds its complete
 request, allocated generation, immutable reference, and paused-running
+response. Attestation adds its exact report data and complete opaque evidence
 response. These operations share the same post-commit reclamation boundary.
 Reusing an acknowledged OperationId with changed content remains fenced by the
 Host record.

@@ -522,6 +522,7 @@ fn validate_exact_event_target(event: &RuntimeEvent) -> Result<()> {
         | RuntimeEventKind::ContainerDeleted
         | RuntimeEventKind::ContainerPaused
         | RuntimeEventKind::ContainerResumed
+        | RuntimeEventKind::ContainerAttested
         | RuntimeEventKind::ResourcesUpdated
             if event.process_id.is_some() =>
         {

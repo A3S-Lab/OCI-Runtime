@@ -14,8 +14,10 @@ use super::{
 use crate::{
     ErrorCode, GuestSessionCapacity, GuestSessionGeneration, GuestSessionId, IoMode,
     IsolationClass, IsolationRequest, NetworkCleanupId, NetworkEnforcementId, NetworkInterfaceId,
-    NetworkNamespaceId, NetworkRedirectId, OciBundle, ProcessIo, StorageAttachmentId, TerminalSize,
-    TrustDomainId, MAX_GUEST_SESSION_CAPACITY,
+    NetworkNamespaceId, NetworkRedirectId, OciBundle, ProcessIo, StorageAttachmentId,
+    TeeLaunchRequest, TeeMode, TeeTechnology, TerminalSize, TrustDomainId,
+    AMD_SEV_SNP_LAUNCH_EXTENSION, INTEL_TDX_LAUNCH_EXTENSION, MAX_GUEST_SESSION_CAPACITY,
+    TEE_LAUNCH_EXTENSION_VERSION,
 };
 
 fn bundle() -> OciBundle {
@@ -57,6 +59,101 @@ fn handoff_bundle() -> OciBundle {
         serde_json::to_string(&configuration).expect("handoff configuration"),
     )
     .expect("handoff bundle")
+}
+
+fn tee_bundle(launch: &TeeLaunchRequest) -> OciBundle {
+    let mut configuration: serde_json::Value =
+        serde_json::from_str(bundle().config_json()).expect("fixture configuration");
+    configuration["annotations"][launch.technology().extension_name()] =
+        json!(launch.to_annotation_value().expect("TEE launch annotation"));
+    OciBundle::from_json(
+        std::env::temp_dir().join("a3s-tee-attachment-bundle"),
+        serde_json::to_string(&configuration).expect("TEE configuration"),
+    )
+    .expect("TEE attachment fixture bundle")
+}
+
+#[test]
+fn tee_launch_is_required_technology_specific_and_dedicated_vm_only() {
+    let launch = TeeLaunchRequest::new(TeeTechnology::AmdSevSnp, TeeMode::Hardware);
+    let bundle = tee_bundle(&launch);
+    let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .expect("base attachments")
+        .attach_tee_launch(&bundle)
+        .expect("TEE launch attachments");
+    assert!(attachments.uses_tee_launch());
+    assert_eq!(attachments.tee_launch(&bundle).unwrap(), Some(launch));
+    attachments
+        .validate_isolation(&IsolationRequest::DedicatedVm)
+        .expect("dedicated TEE isolation");
+    assert!(attachments
+        .validate_isolation(&IsolationRequest::SharedHostKernel)
+        .is_err());
+    let extension = attachments
+        .extensions()
+        .get(AMD_SEV_SNP_LAUNCH_EXTENSION)
+        .expect("AMD launch extension");
+    assert_eq!(extension.version(), TEE_LAUNCH_EXTENSION_VERSION);
+    assert!(extension.required());
+
+    assert!(
+        CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+            .unwrap()
+            .add_extension_from_annotation(
+                &bundle,
+                AMD_SEV_SNP_LAUNCH_EXTENSION,
+                TEE_LAUNCH_EXTENSION_VERSION,
+                false,
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn tee_launch_rejects_mismatched_duplicate_and_misclassified_mechanisms() {
+    let launch = TeeLaunchRequest::new(TeeTechnology::AmdSevSnp, TeeMode::Simulated);
+    let mut configuration: serde_json::Value =
+        serde_json::from_str(tee_bundle(&launch).config_json()).expect("TEE configuration");
+    configuration["annotations"][INTEL_TDX_LAUNCH_EXTENSION] =
+        configuration["annotations"][AMD_SEV_SNP_LAUNCH_EXTENSION].clone();
+    let duplicate = OciBundle::from_json(
+        std::env::temp_dir().join("a3s-duplicate-tee-attachment-bundle"),
+        serde_json::to_string(&configuration).expect("duplicate TEE configuration"),
+    )
+    .expect("duplicate TEE bundle");
+    assert!(
+        CreateAttachments::from_bundle(&duplicate, ProcessIo::default())
+            .unwrap()
+            .attach_tee_launch(&duplicate)
+            .is_err()
+    );
+
+    let bundle = tee_bundle(&launch);
+    let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .unwrap()
+        .attach_tee_launch(&bundle)
+        .unwrap()
+        .attach_network_extension(AMD_SEV_SNP_LAUNCH_EXTENSION)
+        .unwrap();
+    assert!(attachments.validate(&bundle).is_err());
+
+    let tdx_name_with_amd_payload = OciBundle::from_json(
+        std::env::temp_dir().join("a3s-mismatched-tee-attachment-bundle"),
+        serde_json::to_string(&json!({
+            "ociVersion": "1.3.0",
+            "root": {"path": "rootfs"},
+            "process": {"cwd": "/", "args": ["/bin/true"], "user": {"uid": 0, "gid": 0}},
+            "annotations": {INTEL_TDX_LAUNCH_EXTENSION: launch.to_annotation_value().unwrap()}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        CreateAttachments::from_bundle(&tdx_name_with_amd_payload, ProcessIo::default())
+            .unwrap()
+            .attach_tee_launch(&tdx_name_with_amd_payload)
+            .is_err()
+    );
 }
 
 fn terminal_bundle() -> OciBundle {
@@ -1085,6 +1182,11 @@ fn capability_intersection_is_exact_and_wire_inventories_must_be_canonical() {
     assert!(common.supports_extension("dev.a3s.network.tsi", 2));
     assert!(!common.supports_extension("dev.a3s.network.tsi", 1));
     assert!(!common.supports_extension("dev.a3s.storage.volume", 1));
+    assert_eq!(
+        common.extension_versions("dev.a3s.network.tsi"),
+        Some([2].as_slice())
+    );
+    assert_eq!(common.extension_versions("dev.a3s.storage.volume"), None);
 
     let invalid: AttachmentCapabilities = serde_json::from_value(json!({
         "schemas": [ATTACHMENT_SCHEMA_V1],

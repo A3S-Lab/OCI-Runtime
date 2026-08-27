@@ -229,6 +229,7 @@ impl DurableStateStore {
                 | StoredOperationStatus::SucceededProcess { .. }
                 | StoredOperationStatus::SucceededCheckpoint { .. }
                 | StoredOperationStatus::SucceededRestore { .. }
+                | StoredOperationStatus::SucceededAttestation { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(invalid_outcome(context, profile)),
             };
         }
@@ -336,6 +337,7 @@ impl DurableStateStore {
             | StoredOperationStatus::SucceededProcess { .. }
             | StoredOperationStatus::SucceededCheckpoint { .. }
             | StoredOperationStatus::SucceededRestore { .. }
+            | StoredOperationStatus::SucceededAttestation { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(invalid_operation_outcome(operation_id, profile));
             }

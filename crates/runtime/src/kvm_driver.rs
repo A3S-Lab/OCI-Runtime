@@ -438,6 +438,17 @@ mod tests {
             &crate::agent_driver::AGENT_DRIVER_OPERATIONS
         );
         assert_eq!(driver.operations().len(), 20);
+        assert!(!driver
+            .operations()
+            .contains(&a3s_oci_sdk::RuntimeOperation::Attest));
+        for extension in [
+            a3s_oci_sdk::AMD_SEV_SNP_LAUNCH_EXTENSION,
+            a3s_oci_sdk::INTEL_TDX_LAUNCH_EXTENSION,
+        ] {
+            assert!(!driver
+                .attachment_capabilities()
+                .supports_extension(extension, a3s_oci_sdk::TEE_LAUNCH_EXTENSION_VERSION,));
+        }
         assert_eq!(driver.hooks(), &crate::agent_driver::AGENT_DRIVER_HOOKS);
         assert_eq!(driver.hooks().len(), 6);
     }

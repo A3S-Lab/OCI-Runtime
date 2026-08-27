@@ -22,6 +22,7 @@ use super::{
 };
 use crate::DriverState;
 
+mod attestation_operations;
 mod checkpoint_operations;
 mod events;
 mod fault_matrix;

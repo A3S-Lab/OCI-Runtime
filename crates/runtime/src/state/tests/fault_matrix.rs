@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use a3s_oci_sdk::ContainerRecord;
 
+mod attestation;
 mod checkpoint;
 mod filesystem_mutation;
 mod process;
@@ -18,6 +19,7 @@ use crate::fault::{DurableMutation, FaultInjector, FaultPoint, FileCommitStage};
 use crate::state::model::{StoredContainer, StoredGeneration};
 use crate::state::oci_state::{rebuild_paused_state, rebuild_state};
 use crate::state::DeletePreparation;
+use attestation::{exercise_attestation_failure, exercise_attestation_success};
 use checkpoint::{exercise_checkpoint_failure, exercise_checkpoint_success};
 use filesystem_mutation::{
     exercise_filesystem_mutation_failure, exercise_filesystem_mutation_success,
@@ -63,6 +65,8 @@ enum Scenario {
     RestoreSuccess,
     RestoreClaimRecovery,
     RestoreFailure,
+    AttestationSuccess,
+    AttestationFailure,
 }
 
 struct Fixture {
@@ -94,7 +98,7 @@ async fn every_registered_durable_commit_stage_recovers_after_reopen() {
     let registry = FaultPoint::durable_registry();
     assert_eq!(
         registry.len(),
-        835,
+        877,
         "update the durable fault contract when the registry changes"
     );
     for point in registry {
@@ -526,6 +530,12 @@ const fn scenario_for(mutation: DurableMutation) -> Scenario {
         DurableMutation::RecordRestoreFailure | DurableMutation::MoveFailedRestoreTombstone => {
             Scenario::RestoreFailure
         }
+        DurableMutation::PrepareAttestationOperation
+        | DurableMutation::ClaimAttestationOperation
+        | DurableMutation::CompleteAttestationContainer
+        | DurableMutation::CompleteAttestationOperation => Scenario::AttestationSuccess,
+        DurableMutation::ReleaseFailedAttestationClaim
+        | DurableMutation::RecordAttestationFailure => Scenario::AttestationFailure,
         DurableMutation::AllocateGeneration
         | DurableMutation::AdvanceEventSequence
         | DurableMutation::ClaimRuntimeEvent
@@ -620,6 +630,8 @@ async fn exercise(scenario: Scenario, point: FaultPoint) {
         Scenario::RestoreSuccess => exercise_restore_success(point, false).await,
         Scenario::RestoreClaimRecovery => exercise_restore_success(point, true).await,
         Scenario::RestoreFailure => exercise_restore_failure(point).await,
+        Scenario::AttestationSuccess => exercise_attestation_success(point).await,
+        Scenario::AttestationFailure => exercise_attestation_failure(point).await,
     }
 }
 

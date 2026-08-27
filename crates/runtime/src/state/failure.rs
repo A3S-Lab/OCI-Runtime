@@ -40,6 +40,7 @@ impl DurableStateStore {
             | StoredOperationStatus::SucceededFilesystem { .. }
             | StoredOperationStatus::SucceededCheckpoint { .. }
             | StoredOperationStatus::SucceededRestore { .. }
+            | StoredOperationStatus::SucceededAttestation { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::Conflict,
@@ -271,6 +272,7 @@ const fn process_failure_mutations(
         | StoredOperationKind::File
         | StoredOperationKind::Filesystem
         | StoredOperationKind::Checkpoint => None,
+        StoredOperationKind::Attest => None,
     }
 }
 
@@ -315,6 +317,10 @@ const fn failure_mutations(
         StoredOperationKind::Checkpoint => Some((
             DurableMutation::ReleaseFailedCheckpointClaim,
             DurableMutation::RecordCheckpointFailure,
+        )),
+        StoredOperationKind::Attest => Some((
+            DurableMutation::ReleaseFailedAttestationClaim,
+            DurableMutation::RecordAttestationFailure,
         )),
         StoredOperationKind::Exec
         | StoredOperationKind::SignalProcess

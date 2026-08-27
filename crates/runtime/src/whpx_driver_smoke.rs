@@ -441,6 +441,7 @@ mod windows {
             io: io.clone(),
             attachment_contract: CreateAttachments::from_bundle(bundle, io)
                 .map_err(|error| format!("WHPX attachment contract failed: {error}"))?,
+            tee_launch: None,
             attachments: DriverCreateAttachments::None,
         };
         let created = driver

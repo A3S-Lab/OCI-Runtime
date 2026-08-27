@@ -6,8 +6,8 @@ use crate::{
     EventsRequest, ExecRequest, ExitStatus, FileRequest, FileResponse, FilesystemRequest,
     FilesystemResponse, KillRequest, ListRequest, OutputChunk, ProcessRecord, ProcessesRequest,
     ReadOutputRequest, ResizeRequest, RestoreRequest, RestoreResponse, Result, RuntimeInfo,
-    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest,
-    WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, TeeAttestationRequest,
+    TeeAttestationResponse, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
 };
 
 /// Complete asynchronous runtime contract consumed by [`crate::RuntimeClient`].
@@ -128,5 +128,10 @@ pub trait OciRuntimeService: Send + Sync {
     /// Restore one immutable artifact as a new paused container generation.
     async fn restore(&self, _request: RestoreRequest) -> Result<RestoreResponse> {
         Err(Error::unsupported("restore"))
+    }
+
+    /// Collect opaque provider evidence for one exact TEE-backed generation.
+    async fn attest(&self, _request: TeeAttestationRequest) -> Result<TeeAttestationResponse> {
+        Err(Error::unsupported("attest"))
     }
 }

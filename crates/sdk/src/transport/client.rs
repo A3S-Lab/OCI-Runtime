@@ -12,8 +12,9 @@ use crate::{
     EventsRequest, ExecRequest, ExitStatus, FileRequest, FileResponse, FilesystemRequest,
     FilesystemResponse, KillRequest, ListRequest, OciRuntimeService, OutputChunk, ProcessRecord,
     ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, RestoreResponse, Result,
-    RuntimeInfo, SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest,
-    WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    RuntimeInfo, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
+    TeeAttestationRequest, TeeAttestationResponse, UpdateRequest, WaitProcessRequest, WaitRequest,
+    WriteStdinRequest,
 };
 
 use super::wire::{
@@ -382,6 +383,13 @@ impl OciRuntimeService for RuntimeTransportClient {
     async fn restore(&self, request: RestoreRequest) -> Result<RestoreResponse> {
         let expected = request.clone();
         let response = typed_call!(self, WireRequest::Restore(Box::new(request)), Restore)?;
+        response.validate_for_request(&expected)?;
+        Ok(response)
+    }
+
+    async fn attest(&self, request: TeeAttestationRequest) -> Result<TeeAttestationResponse> {
+        let expected = request.clone();
+        let response = typed_call!(self, WireRequest::Attest(request), Attest)?;
         response.validate_for_request(&expected)?;
         Ok(response)
     }

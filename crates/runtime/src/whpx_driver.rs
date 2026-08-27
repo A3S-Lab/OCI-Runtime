@@ -2458,6 +2458,7 @@ mod tests {
                 target: target(generation),
                 attachment_contract: CreateAttachments::from_bundle(&bundle, ProcessIo::default())
                     .expect("attachment contract"),
+                tee_launch: None,
                 bundle,
                 isolation: IsolationRequest::DedicatedVm,
                 io: ProcessIo::default(),
@@ -2513,6 +2514,7 @@ mod tests {
                 isolation: IsolationRequest::DedicatedVm,
                 io: ProcessIo::default(),
                 attachment_contract: attachments,
+                tee_launch: None,
                 attachments: DriverCreateAttachments::None,
             }
         }
@@ -3230,5 +3232,18 @@ mod tests {
             RUNTIME_BUNDLE_HANDOFF_EXTENSION,
             a3s_oci_sdk::RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
         ));
+        assert!(!fixture
+            .driver
+            .operations()
+            .contains(&a3s_oci_sdk::RuntimeOperation::Attest));
+        for extension in [
+            a3s_oci_sdk::AMD_SEV_SNP_LAUNCH_EXTENSION,
+            a3s_oci_sdk::INTEL_TDX_LAUNCH_EXTENSION,
+        ] {
+            assert!(!fixture
+                .driver
+                .attachment_capabilities()
+                .supports_extension(extension, a3s_oci_sdk::TEE_LAUNCH_EXTENSION_VERSION,));
+        }
     }
 }

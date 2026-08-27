@@ -40,6 +40,7 @@ pub enum RuntimeOperation {
     Filesystem,
     Checkpoint,
     Restore,
+    Attest,
 }
 
 /// Standards-based and A3S-specific runtime capability inventory.
@@ -801,6 +802,7 @@ pub enum RuntimeEventKind {
     ContainerDeleted,
     ContainerPaused,
     ContainerResumed,
+    ContainerAttested,
     ResourcesUpdated,
     ProcessCreated,
     ProcessStarted,

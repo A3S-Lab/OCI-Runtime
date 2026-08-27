@@ -1,3 +1,4 @@
+mod attestation;
 mod checkpoint;
 mod create;
 mod creation;
@@ -28,9 +29,10 @@ use std::sync::Arc;
 use a3s_oci_core::{DriverKind, IsolationClass, LifecycleEvent, LifecycleState};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    CheckpointResponse, ContainerId, ContainerRecord, ContainerTarget, CreateRequest, ErrorCode,
-    FileOp, Generation, OciBundle, OciSchemaValidator, OperationId, ProcessRecord, ProcessTarget,
-    RestoreResponse, Result, RuntimeEventKind, ValidateRequest,
+    CheckpointResponse, ContainerId, ContainerRecord, ContainerTarget, CreateAttachments,
+    CreateRequest, ErrorCode, FileOp, Generation, IsolationRequest, OciBundle, OciSchemaValidator,
+    OperationId, ProcessRecord, ProcessTarget, RestoreResponse, Result, RuntimeEventKind,
+    TeeAttestationResponse, TeeLaunchRequest, ValidateRequest,
 };
 use tokio::sync::{Mutex, Notify};
 
@@ -45,6 +47,7 @@ use model::{
     StoredOperationKind, StoredOperationRequest, StoredOperationStatus, CONTAINER_SCHEMA_VERSION,
     GENERATION_SCHEMA_VERSION, OPERATION_SCHEMA_VERSION, OPERATION_SCHEMA_VERSION_V1,
     OPERATION_SCHEMA_VERSION_V2, OPERATION_SCHEMA_VERSION_V3, OPERATION_SCHEMA_VERSION_V4,
+    OPERATION_SCHEMA_VERSION_V5,
 };
 use oci_state::{container_state, is_paused, rebuild_state};
 use operation::validate_deadline;
@@ -138,6 +141,30 @@ pub(crate) enum CheckpointOperationPreparation {
     Resume(ContainerRecord),
     /// A matching checkpoint already completed; this is its exact response.
     Replayed(Box<CheckpointResponse>),
+}
+
+/// Validated durable source of one TEE attestation attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AttestationSource {
+    pub(crate) record: ContainerRecord,
+    pub(crate) launch: TeeLaunchRequest,
+}
+
+/// Result of checking an idempotent attestation before source preflight.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AttestationOperationLookup {
+    /// No committed response exists; source and capability preflight is required.
+    Pending,
+    /// The exact attestation already completed and can replay without its source.
+    Replayed(Box<TeeAttestationResponse>),
+}
+
+/// Result of preparing an idempotent TEE attestation operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AttestationOperationPreparation {
+    Prepared(AttestationSource),
+    Resume(AttestationSource),
+    Replayed(Box<TeeAttestationResponse>),
 }
 
 /// Result of checking an idempotent restore before read-only artifact preflight.
@@ -261,6 +288,7 @@ impl DurableStateStore {
                 | StoredOperationStatus::SucceededFilesystem { .. }
                 | StoredOperationStatus::SucceededCheckpoint { .. }
                 | StoredOperationStatus::SucceededRestore { .. }
+                | StoredOperationStatus::SucceededAttestation { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-create",
@@ -368,17 +396,20 @@ impl DurableStateStore {
                 let active = self.load_operation(operation_id).await?;
                 matches!(
                     (durable_status, active.kind),
-                    (ContainerState::Created, StoredOperationKind::Start)
-                        | (
-                            ContainerState::Running,
-                            StoredOperationKind::Kill
-                                | StoredOperationKind::Pause
-                                | StoredOperationKind::Resume
-                                | StoredOperationKind::Update
-                                | StoredOperationKind::File
-                                | StoredOperationKind::Filesystem
-                                | StoredOperationKind::Checkpoint
-                        )
+                    (
+                        ContainerState::Created,
+                        StoredOperationKind::Start | StoredOperationKind::Attest,
+                    ) | (
+                        ContainerState::Running,
+                        StoredOperationKind::Kill
+                            | StoredOperationKind::Pause
+                            | StoredOperationKind::Resume
+                            | StoredOperationKind::Update
+                            | StoredOperationKind::File
+                            | StoredOperationKind::Filesystem
+                            | StoredOperationKind::Checkpoint
+                            | StoredOperationKind::Attest
+                    )
                 ) && active.container_id == stored.id
                     && active.generation == stored.record.generation
                     && matches!(active.outcome, StoredOperationStatus::Prepared)
@@ -464,6 +495,7 @@ impl DurableStateStore {
             | StoredOperationStatus::SucceededFilesystem { .. }
             | StoredOperationStatus::SucceededCheckpoint { .. }
             | StoredOperationStatus::SucceededRestore { .. }
+            | StoredOperationStatus::SucceededAttestation { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
@@ -586,6 +618,26 @@ impl DurableStateStore {
         self.load_bundle(&stored).await
     }
 
+    /// Load the exact attachment contract bound to a durable generation.
+    pub(crate) async fn attachment_contract(
+        &self,
+        target: &ContainerTarget,
+    ) -> Result<Option<CreateAttachments>> {
+        let _guard = self.gate.lock().await;
+        let stored = self.load_stored_container(&target.id).await?;
+        if let Some(expected) = target.generation {
+            if stored.record.generation != expected {
+                return Err(generation_conflict(
+                    &target.id,
+                    expected,
+                    stored.record.generation,
+                    "load-durable-attachments",
+                ));
+            }
+        }
+        Ok(stored.attachments)
+    }
+
     async fn next_generation(&self, id: &ContainerId) -> Result<Generation> {
         let path = self.generation_path(id);
         let last = if self.filesystem.path_exists(&path).await? {
@@ -649,6 +701,7 @@ impl DurableStateStore {
                 | OPERATION_SCHEMA_VERSION_V2
                 | OPERATION_SCHEMA_VERSION_V3
                 | OPERATION_SCHEMA_VERSION_V4
+                | OPERATION_SCHEMA_VERSION_V5
                 | OPERATION_SCHEMA_VERSION
         ) || operation.operation_id != *operation_id
         {
@@ -750,6 +803,35 @@ impl DurableStateStore {
         match (&stored.attachments, &stored.record.attachments_digest) {
             (Some(attachments), Some(expected_digest)) => {
                 attachments.validate(&bundle)?;
+                let isolation = match stored.record.isolation {
+                    IsolationClass::DedicatedVm => IsolationRequest::DedicatedVm,
+                    IsolationClass::SharedHostKernel => IsolationRequest::SharedHostKernel,
+                    IsolationClass::SharedGuestKernel => IsolationRequest::SharedGuestKernel {
+                        trust_domain: attachments
+                            .guest_session()
+                            .ok_or_else(|| {
+                                state_error(
+                                    ErrorCode::FailedPrecondition,
+                                    "load-container-state",
+                                    format!(
+                                        "container {id} shared-guest isolation has no durable guest-session attachment"
+                                    ),
+                                )
+                            })?
+                            .trust_domain()
+                            .clone(),
+                    },
+                };
+                attachments.validate_isolation(&isolation).map_err(|error| {
+                    state_error(
+                        ErrorCode::FailedPrecondition,
+                        "load-container-state",
+                        format!(
+                            "container {id} guest-session evidence or TEE launch evidence does not match its durable isolation: {}",
+                            error.message
+                        ),
+                    )
+                })?;
                 let expected_network_enforcement = attachments.network_enforcement(&bundle)?;
                 if (stored.record.guest_session.is_some()
                     && stored.record.isolation != IsolationClass::SharedGuestKernel)
@@ -910,6 +992,7 @@ fn validate_stored_operation_shape(operation: &StoredOperation) -> Result<()> {
                 operation.schema_version.as_str(),
                 OPERATION_SCHEMA_VERSION_V3
                     | OPERATION_SCHEMA_VERSION_V4
+                    | OPERATION_SCHEMA_VERSION_V5
                     | OPERATION_SCHEMA_VERSION
             ) {
                 return Err(invalid(
@@ -959,6 +1042,7 @@ fn validate_stored_operation_shape(operation: &StoredOperation) -> Result<()> {
                 operation.schema_version.as_str(),
                 OPERATION_SCHEMA_VERSION_V3
                     | OPERATION_SCHEMA_VERSION_V4
+                    | OPERATION_SCHEMA_VERSION_V5
                     | OPERATION_SCHEMA_VERSION
             ) {
                 return Err(invalid(
@@ -1008,7 +1092,9 @@ fn validate_stored_operation_shape(operation: &StoredOperation) -> Result<()> {
         StoredOperationKind::Checkpoint => {
             if !matches!(
                 operation.schema_version.as_str(),
-                OPERATION_SCHEMA_VERSION_V4 | OPERATION_SCHEMA_VERSION
+                OPERATION_SCHEMA_VERSION_V4
+                    | OPERATION_SCHEMA_VERSION_V5
+                    | OPERATION_SCHEMA_VERSION
             ) {
                 return Err(invalid(
                     "Checkpoint mutations require the current request-retaining schema".to_string(),
@@ -1048,7 +1134,10 @@ fn validate_stored_operation_shape(operation: &StoredOperation) -> Result<()> {
             }
         }
         StoredOperationKind::Restore => {
-            if operation.schema_version != OPERATION_SCHEMA_VERSION {
+            if !matches!(
+                operation.schema_version.as_str(),
+                OPERATION_SCHEMA_VERSION_V5 | OPERATION_SCHEMA_VERSION
+            ) {
                 return Err(invalid(
                     "Restore mutations require the current request-retaining schema".to_string(),
                 ));
@@ -1088,6 +1177,45 @@ fn validate_stored_operation_shape(operation: &StoredOperation) -> Result<()> {
                 }
             }
         }
+        StoredOperationKind::Attest => {
+            if operation.schema_version != OPERATION_SCHEMA_VERSION {
+                return Err(invalid(
+                    "TEE attestation mutations require operation schema v6".to_string(),
+                ));
+            }
+            let Some(StoredOperationRequest::Attest(request)) = operation.request.as_ref() else {
+                return Err(invalid(
+                    "TEE attestation mutation does not retain its exact request".to_string(),
+                ));
+            };
+            let request_digest_matches = attestation::attestation_request_digest(request)
+                .is_ok_and(|digest| digest.current() == operation.request_digest);
+            if !response_target_matches(&request.target)
+                || request.context.operation_id != operation.operation_id
+                || request.validate().is_err()
+                || !request_digest_matches
+            {
+                return Err(invalid(
+                    "TEE attestation request does not match its durable identity".to_string(),
+                ));
+            }
+            match &operation.outcome {
+                StoredOperationStatus::Prepared | StoredOperationStatus::Failed { .. } => {}
+                StoredOperationStatus::SucceededAttestation { response } => {
+                    if response.validate_for_request(request).is_err() {
+                        return Err(invalid(
+                            "TEE attestation response does not match its retained request"
+                                .to_string(),
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(invalid(
+                        "TEE attestation mutation contains an incompatible outcome".to_string(),
+                    ));
+                }
+            }
+        }
         StoredOperationKind::Create
         | StoredOperationKind::Start
         | StoredOperationKind::Kill
@@ -1106,6 +1234,7 @@ fn validate_stored_operation_shape(operation: &StoredOperation) -> Result<()> {
                     StoredOperationStatus::SucceededFilesystem { .. }
                         | StoredOperationStatus::SucceededCheckpoint { .. }
                         | StoredOperationStatus::SucceededRestore { .. }
+                        | StoredOperationStatus::SucceededAttestation { .. }
                 )
             {
                 return Err(invalid(

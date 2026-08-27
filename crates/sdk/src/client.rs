@@ -9,8 +9,8 @@ use crate::{
     LocalIpcEndpoint, OciRuntimeService, OutputChunk, ProcessRecord, ProcessesRequest,
     ReadOutputRequest, ResizeRequest, RestoreRequest, RestoreResponse, Result, RunRequest,
     RuntimeInfo, RuntimeTransportClient, SignalProcessRequest, StartRequest, StateRequest,
-    StatsRequest, UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest,
-    WriteStdinRequest,
+    StatsRequest, TeeAttestationRequest, TeeAttestationResponse, UpdateRequest, ValidateRequest,
+    WaitProcessRequest, WaitRequest, WriteStdinRequest,
 };
 
 /// Cloneable, transport-independent Rust SDK client.
@@ -219,6 +219,14 @@ impl RuntimeClient {
     pub async fn restore(&self, request: RestoreRequest) -> Result<RestoreResponse> {
         request.validate()?;
         let response = self.service.restore(request.clone()).await?;
+        response.validate_for_request(&request)?;
+        Ok(response)
+    }
+
+    /// Collect and revalidate opaque evidence for one exact TEE-backed generation.
+    pub async fn attest(&self, request: TeeAttestationRequest) -> Result<TeeAttestationResponse> {
+        request.validate()?;
+        let response = self.service.attest(request.clone()).await?;
         response.validate_for_request(&request)?;
         Ok(response)
     }

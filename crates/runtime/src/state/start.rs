@@ -128,6 +128,7 @@ impl DurableStateStore {
                 | StoredOperationStatus::SucceededFilesystem { .. }
                 | StoredOperationStatus::SucceededCheckpoint { .. }
                 | StoredOperationStatus::SucceededRestore { .. }
+                | StoredOperationStatus::SucceededAttestation { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-start",
@@ -312,6 +313,7 @@ impl DurableStateStore {
             | StoredOperationStatus::SucceededFilesystem { .. }
             | StoredOperationStatus::SucceededCheckpoint { .. }
             | StoredOperationStatus::SucceededRestore { .. }
+            | StoredOperationStatus::SucceededAttestation { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,

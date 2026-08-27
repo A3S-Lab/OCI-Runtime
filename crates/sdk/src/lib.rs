@@ -30,6 +30,7 @@ mod rootfs_metadata;
 mod schema;
 mod semantic;
 mod service;
+mod tee;
 mod transport;
 mod validation;
 
@@ -130,6 +131,13 @@ pub use semantic::{
     OciSemanticValidator, OciSemanticViolation, OciSemanticViolationKind,
 };
 pub use service::OciRuntimeService;
+pub use tee::{
+    TeeAttestationRequest, TeeAttestationResponse, TeeEvidence, TeeLaunchRequest, TeeMeasurement,
+    TeeMode, TeeReportData, TeeSha256Digest, TeeTechnology, AMD_SEV_SNP_LAUNCH_EXTENSION,
+    INTEL_TDX_LAUNCH_EXTENSION, MAX_TEE_EVIDENCE_BYTES, MAX_TEE_LAUNCH_ANNOTATION_BYTES,
+    TEE_ATTESTATION_SCHEMA_V1, TEE_LAUNCH_EXTENSION_VERSION, TEE_LAUNCH_SCHEMA_V1,
+    TEE_REPORT_DATA_BYTES,
+};
 pub use transport::{
     serve_transport_connection, LocalIpcEndpoint, RuntimeTransportClient, SDK_PROTOCOL_VERSION_MAX,
     SDK_PROTOCOL_VERSION_MIN,

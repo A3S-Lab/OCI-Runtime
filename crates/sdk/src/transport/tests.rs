@@ -19,7 +19,9 @@ use crate::{
     OciBundle, OciRuntimeService, OperationContext, OperationId, ProcessIo, RestoreRequest, Result,
     RuntimeArtifact, RuntimeEvent, RuntimeEventKind, RuntimeFeatures, RuntimeInfo,
     RuntimeOperation, StartRequest, StateRequest, StorageAccessMode, StorageAttachmentId,
-    StorageCleanup, StorageOwnership, TrustDomainId, NETWORK_ENFORCEMENT_EXTENSION,
+    StorageCleanup, StorageOwnership, TeeAttestationRequest, TeeAttestationResponse, TeeEvidence,
+    TeeLaunchRequest, TeeMeasurement, TeeMode, TeeReportData, TeeSha256Digest, TeeTechnology,
+    TrustDomainId, AMD_SEV_SNP_LAUNCH_EXTENSION, NETWORK_ENFORCEMENT_EXTENSION,
     PAUSED_STATE_ANNOTATION,
 };
 
@@ -33,6 +35,8 @@ struct EchoService {
     exact_config: Mutex<Option<String>>,
     checkpoint_response: Mutex<Option<CheckpointResponse>>,
     checkpoint_calls: AtomicUsize,
+    attestation_response: Mutex<Option<TeeAttestationResponse>>,
+    attestation_calls: AtomicUsize,
 }
 
 #[async_trait]
@@ -138,6 +142,15 @@ impl OciRuntimeService for EchoService {
             .map_err(|error| Error::new(ErrorCode::Internal, error.to_string()))?
             .take()
             .ok_or_else(|| Error::unsupported("checkpoint-test"))
+    }
+
+    async fn attest(&self, _request: TeeAttestationRequest) -> Result<TeeAttestationResponse> {
+        self.attestation_calls.fetch_add(1, Ordering::Relaxed);
+        self.attestation_response
+            .lock()
+            .map_err(|error| Error::new(ErrorCode::Internal, error.to_string()))?
+            .take()
+            .ok_or_else(|| Error::unsupported("attestation-test"))
     }
 }
 
@@ -341,6 +354,76 @@ fn guest_session_create_request() -> CreateRequest {
     }
 }
 
+fn tee_create_request() -> CreateRequest {
+    let launch = TeeLaunchRequest::new(TeeTechnology::AmdSevSnp, TeeMode::Simulated);
+    let mut configuration = json!({
+        "ociVersion": "1.3.0",
+        "root": {"path": "rootfs"},
+        "process": {
+            "cwd": "/",
+            "args": ["/bin/true"],
+            "user": {"uid": 0, "gid": 0}
+        },
+        "annotations": {}
+    });
+    configuration["annotations"][AMD_SEV_SNP_LAUNCH_EXTENSION] =
+        json!(launch.to_annotation_value().expect("TEE launch annotation"));
+    let bundle = OciBundle::from_json(
+        std::env::current_dir()
+            .expect("current directory")
+            .join("protocol-nine-tee-bundle"),
+        serde_json::to_string(&configuration).expect("TEE configuration"),
+    )
+    .expect("TEE bundle");
+    let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .expect("base attachments")
+        .attach_tee_launch(&bundle)
+        .expect("TEE attachments");
+    CreateRequest {
+        context: OperationContext::new(
+            OperationId::new("protocol-nine-tee-create").expect("operation ID"),
+        ),
+        id: ContainerId::new("protocol-nine-tee-container").expect("container ID"),
+        bundle,
+        isolation: IsolationRequest::DedicatedVm,
+        attachments,
+    }
+}
+
+fn attestation_fixture() -> (TeeAttestationRequest, TeeAttestationResponse) {
+    let target = ContainerTarget::exact(
+        ContainerId::new("protocol-nine-tee-container").expect("container ID"),
+        Generation(7),
+    );
+    let report_data = TeeReportData::new([0x5a; crate::TEE_REPORT_DATA_BYTES]);
+    let request = TeeAttestationRequest::new(
+        OperationContext::new(OperationId::new("protocol-nine-attest").expect("operation ID")),
+        target.clone(),
+        report_data,
+    )
+    .expect("attestation request");
+    let response = TeeAttestationResponse::new(
+        target,
+        TeeLaunchRequest::new(TeeTechnology::AmdSevSnp, TeeMode::Simulated),
+        report_data,
+        TeeSha256Digest::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
+        TeeSha256Digest::new(format!("sha256:{}", "2".repeat(64))).unwrap(),
+        DriverKind::LibkrunKvm,
+        RuntimeArtifact::new(
+            "a3s-oci-runtime",
+            "0.3.1",
+            format!("sha256:{}", "3".repeat(64)),
+            None,
+        )
+        .unwrap(),
+        TeeSha256Digest::new(format!("sha256:{}", "4".repeat(64))).unwrap(),
+        TeeMeasurement::new(format!("sha384:{}", "5".repeat(96))).unwrap(),
+        TeeEvidence::new("application/vnd.amd.sev-snp.report", vec![6, 7]).unwrap(),
+    )
+    .expect("attestation response");
+    (request, response)
+}
+
 fn checkpoint_source(create: &CreateRequest) -> ContainerRecord {
     let state = StateBuilder::default()
         .version("1.3.0")
@@ -457,7 +540,7 @@ async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
     let client = RuntimeTransportClient::from_io(client_io)
         .await
         .expect("negotiate in-memory SDK transport");
-    assert_eq!(client.protocol_version(), 8);
+    assert_eq!(client.protocol_version(), 9);
 
     let info = client.features().await.expect("transport features");
     assert_eq!(
@@ -861,7 +944,7 @@ async fn protocol_eight_round_trips_checkpoint_reference_and_paused_source() {
     let client = RuntimeTransportClient::from_io(client_io)
         .await
         .expect("negotiate protocol eight");
-    assert_eq!(client.protocol_version(), 8);
+    assert_eq!(client.protocol_version(), 9);
     let response = client
         .checkpoint(request)
         .await
@@ -869,6 +952,87 @@ async fn protocol_eight_round_trips_checkpoint_reference_and_paused_source() {
     assert_eq!(response, expected);
     assert_eq!(service.checkpoint_calls.load(Ordering::Relaxed), 1);
 
+    drop(client);
+    server
+        .await
+        .expect("server task must join")
+        .expect("server connection must close cleanly");
+}
+
+#[test]
+fn protocol_nine_gates_tee_create_restore_and_attestation() {
+    let create = tee_create_request();
+    assert_eq!(
+        WireRequest::Create(Box::new(create.clone())).minimum_protocol(),
+        9
+    );
+    assert_eq!(
+        WireRequest::Restore(Box::new(restore_request(
+            create,
+            "protocol-nine-tee-restore"
+        )))
+        .minimum_protocol(),
+        9
+    );
+    let (request, _) = attestation_fixture();
+    assert_eq!(WireRequest::Attest(request).minimum_protocol(), 9);
+}
+
+#[tokio::test]
+async fn protocol_eight_rejects_attestation_before_dispatch() {
+    let (client_io, mut server_io) = tokio::io::duplex(4096);
+    let server = tokio::spawn(async move {
+        let hello = read_frame::<ClientMessage>(&mut server_io)
+            .await
+            .expect("read client hello")
+            .expect("client hello frame");
+        assert!(matches!(hello, ClientMessage::Hello { .. }));
+        write_frame(&mut server_io, &ServerMessage::Welcome { protocol: 8 })
+            .await
+            .expect("write protocol-eight welcome");
+        assert!(read_frame::<ClientMessage>(&mut server_io)
+            .await
+            .expect("read protocol-eight connection close")
+            .is_none());
+    });
+    let client = RuntimeTransportClient::from_io(client_io)
+        .await
+        .expect("negotiate protocol eight");
+    let (request, _) = attestation_fixture();
+    let error = client
+        .attest(request)
+        .await
+        .expect_err("protocol eight must reject attestation");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("requires protocol 9"));
+    drop(client);
+    server.await.expect("server task must join");
+}
+
+#[tokio::test]
+async fn protocol_nine_round_trips_exact_attestation_evidence() {
+    let (request, expected) = attestation_fixture();
+    let service = Arc::new(EchoService::default());
+    *service
+        .attestation_response
+        .lock()
+        .expect("attestation response lock") = Some(expected.clone());
+    let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+    let server_service: Arc<dyn OciRuntimeService> = service.clone();
+    let server =
+        tokio::spawn(async move { serve_transport_connection(server_service, server_io).await });
+    let client = RuntimeTransportClient::from_io(client_io)
+        .await
+        .expect("negotiate protocol nine");
+    assert_eq!(client.protocol_version(), 9);
+    assert_eq!(
+        client
+            .attest(request)
+            .await
+            .expect("attestation round trip"),
+        expected
+    );
+    assert_eq!(service.attestation_calls.load(Ordering::Relaxed), 1);
     drop(client);
     server
         .await

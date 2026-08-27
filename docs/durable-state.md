@@ -147,7 +147,7 @@ cleanup. Production drivers do not expose this profile until real-host restart
 and leak qualification is retained.
 
 Start, kill, pause, resume, update, delete, File upload, Filesystem
-mkdir/move/remove, checkpoint, and restore use the same global journal and
+mkdir/move/remove, checkpoint, restore, and TEE attestation use the same global journal and
 request fingerprinting. Mutations of an existing container claim its exact
 record so a second mutation cannot race the driver call. Start revalidates the
 durable configuration snapshot, not the caller's mutable source bundle, before
@@ -164,21 +164,31 @@ patch and returns the exact observed container record on replay. Delete
 atomically moves the owned container directory into quarantine rather than
 recursively deleting an unresolved path.
 
-New journals use `a3s.oci.operation.v5` and SHA-256 over canonical JSON with
+TEE attestation first validates one exact created or running dedicated-VM
+generation and its durable launch extension without writing a journal. It then
+claims the container, dispatches the exact 64-byte report-data binding to an
+explicitly capable driver, and commits the complete typed evidence response
+and `ContainerAttested` event before acknowledging driver replay state.
+Success replay never dispatches the driver. A changed target or report-data
+value under the same operation ID fails closed.
+
+New journals use `a3s.oci.operation.v6` and SHA-256 over canonical JSON with
 every object key sorted, so unordered OCI resource maps retain the same
 identity after process reconstruction. Version 3 retains the complete
 validated request and typed response for File and Filesystem mutations;
 version 4 adds the exact normalized checkpoint request and immutable typed
 response; version 5 adds the complete restore request, generation, and paused
-typed response. Existing `a3s.oci.operation.v1` through
-`a3s.oci.operation.v4` journals remain loadable and validate supported retries
-with their original schema and digest rules. Restore is accepted only in v5.
+typed response; and version 6 adds the exact TEE attestation request and
+immutable evidence response. Existing `a3s.oci.operation.v1` through
+`a3s.oci.operation.v5` journals remain loadable and validate supported retries
+with their original schema and digest rules. Restore is accepted in v5 and
+v6; attestation requires v6.
 
 Drivers must be idempotent by `OperationId`. A retryable driver error leaves
 the intent active for an exact retry. A terminal error is stored and replayed
 exactly; it releases a start, kill, pause, resume, update, delete, exec,
-checkpoint, or per-process signal, write-stdin, close-stdin, resize, File, or
-Filesystem claim, while a failed create or restore is moved out of the live
+checkpoint, attestation, or per-process signal, write-stdin, close-stdin,
+resize, File, or Filesystem claim, while a failed create or restore is moved out of the live
 namespace before its ID can be reused. A checkpoint driver must remove only
 its own unpublished partials before returning a terminal error. A restore
 driver must remove its runtime-owned process and attachment effects while
@@ -230,7 +240,7 @@ whole snapshot instead of being hidden from recovery callers.
 
 The configured host also owns the runtime event stream; polling it never
 dispatches a driver or guest operation. Lifecycle, freezer, resource, exec,
-and wait reconciliation append exact-generation events under one global,
+attestation, and wait reconciliation append exact-generation events under one global,
 nonzero sequence. A deterministic identity binds each logical event to its
 first sequence and contents, so retrying an operation or reopening the host
 cannot duplicate it.
@@ -290,6 +300,9 @@ handles these interrupted states:
   idempotent driver, while a committed result replays without driver dispatch;
 - an interrupted File or Filesystem mutation resumes from its retained exact
   request, while a committed typed response replays without driver dispatch;
+- an interrupted attestation resumes through the driver with the same exact
+  report data and operation ID, while committed evidence or a terminal error
+  replays without driver dispatch;
 - cached init and exec terminal results survive host-service reopen;
 - a terminal create failure completes quarantine before replaying its exact
   error;
@@ -301,7 +314,7 @@ handles these interrupted states:
 ## Fault Injection Contract
 
 Every lifecycle write is routed through one typed `DurableMutation` registry.
-The registry currently contains 121 semantic mutations. One hundred eighteen
+The registry currently contains 127 semantic mutations. One hundred twenty-four
 atomic file replacements are exercised at all seven commit stages:
 
 1. temporary file creation;
@@ -314,10 +327,10 @@ atomic file replacements are exercised at all seven commit stages:
 
 The delete, failed-create, and failed-restore quarantine moves are each
 exercised after the rename, source-parent sync, and destination-parent sync.
-This expands to 835 durable fault points. The host matrix separately injects
-before and after all 25 `RuntimeDriver` boundaries, including capability
+This expands to 877 durable fault points. The host matrix separately injects
+before and after all 26 `RuntimeDriver` boundaries, including capability
 discovery, startup recovery, file transfer, filesystem operations, checkpoint,
-restore validation, and restore execution, for another 50 boundaries.
+restore validation, restore execution, and attestation, for another 52 boundaries.
 
 On Unix the final file and directory boundaries follow explicit directory
 `sync_all` calls. Windows reaches the same logical checkpoints after its
@@ -338,7 +351,8 @@ event entries; filename/payload identity drift; operations without an
 allocated generation; duplicate creation owners; live records below or beyond
 their generation fence; missing Create/Restore or Exec ownership; incompatible
 active claims; malformed configuration or attachment evidence, including
-mismatched v4 guest-session or OAR-01 network-enforcement records; quarantine
+mismatched v4 guest-session, OAR-01 network-enforcement, or TEE launch records;
+successful attestation evidence that differs from its exact durable source; quarantine
 entries that disagree with their operation; one generation present both live
 and quarantined; and event records without an exact identity claim. Quarantined
 container snapshots and their process namespaces receive the same record and

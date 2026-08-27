@@ -5,7 +5,8 @@ use crate::{
     Error, ErrorCode, EventsRequest, ExecRequest, FileOp, FileRequest, FilesystemOp,
     FilesystemRequest, KillRequest, ListRequest, ProcessesRequest, ReadOutputRequest,
     ResizeRequest, RestoreRequest, Result, RunRequest, SignalProcessRequest, StartRequest,
-    StateRequest, StatsRequest, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    StateRequest, StatsRequest, TeeAttestationRequest, UpdateRequest, WaitProcessRequest,
+    WaitRequest, WriteStdinRequest,
 };
 use crate::{OciSemanticPhase, OciSemanticValidator};
 
@@ -213,6 +214,12 @@ impl ValidateRequest for CheckpointRequest {
 }
 
 impl ValidateRequest for RestoreRequest {
+    fn validate(&self) -> Result<()> {
+        self.validate_contract()
+    }
+}
+
+impl ValidateRequest for TeeAttestationRequest {
     fn validate(&self) -> Result<()> {
         self.validate_contract()
     }

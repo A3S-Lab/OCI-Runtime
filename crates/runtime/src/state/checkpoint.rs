@@ -81,6 +81,7 @@ impl DurableStateStore {
                 | StoredOperationStatus::SucceededProcess { .. }
                 | StoredOperationStatus::SucceededFilesystem { .. }
                 | StoredOperationStatus::SucceededRestore { .. }
+                | StoredOperationStatus::SucceededAttestation { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(invalid_outcome(operation_id)),
             };
         }
@@ -154,6 +155,7 @@ impl DurableStateStore {
             | StoredOperationStatus::SucceededProcess { .. }
             | StoredOperationStatus::SucceededFilesystem { .. }
             | StoredOperationStatus::SucceededRestore { .. }
+            | StoredOperationStatus::SucceededAttestation { .. }
             | StoredOperationStatus::SucceededEmpty => return Err(invalid_outcome(operation_id)),
         }
         let Some(StoredOperationRequest::Checkpoint(request)) = operation.request.as_ref() else {

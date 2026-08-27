@@ -161,13 +161,13 @@ pub use cleanup_report::{
     OciVmFaultCleanupReport,
 };
 pub use driver::{
-    DriverCheckpointRequest, DriverCheckpointResult, DriverCloseStdinRequest,
-    DriverContainerOperationRequest, DriverCreateAttachments, DriverCreateRequest,
-    DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
-    DriverReadOutputRequest, DriverRecovery, DriverResizeRequest, DriverRestoreRequest,
-    DriverRestoreValidationRequest, DriverSignalProcessRequest, DriverStartRequest, DriverState,
-    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
-    OciHookPhase, RuntimeDriver,
+    DriverAttestationRequest, DriverAttestationResult, DriverCheckpointRequest,
+    DriverCheckpointResult, DriverCloseStdinRequest, DriverContainerOperationRequest,
+    DriverCreateAttachments, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
+    DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverRecovery, DriverResizeRequest,
+    DriverRestoreRequest, DriverRestoreValidationRequest, DriverSignalProcessRequest,
+    DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
+    DriverWaitRequest, DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
 };
 pub use guest_isolation_report::{
     OciVmGuestIsolationCaseEvidence, OciVmGuestIsolationSmokeReport,

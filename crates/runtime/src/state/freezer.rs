@@ -205,6 +205,7 @@ impl DurableStateStore {
                 | StoredOperationStatus::SucceededFilesystem { .. }
                 | StoredOperationStatus::SucceededCheckpoint { .. }
                 | StoredOperationStatus::SucceededRestore { .. }
+                | StoredOperationStatus::SucceededAttestation { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     operation_name,
@@ -397,6 +398,7 @@ impl DurableStateStore {
             | StoredOperationStatus::SucceededFilesystem { .. }
             | StoredOperationStatus::SucceededCheckpoint { .. }
             | StoredOperationStatus::SucceededRestore { .. }
+            | StoredOperationStatus::SucceededAttestation { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,

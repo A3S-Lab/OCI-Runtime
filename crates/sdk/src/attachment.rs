@@ -6,13 +6,15 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     Error, ErrorCode, GuestSessionId, IsolationRequest, OciBundle, ProcessIo, Result,
-    StorageAttachmentId,
+    StorageAttachmentId, TeeLaunchRequest, TeeTechnology, AMD_SEV_SNP_LAUNCH_EXTENSION,
+    INTEL_TDX_LAUNCH_EXTENSION, TEE_LAUNCH_EXTENSION_VERSION,
 };
 
 mod guest_session;
 mod network;
 mod network_enforcement;
 mod storage;
+mod tee_launch;
 
 pub use guest_session::{
     GuestSessionAttachment, GuestSessionCapacity, GuestSessionGeneration, GuestSessionOwnership,
@@ -442,6 +444,59 @@ impl CreateAttachments {
         Ok(self)
     }
 
+    /// Bind one policy-neutral TEE mechanism to a dedicated utility-VM launch.
+    ///
+    /// The exact technology and hardware/simulation mode are read from the
+    /// matching canonical OCI annotation. Measurement policy, identities, and
+    /// authorization remain outside Runtime.
+    pub fn attach_tee_launch(mut self, bundle: &OciBundle) -> Result<Self> {
+        self.validate(bundle)?;
+        let configuration = decode_configuration(bundle)?;
+        let configured = [AMD_SEV_SNP_LAUNCH_EXTENSION, INTEL_TDX_LAUNCH_EXTENSION]
+            .into_iter()
+            .filter(|name| {
+                configuration
+                    .pointer(&format!("/annotations/{name}"))
+                    .is_some()
+            })
+            .collect::<Vec<_>>();
+        if configured.len() != 1 {
+            return Err(invalid_attachment(
+                "a TEE launch requires exactly one known technology annotation",
+            ));
+        }
+        let name = configured[0];
+        if self.extensions.contains_key(name) {
+            return Err(invalid_attachment(
+                "TEE launch extension is declared more than once",
+            ));
+        }
+        let encoded = configuration
+            .pointer(&format!("/annotations/{name}"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                invalid_attachment("TEE launch extension annotation must contain a JSON string")
+            })?;
+        let launch = TeeLaunchRequest::from_annotation_value(encoded)?;
+        let technology = TeeTechnology::from_extension_name(name)
+            .ok_or_else(|| invalid_attachment(format!("unknown TEE launch extension {name}")))?;
+        if launch.technology() != technology {
+            return Err(invalid_attachment(format!(
+                "TEE launch technology {:?} does not match extension {name}",
+                launch.technology()
+            )));
+        }
+        let extension = RuntimeExtensionAttachment::from_annotation(
+            &configuration,
+            name,
+            TEE_LAUNCH_EXTENSION_VERSION,
+            true,
+        )?;
+        self.extensions.insert(name.to_string(), extension);
+        self.validate(bundle)?;
+        Ok(self)
+    }
+
     /// Declare a namespaced runtime extension configured by the same OCI annotation.
     pub fn add_extension_from_annotation(
         mut self,
@@ -499,6 +554,18 @@ impl CreateAttachments {
             .is_some_and(|extension| {
                 extension.version() == RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION
                     && extension.required()
+            })
+    }
+
+    /// Whether this manifest requests one exact TEE launch mechanism.
+    #[must_use]
+    pub fn uses_tee_launch(&self) -> bool {
+        [AMD_SEV_SNP_LAUNCH_EXTENSION, INTEL_TDX_LAUNCH_EXTENSION]
+            .into_iter()
+            .any(|name| {
+                self.extensions.get(name).is_some_and(|extension| {
+                    extension.version() == TEE_LAUNCH_EXTENSION_VERSION && extension.required()
+                })
             })
     }
 
@@ -584,8 +651,24 @@ impl CreateAttachments {
         )
     }
 
+    /// Decode the exact policy-neutral TEE launch binding, when requested.
+    pub fn tee_launch(&self, bundle: &OciBundle) -> Result<Option<TeeLaunchRequest>> {
+        let configuration = decode_configuration(bundle)?;
+        tee_launch::decode_extension(
+            &self.extensions,
+            &self.network,
+            &self.secrets,
+            &configuration,
+        )
+    }
+
     /// Bind reusable-session evidence to the create or restore isolation request.
     pub fn validate_isolation(&self, isolation: &IsolationRequest) -> Result<()> {
+        if self.uses_tee_launch() && !matches!(isolation, IsolationRequest::DedicatedVm) {
+            return Err(invalid_attachment(
+                "TEE launch extensions require dedicated-vm isolation",
+            ));
+        }
         match (&self.guest_session, isolation) {
             (Some(session), _) => session.validate_isolation(isolation),
             (None, IsolationRequest::SharedGuestKernel { .. }) => Err(invalid_attachment(
@@ -743,6 +826,12 @@ impl CreateAttachments {
             &self.network,
             &self.secrets,
             &self.network_attachments,
+            &configuration,
+        )?;
+        tee_launch::decode_extension(
+            &self.extensions,
+            &self.network,
+            &self.secrets,
             &configuration,
         )?;
         if let Some(session) = &self.guest_session {
@@ -989,6 +1078,12 @@ impl AttachmentCapabilities {
         self.extensions
             .get(name)
             .is_some_and(|versions| versions.binary_search(&version).is_ok())
+    }
+
+    /// Canonical versions advertised for one exact extension name.
+    #[must_use]
+    pub fn extension_versions(&self, name: &str) -> Option<&[u16]> {
+        self.extensions.get(name).map(Vec::as_slice)
     }
 
     /// Supported extension names in canonical byte order.

@@ -66,6 +66,7 @@ impl DurableStateStore {
             | StoredOperationStatus::SucceededProcess { .. }
             | StoredOperationStatus::SucceededFilesystem { .. }
             | StoredOperationStatus::SucceededCheckpoint { .. }
+            | StoredOperationStatus::SucceededAttestation { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 Err(invalid_restore_outcome(&operation.operation_id))
             }
@@ -116,6 +117,7 @@ impl DurableStateStore {
                 | StoredOperationStatus::SucceededProcess { .. }
                 | StoredOperationStatus::SucceededFilesystem { .. }
                 | StoredOperationStatus::SucceededCheckpoint { .. }
+                | StoredOperationStatus::SucceededAttestation { .. }
                 | StoredOperationStatus::SucceededEmpty => {
                     Err(invalid_restore_outcome(operation_id))
                 }
@@ -185,6 +187,7 @@ impl DurableStateStore {
             | StoredOperationStatus::SucceededProcess { .. }
             | StoredOperationStatus::SucceededFilesystem { .. }
             | StoredOperationStatus::SucceededCheckpoint { .. }
+            | StoredOperationStatus::SucceededAttestation { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(invalid_restore_outcome(operation_id));
             }

@@ -583,7 +583,10 @@ async fn guest_path(bundle: &Path) -> Result<GuestPath> {
 
 #[cfg(test)]
 mod tests {
-    use a3s_oci_sdk::{ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3};
+    use a3s_oci_sdk::{
+        AMD_SEV_SNP_LAUNCH_EXTENSION, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3,
+        INTEL_TDX_LAUNCH_EXTENSION, TEE_LAUNCH_EXTENSION_VERSION,
+    };
 
     use super::native_attachment_capabilities;
 
@@ -596,5 +599,11 @@ mod tests {
         let rootless = native_attachment_capabilities(false);
         assert!(rootless.supports_schema(ATTACHMENT_SCHEMA_V2));
         assert!(!rootless.supports_schema(ATTACHMENT_SCHEMA_V3));
+        for capabilities in [rootful, rootless] {
+            assert!(!capabilities
+                .supports_extension(AMD_SEV_SNP_LAUNCH_EXTENSION, TEE_LAUNCH_EXTENSION_VERSION,));
+            assert!(!capabilities
+                .supports_extension(INTEL_TDX_LAUNCH_EXTENSION, TEE_LAUNCH_EXTENSION_VERSION,));
+        }
     }
 }

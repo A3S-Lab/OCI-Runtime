@@ -7,9 +7,9 @@ use crate::{
     EventsRequest, ExecRequest, ExitStatus, FileRequest, FileResponse, FilesystemRequest,
     FilesystemResponse, KillRequest, ListRequest, OutputChunk, ProcessRecord, ProcessesRequest,
     ReadOutputRequest, ResizeRequest, RestoreRequest, RestoreResponse, RuntimeInfo,
-    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest, ValidateRequest,
-    WaitProcessRequest, WaitRequest, WriteStdinRequest, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3,
-    ATTACHMENT_SCHEMA_V4,
+    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, TeeAttestationRequest,
+    TeeAttestationResponse, UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest,
+    WriteStdinRequest, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3, ATTACHMENT_SCHEMA_V4,
 };
 
 use super::{protocol_error, transport_error};
@@ -83,6 +83,7 @@ pub(super) enum WireRequest {
     Filesystem(FilesystemRequest),
     Checkpoint(CheckpointRequest),
     Restore(Box<RestoreRequest>),
+    Attest(TeeAttestationRequest),
 }
 
 impl WireRequest {
@@ -112,11 +113,15 @@ impl WireRequest {
             Self::Filesystem(request) => request.validate(),
             Self::Checkpoint(request) => request.validate(),
             Self::Restore(request) => request.validate(),
+            Self::Attest(request) => request.validate(),
         }
     }
 
     pub(super) fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::Attest(_) => 9,
+            Self::Create(request) if request.attachments.uses_tee_launch() => 9,
+            Self::Restore(request) if request.attachments().uses_tee_launch() => 9,
             Self::Checkpoint(_) | Self::Restore(_) => 8,
             Self::Create(request)
                 if request.attachments.schema_version() == ATTACHMENT_SCHEMA_V4 =>
@@ -167,6 +172,7 @@ pub(super) enum WireResponse {
     Filesystem(FilesystemResponse),
     Checkpoint(CheckpointResponse),
     Restore(RestoreResponse),
+    Attest(TeeAttestationResponse),
 }
 
 pub(super) async fn write_frame<T>(

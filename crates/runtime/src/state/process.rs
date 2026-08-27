@@ -152,6 +152,7 @@ impl DurableStateStore {
                 | StoredOperationStatus::SucceededFilesystem { .. }
                 | StoredOperationStatus::SucceededCheckpoint { .. }
                 | StoredOperationStatus::SucceededRestore { .. }
+                | StoredOperationStatus::SucceededAttestation { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-exec",
@@ -309,6 +310,7 @@ impl DurableStateStore {
             | StoredOperationStatus::SucceededFilesystem { .. }
             | StoredOperationStatus::SucceededCheckpoint { .. }
             | StoredOperationStatus::SucceededRestore { .. }
+            | StoredOperationStatus::SucceededAttestation { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
@@ -450,7 +452,8 @@ impl DurableStateStore {
                 | StoredOperationStatus::SucceededProcess { .. }
                 | StoredOperationStatus::SucceededFilesystem { .. }
                 | StoredOperationStatus::SucceededCheckpoint { .. }
-                | StoredOperationStatus::SucceededRestore { .. } => Err(state_error(
+                | StoredOperationStatus::SucceededRestore { .. }
+                | StoredOperationStatus::SucceededAttestation { .. } => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-signal-process",
                     format!(
@@ -549,7 +552,8 @@ impl DurableStateStore {
             | StoredOperationStatus::SucceededProcess { .. }
             | StoredOperationStatus::SucceededFilesystem { .. }
             | StoredOperationStatus::SucceededCheckpoint { .. }
-            | StoredOperationStatus::SucceededRestore { .. } => {
+            | StoredOperationStatus::SucceededRestore { .. }
+            | StoredOperationStatus::SucceededAttestation { .. } => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "complete-signal-process",

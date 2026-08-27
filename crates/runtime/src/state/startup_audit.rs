@@ -9,8 +9,8 @@ use a3s_oci_sdk::{
 
 use super::filesystem::state_error;
 use super::model::{
-    StoredGeneration, StoredOperation, StoredOperationKind, StoredOperationStatus,
-    GENERATION_SCHEMA_VERSION,
+    StoredContainer, StoredGeneration, StoredOperation, StoredOperationKind,
+    StoredOperationRequest, StoredOperationStatus, GENERATION_SCHEMA_VERSION,
 };
 use super::{DurableStateStore, CONFIG_SNAPSHOT_FILE, CONTAINER_RECORD_FILE};
 
@@ -250,9 +250,64 @@ impl DurableStateStore {
                     ),
                 ));
             }
+            self.audit_attestation_outcomes(&stored, operations).await?;
             self.audit_container_claims(&stored, operations)?;
             self.audit_process_entries(&stored, &container_directory, operations, true)
                 .await?;
+        }
+        Ok(())
+    }
+
+    async fn audit_attestation_outcomes(
+        &self,
+        stored: &StoredContainer,
+        operations: &OperationInventory,
+    ) -> Result<()> {
+        for operation in operations.values().filter(|operation| {
+            operation.kind == StoredOperationKind::Attest
+                && operation.container_id == stored.id
+                && operation.generation == stored.record.generation
+        }) {
+            let StoredOperationStatus::SucceededAttestation { response } = &operation.outcome
+            else {
+                continue;
+            };
+            let Some(StoredOperationRequest::Attest(request)) = operation.request.as_ref() else {
+                return Err(audit_error(
+                    "audit-operation-state",
+                    format!(
+                        "TEE attestation operation {} has no retained request",
+                        operation.operation_id
+                    ),
+                ));
+            };
+            let source = self
+                .validate_attestation_bindings(stored)
+                .await
+                .map_err(|error| {
+                    audit_error(
+                        "audit-operation-state",
+                        format!(
+                            "TEE attestation operation {} has an invalid durable source: {}",
+                            operation.operation_id, error.message
+                        ),
+                    )
+                })?;
+            super::attestation::validate_attestation_response_bindings(
+                &source,
+                &operation.operation_id,
+                request,
+                response,
+            )
+            .map_err(|error| {
+                audit_error(
+                    "audit-operation-state",
+                    format!(
+                        "TEE attestation operation {} has invalid durable evidence: {}",
+                        operation.operation_id, error.message
+                    ),
+                )
+            })?;
         }
         Ok(())
     }

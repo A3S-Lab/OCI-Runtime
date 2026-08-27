@@ -81,7 +81,8 @@ A failed restore removes only runtime-owned lifecycle, driver, and attachment
 resources created for that attempt.
 
 Both requests carry `OperationContext`. New Host journals use
-`a3s.oci.operation.v5`; checkpoint records written with v4 remain readable.
+`a3s.oci.operation.v6`; checkpoint records written with v4 or v5 remain
+readable, and restore records written with v5 remain readable.
 Checkpoint retains the exact normalized request and typed response. It claims
 the source before driver dispatch, rejects active process mutations and I/O,
 and blocks new process I/O until success or terminal failure is durable.
@@ -93,7 +94,7 @@ Restore checks its durable journal before touching the caller artifact, so a
 committed response or terminal error replays even when the artifact is no
 longer present. A pending restore performs read-only artifact validation and
 exact compatibility selection before it writes an operation or allocates a
-generation. Its v5 journal retains the reference, bundle, isolation,
+generation. Its v5/v6 journal retains the reference, bundle, isolation,
 attachments, path, target ID, and allocated generation. A prepared attempt
 resumes through the same operation ID; success commits `running`, a positive
 PID, and the paused annotation before returning the exact typed response.
@@ -119,8 +120,9 @@ partial cleanup.
 
 ## Protocol Compatibility
 
-Checkpoint and restore require SDK protocol 8 regardless of attachment schema.
-Protocol 7 and earlier cannot carry an immutable reference or typed response
-and are rejected before service dispatch. Legacy request field aliases are
-decoded only so a protocol-8 peer can return a stable validation error instead
-of accidentally applying the old directory/boolean semantics.
+Checkpoint and non-TEE restore require SDK protocol 8 regardless of attachment
+schema. A restore carrying a TEE launch extension requires protocol 9. Protocol
+7 and earlier cannot carry an immutable reference or typed response and are
+rejected before service dispatch. Legacy request field aliases are decoded
+only so a protocol-8 peer can return a stable validation error instead of
+accidentally applying the old directory/boolean semantics.
