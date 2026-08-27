@@ -339,7 +339,8 @@ impl DurableStateStore {
                 | StoredOperationKind::Resize
                 | StoredOperationKind::Update
                 | StoredOperationKind::File
-                | StoredOperationKind::Filesystem => {}
+                | StoredOperationKind::Filesystem
+                | StoredOperationKind::Checkpoint => {}
             }
         }
         if status == ContainerState::Stopped && current != ContainerState::Stopped {
@@ -375,7 +376,8 @@ impl DurableStateStore {
                 | StoredOperationKind::Resize
                 | StoredOperationKind::Update
                 | StoredOperationKind::File
-                | StoredOperationKind::Filesystem => {
+                | StoredOperationKind::Filesystem
+                | StoredOperationKind::Checkpoint => {
                     return Err(state_error(
                         ErrorCode::Internal,
                         "observe-state",
@@ -435,7 +437,8 @@ fn observation_completes(kind: StoredOperationKind, status: ContainerState, paus
         | StoredOperationKind::Resize
         | StoredOperationKind::Update
         | StoredOperationKind::File
-        | StoredOperationKind::Filesystem => false,
+        | StoredOperationKind::Filesystem
+        | StoredOperationKind::Checkpoint => false,
     }
 }
 

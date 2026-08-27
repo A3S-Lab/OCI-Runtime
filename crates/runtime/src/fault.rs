@@ -81,6 +81,10 @@ pub(crate) enum DurableMutation {
     ClaimFilesystemOperation,
     CompleteFilesystemContainer,
     CompleteFilesystemOperation,
+    PrepareCheckpointOperation,
+    ClaimCheckpointOperation,
+    CompleteCheckpointContainer,
+    CompleteCheckpointOperation,
     CacheInitWait,
     CacheProcessWait,
     AdvanceEventSequence,
@@ -114,13 +118,15 @@ pub(crate) enum DurableMutation {
     RecordFileFailure,
     ReleaseFailedFilesystemClaim,
     RecordFilesystemFailure,
+    ReleaseFailedCheckpointClaim,
+    RecordCheckpointFailure,
     ObserveContainer,
     CompleteObservedOperation,
 }
 
 impl DurableMutation {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 107] = [
+    pub(crate) const ALL: [Self; 113] = [
         Self::RuntimeRootMarker,
         Self::AllocateGeneration,
         Self::PrepareCreateOperation,
@@ -193,6 +199,10 @@ impl DurableMutation {
         Self::ClaimFilesystemOperation,
         Self::CompleteFilesystemContainer,
         Self::CompleteFilesystemOperation,
+        Self::PrepareCheckpointOperation,
+        Self::ClaimCheckpointOperation,
+        Self::CompleteCheckpointContainer,
+        Self::CompleteCheckpointOperation,
         Self::CacheInitWait,
         Self::CacheProcessWait,
         Self::AdvanceEventSequence,
@@ -226,6 +236,8 @@ impl DurableMutation {
         Self::RecordFileFailure,
         Self::ReleaseFailedFilesystemClaim,
         Self::RecordFilesystemFailure,
+        Self::ReleaseFailedCheckpointClaim,
+        Self::RecordCheckpointFailure,
         Self::ObserveContainer,
         Self::CompleteObservedOperation,
     ];
@@ -306,11 +318,12 @@ pub(crate) enum DriverOperation {
     Resize,
     File,
     Filesystem,
+    Checkpoint,
 }
 
 impl DriverOperation {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 22] = [
+    pub(crate) const ALL: [Self; 23] = [
         Self::Capability,
         Self::Recover,
         Self::Create,
@@ -333,6 +346,7 @@ impl DriverOperation {
         Self::Resize,
         Self::File,
         Self::Filesystem,
+        Self::Checkpoint,
     ];
 }
 

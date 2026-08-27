@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use a3s_oci_sdk::ContainerRecord;
 
+mod checkpoint;
 mod filesystem_mutation;
 mod process;
 mod process_io;
@@ -16,6 +17,7 @@ use crate::fault::{DurableMutation, FaultInjector, FaultPoint, FileCommitStage};
 use crate::state::model::{StoredContainer, StoredGeneration};
 use crate::state::oci_state::{rebuild_paused_state, rebuild_state};
 use crate::state::DeletePreparation;
+use checkpoint::{exercise_checkpoint_failure, exercise_checkpoint_success};
 use filesystem_mutation::{
     exercise_filesystem_mutation_failure, exercise_filesystem_mutation_success,
 };
@@ -54,6 +56,8 @@ enum Scenario {
     ProcessIoFailure,
     FilesystemMutationSuccess,
     FilesystemMutationFailure,
+    CheckpointSuccess,
+    CheckpointFailure,
 }
 
 struct Fixture {
@@ -85,7 +89,7 @@ async fn every_registered_durable_commit_stage_recovers_after_reopen() {
     let registry = FaultPoint::durable_registry();
     assert_eq!(
         registry.len(),
-        741,
+        783,
         "update the durable fault contract when the registry changes"
     );
     for point in registry {
@@ -502,6 +506,12 @@ const fn scenario_for(mutation: DurableMutation) -> Scenario {
         | DurableMutation::RecordFileFailure
         | DurableMutation::ReleaseFailedFilesystemClaim
         | DurableMutation::RecordFilesystemFailure => Scenario::FilesystemMutationFailure,
+        DurableMutation::PrepareCheckpointOperation
+        | DurableMutation::ClaimCheckpointOperation
+        | DurableMutation::CompleteCheckpointContainer
+        | DurableMutation::CompleteCheckpointOperation => Scenario::CheckpointSuccess,
+        DurableMutation::ReleaseFailedCheckpointClaim
+        | DurableMutation::RecordCheckpointFailure => Scenario::CheckpointFailure,
         DurableMutation::AllocateGeneration
         | DurableMutation::AdvanceEventSequence
         | DurableMutation::ClaimRuntimeEvent
@@ -591,6 +601,8 @@ async fn exercise(scenario: Scenario, point: FaultPoint) {
         Scenario::ProcessIoFailure => exercise_process_io_failure(point).await,
         Scenario::FilesystemMutationSuccess => exercise_filesystem_mutation_success(point).await,
         Scenario::FilesystemMutationFailure => exercise_filesystem_mutation_failure(point).await,
+        Scenario::CheckpointSuccess => exercise_checkpoint_success(point).await,
+        Scenario::CheckpointFailure => exercise_checkpoint_failure(point).await,
     }
 }
 

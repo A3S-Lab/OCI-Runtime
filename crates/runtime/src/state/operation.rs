@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use super::filesystem::state_error;
 use super::model::{
     StoredOperation, StoredOperationKind, OPERATION_SCHEMA_VERSION, OPERATION_SCHEMA_VERSION_V1,
-    OPERATION_SCHEMA_VERSION_V2,
+    OPERATION_SCHEMA_VERSION_V2, OPERATION_SCHEMA_VERSION_V3,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,7 +31,9 @@ impl RequestDigests {
     fn for_schema(&self, schema_version: &str) -> Option<&str> {
         match schema_version {
             OPERATION_SCHEMA_VERSION_V1 => Some(&self.legacy),
-            OPERATION_SCHEMA_VERSION_V2 | OPERATION_SCHEMA_VERSION => Some(&self.canonical),
+            OPERATION_SCHEMA_VERSION_V2
+            | OPERATION_SCHEMA_VERSION_V3
+            | OPERATION_SCHEMA_VERSION => Some(&self.canonical),
             _ => None,
         }
     }
@@ -133,7 +135,7 @@ mod tests {
     use super::{request_digest, validate_retry};
     use crate::state::model::{
         StoredOperation, StoredOperationKind, StoredOperationStatus, OPERATION_SCHEMA_VERSION,
-        OPERATION_SCHEMA_VERSION_V1, OPERATION_SCHEMA_VERSION_V2,
+        OPERATION_SCHEMA_VERSION_V1, OPERATION_SCHEMA_VERSION_V2, OPERATION_SCHEMA_VERSION_V3,
     };
 
     #[derive(Serialize)]
@@ -179,6 +181,7 @@ mod tests {
         for (schema_version, request_digest) in [
             (OPERATION_SCHEMA_VERSION_V1, digests.legacy.clone()),
             (OPERATION_SCHEMA_VERSION_V2, digests.canonical.clone()),
+            (OPERATION_SCHEMA_VERSION_V3, digests.canonical.clone()),
             (OPERATION_SCHEMA_VERSION, digests.canonical.clone()),
         ] {
             let stored = StoredOperation {

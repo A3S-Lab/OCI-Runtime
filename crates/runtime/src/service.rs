@@ -3,35 +3,36 @@ use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 
-use a3s_oci_core::{DriverKind, RuntimeFeatures};
+use a3s_oci_core::{DriverKind, HostPlatform, RuntimeFeatures};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, AttachmentCapabilities, CheckpointRequest, CheckpointResponse, CloseStdinRequest,
-    ContainerId, ContainerOperationRequest, ContainerRecord, ContainerStats, ContainerTarget,
-    CreateRequest, DeleteRequest, Error, ErrorCode, EventBatch, EventsRequest, ExecRequest,
-    ExitStatus, FileOp, FileRequest, FileResponse, FilesystemOp, FilesystemRequest,
-    FilesystemResponse, KillRequest, ListRequest, OciLinuxSupport, OciRuntimeService, OutputChunk,
-    ProcessId, ProcessRecord, ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest,
-    RestoreRequest, RestoreResponse, Result, RuntimeExtensions, RuntimeInfo, RuntimeOperation,
-    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest, ValidateRequest,
-    WaitProcessRequest, WaitRequest, WriteStdinRequest, MAX_FILE_TRANSFER_BYTES,
+    async_trait, AttachmentCapabilities, CheckpointReference, CheckpointRequest,
+    CheckpointResponse, CloseStdinRequest, ContainerId, ContainerOperationRequest, ContainerRecord,
+    ContainerStats, ContainerTarget, CreateRequest, DeleteRequest, Error, ErrorCode, EventBatch,
+    EventsRequest, ExecRequest, ExitStatus, FileOp, FileRequest, FileResponse, FilesystemOp,
+    FilesystemRequest, FilesystemResponse, KillRequest, ListRequest, OciLinuxSupport,
+    OciRuntimeService, OutputChunk, ProcessId, ProcessRecord, ProcessTarget, ProcessesRequest,
+    ReadOutputRequest, ResizeRequest, RestoreRequest, RestoreResponse, Result, RuntimeExtensions,
+    RuntimeInfo, RuntimeOperation, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
+    UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    MAX_FILE_TRANSFER_BYTES,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use crate::driver::{
-    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateAttachments,
-    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest,
-    DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest,
-    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
-    RecreatedProcess, RuntimeDriver,
+    DriverCheckpointRequest, DriverCloseStdinRequest, DriverContainerOperationRequest,
+    DriverCreateAttachments, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
+    DriverKillRequest, DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest,
+    DriverStartRequest, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
+    DriverWriteStdinRequest, RecreatedProcess, RuntimeDriver,
 };
 use crate::fault::{
     DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint, NoFaultInjector,
 };
 use crate::state::{
-    DeletePreparation, DurableStateStore, FilesystemMutationPreparation, ProcessIoPreparation,
-    ProcessOperationPreparation, ProcessWaitPreparation, RecordOperationPreparation,
-    SignalProcessPreparation,
+    CheckpointOperationPreparation, DeletePreparation, DurableStateStore,
+    FilesystemMutationPreparation, ProcessIoPreparation, ProcessOperationPreparation,
+    ProcessWaitPreparation, RecordOperationPreparation, SignalProcessPreparation,
 };
 
 mod artifact;
@@ -1387,8 +1388,80 @@ impl OciRuntimeService for HostRuntimeService {
         Ok(response)
     }
 
-    async fn checkpoint(&self, _request: CheckpointRequest) -> Result<CheckpointResponse> {
-        Err(Error::unsupported("checkpoint"))
+    async fn checkpoint(&self, request: CheckpointRequest) -> Result<CheckpointResponse> {
+        request.validate()?;
+        let lifecycle = self.lifecycle("checkpoint")?;
+        lifecycle.ensure_operation(RuntimeOperation::Checkpoint, "checkpoint")?;
+        let operation_id = request.context().operation_id.clone();
+        let runtime_artifact = artifact::current()
+            .await
+            .map_err(|error| error.for_operation("checkpoint"))?;
+        let source = match lifecycle.store.prepare_checkpoint(&request).await? {
+            CheckpointOperationPreparation::Replayed(response) => {
+                return lifecycle
+                    .acknowledge_result(&operation_id, Ok(*response))
+                    .await;
+            }
+            CheckpointOperationPreparation::Prepared(source)
+            | CheckpointOperationPreparation::Resume(source) => source,
+        };
+        let registered = lifecycle.driver(source.driver, "checkpoint")?;
+        registered.ensure_operation(RuntimeOperation::Checkpoint, "checkpoint")?;
+        lifecycle.driver_boundary(DriverOperation::Checkpoint, DriverBoundaryStage::BeforeCall)?;
+        let result = registered
+            .driver()
+            .checkpoint(DriverCheckpointRequest {
+                context: request.context().clone(),
+                source: source.clone(),
+                artifact_path: request.artifact_path().clone(),
+                runtime_artifact: runtime_artifact.clone(),
+            })
+            .await;
+        lifecycle.driver_boundary(DriverOperation::Checkpoint, DriverBoundaryStage::AfterCall)?;
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                return lifecycle.fail_driver_operation(&operation_id, error).await;
+            }
+        };
+        let compatibility = result.compatibility();
+        if compatibility.driver() != source.driver
+            || compatibility.isolation() != source.isolation
+            || compatibility.platform() != HostPlatform::current()
+            || compatibility.architecture() != std::env::consts::ARCH
+            || compatibility.runtime_artifact().name() != runtime_artifact.name()
+        {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "runtime driver returned checkpoint compatibility evidence for a different execution stack",
+            )
+            .for_operation("checkpoint")
+            .retryable(true));
+        }
+        let reference = match CheckpointReference::new(
+            &source,
+            compatibility.clone(),
+            result.artifact_digest().clone(),
+            result.artifact_size_bytes(),
+        ) {
+            Ok(reference) => reference,
+            Err(error) => {
+                return Err(error.for_operation("checkpoint").retryable(true));
+            }
+        };
+        let response = match CheckpointResponse::new(source, reference)
+            .and_then(|response| response.validate_for_request(&request).map(|()| response))
+        {
+            Ok(response) => response,
+            Err(error) => {
+                return Err(error.for_operation("checkpoint").retryable(true));
+            }
+        };
+        let completed = lifecycle
+            .store
+            .complete_checkpoint(&operation_id, response)
+            .await;
+        lifecycle.acknowledge_result(&operation_id, completed).await
     }
 
     async fn restore(&self, _request: RestoreRequest) -> Result<RestoreResponse> {

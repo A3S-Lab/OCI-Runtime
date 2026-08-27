@@ -11,45 +11,50 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixListener;
 
 use a3s_oci_core::{
-    CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
+    CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, HostPlatform, IsolationClass,
 };
 use a3s_oci_sdk::oci_spec::runtime::{
     ContainerState, LinuxNamespaceType, LinuxResources, LinuxSeccompAction, Process,
 };
 use a3s_oci_sdk::{
-    async_trait, AttachmentCapabilities, CloseStdinRequest, ContainerId, ContainerOperationRequest,
-    ContainerRecord, ContainerStats, ContainerTarget, CpuStats, CreateAttachments, CreateRequest,
-    DeleteMode, DeleteRequest, Error, ErrorCode, EventsRequest, ExecRequest, ExitStatus, FileOp,
-    FileRequest, FileResponse, FilesystemEntry, FilesystemEntryKind, FilesystemOp,
-    FilesystemRequest, FilesystemResponse, Generation, GuestSessionCapacity,
-    GuestSessionGeneration, GuestSessionId, GuestSessionReset, IoMode, IsolationRequest,
-    KillRequest, ListRequest, MemoryStats, OciBundle, OciLinuxSupport, OciRuntimeService,
-    OciSchemaValidator, OperationContext, OperationId, OutputChunk, OutputStream, ProcessId,
-    ProcessIo, ProcessRecord, ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest,
-    Result, RuntimeEventKind, RuntimeNegotiationRequest, RuntimeOperation, Signal,
-    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, StorageAccessMode,
-    StorageAttachmentId, StorageCleanup, StorageOwnership, TerminalSize, TrustDomainId,
-    UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest, ATTACHMENT_SCHEMA_V1,
-    ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3, ATTACHMENT_SCHEMA_V4,
+    async_trait, canonical_json_bytes, AttachmentCapabilities, CheckpointArtifactPath,
+    CheckpointCompatibility, CheckpointDigest, CheckpointFormat, CheckpointRequest,
+    CloseStdinRequest, ContainerId, ContainerOperationRequest, ContainerRecord, ContainerStats,
+    ContainerTarget, CpuStats, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest, Error,
+    ErrorCode, EventsRequest, ExecRequest, ExitStatus, FileOp, FileRequest, FileResponse,
+    FilesystemEntry, FilesystemEntryKind, FilesystemOp, FilesystemRequest, FilesystemResponse,
+    Generation, GuestSessionCapacity, GuestSessionGeneration, GuestSessionId, GuestSessionReset,
+    IoMode, IsolationRequest, KillRequest, ListRequest, MemoryStats, OciBundle, OciLinuxSupport,
+    OciRuntimeService, OciSchemaValidator, OperationContext, OperationId, OutputChunk,
+    OutputStream, ProcessId, ProcessIo, ProcessRecord, ProcessTarget, ProcessesRequest,
+    ReadOutputRequest, ResizeRequest, Result, RuntimeEventKind, RuntimeNegotiationRequest,
+    RuntimeOperation, Signal, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
+    StorageAccessMode, StorageAttachmentId, StorageCleanup, StorageOwnership, TerminalSize,
+    TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    ATTACHMENT_SCHEMA_V1, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3, ATTACHMENT_SCHEMA_V4,
     BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS, OCI_LINUX_CAPABILITY_NAMES,
     OCI_LINUX_MEMORY_POLICY_FLAGS, OCI_LINUX_MEMORY_POLICY_MODES, OCI_LINUX_MOUNT_OPTIONS,
     OCI_LINUX_SECCOMP_ACTIONS, OCI_LINUX_SECCOMP_ARCHITECTURES, OCI_LINUX_SECCOMP_KNOWN_FLAGS,
     OCI_LINUX_SECCOMP_OPERATORS, RUNTIME_EXTENSIONS_SCHEMA_V1, RUNTIME_OPERATION_CONTRACT_V1,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use sha2::{Digest, Sha256};
+use tokio::io::AsyncWriteExt as _;
 
 use super::HostRuntimeService;
 #[cfg(target_os = "linux")]
 use crate::DriverCreateAttachments;
 use crate::{
-    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateRequest,
-    DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
-    DriverReadOutputRequest, DriverRecovery, DriverResizeRequest, DriverSignalProcessRequest,
-    DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
-    DriverWaitRequest, DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
+    DriverCheckpointRequest, DriverCheckpointResult, DriverCloseStdinRequest,
+    DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
+    DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverRecovery, DriverResizeRequest,
+    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverUpdateRequest,
+    DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest, OciHookPhase,
+    RuntimeDriver,
 };
 
 mod agent_transport_recovery;
+mod checkpoint_operations;
 mod fault_matrix;
 mod filesystem_operations;
 mod guest_sessions;
@@ -97,6 +102,7 @@ enum DriverCall {
     Resize(DriverResizeRequest),
     File(FileRequest),
     Filesystem(FilesystemRequest),
+    Checkpoint(Box<DriverCheckpointRequest>),
 }
 
 type DriverProcessKey = (ContainerId, Generation, ProcessId);
@@ -128,6 +134,9 @@ struct RecordingDriver {
     write_stdin_replays: Mutex<HashMap<OperationId, DriverWriteStdinRequest>>,
     close_stdin_replays: Mutex<HashMap<OperationId, DriverCloseStdinRequest>>,
     resize_replays: Mutex<HashMap<OperationId, DriverResizeRequest>>,
+    checkpoint_replays:
+        Mutex<HashMap<OperationId, (DriverCheckpointRequest, DriverCheckpointResult)>>,
+    checkpoint_gate: tokio::sync::Mutex<()>,
     output_responses: Mutex<VecDeque<Vec<OutputChunk>>>,
     recovery: Mutex<DriverRecovery>,
     failures: Mutex<HashMap<&'static str, Vec<Error>>>,
@@ -170,6 +179,8 @@ impl RecordingDriver {
             write_stdin_replays: Mutex::new(HashMap::new()),
             close_stdin_replays: Mutex::new(HashMap::new()),
             resize_replays: Mutex::new(HashMap::new()),
+            checkpoint_replays: Mutex::new(HashMap::new()),
+            checkpoint_gate: tokio::sync::Mutex::new(()),
             output_responses: Mutex::new(VecDeque::new()),
             recovery: Mutex::new(DriverRecovery::none()),
             failures: Mutex::new(HashMap::new()),
@@ -244,6 +255,22 @@ impl RecordingDriver {
             RuntimeOperation::File,
             RuntimeOperation::Filesystem,
         ]);
+        driver
+    }
+
+    fn with_checkpoint_operations() -> Self {
+        let mut driver = Self::with_control_operations();
+        if cfg!(target_os = "linux") {
+            driver.capability.driver = DriverKind::NativeLinux;
+            driver.capability.isolation_classes = vec![IsolationClass::SharedHostKernel];
+        } else if cfg!(target_os = "macos") {
+            driver.capability.driver = DriverKind::LibkrunHvf;
+            driver.capability.isolation_classes = vec![IsolationClass::DedicatedVm];
+        } else {
+            driver.capability.driver = DriverKind::LibkrunWhpx;
+            driver.capability.isolation_classes = vec![IsolationClass::DedicatedVm];
+        }
+        driver.operations.push(RuntimeOperation::Checkpoint);
         driver
     }
 
@@ -1355,6 +1382,154 @@ impl RuntimeDriver for RecordingDriver {
             entries: Vec::new(),
         })
     }
+
+    async fn checkpoint(&self, request: DriverCheckpointRequest) -> Result<DriverCheckpointResult> {
+        let _checkpoint_guard = self.checkpoint_gate.lock().await;
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::Checkpoint(Box::new(request.clone())));
+        if let Some((recorded, response)) = self
+            .checkpoint_replays
+            .lock()
+            .expect("driver checkpoint replay lock")
+            .get(&request.context.operation_id)
+            .cloned()
+        {
+            if recorded != request {
+                return Err(Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "driver checkpoint operation ID was reused for a different request",
+                )
+                .for_operation("driver-checkpoint"));
+            }
+            return Ok(response);
+        }
+        if let Some(error) = self.take_failure("checkpoint") {
+            return Err(error);
+        }
+
+        let source_id = ContainerId::new(request.source.state.id().to_string())?;
+        let (generation, state) = {
+            let states = self.states.lock().expect("driver states lock");
+            states.get(&source_id).copied().ok_or_else(|| {
+                Error::new(
+                    ErrorCode::NotFound,
+                    "driver checkpoint source does not exist",
+                )
+                .for_operation("driver-checkpoint")
+            })?
+        };
+        if generation != request.source.generation
+            || state.status() != *request.source.state.status()
+            || state.pid() != *request.source.state.pid()
+            || state.paused() != request.source.is_paused()
+            || state.status() != ContainerState::Running
+            || !state.paused()
+        {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "driver checkpoint source does not match the exact paused Host record",
+            )
+            .for_operation("driver-checkpoint"));
+        }
+        let bytes = canonical_json_bytes(&request.source).map_err(|error| {
+            Error::new(
+                ErrorCode::Internal,
+                format!("failed to encode checkpoint fixture: {error}"),
+            )
+            .for_operation("driver-checkpoint")
+        })?;
+        let artifact_digest =
+            CheckpointDigest::new(format!("sha256:{:x}", Sha256::digest(&bytes)))?;
+        let compatibility = CheckpointCompatibility::new(
+            self.capability.driver,
+            request.source.isolation,
+            HostPlatform::current(),
+            std::env::consts::ARCH,
+            request.runtime_artifact.clone(),
+            CheckpointDigest::new(format!("sha256:{}", "b".repeat(64)))?,
+            CheckpointFormat::new("recording-driver", 1)?,
+        )?;
+        let artifact_size_bytes = u64::try_from(bytes.len()).map_err(|error| {
+            Error::new(
+                ErrorCode::ResourceExhausted,
+                format!("checkpoint fixture size does not fit u64: {error}"),
+            )
+            .for_operation("driver-checkpoint")
+        })?;
+        let result =
+            DriverCheckpointResult::new(compatibility, artifact_digest, artifact_size_bytes)?;
+
+        let destination = request.artifact_path.as_path();
+        let file_name = destination.file_name().ok_or_else(|| {
+            Error::new(
+                ErrorCode::InvalidArgument,
+                "checkpoint destination has no filename",
+            )
+            .for_operation("driver-checkpoint")
+        })?;
+        let partial = destination.with_file_name(format!(
+            ".{}.{}.partial",
+            file_name.to_string_lossy(),
+            request.context.operation_id
+        ));
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&partial)
+            .await
+            .map_err(|error| {
+                checkpoint_fixture_io_error("create partial artifact", &partial, error)
+            })?;
+        if let Err(error) = file.write_all(&bytes).await {
+            drop(file);
+            let _ = tokio::fs::remove_file(&partial).await;
+            return Err(checkpoint_fixture_io_error(
+                "write partial artifact",
+                &partial,
+                error,
+            ));
+        }
+        if let Err(error) = file.sync_all().await {
+            drop(file);
+            let _ = tokio::fs::remove_file(&partial).await;
+            return Err(checkpoint_fixture_io_error(
+                "sync partial artifact",
+                &partial,
+                error,
+            ));
+        }
+        drop(file);
+        if let Err(error) = tokio::fs::hard_link(&partial, destination).await {
+            let _ = tokio::fs::remove_file(&partial).await;
+            let code = if error.kind() == std::io::ErrorKind::AlreadyExists {
+                ErrorCode::AlreadyExists
+            } else {
+                ErrorCode::Internal
+            };
+            return Err(Error::new(
+                code,
+                format!(
+                    "failed to publish checkpoint artifact {}: {error}",
+                    destination.display()
+                ),
+            )
+            .for_operation("driver-checkpoint"));
+        }
+        tokio::fs::remove_file(&partial).await.map_err(|error| {
+            checkpoint_fixture_io_error("remove published partial artifact", &partial, error)
+        })?;
+
+        self.checkpoint_replays
+            .lock()
+            .expect("driver checkpoint replay lock")
+            .insert(
+                request.context.operation_id.clone(),
+                (request, result.clone()),
+            );
+        Ok(result)
+    }
 }
 
 impl RecordingDriver {
@@ -1381,6 +1556,14 @@ impl RecordingDriver {
         *state = state.with_paused(paused)?;
         Ok(*state)
     }
+}
+
+fn checkpoint_fixture_io_error(action: &str, path: &Path, error: std::io::Error) -> Error {
+    Error::new(
+        ErrorCode::Internal,
+        format!("failed to {action} {}: {error}", path.display()),
+    )
+    .for_operation("driver-checkpoint")
 }
 
 fn identifier<T>(value: &str, constructor: impl FnOnce(String) -> a3s_oci_sdk::Result<T>) -> T {

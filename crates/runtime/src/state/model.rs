@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
 use a3s_oci_sdk::{
-    ContainerId, ContainerRecord, CreateAttachments, Error, ExitStatus, FileRequest, FileResponse,
-    FilesystemRequest, FilesystemResponse, Generation, OperationId, ProcessId, ProcessRecord,
-    RuntimeEvent,
+    CheckpointRequest, CheckpointResponse, ContainerId, ContainerRecord, CreateAttachments, Error,
+    ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse, Generation,
+    OperationId, ProcessId, ProcessRecord, RuntimeEvent,
 };
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +12,8 @@ pub(super) const CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.container-record.v1";
 pub(super) const GENERATION_SCHEMA_VERSION: &str = "a3s.oci.generation.v1";
 pub(super) const OPERATION_SCHEMA_VERSION_V1: &str = "a3s.oci.operation.v1";
 pub(super) const OPERATION_SCHEMA_VERSION_V2: &str = "a3s.oci.operation.v2";
-pub(super) const OPERATION_SCHEMA_VERSION: &str = "a3s.oci.operation.v3";
+pub(super) const OPERATION_SCHEMA_VERSION_V3: &str = "a3s.oci.operation.v3";
+pub(super) const OPERATION_SCHEMA_VERSION: &str = "a3s.oci.operation.v4";
 pub(super) const PROCESS_SCHEMA_VERSION: &str = "a3s.oci.process-record.v1";
 pub(super) const EVENT_CURSOR_SCHEMA_VERSION: &str = "a3s.oci.event-cursor.v1";
 pub(super) const EVENT_CLAIM_SCHEMA_VERSION: &str = "a3s.oci.event-claim.v1";
@@ -116,6 +117,7 @@ pub(super) enum StoredOperationKind {
     Update,
     File,
     Filesystem,
+    Checkpoint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,6 +125,7 @@ pub(super) enum StoredOperationKind {
 pub(super) enum StoredOperationRequest {
     File(FileRequest),
     Filesystem(FilesystemRequest),
+    Checkpoint(CheckpointRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,6 +148,9 @@ pub(super) enum StoredOperationStatus {
     SucceededFilesystem {
         response: StoredFilesystemMutationResponse,
     },
+    SucceededCheckpoint {
+        response: Box<CheckpointResponse>,
+    },
     SucceededEmpty,
     Failed {
         error: Error,
@@ -161,8 +167,8 @@ pub(super) struct StoredOperation {
     pub generation: Generation,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_id: Option<ProcessId>,
-    /// Complete exact request retained for filesystem mutations whose effect
-    /// may need reconstruction by a replacement driver owner.
+    /// Complete exact request retained for mutations whose external effect or
+    /// typed response may need reconstruction by a replacement driver owner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request: Option<StoredOperationRequest>,
     pub request_digest: String,

@@ -1,3 +1,4 @@
+mod checkpoint;
 mod create;
 mod delete;
 mod event;
@@ -25,9 +26,9 @@ use std::sync::Arc;
 use a3s_oci_core::{DriverKind, IsolationClass, LifecycleEvent, LifecycleState};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerId, ContainerRecord, ContainerTarget, CreateRequest, ErrorCode, FileOp, Generation,
-    OciBundle, OciSchemaValidator, OperationId, ProcessRecord, ProcessTarget, Result,
-    RuntimeEventKind, ValidateRequest,
+    CheckpointResponse, ContainerId, ContainerRecord, ContainerTarget, CreateRequest, ErrorCode,
+    FileOp, Generation, OciBundle, OciSchemaValidator, OperationId, ProcessRecord, ProcessTarget,
+    Result, RuntimeEventKind, ValidateRequest,
 };
 use tokio::sync::{Mutex, Notify};
 
@@ -41,7 +42,7 @@ use model::{
     StoredContainer, StoredFilesystemMutationResponse, StoredGeneration, StoredOperation,
     StoredOperationKind, StoredOperationRequest, StoredOperationStatus, CONTAINER_SCHEMA_VERSION,
     GENERATION_SCHEMA_VERSION, OPERATION_SCHEMA_VERSION, OPERATION_SCHEMA_VERSION_V1,
-    OPERATION_SCHEMA_VERSION_V2,
+    OPERATION_SCHEMA_VERSION_V2, OPERATION_SCHEMA_VERSION_V3,
 };
 use oci_state::{build_state, container_state, is_paused, rebuild_state};
 use operation::validate_deadline;
@@ -124,6 +125,17 @@ pub(crate) enum FilesystemMutationPreparation<Response> {
     Resume(ContainerTarget),
     /// A matching operation already completed; this is its exact response.
     Replayed(Response),
+}
+
+/// Result of preparing an idempotent immutable checkpoint operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CheckpointOperationPreparation {
+    /// This call durably created a new checkpoint intent.
+    Prepared(ContainerRecord),
+    /// A matching intent exists and requires driver reconciliation.
+    Resume(ContainerRecord),
+    /// A matching checkpoint already completed; this is its exact response.
+    Replayed(Box<CheckpointResponse>),
 }
 
 /// Single-writer durable lifecycle store.
@@ -225,6 +237,7 @@ impl DurableStateStore {
                 }
                 StoredOperationStatus::SucceededProcess { .. }
                 | StoredOperationStatus::SucceededFilesystem { .. }
+                | StoredOperationStatus::SucceededCheckpoint { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-create",
@@ -414,6 +427,7 @@ impl DurableStateStore {
                                 | StoredOperationKind::Update
                                 | StoredOperationKind::File
                                 | StoredOperationKind::Filesystem
+                                | StoredOperationKind::Checkpoint
                         )
                 ) && active.container_id == stored.id
                     && active.generation == stored.record.generation
@@ -498,6 +512,7 @@ impl DurableStateStore {
             StoredOperationStatus::Failed { error } => return Err(error.clone()),
             StoredOperationStatus::SucceededProcess { .. }
             | StoredOperationStatus::SucceededFilesystem { .. }
+            | StoredOperationStatus::SucceededCheckpoint { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
@@ -679,7 +694,10 @@ impl DurableStateStore {
         let operation: StoredOperation = self.filesystem.read_json(&path).await?;
         if !matches!(
             operation.schema_version.as_str(),
-            OPERATION_SCHEMA_VERSION_V1 | OPERATION_SCHEMA_VERSION_V2 | OPERATION_SCHEMA_VERSION
+            OPERATION_SCHEMA_VERSION_V1
+                | OPERATION_SCHEMA_VERSION_V2
+                | OPERATION_SCHEMA_VERSION_V3
+                | OPERATION_SCHEMA_VERSION
         ) || operation.operation_id != *operation_id
         {
             return Err(state_error(
@@ -930,7 +948,10 @@ fn validate_stored_operation_shape(operation: &StoredOperation) -> Result<()> {
 
     match operation.kind {
         StoredOperationKind::File => {
-            if operation.schema_version != OPERATION_SCHEMA_VERSION {
+            if !matches!(
+                operation.schema_version.as_str(),
+                OPERATION_SCHEMA_VERSION_V3 | OPERATION_SCHEMA_VERSION
+            ) {
                 return Err(invalid(
                     "File mutations require the current request-retaining schema".to_string(),
                 ));
@@ -952,21 +973,32 @@ fn validate_stored_operation_shape(operation: &StoredOperation) -> Result<()> {
                     "File mutation request does not match its durable identity".to_string(),
                 ));
             }
-            if let StoredOperationStatus::SucceededFilesystem { response } = &operation.outcome {
-                let StoredFilesystemMutationResponse::File(response) = response else {
+            match &operation.outcome {
+                StoredOperationStatus::Prepared | StoredOperationStatus::Failed { .. } => {}
+                StoredOperationStatus::SucceededFilesystem { response } => {
+                    let StoredFilesystemMutationResponse::File(response) = response else {
+                        return Err(invalid(
+                            "File mutation contains a Filesystem response".to_string(),
+                        ));
+                    };
+                    if !response_target_matches(&response.target) {
+                        return Err(invalid(
+                            "File response targets a different container generation".to_string(),
+                        ));
+                    }
+                }
+                _ => {
                     return Err(invalid(
-                        "File mutation contains a Filesystem response".to_string(),
-                    ));
-                };
-                if !response_target_matches(&response.target) {
-                    return Err(invalid(
-                        "File response targets a different container generation".to_string(),
+                        "File mutation contains an incompatible outcome".to_string(),
                     ));
                 }
             }
         }
         StoredOperationKind::Filesystem => {
-            if operation.schema_version != OPERATION_SCHEMA_VERSION {
+            if !matches!(
+                operation.schema_version.as_str(),
+                OPERATION_SCHEMA_VERSION_V3 | OPERATION_SCHEMA_VERSION
+            ) {
                 return Err(invalid(
                     "Filesystem mutations require the current request-retaining schema".to_string(),
                 ));
@@ -989,15 +1021,63 @@ fn validate_stored_operation_shape(operation: &StoredOperation) -> Result<()> {
                     "Filesystem mutation request does not match its durable identity".to_string(),
                 ));
             }
-            if let StoredOperationStatus::SucceededFilesystem { response } = &operation.outcome {
-                let StoredFilesystemMutationResponse::Filesystem(response) = response else {
+            match &operation.outcome {
+                StoredOperationStatus::Prepared | StoredOperationStatus::Failed { .. } => {}
+                StoredOperationStatus::SucceededFilesystem { response } => {
+                    let StoredFilesystemMutationResponse::Filesystem(response) = response else {
+                        return Err(invalid(
+                            "Filesystem mutation contains a File response".to_string(),
+                        ));
+                    };
+                    if !response_target_matches(&response.target) {
+                        return Err(invalid(
+                            "Filesystem response targets a different container generation"
+                                .to_string(),
+                        ));
+                    }
+                }
+                _ => {
                     return Err(invalid(
-                        "Filesystem mutation contains a File response".to_string(),
+                        "Filesystem mutation contains an incompatible outcome".to_string(),
                     ));
-                };
-                if !response_target_matches(&response.target) {
+                }
+            }
+        }
+        StoredOperationKind::Checkpoint => {
+            if operation.schema_version != OPERATION_SCHEMA_VERSION {
+                return Err(invalid(
+                    "Checkpoint mutations require the current request-retaining schema".to_string(),
+                ));
+            }
+            let Some(StoredOperationRequest::Checkpoint(request)) = operation.request.as_ref()
+            else {
+                return Err(invalid(
+                    "Checkpoint mutation does not retain its exact request".to_string(),
+                ));
+            };
+            let request_digest_matches = checkpoint::checkpoint_request_digest(request)
+                .is_ok_and(|digest| digest.current() == operation.request_digest);
+            if !request_target_matches(request.target())
+                || request.context().operation_id != operation.operation_id
+                || request.validate().is_err()
+                || !request_digest_matches
+            {
+                return Err(invalid(
+                    "Checkpoint request does not match its durable identity".to_string(),
+                ));
+            }
+            match &operation.outcome {
+                StoredOperationStatus::Prepared | StoredOperationStatus::Failed { .. } => {}
+                StoredOperationStatus::SucceededCheckpoint { response } => {
+                    if response.validate_for_request(request).is_err() {
+                        return Err(invalid(
+                            "Checkpoint response does not match its retained request".to_string(),
+                        ));
+                    }
+                }
+                _ => {
                     return Err(invalid(
-                        "Filesystem response targets a different container generation".to_string(),
+                        "Checkpoint mutation contains an incompatible outcome".to_string(),
                     ));
                 }
             }
@@ -1018,6 +1098,7 @@ fn validate_stored_operation_shape(operation: &StoredOperation) -> Result<()> {
                 || matches!(
                     operation.outcome,
                     StoredOperationStatus::SucceededFilesystem { .. }
+                        | StoredOperationStatus::SucceededCheckpoint { .. }
                 )
             {
                 return Err(invalid(
@@ -1088,7 +1169,10 @@ async fn claim_active_operation(
                 ),
             ));
         }
-        if mutation == DurableMutation::ClaimDeleteOperation {
+        if matches!(
+            mutation,
+            DurableMutation::ClaimDeleteOperation | DurableMutation::ClaimCheckpointOperation
+        ) {
             return Err(state_error(
                 ErrorCode::Conflict,
                 operation,

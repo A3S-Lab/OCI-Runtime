@@ -15,6 +15,11 @@ checkpoint/restore responses. Every checkpoint and restore requires protocol
 8 regardless of attachment schema; protocol 7 and earlier reject it before
 service dispatch.
 
+The Host implements checkpoint through a durable v4 journal and dispatches it
+only to a current-platform driver that explicitly advertises the operation.
+No production driver advertises checkpoint yet. Restore remains unsupported by
+Host orchestration and cannot be advertised by a registered driver.
+
 Version 7 added `a3s.oci.attachments.v4` reusable guest-session identity
 evidence to create. A v4 create is rejected before dispatch when a connection
 negotiated protocol 6 or earlier. Version 6 added
@@ -343,10 +348,11 @@ the parent Host identity back to every derived Guest chunk identity. A lost
 acknowledgement is retryable, and replaying the completed Host operation sends
 it again without redispatching the workload mutation. Protocol-v1 through
 protocol-v9 Guests retain a compatibility no-op. File upload and Filesystem
-mkdir/move/remove use v3 Host journals that retain their exact request and
-typed response, so they share the same post-commit reclamation boundary.
-Reusing an acknowledged OperationId with changed content remains fenced by the
-Host record.
+mkdir/move/remove retain their exact v3 request and typed response. New Host
+mutations use v4; checkpoint additionally retains its exact normalized path,
+paused source target, and immutable typed response. These operations share the
+same post-commit reclamation boundary. Reusing an acknowledged OperationId with
+changed content remains fenced by the Host record.
 
 File downloads and uploads are limited to 32 MiB decoded payloads. Directory
 listings are limited to depth 64, 4,096 entries, and a 12 MiB serialized

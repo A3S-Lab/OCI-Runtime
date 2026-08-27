@@ -43,7 +43,11 @@ impl CheckpointResponse {
         (self.source, self.reference)
     }
 
-    pub(crate) fn validate_for_request(&self, request: &CheckpointRequest) -> Result<()> {
+    /// Revalidate this response against the exact request that produced it.
+    ///
+    /// Service implementations should call this before committing or returning
+    /// driver-provided checkpoint evidence.
+    pub fn validate_for_request(&self, request: &CheckpointRequest) -> Result<()> {
         request.validate_contract()?;
         if &exact_record_target(&self.source)? != request.target()
             || self.reference.quiesce() != request.quiesce()
@@ -106,7 +110,11 @@ impl RestoreResponse {
         (self.restored, self.reference)
     }
 
-    pub(crate) fn validate_for_request(&self, request: &RestoreRequest) -> Result<()> {
+    /// Revalidate this response against the exact request that produced it.
+    ///
+    /// Service implementations should call this before committing or returning
+    /// driver-provided restore evidence.
+    pub fn validate_for_request(&self, request: &RestoreRequest) -> Result<()> {
         request.validate_contract()?;
         let expected_attachments = request.attachments().digest()?;
         if self.reference != *request.reference()?

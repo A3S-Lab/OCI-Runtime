@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use a3s_oci_core::{DriverCapability, DriverKind, IsolationClass};
+use a3s_oci_core::{DriverCapability, DriverKind, HostPlatform, IsolationClass};
 use a3s_oci_sdk::{
     AttachmentCapabilities, ContainerRecord, Error, ErrorCode, OciLinuxSupport, OperationId,
     Result, RuntimeArtifact, RuntimeDriverCapabilities, RuntimeExtensions, RuntimeOperation,
@@ -103,6 +103,15 @@ impl DriverRegistry {
             }
 
             let operations = validate_driver_operations(registration.driver.operations())?;
+            if operations.contains(&RuntimeOperation::Checkpoint)
+                && driver_platform(capability.driver) != HostPlatform::current()
+            {
+                return Err(open_error(format!(
+                    "runtime driver {:?} cannot advertise checkpoint on {:?}",
+                    capability.driver,
+                    HostPlatform::current()
+                )));
+            }
             common_operations = Some(match common_operations {
                 Some(mut retained) => {
                     retained.retain(|operation| operations.contains(operation));
@@ -367,7 +376,7 @@ fn validate_driver_operations(
         RuntimeOperation::Kill,
         RuntimeOperation::Delete,
     ];
-    const HOST_SUPPORTED: [RuntimeOperation; 20] = [
+    const HOST_SUPPORTED: [RuntimeOperation; 21] = [
         RuntimeOperation::Create,
         RuntimeOperation::State,
         RuntimeOperation::Start,
@@ -388,6 +397,7 @@ fn validate_driver_operations(
         RuntimeOperation::Resize,
         RuntimeOperation::File,
         RuntimeOperation::Filesystem,
+        RuntimeOperation::Checkpoint,
     ];
     let reported = operations.iter().copied().collect::<BTreeSet<_>>();
     if reported.len() != operations.len() {
@@ -429,6 +439,14 @@ fn open_error(message: impl Into<String>) -> Error {
     Error::new(ErrorCode::FailedPrecondition, message).for_operation("open-host-runtime")
 }
 
+const fn driver_platform(driver: DriverKind) -> HostPlatform {
+    match driver {
+        DriverKind::NativeLinux | DriverKind::LibkrunKvm => HostPlatform::Linux,
+        DriverKind::LibkrunHvf => HostPlatform::Macos,
+        DriverKind::LibkrunWhpx => HostPlatform::Windows,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use a3s_oci_sdk::RuntimeOperation;
@@ -446,13 +464,15 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_and_restore_remain_unadvertisable_until_host_support_exists() {
-        for operation in [RuntimeOperation::Checkpoint, RuntimeOperation::Restore] {
-            let mut operations = required_operations();
-            operations.push(operation);
-            let error = validate_driver_operations(&operations)
-                .expect_err("checkpoint and restore must remain fail-closed");
-            assert!(error.message.contains("unsupported host operation"));
-        }
+    fn checkpoint_is_advertisable_but_restore_remains_fail_closed() {
+        let mut checkpoint = required_operations();
+        checkpoint.push(RuntimeOperation::Checkpoint);
+        validate_driver_operations(&checkpoint).expect("checkpoint Host routing exists");
+
+        let mut restore = required_operations();
+        restore.push(RuntimeOperation::Restore);
+        let error =
+            validate_driver_operations(&restore).expect_err("restore must remain fail-closed");
+        assert!(error.message.contains("unsupported host operation"));
     }
 }

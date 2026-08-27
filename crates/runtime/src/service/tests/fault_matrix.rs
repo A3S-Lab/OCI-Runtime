@@ -12,7 +12,7 @@ async fn every_host_driver_boundary_recovers_without_duplicate_effects() {
     let registry = FaultPoint::driver_registry();
     assert_eq!(
         registry.len(),
-        44,
+        46,
         "update the host/driver fault contract when the registry changes"
     );
     for point in registry {
@@ -95,8 +95,15 @@ async fn exercise_driver_boundary(point: FaultPoint) {
     let bundle_directory = temporary.path().join("bundle");
     fs::create_dir(&bundle_directory).expect("bundle directory");
     let state_root = temporary.path().join("state");
-    let driver = Arc::new(RecordingDriver::with_control_operations());
-    let create = create_request(&bundle_directory, "boundary-create");
+    let driver = Arc::new(RecordingDriver::with_checkpoint_operations());
+    let mut create = create_request(&bundle_directory, "boundary-create");
+    create.isolation = match driver.capability.isolation_classes[0] {
+        IsolationClass::SharedHostKernel => IsolationRequest::SharedHostKernel,
+        IsolationClass::DedicatedVm => IsolationRequest::DedicatedVm,
+        IsolationClass::SharedGuestKernel => {
+            panic!("driver-boundary fixture does not use shared Guest isolation")
+        }
+    };
 
     let target = if operation_requires_created_container(operation) {
         let setup =
@@ -126,6 +133,7 @@ async fn exercise_driver_boundary(point: FaultPoint) {
                 | DriverOperation::WriteStdin
                 | DriverOperation::CloseStdin
                 | DriverOperation::Resize
+                | DriverOperation::Checkpoint
         ) {
             setup
                 .start(StartRequest {
@@ -172,7 +180,10 @@ async fn exercise_driver_boundary(point: FaultPoint) {
                 .await
                 .expect("signal setup process");
         }
-        if operation == DriverOperation::Resume {
+        if matches!(
+            operation,
+            DriverOperation::Resume | DriverOperation::Checkpoint
+        ) {
             setup
                 .pause(ContainerOperationRequest {
                     context: OperationContext::new(operation_id("boundary-setup-pause")),
@@ -289,6 +300,7 @@ const fn operation_requires_created_container(operation: DriverOperation) -> boo
             | DriverOperation::Resize
             | DriverOperation::File
             | DriverOperation::Filesystem
+            | DriverOperation::Checkpoint
     )
 }
 
@@ -316,6 +328,7 @@ const fn call_matches_operation(call: &DriverCall, operation: DriverOperation) -
             | (DriverCall::Resize(_), DriverOperation::Resize)
             | (DriverCall::File(_), DriverOperation::File)
             | (DriverCall::Filesystem(_), DriverOperation::Filesystem)
+            | (DriverCall::Checkpoint(_), DriverOperation::Checkpoint)
     )
 }
 
@@ -530,6 +543,25 @@ async fn invoke_operation(
                     user: None,
                     context: Some(OperationContext::new(operation_id("boundary-filesystem"))),
                 })
+                .await?;
+            Ok(())
+        }
+        DriverOperation::Checkpoint => {
+            let artifact = create
+                .bundle
+                .directory()
+                .parent()
+                .expect("checkpoint fixture root")
+                .join("boundary-checkpoint.bin");
+            service
+                .checkpoint(
+                    CheckpointRequest::new(
+                        OperationContext::new(operation_id("boundary-checkpoint")),
+                        target.expect("checkpoint target").clone(),
+                        CheckpointArtifactPath::new(artifact).expect("checkpoint artifact path"),
+                    )
+                    .expect("checkpoint request"),
+                )
                 .await?;
             Ok(())
         }

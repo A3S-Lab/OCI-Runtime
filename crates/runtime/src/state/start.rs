@@ -126,6 +126,7 @@ impl DurableStateStore {
                 StoredOperationStatus::Failed { error } => Err(error),
                 StoredOperationStatus::SucceededProcess { .. }
                 | StoredOperationStatus::SucceededFilesystem { .. }
+                | StoredOperationStatus::SucceededCheckpoint { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-start",
@@ -308,6 +309,7 @@ impl DurableStateStore {
             StoredOperationStatus::Failed { error } => return Err(error.clone()),
             StoredOperationStatus::SucceededProcess { .. }
             | StoredOperationStatus::SucceededFilesystem { .. }
+            | StoredOperationStatus::SucceededCheckpoint { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,

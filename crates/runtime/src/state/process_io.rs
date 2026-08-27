@@ -166,7 +166,8 @@ impl DurableStateStore {
                 StoredOperationStatus::Failed { error } => Err(error.clone()),
                 StoredOperationStatus::Succeeded { .. }
                 | StoredOperationStatus::SucceededProcess { .. }
-                | StoredOperationStatus::SucceededFilesystem { .. } => Err(state_error(
+                | StoredOperationStatus::SucceededFilesystem { .. }
+                | StoredOperationStatus::SucceededCheckpoint { .. } => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     operation_name,
                     format!(
@@ -274,13 +275,16 @@ impl DurableStateStore {
             return Ok(());
         };
         let active = self.load_operation(active_id).await?;
-        if active.kind == StoredOperationKind::Delete {
+        if matches!(
+            active.kind,
+            StoredOperationKind::Delete | StoredOperationKind::Checkpoint
+        ) {
             return Err(state_error(
                 ErrorCode::Conflict,
                 operation_name,
                 format!(
-                    "container {} is being deleted by active operation {active_id}",
-                    container.id
+                    "container {} is fenced by active {:?} operation {active_id}",
+                    container.id, active.kind
                 ),
             )
             .retryable(true));
@@ -320,7 +324,8 @@ impl DurableStateStore {
             StoredOperationStatus::Failed { error } => return Err(error.clone()),
             StoredOperationStatus::Succeeded { .. }
             | StoredOperationStatus::SucceededProcess { .. }
-            | StoredOperationStatus::SucceededFilesystem { .. } => {
+            | StoredOperationStatus::SucceededFilesystem { .. }
+            | StoredOperationStatus::SucceededCheckpoint { .. } => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
                     profile.name,

@@ -343,13 +343,13 @@ claimed durably before dispatch, and replayed with the same runtime operation
 after a lost response. Runtime acknowledgement updates Box restart intent
 atomically without changing the original create identity.
 
-New mutation records use `a3s.oci.operation.v3`. File uploads and Filesystem
-mkdir/move/remove retain their exact validated request and typed response in
-the Host journal. The Host commits the result before acknowledging the Guest
-replay record, so an acknowledgement disconnect returns a retryable error and
-the next owner replays the Host result without dispatching the mutation again.
-The Host journal remains the permanent changed-request fence after the Guest
-record has been released.
+New mutation records use `a3s.oci.operation.v4`. Version 3 File uploads and
+Filesystem mkdir/move/remove remain readable; version 4 additionally retains
+each exact checkpoint request and typed immutable response. The Host commits a
+journaled result before acknowledging driver replay evidence, so a disconnect
+returns a retryable error and the next owner replays the Host result without
+dispatching the mutation again. The Host journal remains the permanent
+changed-request fence after driver evidence has been released.
 
 Durable state now pins its canonical root as a directory capability. All
 descendant reads, enumeration, creation, replacement, and quarantine moves are
@@ -957,9 +957,13 @@ driver-defined format, and exact artifact digest and size. Checkpoint accepts
 only an already-paused running generation and leaves it paused; restore returns
 a new paused running generation and requires an explicit later `resume`.
 Artifact storage, lineage, retention, and object policy remain caller-owned.
-The Host and driver registry still reject checkpoint/restore capability
-advertisement until durable execution, scoped partial cleanup, and real-host
-qualification exist. See the
+The Host now owns durable checkpoint orchestration: it fences the exact paused
+source and all process I/O, journals the v4 request and response, validates
+driver compatibility evidence, and replays success or terminal failure across
+service reopen. The registry accepts `Checkpoint` only from an explicitly
+advertising current-platform driver. No production driver advertises it yet;
+`Restore` remains rejected by the Host and registry until its durable creation,
+rollback, artifact verification, and real-host qualification exist. See the
 [immutable checkpoint contract](docs/checkpoint-contract.md).
 
 These commands can require root privileges, hypervisor access, signed
@@ -982,7 +986,7 @@ The repository turns release claims into checked inventories:
 | Typed semantic validation rules | 95 |
 | Owner-bound non-semantic rules | 156 |
 | OCI normative dispositions | 578 enforced · 51 validated · 12 conformant · 14 reviewed external · 0 pending review |
-| Registered durable commit fault stages | 741 |
+| Registered durable commit fault stages | 783 |
 | Durable-state replacement qualification | macOS/Linux/Windows complete, including a real Linux bind mount and the Windows reparse-point matrix |
 | Live containerd terminal init-Kill rehydration | 3 / 3 consecutive same-Host Ubuntu arm64/containerd 2.2.2 matrices on August 24, 2026 |
 | Live containerd `DeleteProcess` response replay | 3 / 3 consecutive same-Host Ubuntu arm64/containerd 2.2.2 matrices on August 24, 2026 |
@@ -990,7 +994,7 @@ The repository turns release claims into checked inventories:
 | Post-commit containerd `WriteStdin` forced cleanup | 3 / 3 consecutive same-Host Ubuntu x86_64/containerd 2.2.3 matrices on August 24, 2026 |
 | Post-commit containerd `CloseStdin` forced cleanup | 3 / 3 consecutive same-Host Ubuntu x86_64/containerd 2.2.3 matrices on August 24, 2026 |
 | Post-commit containerd `ResizePty` forced cleanup | Automated gate implemented; 3-pass real-host qualification pending |
-| Before/after `RuntimeDriver` fault boundaries | 44 |
+| Before/after `RuntimeDriver` fault boundaries | 46 |
 | Authenticated agent operation-stage fault pairs | 180 |
 | Portable Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host-service reopen pairs | 180 |
 | Real HVF Create Host/Guest plus Host shutdown interruption and cleanup stages | 11 |
@@ -1043,7 +1047,8 @@ exact release-artifact qualification must all pass before a driver becomes
 - utility-VM hook recovery and security certification;
 - the default and cross-platform A3S Box cutover, plus the remaining
   containerd compatibility, packaging, and cross-driver gates;
-- checkpoint/restore driver execution and later attachment extensions;
+- production checkpoint-driver execution, restore Host/driver execution, and
+  later attachment extensions;
 - signed-package, upgrade, rollback, security, and long-duration release gates.
 
 ## Workspace map

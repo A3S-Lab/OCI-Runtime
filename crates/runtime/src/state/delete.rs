@@ -126,7 +126,8 @@ impl DurableStateStore {
                 StoredOperationStatus::Failed { error } => Err(error.clone()),
                 StoredOperationStatus::Succeeded { .. }
                 | StoredOperationStatus::SucceededProcess { .. }
-                | StoredOperationStatus::SucceededFilesystem { .. } => Err(state_error(
+                | StoredOperationStatus::SucceededFilesystem { .. }
+                | StoredOperationStatus::SucceededCheckpoint { .. } => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-delete",
                     format!(
@@ -213,7 +214,8 @@ impl DurableStateStore {
             StoredOperationStatus::Failed { error } => return Err(error.clone()),
             StoredOperationStatus::Succeeded { .. }
             | StoredOperationStatus::SucceededProcess { .. }
-            | StoredOperationStatus::SucceededFilesystem { .. } => {
+            | StoredOperationStatus::SucceededFilesystem { .. }
+            | StoredOperationStatus::SucceededCheckpoint { .. } => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "complete-delete",

@@ -161,8 +161,9 @@ pub use cleanup_report::{
     OciVmFaultCleanupReport,
 };
 pub use driver::{
-    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateAttachments,
-    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
+    DriverCheckpointRequest, DriverCheckpointResult, DriverCloseStdinRequest,
+    DriverContainerOperationRequest, DriverCreateAttachments, DriverCreateRequest,
+    DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
     DriverReadOutputRequest, DriverRecovery, DriverResizeRequest, DriverSignalProcessRequest,
     DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
     DriverWaitRequest, DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,

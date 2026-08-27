@@ -2,10 +2,11 @@ use a3s_oci_agent_protocol::AgentInheritedDescriptorSchema;
 use a3s_oci_core::DriverCapability;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
-    async_trait, AttachmentCapabilities, ContainerRecord, ContainerStats, ContainerTarget,
-    CreateAttachments, DeleteMode, Error, ErrorCode, ExitStatus, FileRequest, FileResponse,
-    FilesystemRequest, FilesystemResponse, IsolationRequest, OciBundle, OciLinuxSupport,
-    OperationContext, OperationId, OutputChunk, ProcessIo, ProcessRecord, ProcessTarget, Result,
+    async_trait, AttachmentCapabilities, CheckpointArtifactPath, CheckpointCompatibility,
+    CheckpointDigest, ContainerRecord, ContainerStats, ContainerTarget, CreateAttachments,
+    DeleteMode, Error, ErrorCode, ExitStatus, FileRequest, FileResponse, FilesystemRequest,
+    FilesystemResponse, IsolationRequest, OciBundle, OciLinuxSupport, OperationContext,
+    OperationId, OutputChunk, ProcessIo, ProcessRecord, ProcessTarget, Result, RuntimeArtifact,
     RuntimeOperation, Signal, TerminalSize,
 };
 
@@ -551,6 +552,81 @@ pub struct DriverUpdateRequest {
     pub resources: LinuxResources,
 }
 
+/// Exact checkpoint input passed from durable Host orchestration to one driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverCheckpointRequest {
+    /// Stable idempotency and deadline metadata.
+    pub context: OperationContext,
+    /// Unchanged exact paused source record captured by this operation.
+    pub source: ContainerRecord,
+    /// Already-authorized immutable artifact destination.
+    pub artifact_path: CheckpointArtifactPath,
+    /// Exact Host executable invoking this attempt.
+    ///
+    /// A fresh effect must bind this value into its compatibility evidence. An
+    /// idempotent replay after a Host upgrade returns its previously retained
+    /// result instead.
+    pub runtime_artifact: RuntimeArtifact,
+}
+
+/// Immutable checkpoint evidence returned by one driver invocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverCheckpointResult {
+    compatibility: CheckpointCompatibility,
+    artifact_digest: CheckpointDigest,
+    artifact_size_bytes: u64,
+}
+
+impl DriverCheckpointResult {
+    /// Construct complete compatibility and content evidence for one artifact.
+    pub fn new(
+        compatibility: CheckpointCompatibility,
+        artifact_digest: CheckpointDigest,
+        artifact_size_bytes: u64,
+    ) -> Result<Self> {
+        if artifact_size_bytes == 0 {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "driver checkpoint artifact size must be greater than zero",
+            )
+            .for_operation("construct-driver-checkpoint-result"));
+        }
+        Ok(Self {
+            compatibility,
+            artifact_digest,
+            artifact_size_bytes,
+        })
+    }
+
+    /// Exact execution stack required to consume the artifact.
+    #[must_use]
+    pub const fn compatibility(&self) -> &CheckpointCompatibility {
+        &self.compatibility
+    }
+
+    /// Canonical SHA-256 identity of the published artifact.
+    #[must_use]
+    pub const fn artifact_digest(&self) -> &CheckpointDigest {
+        &self.artifact_digest
+    }
+
+    /// Positive byte size of the published artifact.
+    #[must_use]
+    pub const fn artifact_size_bytes(&self) -> u64 {
+        self.artifact_size_bytes
+    }
+
+    /// Consume this result into its immutable evidence fields.
+    #[must_use]
+    pub fn into_parts(self) -> (CheckpointCompatibility, CheckpointDigest, u64) {
+        (
+            self.compatibility,
+            self.artifact_digest,
+            self.artifact_size_bytes,
+        )
+    }
+}
+
 /// Driver-reported process identity returned after exec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DriverProcess {
@@ -768,5 +844,18 @@ pub trait RuntimeDriver: Send + Sync {
     /// Inspect or mutate one exact retained container filesystem.
     async fn filesystem(&self, _request: FilesystemRequest) -> Result<FilesystemResponse> {
         Err(Error::unsupported("filesystem"))
+    }
+
+    /// Capture one already-paused exact generation into a new immutable file.
+    ///
+    /// Implementations must publish without replacing an existing destination,
+    /// durably retain the exact result by operation ID before returning, and
+    /// leave the source paused on success or failure. A replay must return the
+    /// retained evidence without rewriting the artifact.
+    async fn checkpoint(
+        &self,
+        _request: DriverCheckpointRequest,
+    ) -> Result<DriverCheckpointResult> {
+        Err(Error::unsupported("checkpoint"))
     }
 }

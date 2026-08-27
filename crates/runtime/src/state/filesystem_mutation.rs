@@ -227,6 +227,7 @@ impl DurableStateStore {
                 StoredOperationStatus::Failed { error } => Err(error),
                 StoredOperationStatus::Succeeded { .. }
                 | StoredOperationStatus::SucceededProcess { .. }
+                | StoredOperationStatus::SucceededCheckpoint { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(invalid_outcome(context, profile)),
             };
         }
@@ -332,6 +333,7 @@ impl DurableStateStore {
             StoredOperationStatus::Failed { error } => return Err(error.clone()),
             StoredOperationStatus::Succeeded { .. }
             | StoredOperationStatus::SucceededProcess { .. }
+            | StoredOperationStatus::SucceededCheckpoint { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(invalid_operation_outcome(operation_id, profile));
             }

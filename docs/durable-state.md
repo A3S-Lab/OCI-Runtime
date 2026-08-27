@@ -145,33 +145,37 @@ stopped tombstone, and keeps the session root until the final tombstone
 cleanup. Production drivers do not expose this profile until real-host restart
 and leak qualification is retained.
 
-Start, kill, pause, resume, update, delete, File upload, and Filesystem
-mkdir/move/remove use the same global journal and request fingerprinting. Each
-accepted mutation claims the target record so a
+Start, kill, pause, resume, update, delete, File upload, Filesystem
+mkdir/move/remove, and checkpoint use the same global journal and request
+fingerprinting. Each accepted mutation claims the target record so a
 second mutation cannot race the driver call. Start revalidates the durable
 configuration snapshot, not the caller's mutable source bundle, before
 recording an intent. Pause and resume preserve the standard OCI `running`
 status and store freezer state in the reserved
-`dev.a3s.oci.runtime.paused=true` state annotation. Update fingerprints the
-complete OCI `LinuxResources` patch and returns the exact observed container
-record on replay. Delete atomically moves the owned container directory into
-quarantine rather than recursively deleting an unresolved path.
+`dev.a3s.oci.runtime.paused=true` state annotation. Checkpoint requires that
+paused running state, refuses any active init or exec mutation/I/O, and prevents
+new process I/O until its exact response or terminal error is durable. Update
+fingerprints the complete OCI `LinuxResources` patch and returns the exact
+observed container record on replay. Delete atomically moves the owned container
+directory into quarantine rather than recursively deleting an unresolved path.
 
-New journals use `a3s.oci.operation.v3` and SHA-256 over canonical JSON with
+New journals use `a3s.oci.operation.v4` and SHA-256 over canonical JSON with
 every object key sorted, so unordered OCI resource maps retain the same
-identity after process reconstruction. Version 3 also retains the complete
-validated request and typed response for File and Filesystem mutations; those
-records cannot be represented by an older schema. Existing
-`a3s.oci.operation.v1` and `a3s.oci.operation.v2` lifecycle and process
-journals remain loadable and validate retries with their original digest
-algorithm.
+identity after process reconstruction. Version 3 retains the complete
+validated request and typed response for File and Filesystem mutations;
+version 4 adds the exact normalized checkpoint request and immutable typed
+response. Existing `a3s.oci.operation.v1`, `a3s.oci.operation.v2`, and
+`a3s.oci.operation.v3` journals remain loadable and validate retries with their
+original digest algorithm.
 
 Drivers must be idempotent by `OperationId`. A retryable driver error leaves
 the intent active for an exact retry. A terminal error is stored and replayed
-exactly; it releases a start, kill, pause, resume, update, delete, exec, or
-per-process signal, write-stdin, close-stdin, resize, File, or Filesystem claim,
-while a failed create is moved out of the live namespace before its ID can be
-reused.
+exactly; it releases a start, kill, pause, resume, update, delete, exec,
+checkpoint, or per-process signal, write-stdin, close-stdin, resize, File, or
+Filesystem claim, while a failed create is moved out of the live namespace
+before its ID can be reused. A checkpoint driver must remove only its own
+unpublished partials before returning a terminal error; retryable or
+unvalidated evidence keeps the durable claim active.
 
 Exec uses the same global operation journal. Preparation reserves the
 generation-scoped process ID before driver dispatch, so duplicate IDs fail
@@ -283,7 +287,7 @@ handles these interrupted states:
 ## Fault Injection Contract
 
 Every lifecycle write is routed through one typed `DurableMutation` registry.
-The registry currently contains 107 semantic mutations. One hundred five atomic
+The registry currently contains 113 semantic mutations. One hundred eleven atomic
 file replacements are exercised at all seven commit stages:
 
 1. temporary file creation;
@@ -295,10 +299,11 @@ file replacements are exercised at all seven commit stages:
 7. parent-directory sync.
 
 The delete and failed-create quarantine moves are each exercised after the
-rename, source-parent sync, and destination-parent sync. This expands to 741
+rename, source-parent sync, and destination-parent sync. This expands to 783
 durable fault points. The host matrix separately injects before and after all
-22 `RuntimeDriver` boundaries, including capability discovery, startup
-recovery, file transfer, and filesystem operations, for another 44 boundaries.
+23 `RuntimeDriver` boundaries, including capability discovery, startup
+recovery, file transfer, filesystem operations, and checkpoint, for another 46
+boundaries.
 
 On Unix the final file and directory boundaries follow explicit directory
 `sync_all` calls. Windows reaches the same logical checkpoints after its

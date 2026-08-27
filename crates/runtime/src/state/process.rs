@@ -150,6 +150,7 @@ impl DurableStateStore {
                 StoredOperationStatus::Failed { error } => Err(error),
                 StoredOperationStatus::Succeeded { .. }
                 | StoredOperationStatus::SucceededFilesystem { .. }
+                | StoredOperationStatus::SucceededCheckpoint { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-exec",
@@ -305,6 +306,7 @@ impl DurableStateStore {
             StoredOperationStatus::Failed { error } => return Err(error.clone()),
             StoredOperationStatus::Succeeded { .. }
             | StoredOperationStatus::SucceededFilesystem { .. }
+            | StoredOperationStatus::SucceededCheckpoint { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
@@ -444,7 +446,8 @@ impl DurableStateStore {
                 StoredOperationStatus::Failed { error } => Err(error.clone()),
                 StoredOperationStatus::Succeeded { .. }
                 | StoredOperationStatus::SucceededProcess { .. }
-                | StoredOperationStatus::SucceededFilesystem { .. } => Err(state_error(
+                | StoredOperationStatus::SucceededFilesystem { .. }
+                | StoredOperationStatus::SucceededCheckpoint { .. } => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-signal-process",
                     format!(
@@ -541,7 +544,8 @@ impl DurableStateStore {
             StoredOperationStatus::Failed { error } => return Err(error.clone()),
             StoredOperationStatus::Succeeded { .. }
             | StoredOperationStatus::SucceededProcess { .. }
-            | StoredOperationStatus::SucceededFilesystem { .. } => {
+            | StoredOperationStatus::SucceededFilesystem { .. }
+            | StoredOperationStatus::SucceededCheckpoint { .. } => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "complete-signal-process",

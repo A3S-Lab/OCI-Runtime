@@ -4,14 +4,16 @@
 
 SDK protocol 8 freezes the public checkpoint and restore contract. It does not
 claim that a production driver can execute either operation. The Host Service
-continues to return `Unsupported`, the driver registry rejects either operation
-in a capability advertisement, and callers must treat absence from
-`RuntimeInfo::operations` and the exact-artifact extension catalog as
-authoritative.
+now implements durable checkpoint orchestration and permits a current-platform
+driver to advertise `Checkpoint`. No production driver advertises it, so
+callers must still treat absence from `RuntimeInfo::operations` and the
+exact-artifact extension catalog as authoritative. Restore continues to return
+`Unsupported`, and the driver registry rejects `Restore` advertisements.
 
-A driver may advertise checkpoint and restore only after the Host owns a
-durable implementation, the driver provides the required atomic artifact and
-cleanup behavior, and the relevant real-host qualification passes. Protocol
+A production driver may advertise checkpoint only after it provides the
+required atomic artifact and cleanup behavior and the relevant real-host
+qualification passes. Restore additionally requires durable Host creation and
+rollback orchestration before any driver may advertise it. Protocol
 availability alone is never capability evidence.
 
 ## Artifact And Reference
@@ -76,12 +78,20 @@ content before lifecycle mutation, and never changes or deletes the artifact.
 A failed restore removes only runtime-owned lifecycle, driver, and attachment
 resources created for that attempt.
 
-Both requests carry `OperationContext`. A future implementation must journal
-the exact normalized request and response before advertising support. Reusing
-an operation ID with different target, path, reference, bundle, isolation, or
-attachments must fail. A retry of a committed checkpoint returns the same
-reference without rewriting the file; a retry of a committed restore returns
-the same generation without creating another one.
+Both requests carry `OperationContext`. The Host stores checkpoint in
+`a3s.oci.operation.v4`, retaining the exact normalized request and typed
+response. It claims the source before driver dispatch, rejects active process
+mutations and I/O, and blocks new process I/O until success or terminal failure
+is durable. Reusing an operation ID with a different target or path fails. A
+retry of a committed checkpoint returns the same reference without rewriting
+the file, including after service reopen. The future restore implementation
+must apply the same rule to its reference, bundle, isolation, attachments, and
+new generation.
+
+Terminal driver errors are durable only after the driver has removed its own
+unpublished partials. A retryable driver error or Host rejection of inconsistent
+compatibility evidence leaves the checkpoint claim active so another mutation
+cannot race an unresolved published effect.
 
 ## Ownership Boundary
 
