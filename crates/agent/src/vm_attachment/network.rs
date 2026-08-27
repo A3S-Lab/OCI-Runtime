@@ -8,6 +8,15 @@ use a3s_oci_sdk::Result;
 
 use super::attachment_error;
 
+// libc models ioctl request width differently for glibc and musl. These Linux
+// socket requests fit both ABIs; bind them once to the target's exact type.
+#[cfg(target_os = "linux")]
+const SIOCGIFFLAGS_REQUEST: libc::Ioctl = libc::SIOCGIFFLAGS as libc::Ioctl;
+#[cfg(target_os = "linux")]
+const SIOCSIFFLAGS_REQUEST: libc::Ioctl = libc::SIOCSIFFLAGS as libc::Ioctl;
+#[cfg(target_os = "linux")]
+const SIOCSIFNAME_REQUEST: libc::Ioctl = libc::SIOCSIFNAME as libc::Ioctl;
+
 #[cfg(target_os = "linux")]
 pub(super) fn configure_guest_interfaces(manifest: &AgentVmAttachmentManifest) -> Result<()> {
     let inventory = interface_inventory()?;
@@ -175,7 +184,7 @@ fn datagram_socket() -> Result<OwnedFd> {
 fn rename_interface(socket: &OwnedFd, from: &str, to: &str) -> Result<()> {
     let mut flags_request = interface_request(from)?;
     // SAFETY: `flags_request` is a writable Linux ifreq and the socket is live.
-    if unsafe { libc::ioctl(socket.as_raw_fd(), libc::SIOCGIFFLAGS, &mut flags_request) } < 0 {
+    if unsafe { libc::ioctl(socket.as_raw_fd(), SIOCGIFFLAGS_REQUEST, &mut flags_request) } < 0 {
         return Err(attachment_error(format!(
             "failed to read Guest interface {from} flags: {}",
             std::io::Error::last_os_error()
@@ -186,7 +195,7 @@ fn rename_interface(socket: &OwnedFd, from: &str, to: &str) -> Result<()> {
     if i32::from(original_flags) & libc::IFF_UP != 0 {
         flags_request.ifr_ifru.ifru_flags = original_flags & !(libc::IFF_UP as i16);
         // SAFETY: `flags_request` contains the exact source name and flags.
-        if unsafe { libc::ioctl(socket.as_raw_fd(), libc::SIOCSIFFLAGS, &flags_request) } < 0 {
+        if unsafe { libc::ioctl(socket.as_raw_fd(), SIOCSIFFLAGS_REQUEST, &flags_request) } < 0 {
             return Err(attachment_error(format!(
                 "failed to bring Guest interface {from} down for rename: {}",
                 std::io::Error::last_os_error()
@@ -197,13 +206,13 @@ fn rename_interface(socket: &OwnedFd, from: &str, to: &str) -> Result<()> {
     let mut rename_request = interface_request(from)?;
     copy_interface_name(to, unsafe { &mut rename_request.ifr_ifru.ifru_newname })?;
     // SAFETY: both names are validated NUL-terminated ifreq arrays.
-    if unsafe { libc::ioctl(socket.as_raw_fd(), libc::SIOCSIFNAME, &rename_request) } < 0 {
+    if unsafe { libc::ioctl(socket.as_raw_fd(), SIOCSIFNAME_REQUEST, &rename_request) } < 0 {
         let error = std::io::Error::last_os_error();
         if i32::from(original_flags) & libc::IFF_UP != 0 {
             flags_request.ifr_ifru.ifru_flags = original_flags;
             // SAFETY: best-effort restoration uses the original live name.
             unsafe {
-                libc::ioctl(socket.as_raw_fd(), libc::SIOCSIFFLAGS, &flags_request);
+                libc::ioctl(socket.as_raw_fd(), SIOCSIFFLAGS_REQUEST, &flags_request);
             }
         }
         return Err(attachment_error(format!(
@@ -214,7 +223,7 @@ fn rename_interface(socket: &OwnedFd, from: &str, to: &str) -> Result<()> {
         let mut restore = interface_request(to)?;
         restore.ifr_ifru.ifru_flags = original_flags;
         // SAFETY: the renamed interface is addressed by its exact new name.
-        if unsafe { libc::ioctl(socket.as_raw_fd(), libc::SIOCSIFFLAGS, &restore) } < 0 {
+        if unsafe { libc::ioctl(socket.as_raw_fd(), SIOCSIFFLAGS_REQUEST, &restore) } < 0 {
             return Err(attachment_error(format!(
                 "failed to restore Guest interface {to} flags: {}",
                 std::io::Error::last_os_error()

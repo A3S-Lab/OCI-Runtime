@@ -155,7 +155,8 @@ pub(super) fn rename_directory_noreplace(
     // SAFETY: both names are NUL-terminated, the directory descriptors remain
     // live for the call, and RENAME_NOREPLACE prevents destination races.
     let result = unsafe {
-        libc::renameat2(
+        libc::syscall(
+            libc::SYS_renameat2,
             source_parent.as_raw_fd(),
             source.as_ptr(),
             destination_parent.as_raw_fd(),
@@ -500,16 +501,38 @@ pub(super) async fn sync_directory(directory: Dir, display: &Path) -> Result<()>
 }
 
 #[cfg(target_os = "linux")]
+const STATX_MNT_ID_MASK: libc::c_uint = 0x0000_1000;
+
+// The statx kernel ABI is fixed at 256 bytes, with stx_mnt_id at offset 144.
+// Keep a local minimal representation because libc does not expose `statx`
+// when cross-compiling against a pre-1.2.3 musl baseline.
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct LinuxStatx {
+    stx_mask: u32,
+    _before_mount_id: [u8; 140],
+    stx_mnt_id: u64,
+    _after_mount_id: [u8; 104],
+}
+
+#[cfg(target_os = "linux")]
+const _: () = assert!(std::mem::size_of::<LinuxStatx>() == 256);
+#[cfg(target_os = "linux")]
+const _: () = assert!(std::mem::offset_of!(LinuxStatx, stx_mnt_id) == 144);
+
+#[cfg(target_os = "linux")]
 pub(super) fn mount_identity(descriptor: std::os::fd::RawFd) -> io::Result<MountIdentity> {
-    let mut stat = std::mem::MaybeUninit::<libc::statx>::zeroed();
+    let mut stat = std::mem::MaybeUninit::<LinuxStatx>::zeroed();
     // SAFETY: `descriptor` is live and the output buffer is correctly sized
-    // and writable. AT_EMPTY_PATH requests metadata for that descriptor.
+    // and writable for the Linux statx kernel ABI. AT_EMPTY_PATH requests
+    // metadata for that descriptor.
     let result = unsafe {
-        libc::statx(
+        libc::syscall(
+            libc::SYS_statx,
             descriptor,
             c"".as_ptr(),
             libc::AT_EMPTY_PATH | libc::AT_NO_AUTOMOUNT,
-            libc::STATX_MNT_ID,
+            STATX_MNT_ID_MASK,
             stat.as_mut_ptr(),
         )
     };
@@ -518,7 +541,7 @@ pub(super) fn mount_identity(descriptor: std::os::fd::RawFd) -> io::Result<Mount
     }
     // SAFETY: a successful statx initialized the output structure.
     let stat = unsafe { stat.assume_init() };
-    if stat.stx_mask & libc::STATX_MNT_ID == 0 {
+    if stat.stx_mask & STATX_MNT_ID_MASK == 0 {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "statx did not report a mount identity",

@@ -82,7 +82,9 @@ async fn service_open_rejects_durable_tee_capability_drift_before_recovery() {
     let created = service.create(create).await.expect("create TEE container");
     drop(service);
 
-    let replacement = Arc::new(RecordingDriver::supported());
+    let mut replacement = RecordingDriver::supported();
+    replacement.capability.driver = created.driver;
+    let replacement = Arc::new(replacement);
     let error = HostRuntimeService::open(
         &state_root,
         Arc::clone(&replacement) as Arc<dyn RuntimeDriver>,

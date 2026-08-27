@@ -417,7 +417,7 @@ mod tests {
     fn manifest(generation: u64) -> AgentVmAttachmentManifest {
         let mut value = serde_json::to_value(Spec::default()).expect("default OCI spec");
         value["linux"] = json!({
-            "namespaces": [{"type": "network"}],
+            "namespaces": [{"type": "network"}, {"type": "uts"}],
             "netDevices": {"tap0": {"name": "eth0"}}
         });
         let bundle = OciBundle::from_json(
