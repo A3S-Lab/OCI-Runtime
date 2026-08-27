@@ -101,7 +101,8 @@
         "default_containerd_preserved": true,
         "tasks_after": 0,
         "containers_after": 0,
-        "temporary_roots_removed": true
+        "temporary_roots_removed": true,
+        "post_commit_resize_pty_forced_cleanup": false
       }
     },
     {
@@ -172,7 +173,8 @@
         "default_containerd_preserved": true,
         "tasks_after": 0,
         "containers_after": 0,
-        "temporary_roots_removed": null
+        "temporary_roots_removed": null,
+        "post_commit_resize_pty_forced_cleanup": false
       }
     },
     {
@@ -180,7 +182,7 @@
       "recorded_on": "2026-08-28",
       "result": "passed",
       "claim_effect": "observation-only",
-      "source_commit": "45158bc9607bee4ee819d5250337154c7c4f199f",
+      "source_commit": "2fef85c6e68a07f114d211175b77841301d57985",
       "containerd": {
         "version": "2.2.1",
         "revision": "dea7da592f5d1d2b7755e3a161be07f43fad8f75"
@@ -212,8 +214,8 @@
           {
             "role": "cli",
             "name": "a3s-oci",
-            "sha256": "7136aa6c7e540f936e41a03e93cbbc9759934503337ffbd9ec99745de494a17d",
-            "size_bytes": 30336632,
+            "sha256": "e22a08d884ad59187fce39e170f6ca21d367a77c2d3a1a297cb8650adf6f7561",
+            "size_bytes": 30336760,
             "format": "elf-static-pie"
           },
           {
@@ -226,7 +228,7 @@
           {
             "role": "shim",
             "name": "containerd-shim-a3s-oci-v2",
-            "sha256": "f694adf3f6aab089c77358e84dac604a66cb0c502990c01d830743bea6d35015",
+            "sha256": "c4c8ce162cdb0c031eac6e792e2bbdf9c99c30e7ef971ca8791b123f2b4ce00c",
             "size_bytes": 20350960,
             "format": "elf-static-pie"
           },
@@ -241,9 +243,11 @@
       },
       "qualification": {
         "test": "real_containerd_runtime_v2_qualification",
-        "passes": 1,
+        "passes": 3,
         "duration_seconds": [
-          77.06
+          91.96,
+          91.89,
+          91.92
         ],
         "preflight_passed": true,
         "isolated_containerd": true,
@@ -251,6 +255,7 @@
         "tasks_after": 0,
         "containers_after": 0,
         "temporary_roots_removed": true,
+        "post_commit_resize_pty_forced_cleanup": true,
         "boundary_count": 23
       }
     }

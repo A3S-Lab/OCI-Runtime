@@ -8,7 +8,7 @@ The shim is a development adapter. It does not make any runtime driver
 | containerd | Host | Runtime profile | Status | Retained gate |
 | --- | --- | --- | --- | --- |
 | 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Three consecutive same-Host real lifecycle matrices with guest-journal reclamation, exec, deleted exec-ID reuse, exact `DeleteProcess` response replay, FIFO/PTY I/O, repeated controls and signals, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed init-Start, exec-Start, live init-Kill, terminal init-Kill and exec-SignalProcess exit adoption, Pause, Resume, Update, WriteStdin, CloseStdin, SignalProcess, and ResizePty rehydration, post-commit Create/Start/Kill/Delete/Exec/SignalProcess/control cleanup, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
-| 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | Compatibility record pending |
+| 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | 2.2.1 and 2.2.3 observations retained; range qualification pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
 | Any | Utility-VM profile | `dedicated-vm` | Not yet qualified through containerd | Driver-specific gate pending |
 
@@ -22,9 +22,14 @@ The canonical machine-readable record is
 It mirrors the code-owned claims and retains the exact source revisions,
 protocol ranges, artifact digests, environments, pass durations, and cleanup
 results behind them. Its August 28, 2026 containerd 2.2.1 WSL2 x86_64 run is
-explicitly observation-only: one 77.06-second pass of the static-musl CLI,
-agent, shim, and qualification executable does not extend the exact 2.2.2
-Ubuntu arm64 development claim.
+explicitly observation-only: three consecutive 91.96, 91.89, and 91.92-second
+passes of the static-musl CLI, agent, shim, and qualification executable ran
+through unchanged Host PID 1566. Each pass crossed all 23 daemon-restart and
+post-commit rehydration boundaries, including the current forced-cleanup
+`ResizePty` gate. The default containerd remained active at PID 184; final
+audits found zero tasks, containers, live Runtime containers, matching shim or
+workload processes, mounts, or cgroups, and both isolated roots were removed.
+This evidence does not extend the exact 2.2.2 Ubuntu arm64 development claim.
 
 Contract v1 owns this matrix in code and exposes it through the shim's version
 output and RuntimeInfo annotations. The accepted ttrpc service is
@@ -734,9 +739,6 @@ suite to restart containerd.
 
 - qualify the supported containerd version range from exact release packages;
 - publish signed or checksummed shim, host-service, agent, and driver assets;
-- retain a three-pass real-host record for the implemented post-commit
-  `ResizePty` forced-cleanup gate; Native Linux lifecycle mutations,
-  `WriteStdin`, and `CloseStdin` are already qualified at this boundary;
 - qualify Checkpoint, checkpoint-backed Create, restored Start, package
   handoff, containerd content-store import, restart, and leak cleanup with a
   production driver that explicitly advertises Checkpoint and Restore;

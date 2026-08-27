@@ -31,6 +31,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   record that is schema-checked against the code-owned support matrix and
   retains exact qualification environments, protocol ranges, digests,
   durations, and cleanup evidence without promoting observation-only runs.
+  The current post-commit containerd `ResizePty` cleanup boundary has three
+  consecutive real-daemon observations through one unchanged Host process.
   Tagged Linux x86_64 and arm64 host archives now build the CLI, agent, and
   containerd shim against musl with the bundled Rust linker and reject ELF
   interpreters or dynamic dependencies before packaging the record.

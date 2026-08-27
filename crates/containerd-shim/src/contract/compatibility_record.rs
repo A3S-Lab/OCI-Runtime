@@ -140,6 +140,7 @@ struct QualificationEvidence {
     tasks_after: u64,
     containers_after: u64,
     temporary_roots_removed: Option<bool>,
+    post_commit_resize_pty_forced_cleanup: bool,
     boundary_count: Option<u32>,
 }
 
@@ -323,6 +324,18 @@ fn machine_readable_compatibility_record_is_complete_and_exact() {
         if let Some(boundary_count) = run.qualification.boundary_count {
             assert!(boundary_count > 0, "boundary_count must be positive");
         }
+        if run.qualification.post_commit_resize_pty_forced_cleanup {
+            assert!(
+                run.qualification.passes >= 3,
+                "{} needs three passes for the ResizePty forced-cleanup gate",
+                run.id
+            );
+            assert!(
+                run.qualification.boundary_count.is_some(),
+                "{} must retain its ResizePty boundary count",
+                run.id
+            );
+        }
 
         let matching_development_claim = record.claims.iter().any(|claim| {
             claim.status == RecordedQualificationStatus::DevelopmentQualified
@@ -365,6 +378,9 @@ fn machine_readable_compatibility_record_is_complete_and_exact() {
         })
         .collect::<BTreeSet<_>>();
     assert_eq!(supported_claims, expected_supported_claims);
+    assert!(record.qualification_runs.iter().any(|run| {
+        run.qualification.post_commit_resize_pty_forced_cleanup && run.qualification.passes >= 3
+    }));
 
     for retained_run in [
         "2026-08-24-containerd-2.2.2-ubuntu-arm64",

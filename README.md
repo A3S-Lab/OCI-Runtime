@@ -189,10 +189,24 @@ with one recorded Runtime resize and proves cleanup leaves that count
 unchanged while fencing Kill and force Delete to the exact generation.
 
 All non-destructive CI targets pass with this gate, including Linux, musl,
-macOS, Windows, and Native Linux arm64 coverage. The destructive three-pass
-real-host qualification has not been retained yet, so R7 remains open and the
-latest x86_64 evidence below continues to describe the preceding
-`CloseStdin` revision.
+macOS, Windows, and Native Linux arm64 coverage. Source revision
+`2fef85c6e68a07f114d211175b77841301d57985` also passed three complete
+containerd 2.2.1 matrices on Ubuntu 24.04.3 LTS/WSL2 x86_64 in 91.96, 91.89,
+and 91.92 seconds through unchanged Host PID 1566. Every pass crossed all 23
+daemon-restart and post-commit rehydration boundaries, including the current
+forced-cleanup `ResizePty` gate. The static-musl CLI, agent, shim, qualification
+executable, and Cargo.lock SHA-256 values were
+`e22a08d884ad59187fce39e170f6ca21d367a77c2d3a1a297cb8650adf6f7561`,
+`c73cc2356552de6f2def62598a44fb370df7300a56af5c7be33e63d148b865e2`,
+`c4c8ce162cdb0c031eac6e792e2bbdf9c99c30e7ef971ca8791b123f2b4ce00c`,
+`ba458b70cb1c879ed78095d326ccfe8992b22f12198728b45cc8d50a52e0451f`,
+and `1f00f4ec1b0f1ba9f3e39daf2b8782e42c922d9fa696aaa07c709c38123edca0`.
+The default containerd remained active at PID 184. Final audits found zero
+tasks, containers, live Runtime containers, matching processes, mounts, or
+cgroups before both isolated roots were removed. This source-build WSL2 record
+is observation-only and does not promote the exact containerd 2.2.2 Ubuntu
+arm64 development claim; exact release-package range qualification and the
+remaining R7 release gates stay open.
 
 Source revision `9726719e5a66156cd61f8be36ca00998bbcfc871` passed three
 complete Ubuntu 24.04 x86_64/containerd 2.2.3 matrices consecutively in
