@@ -18,6 +18,9 @@ use crate::NativeLinuxMultiContainerSmokeReport;
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const EXTERNAL_SCRIPT_EVIDENCE: &[u8] = b"a3s-oci-external-init-v1\n";
 const INLINE_EVIDENCE: &[u8] = b"a3s-oci-inline-init-v1\n";
+const HOOK_DESCENDANT_STARTED: &str = "hook-timeout-descendant-started";
+const HOOK_DESCENDANT_ESCAPED: &str = "hook-timeout-descendant-escaped";
+const HOOK_DESCENDANT_OBSERVATION: Duration = Duration::from_secs(3);
 
 pub(super) struct InitializationFixture {
     inline: OciBundle,
@@ -182,7 +185,7 @@ impl InitializationFixture {
             mount,
             sleeping_init(),
             json!(["PATH=/bin"]),
-            Some(hooks("prestart", "/bin/busybox sleep 30", 1)),
+            Some(timeout_hooks(&evidence_directory)?),
             &format!("a3s-oci-hook-timeout-{nonce}"),
         )?;
         let poststop_failure = build_profile(
@@ -308,6 +311,8 @@ pub(super) async fn exercise(
     .await?;
     report.initialization.hook_timeout_rolled_back =
         state_is_missing(client, &timeout_target, "timed-out hook after rollback").await?;
+    report.initialization.hook_timeout_process_group_terminated =
+        verify_timeout_process_group(fixture).await?;
 
     let start_container_failure_target = run_start_failure(
         client,
@@ -614,6 +619,70 @@ fn hooks(phase: &str, command: &str, timeout_seconds: u32) -> Value {
     Value::Object(hooks)
 }
 
+fn timeout_hooks(evidence_directory: &Path) -> Result<Value, String> {
+    let started = evidence_directory.join(HOOK_DESCENDANT_STARTED);
+    let escaped = evidence_directory.join(HOOK_DESCENDANT_ESCAPED);
+    let started = started
+        .to_str()
+        .ok_or_else(|| "Hook descendant startup path must be UTF-8".to_string())?;
+    let escaped = escaped
+        .to_str()
+        .ok_or_else(|| "Hook descendant escape path must be UTF-8".to_string())?;
+    Ok(json!({
+        "prestart": [{
+            "path": "/bin/sh",
+            "args": [
+                "sh",
+                "-c",
+                "set -eu; (trap '' HUP TERM; /bin/busybox sleep 2; \
+                 /bin/busybox touch \"$A3S_HOOK_DESCENDANT_ESCAPED\") & \
+                 printf '%s\\n' \"$!\" > \"$A3S_HOOK_DESCENDANT_STARTED\"; \
+                 exec /bin/busybox sleep 30"
+            ],
+            "env": [
+                format!("A3S_HOOK_DESCENDANT_STARTED={started}"),
+                format!("A3S_HOOK_DESCENDANT_ESCAPED={escaped}")
+            ],
+            "timeout": 1
+        }]
+    }))
+}
+
+async fn verify_timeout_process_group(fixture: &InitializationFixture) -> Result<bool, String> {
+    let started_path = fixture.evidence_directory.join(HOOK_DESCENDANT_STARTED);
+    let started = tokio::fs::read_to_string(&started_path)
+        .await
+        .map_err(|error| {
+            format!(
+                "timed-out Hook descendant did not publish {}: {error}",
+                started_path.display()
+            )
+        })?;
+    require(
+        started.trim().parse::<u32>().is_ok_and(|pid| pid > 0),
+        format!("timed-out Hook descendant published invalid PID {started:?}"),
+    )?;
+
+    tokio::time::sleep(HOOK_DESCENDANT_OBSERVATION).await;
+    let escaped_path = fixture.evidence_directory.join(HOOK_DESCENDANT_ESCAPED);
+    let escaped = tokio::fs::try_exists(&escaped_path)
+        .await
+        .map_err(|error| {
+            format!(
+                "failed to inspect timed-out Hook descendant marker {}: {error}",
+                escaped_path.display()
+            )
+        })?;
+    require(
+        !escaped,
+        format!(
+            "timed-out Hook descendant escaped process-group cleanup and created {}",
+            escaped_path.display()
+        ),
+    )?;
+    Ok(true)
+}
+
 async fn read_exact(path: &Path, expected: &[u8]) -> Result<bool, String> {
     let actual = tokio::fs::read(path)
         .await
@@ -663,7 +732,10 @@ mod tests {
     use a3s_oci_sdk::OciBundle;
     use serde_json::{json, Value};
 
-    use super::{build_profile, hooks, with_exact_process_profile, EvidenceMount};
+    use super::{
+        build_profile, hooks, timeout_hooks, with_exact_process_profile, EvidenceMount,
+        HOOK_DESCENDANT_ESCAPED, HOOK_DESCENDANT_STARTED,
+    };
 
     const CONFIG: &str = include_str!("../../../../../../fixtures/native-linux/config.json");
 
@@ -704,5 +776,20 @@ mod tests {
         assert_eq!(config["process"]["user"]["gid"], 0);
         assert_eq!(config["process"]["user"]["umask"], 18);
         assert_eq!(config["process"]["user"]["additionalGids"], json!([1]));
+
+        let timeout =
+            timeout_hooks(Path::new("/tmp/a3s-oci-hook-evidence")).expect("timeout Hook profile");
+        assert_eq!(timeout["prestart"][0]["timeout"], 1);
+        assert_eq!(
+            timeout["prestart"][0]["env"],
+            json!([
+                format!(
+                    "A3S_HOOK_DESCENDANT_STARTED=/tmp/a3s-oci-hook-evidence/{HOOK_DESCENDANT_STARTED}"
+                ),
+                format!(
+                    "A3S_HOOK_DESCENDANT_ESCAPED=/tmp/a3s-oci-hook-evidence/{HOOK_DESCENDANT_ESCAPED}"
+                )
+            ])
+        );
     }
 }

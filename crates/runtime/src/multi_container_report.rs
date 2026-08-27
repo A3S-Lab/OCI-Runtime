@@ -10,7 +10,7 @@ pub use cgroup_path::CgroupPathEvidence;
 
 /// Schema emitted by the native Linux multi-container lifecycle diagnostic.
 pub const NATIVE_LINUX_MULTI_CONTAINER_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-multi-container-smoke.v19";
+    "a3s.oci.native-linux-multi-container-smoke.v20";
 /// Schema emitted by the utility-VM multi-container lifecycle diagnostic.
 pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v11";
 /// Schema emitted by the Windows bootstrap-profile multi-container diagnostic.
@@ -263,6 +263,9 @@ pub struct InitializationEvidence {
     /// Whether a timed-out prestart hook was terminated and rolled back before
     /// any container state became visible.
     pub hook_timeout_rolled_back: bool,
+    /// Whether the timed-out Hook's signal-resistant background descendant was
+    /// terminated with the complete private process group.
+    pub hook_timeout_process_group_terminated: bool,
     /// Whether a failing poststop hook remained warning-only and did not block
     /// wait or deletion.
     pub poststop_failure_warning_only: bool,
@@ -284,6 +287,7 @@ impl InitializationEvidence {
             && self.start_container_failure_rolled_back
             && self.poststart_failure_rolled_back
             && self.hook_timeout_rolled_back
+            && self.hook_timeout_process_group_terminated
             && self.poststop_failure_warning_only
             && self.all_profiles_removed
     }
@@ -853,10 +857,15 @@ mod tests {
             start_container_failure_rolled_back: true,
             poststart_failure_rolled_back: true,
             hook_timeout_rolled_back: true,
+            hook_timeout_process_group_terminated: true,
             poststop_failure_warning_only: true,
             all_profiles_removed: true,
         };
         assert!(complete.is_success());
+
+        let mut incomplete = complete.clone();
+        incomplete.hook_timeout_process_group_terminated = false;
+        assert!(!incomplete.is_success());
 
         let mut incomplete = complete;
         incomplete.poststart_failure_rolled_back = false;

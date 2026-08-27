@@ -1246,7 +1246,7 @@ run_multi_container_smoke() {
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
     --arg absolute "$absolute_cgroup_path" \
-    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v19"
+    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v20"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundles_loaded
@@ -1353,6 +1353,7 @@ run_multi_container_smoke() {
      and .initialization.start_container_failure_rolled_back
      and .initialization.poststart_failure_rolled_back
      and .initialization.hook_timeout_rolled_back
+     and .initialization.hook_timeout_process_group_terminated
      and .initialization.poststop_failure_warning_only
      and .initialization.all_profiles_removed
      and .pid_supervision.pid1_supervision_enforced
@@ -2373,6 +2374,9 @@ elif [[ "$native_focus" == cgroup-ownership ]]; then
   exit 0
 elif [[ "$native_focus" == control-workload ]]; then
   run_smoke false "$control_bundle" "$control_hook_trace"
+  exit 0
+elif [[ "$native_focus" == multi-container ]]; then
+  run_multi_container_smoke false
   exit 0
 elif [[ "$native_focus" == rootless-device-boundary ]]; then
   run_rootless_smoke

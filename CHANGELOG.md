@@ -1283,6 +1283,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
   headroom, hands fixed membership descriptors to a trusted init, and keeps
   update, freeze, statistics, OOM behavior, and cleanup scoped to one
   runtime-owned topology.
+- Promote the Native Linux multi-container report to v20 and require a timed-out
+  prestart Hook to launch a signal-resistant background descendant. The gate
+  now retains both startup evidence and the absence of its delayed escape
+  marker, while focused script and executor regressions cover the same complete
+  process-group boundary.
 
 ### Fixed
 

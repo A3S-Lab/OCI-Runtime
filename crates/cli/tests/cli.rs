@@ -435,7 +435,7 @@ fn native_linux_multi_container_smoke_fails_closed_with_versioned_output() {
         serde_json::from_slice(&output.stdout).expect("diagnostic output must be valid JSON");
     assert_eq!(
         report["schema_version"],
-        "a3s.oci.native-linux-multi-container-smoke.v19"
+        "a3s.oci.native-linux-multi-container-smoke.v20"
     );
     assert_ne!(report["status"], "available");
 }

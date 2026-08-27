@@ -823,26 +823,55 @@ mod tests {
     }
 
     #[test]
-    fn hook_timeout_kills_the_supervised_process_group() {
+    fn hook_timeout_kills_the_entire_supervised_process_group() {
+        let directory = tempfile::tempdir().expect("temporary hook process-group directory");
+        let descendant_started = directory.path().join("descendant-started");
+        let descendant_escaped = directory.path().join("descendant-escaped");
         let hooks = HookSet {
             prestart: vec![HookPlan {
                 path: PathBuf::from("/bin/sh"),
                 args: Some(vec![
                     "a3s-hook".to_string(),
                     "-c".to_string(),
-                    "exec /bin/sleep 30".to_string(),
+                    "set -eu; (trap '' HUP TERM; /bin/sleep 1; : > \"$ESCAPED\") & \
+                     printf '%s\\n' \"$!\" > \"$STARTED\"; exec /bin/sleep 30"
+                        .to_string(),
                 ]),
-                environment: Some(Vec::new()),
-                timeout: Some(Duration::from_millis(50)),
+                environment: Some(vec![
+                    (
+                        "STARTED".to_string(),
+                        descendant_started
+                            .to_str()
+                            .expect("UTF-8 started path")
+                            .to_string(),
+                    ),
+                    (
+                        "ESCAPED".to_string(),
+                        descendant_escaped
+                            .to_str()
+                            .expect("UTF-8 escaped path")
+                            .to_string(),
+                    ),
+                ]),
+                timeout: Some(Duration::from_millis(500)),
             }],
             ..HookSet::default()
         };
-        let started = Instant::now();
+        let started_at = Instant::now();
         let error = hooks
             .run_sync(HookPhase::Prestart, b"{}")
             .expect_err("hook must time out");
         assert_eq!(error.code, ErrorCode::DeadlineExceeded);
-        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(started_at.elapsed() < Duration::from_secs(2));
+        assert!(
+            descendant_started.is_file(),
+            "hook descendant did not publish startup evidence"
+        );
+        std::thread::sleep(Duration::from_millis(750));
+        assert!(
+            !descendant_escaped.exists(),
+            "hook descendant survived process-group termination"
+        );
     }
 
     #[test]

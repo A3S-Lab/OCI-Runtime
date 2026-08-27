@@ -808,12 +808,16 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
   --work-parent "$work_parent"
 ```
 
+The checked-in qualification script can isolate this gate from the broader
+rootless, network-device, recovery, and soak matrix with
+`A3S_OCI_NATIVE_FOCUS=multi-container bash .github/scripts/native-linux-smoke.sh`.
+
 The two simultaneously live bundles must use distinct cgroup v2 paths. Bundle
 A uses relative `a3s-oci-smoke-a`; bundle B uses an absolute path so the gate
 can compare its host membership directly with the requested mount-relative
 value.
 
-The `a3s.oci.native-linux-multi-container-smoke.v19` success additionally
+The `a3s.oci.native-linux-multi-container-smoke.v20` success additionally
 requires exact create/start/kill/delete replay, stable repeated wait results,
 independent wait/state progress, exact absolute-path membership, same-location
 relative-path recreation, both cgroup removals, both marker removals, executor
@@ -900,9 +904,11 @@ matrices:
   nonzero exit of 42. Negative OCI Hook runs independently require prestart,
   createRuntime, and createContainer failures to roll create back before any
   state is visible; startContainer and poststart failures to stop the process
-  and permit exact force cleanup; bounded prestart timeout and process-group
-  termination; and warning-only poststop failure. The service list and every
-  exact target must be empty afterward.
+  and permit exact force cleanup; bounded prestart timeout to start a
+  signal-resistant background descendant and prove that the complete private
+  process group is terminated before it can emit delayed escape evidence; and
+  warning-only poststop failure. The service list and every exact target must
+  be empty afterward.
 
 Before every Hook `exec`, the shared Linux executor applies
 `close_range(3, UINT_MAX, CLOSE_RANGE_CLOEXEC)` in the forked child. Standard

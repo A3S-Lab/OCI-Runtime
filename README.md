@@ -883,7 +883,7 @@ namespace, the executor pins and type-checks that namespace, observes its real
 UID/GID maps through a short-lived namespace helper, and rechecks the namespace
 identity before entry. The same detached-mount path then supplies the six
 default devices with namespace-root ownership. Native Linux multi-container
-v19 and real Apple Silicon utility-VM multi-container v11 both verify the
+v20 and real Apple Silicon utility-VM multi-container v11 both verify the
 device type, major/minor number, mode, ownership, workload access, and cleanup.
 The same reports cover the image's `/dev` with a fresh tmpfs and require the
 four OCI Linux links to resolve to their exact `/proc/self/fd` targets after
