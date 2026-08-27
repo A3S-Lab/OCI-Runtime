@@ -396,9 +396,9 @@ async fn legacy_schema_v8_pending_update_waits_for_matching_caller_resources() {
     let mut document: serde_json::Value = serde_json::from_slice(
         &tokio::fs::read(&path)
             .await
-            .expect("read schema-v9 task metadata"),
+            .expect("read schema-v10 task metadata"),
     )
-    .expect("decode schema-v9 task metadata");
+    .expect("decode schema-v10 task metadata");
     document["schema_version"] = serde_json::json!(8);
     document["pending_control"]
         .as_object_mut()
@@ -436,7 +436,7 @@ async fn legacy_schema_v8_pending_update_waits_for_matching_caller_resources() {
     assert_eq!(calls[0].context.operation_id, calls[1].context.operation_id);
     assert_eq!(calls[0].resources, calls[1].resources);
     let upgraded = load_metadata(directory.path());
-    assert_eq!(upgraded.schema_version(), 9);
+    assert_eq!(upgraded.schema_version(), 10);
     assert_eq!(upgraded.control_sequence(), 1);
     assert_eq!(upgraded.pending_control(), None);
 }
@@ -553,7 +553,7 @@ async fn legacy_metadata_upgrades_to_current_schema_before_the_first_control() {
             .expect("read upgraded task metadata"),
     )
     .expect("decode upgraded task metadata");
-    assert_eq!(document["schema_version"], serde_json::json!(9));
+    assert_eq!(document["schema_version"], serde_json::json!(10));
 }
 
 #[tokio::test]

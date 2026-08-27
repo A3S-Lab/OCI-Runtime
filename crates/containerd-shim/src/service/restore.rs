@@ -133,6 +133,25 @@ impl Service {
             )
             .for_operation("containerd-shim-rehydrate"));
         }
+        let restore_state = if metadata.restore_state() == RestoreState::PendingStart {
+            if *record.state.status() != ContainerState::Running {
+                return Err(RuntimeError::new(
+                    ErrorCode::FailedPrecondition,
+                    "pending containerd restore no longer names a running generation",
+                )
+                .for_operation("containerd-shim-rehydrate"));
+            }
+            if record.is_paused() {
+                RestoreState::PendingStart
+            } else {
+                // Resume is operation-idempotent. An unpaused exact generation
+                // proves that the restore Start effect committed before the
+                // shim could durably advance its local barrier state.
+                RestoreState::Started
+            }
+        } else {
+            metadata.restore_state()
+        };
         if task_delete_receipt.is_some() {
             TaskDeleteReceipt::remove(metadata.bundle())?;
         }
@@ -143,6 +162,7 @@ impl Service {
             stdout: metadata.stdout().to_string(),
             stderr: metadata.stderr().to_string(),
             terminal: metadata.terminal(),
+            restore_state,
             stdin_sequence: metadata.stdin_sequence(),
             pending_stdin_write: metadata.pending_stdin_write().cloned(),
             stdin_close_state: metadata.stdin_close_state(),
@@ -292,7 +312,7 @@ impl Service {
         }
         state.pumps.extend(pumps);
         for ((task_id, _), pump) in &state.pumps {
-            if task_id == expected_task_id {
+            if task_id == expected_task_id && task.restore_state != RestoreState::PendingStart {
                 pump.activate_stdin();
             }
         }

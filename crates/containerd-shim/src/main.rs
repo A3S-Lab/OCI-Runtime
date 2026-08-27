@@ -6,6 +6,8 @@ use std::io::{stdin, stdout, Read, Write};
 #[cfg(unix)]
 mod adapter;
 #[cfg(unix)]
+mod checkpoint;
+#[cfg(unix)]
 mod contract;
 #[cfg(unix)]
 mod identity;

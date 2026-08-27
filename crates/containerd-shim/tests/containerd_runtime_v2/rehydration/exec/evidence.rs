@@ -45,7 +45,7 @@ pub(super) async fn wait_for_starting(
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             return Err(qualification_error(format!(
-                "Exec Start did not persist schema-9 incarnation-1 starting metadata before reaching the suspended Runtime executor: {evidence:?}"
+                "Exec Start did not persist schema-10 incarnation-1 starting metadata before reaching the suspended Runtime executor: {evidence:?}"
             ))
             .into());
         }
@@ -78,7 +78,7 @@ pub(super) async fn require(
     let evidence = read(bundle, exec_id).await?;
     if !matches(&evidence, stage, record) {
         return Err(qualification_error(format!(
-            "committed Exec metadata {context} was {evidence:?}; expected schema 9, exec sequence/incarnation 1, stage {stage:?}, and record {record:?}"
+            "committed Exec metadata {context} was {evidence:?}; expected schema 10, exec sequence/incarnation 1, stage {stage:?}, and record {record:?}"
         ))
         .into());
     }
@@ -86,7 +86,7 @@ pub(super) async fn require(
 }
 
 fn matches(evidence: &MetadataEvidence, stage: &str, record: Option<&ProcessRecord>) -> bool {
-    evidence.schema_version == 9
+    evidence.schema_version == 10
         && evidence.exec_sequence == 1
         && evidence.exec.incarnation == 1
         && evidence.exec.stage == stage

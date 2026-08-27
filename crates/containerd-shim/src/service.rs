@@ -21,7 +21,8 @@ use crate::io::{self, ProcessIoEndpoints, ProcessPumps};
 use crate::metadata::{
     ControlOperationKind, ExecDeleteJournal, ExecDeleteReceipt, ExecMetadata, ExecStage,
     NewShimCreateIntent, NewShimMetadata, PendingControlOperation, PendingResize, PendingSignal,
-    PendingStdinWrite, ShimCreateIntent, ShimMetadata, StdinCloseState, TaskDeleteReceipt,
+    PendingStdinWrite, RestoreState, ShimCreateIntent, ShimMetadata, StdinCloseState,
+    TaskDeleteReceipt,
 };
 
 mod control;
@@ -43,6 +44,7 @@ struct TaskState {
     stdout: String,
     stderr: String,
     terminal: bool,
+    restore_state: RestoreState,
     stdin_sequence: u64,
     pending_stdin_write: Option<PendingStdinWrite>,
     stdin_close_state: StdinCloseState,
@@ -224,6 +226,7 @@ impl Service {
         event.set_bundle(req.bundle().to_string());
         event.set_rootfs(req.rootfs().to_vec());
         event.set_io(io);
+        event.set_checkpoint(req.checkpoint().to_string());
         event.set_pid(pid);
         self.publish("/tasks/create", Box::new(event)).await;
     }
@@ -260,6 +263,13 @@ impl Service {
         let mut event = containerd_shim_protos::events::task::TaskResumed::new();
         event.set_container_id(task_id.to_string());
         self.publish("/tasks/resumed", Box::new(event)).await;
+    }
+
+    async fn publish_checkpointed(&self, task_id: &str, checkpoint: &str) {
+        let mut event = containerd_shim_protos::events::task::TaskCheckpointed::new();
+        event.set_container_id(task_id.to_string());
+        event.set_checkpoint(checkpoint.to_string());
+        self.publish("/tasks/checkpointed", Box::new(event)).await;
     }
 
     async fn publish_delete(
@@ -801,15 +811,17 @@ fn protobuf_status(status: i32) -> protobuf::EnumOrUnknown<api::Status> {
 }
 
 fn protobuf_task_status(
-    record: &ContainerRecord,
+    task: &TaskState,
     exit_observed: bool,
 ) -> protobuf::EnumOrUnknown<api::Status> {
     if exit_observed {
         protobuf::EnumOrUnknown::new(api::Status::STOPPED)
-    } else if record.is_paused() {
+    } else if task.restore_state == RestoreState::PendingStart {
+        protobuf::EnumOrUnknown::new(api::Status::CREATED)
+    } else if task.record.is_paused() {
         protobuf::EnumOrUnknown::new(api::Status::PAUSED)
     } else {
-        protobuf_status(adapter::task_status(record))
+        protobuf_status(adapter::task_status(&task.record))
     }
 }
 
@@ -902,6 +914,7 @@ fn metadata_from_task(task: &TaskState) -> ShimMetadata {
         stdout: task.stdout.clone(),
         stderr: task.stderr.clone(),
         terminal: task.terminal,
+        restore_state: task.restore_state,
         output_cursor: task.output_cursor,
         rootfs_mounted: task.rootfs_mounted,
     });

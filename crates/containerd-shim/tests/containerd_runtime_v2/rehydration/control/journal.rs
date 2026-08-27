@@ -45,7 +45,7 @@ pub(super) async fn wait_for_pending_control(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         let evidence = read_control_journal(bundle).await?;
-        if evidence.schema_version == 9
+        if evidence.schema_version == 10
             && evidence.completed_sequence.checked_add(1) == Some(sequence)
             && evidence.pending.as_ref() == Some(&expected)
         {
@@ -87,7 +87,7 @@ pub(super) async fn assert_completed(
     update_digest: Option<&str>,
 ) -> TestResult<()> {
     let evidence = read_control_journal(bundle).await?;
-    if evidence.schema_version != 9
+    if evidence.schema_version != 10
         || evidence.completed_sequence != sequence
         || evidence.pending.is_some()
         || evidence.last_update_digest.as_deref() != update_digest

@@ -134,7 +134,7 @@ pub(crate) const TASK_METHODS: &[TaskMethod] = &[
     },
     TaskMethod {
         name: "Checkpoint",
-        status: MethodStatus::Unimplemented,
+        status: MethodStatus::Implemented,
     },
     TaskMethod {
         name: "Kill",
@@ -179,6 +179,13 @@ pub(crate) struct SdkTranslation {
     pub(crate) source: &'static str,
     pub(crate) task_method: Option<&'static str>,
     pub(crate) sdk_operations: &'static [RuntimeOperation],
+    pub(crate) admission: SdkAdmission,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SdkAdmission {
+    Required,
+    Optional,
 }
 
 pub(crate) const SDK_TRANSLATIONS: &[SdkTranslation] = &[
@@ -186,106 +193,133 @@ pub(crate) const SDK_TRANSLATIONS: &[SdkTranslation] = &[
         source: "Create",
         task_method: Some("Create"),
         sdk_operations: &[RuntimeOperation::Create],
+        admission: SdkAdmission::Required,
+    },
+    SdkTranslation {
+        source: "Create(restore)",
+        task_method: Some("Create"),
+        sdk_operations: &[RuntimeOperation::Restore],
+        admission: SdkAdmission::Optional,
     },
     SdkTranslation {
         source: "Start(init)",
         task_method: Some("Start"),
         sdk_operations: &[RuntimeOperation::Start],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "Start(exec)",
         task_method: Some("Start"),
         sdk_operations: &[RuntimeOperation::Processes, RuntimeOperation::Exec],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "State(init-or-exec)",
         task_method: Some("State"),
         sdk_operations: &[RuntimeOperation::State],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "Exec(stage)",
         task_method: Some("Exec"),
         sdk_operations: &[],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "Wait(init)",
         task_method: Some("Wait"),
         sdk_operations: &[RuntimeOperation::Wait],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "Wait(exec)",
         task_method: Some("Wait"),
         sdk_operations: &[RuntimeOperation::WaitProcess],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "Kill(init)",
         task_method: Some("Kill"),
         sdk_operations: &[RuntimeOperation::Kill],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "Kill(exec)",
         task_method: Some("Kill"),
         sdk_operations: &[RuntimeOperation::SignalProcess],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "Delete(init)",
         task_method: Some("Delete"),
         sdk_operations: &[RuntimeOperation::Delete],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "Delete(exec)",
         task_method: Some("Delete"),
         sdk_operations: &[],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "Pids",
         task_method: Some("Pids"),
         sdk_operations: &[RuntimeOperation::Processes],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "Pause",
         task_method: Some("Pause"),
         sdk_operations: &[RuntimeOperation::Pause],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "Resume",
         task_method: Some("Resume"),
         sdk_operations: &[RuntimeOperation::Resume],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "Checkpoint",
         task_method: Some("Checkpoint"),
-        sdk_operations: &[],
+        sdk_operations: &[RuntimeOperation::Checkpoint],
+        admission: SdkAdmission::Optional,
     },
     SdkTranslation {
         source: "Update",
         task_method: Some("Update"),
         sdk_operations: &[RuntimeOperation::Update],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "ResizePty",
         task_method: Some("ResizePty"),
         sdk_operations: &[RuntimeOperation::Resize],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "CloseIO",
         task_method: Some("CloseIO"),
         sdk_operations: &[RuntimeOperation::CloseStdin],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "Stats",
         task_method: Some("Stats"),
         sdk_operations: &[RuntimeOperation::Stats],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "Connect",
         task_method: Some("Connect"),
         sdk_operations: &[],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "Shutdown",
         task_method: Some("Shutdown"),
         sdk_operations: &[],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "stdin-pump",
@@ -295,17 +329,31 @@ pub(crate) const SDK_TRANSLATIONS: &[SdkTranslation] = &[
             RuntimeOperation::CloseStdin,
             RuntimeOperation::Processes,
         ],
+        admission: SdkAdmission::Required,
     },
     SdkTranslation {
         source: "output-pump",
         task_method: None,
         sdk_operations: &[RuntimeOperation::ReadOutput],
+        admission: SdkAdmission::Required,
     },
 ];
 
 pub(crate) fn required_sdk_operations() -> Vec<RuntimeOperation> {
     SDK_TRANSLATIONS
         .iter()
+        .filter(|translation| translation.admission == SdkAdmission::Required)
+        .flat_map(|translation| translation.sdk_operations.iter().copied())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn optional_sdk_operations() -> Vec<RuntimeOperation> {
+    SDK_TRANSLATIONS
+        .iter()
+        .filter(|translation| translation.admission == SdkAdmission::Optional)
         .flat_map(|translation| translation.sdk_operations.iter().copied())
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -332,6 +380,8 @@ pub(crate) const fn sdk_operation_name(operation: RuntimeOperation) -> &'static 
         RuntimeOperation::Resize => "resize",
         RuntimeOperation::SignalProcess => "signal-process",
         RuntimeOperation::WaitProcess => "wait-process",
+        RuntimeOperation::Checkpoint => "checkpoint",
+        RuntimeOperation::Restore => "restore",
         _ => "outside-containerd-contract",
     }
 }
@@ -347,7 +397,11 @@ pub(crate) fn sdk_operation_names(operations: &[RuntimeOperation]) -> String {
 
 pub(crate) fn sdk_translation_action(translation: &SdkTranslation) -> String {
     if !translation.sdk_operations.is_empty() {
-        return sdk_operation_names(translation.sdk_operations);
+        let operations = sdk_operation_names(translation.sdk_operations);
+        return match translation.admission {
+            SdkAdmission::Required => operations,
+            SdkAdmission::Optional => format!("optional:{operations}"),
+        };
     }
 
     let is_unimplemented = translation
@@ -367,7 +421,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn task_api_surface_is_exact_and_checkpoint_is_the_only_gap() {
+    fn task_api_surface_is_fully_implemented() {
         assert_eq!(TASK_API_SERVICE, "containerd.task.v2.Task");
         assert_eq!(TASK_METHODS.len(), 17);
         assert_eq!(
@@ -375,7 +429,7 @@ mod tests {
                 .iter()
                 .filter(|method| method.status == MethodStatus::Implemented)
                 .count(),
-            16
+            17
         );
         assert_eq!(
             TASK_METHODS
@@ -383,7 +437,7 @@ mod tests {
                 .filter(|method| method.status == MethodStatus::Unimplemented)
                 .map(|method| method.name)
                 .collect::<Vec<_>>(),
-            ["Checkpoint"]
+            Vec::<&str>::new()
         );
     }
 
@@ -398,7 +452,7 @@ mod tests {
             .filter_map(|translation| translation.task_method)
             .collect::<BTreeSet<_>>();
 
-        assert_eq!(SDK_TRANSLATIONS.len(), 23);
+        assert_eq!(SDK_TRANSLATIONS.len(), 24);
         assert_eq!(routed_methods, methods);
         assert_eq!(
             required_sdk_operations(),
@@ -427,6 +481,10 @@ mod tests {
             .into_iter()
             .all(|operation| sdk_operation_name(operation) != "outside-containerd-contract"));
         assert_eq!(
+            optional_sdk_operations(),
+            vec![RuntimeOperation::Checkpoint, RuntimeOperation::Restore]
+        );
+        assert_eq!(
             SDK_TRANSLATIONS
                 .iter()
                 .filter(|translation| sdk_translation_action(translation) == "local-only")
@@ -434,14 +492,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["Exec(stage)", "Delete(exec)", "Connect", "Shutdown"]
         );
-        assert_eq!(
-            SDK_TRANSLATIONS
-                .iter()
-                .filter(|translation| sdk_translation_action(translation) == "unimplemented")
-                .map(|translation| translation.source)
-                .collect::<Vec<_>>(),
-            ["Checkpoint"]
-        );
+        assert!(SDK_TRANSLATIONS
+            .iter()
+            .all(|translation| sdk_translation_action(translation) != "unimplemented"));
     }
 
     #[test]

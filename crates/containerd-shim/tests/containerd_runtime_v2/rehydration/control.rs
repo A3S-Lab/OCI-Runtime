@@ -69,13 +69,13 @@ pub(super) async fn qualify(
     mut replacement: Child,
 ) -> TestResult<(Channel, Child)> {
     let baseline = read_control_journal(bundle).await?;
-    if baseline.schema_version != 9
+    if baseline.schema_version != 10
         || baseline.completed_sequence != 0
         || baseline.pending.is_some()
         || baseline.last_update_digest.is_some()
     {
         return Err(qualification_error(format!(
-            "task control journal before committed replacements was {baseline:?}; expected schema 9, sequence 0, and no pending or completed Update"
+            "task control journal before committed replacements was {baseline:?}; expected schema 10, sequence 0, and no pending or completed Update"
         ))
         .into());
     }

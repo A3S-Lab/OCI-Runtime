@@ -21,10 +21,12 @@ Contract v1 owns this matrix in code and exposes it through the shim's version
 output and RuntimeInfo annotations. The accepted ttrpc service is
 `containerd.task.v2.Task`. State, Create, Start, Delete, Pids, Pause, Resume,
 Kill, Exec, ResizePty, CloseIO, Update, Wait, Stats, Connect, and Shutdown are
-implemented. Checkpoint is part of that API but deliberately returns
-Unimplemented; Create requests containing checkpoint restore fields do the
-same. The contract also freezes the OCI Features, Process, LinuxResources, and
-versioned A3S CreateOptions type URLs consumed by those methods.
+implemented, including Checkpoint and checkpoint-backed Create. Checkpoint and
+Restore remain per-driver optional operations: a request returns Unimplemented
+when its selected isolation driver does not advertise the exact v1 operation,
+without preventing ordinary tasks from using the endpoint. The contract also
+freezes the OCI Features, Process, LinuxResources, containerd runc checkpoint,
+and versioned A3S CreateOptions type URLs consumed by those methods.
 
 The latest August 24, 2026 x86_64 regression qualification used source
 revision `9726719e5a66156cd61f8be36ca00998bbcfc871`, containerd 2.2.3,
@@ -217,7 +219,7 @@ containerd exec ID therefore produces a different SDK process identity and a
 fresh set of exec-scoped mutation identities, including after shim or
 containerd restart.
 
-DeleteProcess response durability is separate from schema-v9 task metadata.
+DeleteProcess response durability is separate from schema-v10 task metadata.
 Before removing a stopped exec from that metadata, the shim atomically writes
 `a3s-oci-shim-exec-delete-v1.json` with the task identity, Runtime generation,
 bundle, exec incarnation, PID, exit status, and nanosecond exit time. Presence
@@ -242,7 +244,7 @@ manually launched replacement survives indefinitely as an unowned shim.
 The shim stores its incarnation and generation-bound metadata in the
 containerd-owned task bundle. Rehydration verifies namespace, task ID,
 generation, driver, and isolation against the host service and fails closed on
-any drift. Metadata schema v9 records the last allocated task exec sequence
+any drift. Metadata schema v10 records the last allocated task exec sequence
 and every current exec incarnation. It also retains the last completed init
 and exec stdin sequence, an optional in-flight sequence plus its exact bounded
 payload, the Open, Closing, or Closed state of each stdin stream, and the last
@@ -264,33 +266,35 @@ preserve output cursors, schema-v3
 adds the control journal, schema-v4 adds sequenced writes, schema-v5 adds
 durable stdin close state, schema-v6 adds durable terminal resize state,
 schema-v7 adds durable init and exec signal state, schema-v8 adds exec
-incarnations, and schema-v9 adds pending Update resource bodies. Schemas v1
+incarnations, schema-v9 adds pending Update resource bodies, and schema-v10
+adds the durable checkpoint-restore Start barrier. Schemas v1
 through v4 default stdin close state to Open. Schemas v1 through v5 default
 resize state to empty. Schemas v1 through v6 default signal state to empty,
 and schemas v1 through v7 default exec incarnations to zero. Incarnation zero
 preserves the legacy process and operation identity encoding. Every legacy
-schema is rewritten as schema v9 on the next metadata commit, except that a
+schema is rewritten as schema v10 on the next metadata commit, except that a
 digest-only pending Update remains encoded as schema v8 until a matching
 caller retry supplies its resource body.
 
-Before dispatching Create, the shim separately commits a schema-v1 create
+Before dispatching Create, the shim separately commits a schema-v2 create
 intent containing the exact incarnation, isolation request, bundle, I/O shape,
-and rootfs ownership. If the shim dies before it can record the returned
-generation, DeleteShim replays the same digest-bound Create with the same
-operation identity. The runtime either joins the request still in progress or
-returns its completed result, after which DeleteShim kills and force-deletes
-that exact generation. It never guesses a current generation from the stable
-container ID.
+rootfs ownership, and optional immutable checkpoint artifact/reference pair.
+Schema v1 remains readable for ordinary Create. If the shim dies before it can
+record the returned generation, DeleteShim replays the same digest-bound
+Create or Restore with the same operation identity. The runtime either joins
+the request still in progress or returns its completed result, after which
+DeleteShim kills and force-deletes that exact generation. It never guesses a
+current generation from the stable container ID.
 
 ## API mapping
 
 The adapter uses the public `a3s-oci-sdk`; it does not call A3S Box or import a
 driver implementation.
 
-A code-owned translation table freezes 23 exact Task and FIFO-pump routes.
-Their deduplicated union is the 18 public SDK operations required by the shim,
-and endpoint admission fails closed before task dispatch if any operation is
-absent. RuntimeInfo publishes that union under
+A code-owned translation table freezes 24 exact Task and FIFO-pump routes.
+The 18-operation required union gates endpoint admission, while Checkpoint and
+Restore form a separate two-operation optional union negotiated against the
+driver owning the selected isolation class. RuntimeInfo publishes the required union under
 `dev.a3s.oci.containerd-sdk-operations`, and `--version` prints every route.
 Manifest contract tests prohibit dependencies on A3S Box, the Host Runtime
 implementation, the Agent, or Core internals.
@@ -301,14 +305,14 @@ durably allocates an exec incarnation without dispatching an SDK operation;
 Runtime adapter, then calls `processes` and dispatches the public SDK `exec`
 operation only when the exact incarnation is absent. `Delete(exec)` removes a
 stopped exec incarnation locally, while
-`Connect` and `Shutdown` only coordinate the shim process. `Checkpoint` is the
-sole unimplemented Task method and is not part of the required SDK-operation
-union.
+`Connect` and `Shutdown` only coordinate the shim process. All 17 Task methods
+are implemented; optional Checkpoint and Restore do not enter the required
+SDK-operation union.
 
 | containerd Tasks operation | SDK/runtime action |
 | --- | --- |
-| Create | Validate the OCI bundle and typed create options, mount the supplied rootfs, then `create` |
-| Start | `start` for init; for exec, inspect `processes` and then dispatch `exec` for the exact staged incarnation |
+| Create | Validate the OCI bundle and typed create options, mount the supplied rootfs, then `create`; when `checkpoint` names a committed A3S package, call `restore` and persist a pending Start barrier |
+| Start | `start` for a normal init; resume a restored paused generation exactly once before advancing its durable barrier; for exec, inspect `processes` and dispatch `exec` for the exact staged incarnation |
 | State | Exact-generation `state` or process inventory plus durable exit evidence |
 | Wait | `wait` or `wait_process` |
 | Kill | `kill` for init, `signal_process` for exec |
@@ -321,7 +325,26 @@ union.
 | Pids | Exact-generation `processes` |
 | Stats | `stats`, encoded as containerd cgroup-v2 metrics |
 | Connect / Shutdown | Shim process coordination; no second lifecycle state |
-| Checkpoint | Unimplemented; checkpoint/restore remains an optional future extension |
+| Checkpoint | Require a paused live task, negotiate the selected driver's `checkpoint@1`, write `a3s-oci-checkpoint-v1.bin`, and atomically commit `a3s-oci-checkpoint-v1.json` |
+
+The checkpoint request path is a caller-owned directory, matching containerd's
+runtime-v2 packaging contract. The manifest binds the fixed artifact filename
+to the complete immutable SDK reference, size, and SHA-256 digest. A committed
+package replays locally without another SDK mutation; source drift, a different
+manifest, symlinks, oversized manifests, and artifact tampering fail closed.
+The runc `CheckpointOptions` payload is accepted only when every option has
+neutral v1 semantics and `image_path`, when present, equals the Task path.
+Incremental `parent_checkpoint`, exit-after-checkpoint, open-socket, namespace,
+cgroup-mode, and work-path semantics remain unsupported.
+
+Checkpoint-backed Create validates that package before dispatching SDK
+Restore. SDK v1 returns a paused running generation, but the shim reports
+containerd CREATED until the first Task Start commits a stable Resume. Schema
+v10 persists PendingStart or Started, serializes that barrier with task
+controls and checkpoint capture, and reconciles a committed Resume after a
+shim crash before metadata advance. Pause, Resume, Update, Kill, Exec, and a
+new Checkpoint cannot bypass a pending Start; DeleteShim can replay a schema-v2
+restore intent and clean the exact generation.
 
 Create without A3S options selects `shared-host-kernel`. The versioned
 `dev.a3s.oci.runtime.v1.CreateOptions` payload can request
@@ -387,7 +410,7 @@ durable exit evidence without redispatch. The August 24, 2026 three-pass
 Native Linux/containerd 2.2.2 matrix retains this boundary.
 
 The terminal init-Kill replacement gate covers the stopped outcome directly.
-It freezes the Host after schema-v9 sequence 1 `SIGTERM` is durable, freezes
+It freezes the Host after schema-v10 sequence 1 `SIGTERM` is durable, freezes
 the original shim, resumes the Host, and commits the exact `kill-1` request.
 The workload trap exits 42, and the Runtime retains both its exact `Stopped`
 record and durable Wait result before the original shim can observe the Kill
@@ -539,7 +562,7 @@ once with its persisted incarnation, while an existing process is adopted
 without another Exec call.
 
 The committed exec-Start rehydration gate covers that adoption against a real
-process. An exec is durably allocated as schema-v9 incarnation 1 in Added,
+process. An exec is durably allocated as schema-v10 incarnation 1 in Added,
 then Start commits `Starting` before any Runtime adapter connection. With the
 Host suspended at that connection boundary, the gate observes the exact
 metadata, freezes the original shim, resumes the Host, and submits the same
@@ -565,7 +588,7 @@ touching containerd-owned metadata.
 
 The post-commit `WriteStdin` gate creates a non-terminal exec that exits 23
 only after receiving `committed-before-cleanup`. It stops the Host before the
-shim can dispatch those bytes, then requires schema-v9 metadata to retain exec
+shim can dispatch those bytes, then requires schema-v10 metadata to retain exec
 incarnation 1, pending sequence 1, and the exact byte payload while the
 committed stdin sequence is still canonically omitted as zero. With the shim
 also stopped, the gate resumes the Host and submits the same
@@ -582,7 +605,7 @@ generation.
 The post-commit `CloseStdin` gate creates a non-terminal exec that exits 29
 only after stdin reaches EOF. It stops the Host, invokes `CloseIO` through the
 task shim's ttrpc address from its validated `bootstrap.json`, and requires
-schema-v9 metadata to retain exec incarnation 1, a canonically omitted zero
+schema-v10 metadata to retain exec incarnation 1, a canonically omitted zero
 stdin sequence, no pending write, and Closing before the request can reach the
 Runtime. With the shim also stopped, the gate resumes the Host and submits the
 same incarnation-bound `close-stdin-1` identity and exact process target
@@ -596,7 +619,7 @@ count unchanged while fencing Kill and force Delete to that generation.
 
 The post-commit `ResizePty` gate creates a terminal exec, stops the Host, sends
 the resize through the shim's ttrpc address from its validated
-`bootstrap.json`, and requires schema-v9 metadata to retain exec incarnation 1
+`bootstrap.json`, and requires schema-v10 metadata to retain exec incarnation 1
 with pending sequence 1 at 166x52. With the shim also stopped, the gate resumes
 the Host and submits the same incarnation-bound `resize-1` identity and exact
 process target directly through the public SDK. It verifies the live PTY size
@@ -699,6 +722,9 @@ suite to restart containerd.
 - retain a three-pass real-host record for the implemented post-commit
   `ResizePty` forced-cleanup gate; Native Linux lifecycle mutations,
   `WriteStdin`, and `CloseStdin` are already qualified at this boundary;
+- qualify Checkpoint, checkpoint-backed Create, restored Start, package
+  handoff, containerd content-store import, restart, and leak cleanup with a
+  production driver that explicitly advertises Checkpoint and Restore;
 - run the same suite for every driver profile advertised through containerd;
 - complete OCI conformance, security review, upgrade/rollback, and release
   soak gates.

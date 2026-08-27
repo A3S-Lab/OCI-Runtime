@@ -11,6 +11,7 @@ use a3s_oci_sdk::{
 use containerd_shim::TtrpcContext;
 use containerd_shim_protos::shim_async::Task;
 
+mod checkpoint_restore;
 mod control;
 mod delete_shim_io;
 mod delete_shim_paused;
@@ -310,6 +311,7 @@ fn task_state(bundle: &Path) -> TaskState {
         .expect("OCI state");
     TaskState {
         identity,
+        restore_state: RestoreState::None,
         bundle: bundle.to_path_buf(),
         stdin: "stdin".to_string(),
         stdout: "stdout".to_string(),
@@ -628,6 +630,7 @@ async fn delete_shim_replays_an_in_flight_create_intent_before_exact_cleanup() {
         stderr: String::new(),
         terminal: false,
         rootfs_mounted: false,
+        restore: None,
     })
     .expect("create intent")
     .store()
@@ -928,7 +931,7 @@ fn protobuf_status_prefers_durable_exit_over_stale_runtime_state() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let task = task_state(directory.path());
     assert_eq!(
-        protobuf_task_status(&task.record, true).enum_value_or_default(),
+        protobuf_task_status(&task, true).enum_value_or_default(),
         api::Status::STOPPED
     );
 }

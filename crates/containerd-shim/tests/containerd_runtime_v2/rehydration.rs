@@ -483,14 +483,14 @@ async fn finish_rehydrated_terminal_exec(
         qualification_error("rehydrated terminal stdin path has no bundle parent")
     })?;
     let restored_journal = read_exec_stdin_journal(bundle, exec_id).await?;
-    if restored_journal.schema_version != 9
+    if restored_journal.schema_version != 10
         || restored_journal.completed_sequence != 3
         || restored_journal.pending.is_some()
         || restored_journal.close_state != "open"
         || restored_journal.output_cursor == 0
     {
         return Err(qualification_error(format!(
-            "terminal stdin journal after manual shim rehydration was {restored_journal:?}; expected schema 9, completed sequence 3, no pending write, open stdin, and a nonzero output cursor"
+            "terminal stdin journal after manual shim rehydration was {restored_journal:?}; expected schema 10, completed sequence 3, no pending write, open stdin, and a nonzero output cursor"
         ))
         .into());
     }

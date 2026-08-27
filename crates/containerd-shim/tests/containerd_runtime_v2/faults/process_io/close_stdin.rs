@@ -240,7 +240,7 @@ async fn wait_for_closing_stdin(
             .iter()
             .find(|exec| exec.exec_id == EXEC_ID)
             .ok_or_else(|| qualification_error(format!("shim metadata omitted exec {EXEC_ID}")))?;
-        if document.schema_version == 9
+        if document.schema_version == 10
             && document.exec_sequence == 1
             && exec.incarnation == 1
             && exec.stdin_sequence == 0
@@ -252,7 +252,7 @@ async fn wait_for_closing_stdin(
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             return Err(qualification_error(format!(
-                "committed CloseStdin did not retain schema-9 exec incarnation 1 and closing stdin before reaching the suspended Runtime: {exec:?}"
+                "committed CloseStdin did not retain schema-10 exec incarnation 1 and closing stdin before reaching the suspended Runtime: {exec:?}"
             ))
             .into());
         }

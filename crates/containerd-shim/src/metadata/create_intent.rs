@@ -2,7 +2,9 @@ use std::fs::{self, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use a3s_oci_sdk::{ContainerId, IsolationRequest, Result};
+use a3s_oci_sdk::{
+    CheckpointArtifactPath, CheckpointReference, ContainerId, IsolationRequest, Result,
+};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -12,7 +14,8 @@ use crate::adapter::TaskIdentity;
 use crate::identity::IncarnationId;
 
 const CREATE_INTENT_FILE_NAME: &str = "a3s-oci-shim-create-v1.json";
-const CREATE_INTENT_SCHEMA_VERSION: u32 = 1;
+const CREATE_INTENT_SCHEMA_VERSION: u32 = 2;
+const MIN_CREATE_INTENT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,6 +32,15 @@ pub(crate) struct ShimCreateIntent {
     stderr: String,
     terminal: bool,
     rootfs_mounted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    restore: Option<RestoreIntent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RestoreIntent {
+    artifact_path: CheckpointArtifactPath,
+    reference: CheckpointReference,
 }
 
 pub(crate) struct NewShimCreateIntent {
@@ -40,6 +52,7 @@ pub(crate) struct NewShimCreateIntent {
     pub(crate) stderr: String,
     pub(crate) terminal: bool,
     pub(crate) rootfs_mounted: bool,
+    pub(crate) restore: Option<(CheckpointArtifactPath, CheckpointReference)>,
 }
 
 impl ShimCreateIntent {
@@ -66,6 +79,12 @@ impl ShimCreateIntent {
             stderr: value.stderr,
             terminal: value.terminal,
             rootfs_mounted: value.rootfs_mounted,
+            restore: value
+                .restore
+                .map(|(artifact_path, reference)| RestoreIntent {
+                    artifact_path,
+                    reference,
+                }),
         };
         intent.validate(&Self::path(&intent.bundle))?;
         Ok(intent)
@@ -174,13 +193,26 @@ impl ShimCreateIntent {
         self.rootfs_mounted
     }
 
+    pub(crate) fn restore(&self) -> Option<(&CheckpointArtifactPath, &CheckpointReference)> {
+        self.restore
+            .as_ref()
+            .map(|restore| (&restore.artifact_path, &restore.reference))
+    }
+
     fn validate(&self, path: &Path) -> Result<()> {
-        if self.schema_version != CREATE_INTENT_SCHEMA_VERSION {
+        if !(MIN_CREATE_INTENT_SCHEMA_VERSION..=CREATE_INTENT_SCHEMA_VERSION)
+            .contains(&self.schema_version)
+        {
             return Err(metadata_error(format!(
-                "unsupported shim create-intent schema {} in {}; expected {CREATE_INTENT_SCHEMA_VERSION}",
+                "unsupported shim create-intent schema {} in {}; expected {MIN_CREATE_INTENT_SCHEMA_VERSION} through {CREATE_INTENT_SCHEMA_VERSION}",
                 self.schema_version,
                 path.display()
             )));
+        }
+        if self.schema_version < 2 && self.restore.is_some() {
+            return Err(metadata_error(
+                "shim create-intent schema v1 cannot contain checkpoint restore state",
+            ));
         }
         if !self.bundle.is_absolute() {
             return Err(metadata_error(format!(
@@ -197,6 +229,13 @@ impl ShimCreateIntent {
             )));
         }
         self.identity()?;
+        if let Some(restore) = &self.restore {
+            if restore.reference.compatibility().isolation() != self.isolation.class() {
+                return Err(metadata_error(
+                    "shim restore intent isolation differs from its immutable checkpoint reference",
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -217,6 +256,7 @@ mod tests {
             stderr: "stderr".to_string(),
             terminal: false,
             rootfs_mounted: true,
+            restore: None,
         })
         .expect("create intent")
     }
@@ -246,6 +286,32 @@ mod tests {
     }
 
     #[test]
+    fn schema_v1_create_intent_remains_readable_without_restore_state() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let expected = intent(directory.path());
+        expected.store().expect("store create intent");
+        let path = ShimCreateIntent::path(directory.path());
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("read create intent"))
+                .expect("decode create intent");
+        document["schema_version"] = serde_json::json!(1);
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&document).expect("encode schema-v1 create intent"),
+        )
+        .expect("write schema-v1 create intent");
+
+        let loaded = ShimCreateIntent::load(&path)
+            .expect("load schema-v1 create intent")
+            .expect("schema-v1 create intent exists");
+        assert_eq!(loaded.restore(), None);
+        assert_eq!(
+            loaded.identity().expect("legacy identity"),
+            expected.identity().expect("expected identity")
+        );
+    }
+
+    #[test]
     fn create_intent_rejects_an_identity_without_an_incarnation() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let error = ShimCreateIntent::new(NewShimCreateIntent {
@@ -257,6 +323,7 @@ mod tests {
             stderr: String::new(),
             terminal: false,
             rootfs_mounted: false,
+            restore: None,
         })
         .expect_err("missing incarnation must fail closed");
         assert_eq!(error.code, a3s_oci_sdk::ErrorCode::FailedPrecondition);

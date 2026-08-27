@@ -305,3 +305,119 @@ async fn terminal_restore_failure_is_replayed_and_quarantines_only_its_generatio
     assert_eq!(restored.restored().generation, Generation(2));
     assert!(restored.restored().is_paused());
 }
+
+#[tokio::test]
+async fn driver_specific_checkpoint_and_restore_survive_a_smaller_common_operation_set() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let primary = Arc::new(RecordingDriver::with_restore_operations());
+    let mut secondary = RecordingDriver::with_control_operations();
+    if primary
+        .capability
+        .isolation_classes
+        .contains(&IsolationClass::DedicatedVm)
+    {
+        secondary.capability.isolation_classes = vec![IsolationClass::SharedGuestKernel];
+        secondary.attachments = AttachmentCapabilities::base_v4();
+    }
+    if secondary.capability.driver == primary.capability.driver {
+        secondary.capability.driver = DriverKind::LibkrunKvm;
+    }
+    let secondary = Arc::new(secondary);
+    let drivers: Vec<Arc<dyn RuntimeDriver>> = vec![primary.clone(), secondary.clone()];
+    let service = HostRuntimeService::open_with_drivers(
+        temporary.path().join("driver-specific-optional-state"),
+        drivers,
+    )
+    .await
+    .expect("open mixed-capability runtime");
+
+    let mut create = create_request(&bundle_directory, "driver-specific-create");
+    create.isolation = match primary.capability.isolation_classes[0] {
+        IsolationClass::SharedHostKernel => IsolationRequest::SharedHostKernel,
+        IsolationClass::DedicatedVm => IsolationRequest::DedicatedVm,
+        IsolationClass::SharedGuestKernel => {
+            panic!("checkpoint driver must use a restorable isolation")
+        }
+    };
+    let created = service.create(create.clone()).await.expect("create source");
+    let target = ContainerTarget::exact(create.id.clone(), created.generation);
+    service
+        .start(StartRequest {
+            context: OperationContext::new(operation_id("driver-specific-start")),
+            target: target.clone(),
+        })
+        .await
+        .expect("start source");
+    let source = service
+        .pause(ContainerOperationRequest {
+            context: OperationContext::new(operation_id("driver-specific-pause")),
+            target: target.clone(),
+        })
+        .await
+        .expect("pause source");
+
+    let info = service.features().await.expect("mixed runtime features");
+    assert!(!info.operations.contains(&RuntimeOperation::Checkpoint));
+    assert!(!info.operations.contains(&RuntimeOperation::Restore));
+    let selected = info
+        .extensions
+        .drivers()
+        .iter()
+        .find(|driver| driver.driver() == source.driver)
+        .expect("selected driver extensions");
+    assert!(
+        selected.supports_operation(RuntimeOperation::Checkpoint, RUNTIME_OPERATION_CONTRACT_V1)
+    );
+    assert!(selected.supports_operation(RuntimeOperation::Restore, RUNTIME_OPERATION_CONTRACT_V1));
+
+    let artifact_path = temporary.path().join("driver-specific.checkpoint");
+    let checkpoint = service
+        .checkpoint(
+            CheckpointRequest::new(
+                OperationContext::new(operation_id("driver-specific-checkpoint")),
+                target,
+                CheckpointArtifactPath::new(artifact_path.clone()).expect("checkpoint path"),
+            )
+            .expect("checkpoint request"),
+        )
+        .await
+        .expect("driver-specific checkpoint");
+    let restore = RestoreRequest::new(
+        OperationContext::new(operation_id("driver-specific-restore")),
+        container_id("driver-specific-restored"),
+        create.bundle,
+        CheckpointArtifactPath::new(artifact_path).expect("restore artifact path"),
+        create.isolation,
+        create.attachments,
+        checkpoint.reference().clone(),
+    )
+    .expect("restore request");
+    let restored = service
+        .restore(restore)
+        .await
+        .expect("driver-specific restore");
+    assert!(restored.restored().is_paused());
+    assert_eq!(restored.restored().driver, primary.capability.driver);
+    assert_eq!(
+        primary
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Checkpoint(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        primary
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Restore(_)))
+            .count(),
+        1
+    );
+    assert!(secondary
+        .calls()
+        .iter()
+        .all(|call| !matches!(call, DriverCall::Checkpoint(_) | DriverCall::Restore(_))));
+}

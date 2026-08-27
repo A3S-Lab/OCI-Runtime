@@ -19,7 +19,7 @@ use super::super::{
     SuspendedProcess, CREATE_INTENT_FILE_NAME,
 };
 
-const CREATE_INTENT_SCHEMA_VERSION: u32 = 1;
+const CREATE_INTENT_SCHEMA_VERSION: u32 = 2;
 const DEFAULT_TERMINAL_WIDTH: u16 = 80;
 const DEFAULT_TERMINAL_HEIGHT: u16 = 24;
 
@@ -38,6 +38,7 @@ struct CommittedCreateIntent {
     stderr: String,
     terminal: bool,
     rootfs_mounted: bool,
+    restore: Option<serde_json::Value>,
 }
 
 pub(crate) async fn qualify_create_effect_committed_shim_sigkill(
@@ -186,6 +187,7 @@ fn validate_create_intent(
         || intent.bundle != config.bundle(task_id)
         || intent.isolation != IsolationRequest::SharedHostKernel
         || !intent.rootfs_mounted
+        || intent.restore.is_some()
     {
         return Err(qualification_error(format!(
             "post-commit Create intent did not retain the exact schema, task identity, bundle, isolation, and mounted-rootfs contract: {intent:?}"

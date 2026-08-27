@@ -5,6 +5,8 @@ use containerd_shim_protos::shim_async::Task;
 
 use crate::contract::{OCI_LINUX_RESOURCES_TYPE_URL, OCI_PROCESS_TYPE_URL};
 
+#[path = "task/checkpoint.rs"]
+mod checkpoint;
 #[path = "task/delete.rs"]
 mod delete;
 #[path = "task/start.rs"]
@@ -46,14 +48,27 @@ impl Task for Service {
                 )));
             }
         }
-        if !req.checkpoint().is_empty() || !req.parent_checkpoint().is_empty() {
+        if !req.parent_checkpoint().is_empty() {
             self.state.lock().await.creating.remove(&task_id);
-            return Err(ttrpc::Error::RpcStatus(ttrpc::get_status(
-                ttrpc::Code::UNIMPLEMENTED,
-                "containerd checkpoint restore is not yet implemented by A3S OCI Runtime"
-                    .to_string(),
-            )));
+            return Err(runtime_error(
+                RuntimeError::new(
+                    ErrorCode::Unsupported,
+                    "incremental containerd checkpoint restore is not supported",
+                )
+                .for_operation("containerd-restore"),
+            ));
         }
+        let restore = if req.checkpoint().is_empty() {
+            None
+        } else {
+            match crate::checkpoint::CheckpointPackage::load(req.checkpoint()).await {
+                Ok(package) => Some(package),
+                Err(error) => {
+                    self.state.lock().await.creating.remove(&task_id);
+                    return Err(runtime_error(error));
+                }
+            }
+        };
         let identity = match self.identity(&task_id) {
             Ok(identity) => identity,
             Err(error) => {
@@ -83,6 +98,9 @@ impl Task for Service {
             stderr: req.stderr().to_string(),
             terminal: req.terminal(),
             rootfs_mounted,
+            restore: restore
+                .as_ref()
+                .map(|package| (package.artifact_path().clone(), package.reference().clone())),
         }) {
             Ok(intent) => intent,
             Err(error) => {
@@ -118,7 +136,20 @@ impl Task for Service {
                 return Err(runtime_error(error));
             }
         };
-        let record = match adapter.create(&identity, &bundle, io).await {
+        let create_result = match &restore {
+            Some(package) => adapter
+                .restore(
+                    &identity,
+                    &bundle,
+                    io,
+                    package.artifact_path().clone(),
+                    package.reference().clone(),
+                )
+                .await
+                .map(|response| response.restored().clone()),
+            None => adapter.create(&identity, &bundle, io).await,
+        };
+        let record = match create_result {
             Ok(record) => record,
             Err(error) => {
                 if !error.retryable {
@@ -182,6 +213,11 @@ impl Task for Service {
             stdout: req.stdout().to_string(),
             stderr: req.stderr().to_string(),
             terminal: req.terminal(),
+            restore_state: if restore.is_some() {
+                RestoreState::PendingStart
+            } else {
+                RestoreState::None
+            },
             stdin_sequence: 0,
             pending_stdin_write: None,
             stdin_close_state: StdinCloseState::Open,
@@ -271,12 +307,12 @@ impl Task for Service {
         response.set_id(req.id().to_string());
         response.set_bundle(task.bundle.to_string_lossy().into_owned());
         if req.exec_id().is_empty() {
+            response.status = protobuf_task_status(&task, task.exit.is_some());
             response.set_stdin(task.stdin);
             response.set_stdout(task.stdout);
             response.set_stderr(task.stderr);
             response.set_terminal(task.terminal);
             response.set_pid(record_pid(&task.record));
-            response.status = protobuf_task_status(&task.record, task.exit.is_some());
             if let Some(exit) = task.exit {
                 response.set_exit_status(adapter::exit_code(&exit));
                 response.set_exited_at(timestamp_from(task.exited_at.unwrap_or(SystemTime::now())));
@@ -359,6 +395,15 @@ impl Task for Service {
             .tasks
             .get_mut(&task_id)
             .ok_or_else(|| ttrpc_error(format!("unknown task {task_id}")))?;
+        if task.restore_state == RestoreState::PendingStart {
+            return Err(runtime_error(
+                RuntimeError::new(
+                    ErrorCode::FailedPrecondition,
+                    "a restored containerd task must pass its Start barrier before adding exec processes",
+                )
+                .for_operation("containerd-restore-start-barrier"),
+            ));
+        }
         if task.execs.contains_key(&exec_id) {
             return Err(ttrpc_already_exists(format!(
                 "exec {exec_id} already exists"
@@ -417,6 +462,15 @@ impl Task for Service {
 
     async fn kill(&self, _ctx: &TtrpcContext, req: api::KillRequest) -> TtrpcResult<api::Empty> {
         let task = self.task_snapshot(req.id()).await?;
+        if task.restore_state == RestoreState::PendingStart {
+            return Err(runtime_error(
+                RuntimeError::new(
+                    ErrorCode::FailedPrecondition,
+                    "a restored containerd task must pass its Start barrier before receiving signals",
+                )
+                .for_operation("containerd-restore-start-barrier"),
+            ));
+        }
         let signal = i32::try_from(req.signal()).map_err(|_| {
             ttrpc_invalid_argument(format!(
                 "containerd signal {} exceeds the runtime signal range",
@@ -585,12 +639,9 @@ impl Task for Service {
     async fn checkpoint(
         &self,
         _ctx: &TtrpcContext,
-        _req: api::CheckpointTaskRequest,
+        req: api::CheckpointTaskRequest,
     ) -> TtrpcResult<api::Empty> {
-        Err(ttrpc::Error::RpcStatus(ttrpc::get_status(
-            ttrpc::Code::UNIMPLEMENTED,
-            "checkpoint/restore is not yet implemented by A3S OCI Runtime".to_string(),
-        )))
+        self.checkpoint_task(req).await
     }
 
     async fn update(

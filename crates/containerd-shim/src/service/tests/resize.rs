@@ -542,7 +542,7 @@ async fn schema_v5_defaults_resize_state_and_upgrades_on_restore() {
             .expect("read upgraded metadata"),
     )
     .expect("decode upgraded metadata");
-    assert_eq!(upgraded["schema_version"], serde_json::json!(9));
+    assert_eq!(upgraded["schema_version"], serde_json::json!(10));
     replacement.stop_all_monitors().await;
     replacement.stop_all_pumps().await;
 }

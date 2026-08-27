@@ -3,14 +3,18 @@ use std::time::Duration;
 
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
+    CheckpointArtifactPath, CheckpointReference, CheckpointRequest, CheckpointResponse,
     CloseStdinRequest, ContainerId, ContainerOperationRequest, ContainerRecord, ContainerStats,
     ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
     ExecRequest, ExitStatus, IoMode, IsolationRequest, KillRequest, LinuxResources,
     LocalIpcEndpoint, OciBundle, OperationContext, ProcessId, ProcessIo, ProcessRecord,
-    ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeClient,
-    Signal, SignalProcessRequest, StartRequest, StateRequest, StatsRequest, TerminalSize,
-    UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest,
+    RestoreResponse, Result, RuntimeClient, RuntimeExtensions, RuntimeNegotiationRequest,
+    RuntimeOperation, Signal, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
+    TerminalSize, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    RUNTIME_OPERATION_CONTRACT_V1,
 };
+use sha2::{Digest, Sha256};
 
 use crate::{contract, identity};
 
@@ -117,6 +121,7 @@ impl TaskIdentity {
 pub(crate) struct RuntimeAdapter {
     client: RuntimeClient,
     isolation: IsolationRequest,
+    extensions: RuntimeExtensions,
 }
 
 impl RuntimeAdapter {
@@ -128,19 +133,62 @@ impl RuntimeAdapter {
         let client = RuntimeClient::connect(&endpoint).await?;
         let features = client.features().await?;
         validate_sdk_operations(&features)?;
-        Ok(Self { client, isolation })
+        Ok(Self {
+            client,
+            isolation,
+            extensions: features.extensions,
+        })
     }
 
     pub(crate) fn with_isolation(&self, isolation: IsolationRequest) -> Self {
         Self {
             client: self.client.clone(),
             isolation,
+            extensions: self.extensions.clone(),
         }
     }
 
     #[cfg(test)]
-    pub(crate) const fn from_client(client: RuntimeClient, isolation: IsolationRequest) -> Self {
-        Self { client, isolation }
+    pub(crate) fn from_client(client: RuntimeClient, isolation: IsolationRequest) -> Self {
+        Self {
+            client,
+            isolation,
+            extensions: RuntimeExtensions::default(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_client_with_extensions(
+        client: RuntimeClient,
+        isolation: IsolationRequest,
+        extensions: RuntimeExtensions,
+    ) -> Self {
+        Self {
+            client,
+            isolation,
+            extensions,
+        }
+    }
+
+    fn ensure_optional_operation(
+        &self,
+        isolation: a3s_oci_sdk::IsolationClass,
+        driver: a3s_oci_sdk::DriverKind,
+        operation: RuntimeOperation,
+    ) -> Result<()> {
+        let request = RuntimeNegotiationRequest::new(isolation)
+            .with_operation(operation, RUNTIME_OPERATION_CONTRACT_V1)?;
+        let selected = self.extensions.negotiate(&request)?;
+        if selected.driver() != driver {
+            return Err(adapter_error(
+                ErrorCode::Unsupported,
+                format!(
+                    "runtime isolation {isolation:?} is advertised by {:?}, not the exact task driver {driver:?}",
+                    selected.driver()
+                ),
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) async fn create(
@@ -160,6 +208,63 @@ impl RuntimeAdapter {
                 attachments,
             })
             .await
+    }
+
+    pub(crate) async fn restore(
+        &self,
+        task: &TaskIdentity,
+        bundle_directory: &Path,
+        io: ProcessIo,
+        artifact_path: CheckpointArtifactPath,
+        reference: CheckpointReference,
+    ) -> Result<RestoreResponse> {
+        self.ensure_optional_operation(
+            self.isolation.class(),
+            reference.compatibility().driver(),
+            RuntimeOperation::Restore,
+        )?;
+        let bundle = OciBundle::load(bundle_directory).await?;
+        let attachments = CreateAttachments::from_bundle(&bundle, io)?;
+        self.client
+            .restore(RestoreRequest::new(
+                task.operation(None, "restore")?,
+                task.container_id.clone(),
+                bundle,
+                artifact_path,
+                self.isolation.clone(),
+                attachments,
+                reference,
+            )?)
+            .await
+    }
+
+    pub(crate) async fn replay_restore_for_cleanup(
+        &self,
+        task: &TaskIdentity,
+        bundle_directory: &Path,
+        io: ProcessIo,
+        artifact_path: CheckpointArtifactPath,
+        reference: CheckpointReference,
+    ) -> Result<RestoreResponse> {
+        let deadline = tokio::time::Instant::now() + DELETE_RETRY_TIMEOUT;
+        loop {
+            match self
+                .restore(
+                    task,
+                    bundle_directory,
+                    io.clone(),
+                    artifact_path.clone(),
+                    reference.clone(),
+                )
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(error) if error.retryable && tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(DELETE_RETRY_INTERVAL).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub(crate) async fn replay_create_for_cleanup(
@@ -454,6 +559,48 @@ impl RuntimeAdapter {
             .await
     }
 
+    pub(crate) async fn start_restored(
+        &self,
+        task: &TaskIdentity,
+        generation: a3s_oci_sdk::Generation,
+    ) -> Result<ContainerRecord> {
+        self.client
+            .resume(ContainerOperationRequest {
+                context: task.operation(None, "start-restored")?,
+                target: ContainerTarget::exact(task.container_id.clone(), generation),
+            })
+            .await
+    }
+
+    pub(crate) async fn checkpoint(
+        &self,
+        task: &TaskIdentity,
+        generation: a3s_oci_sdk::Generation,
+        source_driver: a3s_oci_sdk::DriverKind,
+        source_isolation: a3s_oci_sdk::IsolationClass,
+        artifact_path: CheckpointArtifactPath,
+    ) -> Result<CheckpointResponse> {
+        self.ensure_optional_operation(
+            source_isolation,
+            source_driver,
+            RuntimeOperation::Checkpoint,
+        )?;
+        let path = artifact_path.as_path().to_str().ok_or_else(|| {
+            adapter_error(
+                ErrorCode::InvalidArgument,
+                "checkpoint artifact path must be UTF-8",
+            )
+        })?;
+        let action = format!("checkpoint-{:x}", Sha256::digest(path.as_bytes()));
+        self.client
+            .checkpoint(CheckpointRequest::new(
+                task.operation(None, &action)?,
+                ContainerTarget::exact(task.container_id.clone(), generation),
+                artifact_path,
+            )?)
+            .await
+    }
+
     pub(crate) async fn update(
         &self,
         task: &TaskIdentity,
@@ -634,7 +781,8 @@ mod tests {
     use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Features, StateBuilder};
     use a3s_oci_sdk::{
         async_trait, AttachmentCapabilities, DeleteMode, DriverKind, Generation, IsolationClass,
-        OciRuntimeService, RuntimeFeatures, RuntimeInfo, RuntimeOperation,
+        OciRuntimeService, RuntimeArtifact, RuntimeDriverCapabilities, RuntimeFeatures,
+        RuntimeInfo, RuntimeOperation, RuntimeOperationCapability,
     };
 
     #[derive(Clone, Default)]
@@ -798,6 +946,53 @@ mod tests {
         let error = validate_sdk_operations(&features).expect_err("missing resize must fail");
         assert_eq!(error.code, ErrorCode::Unsupported);
         assert!(error.message.contains("resize"));
+    }
+
+    #[test]
+    fn optional_operations_require_the_exact_task_driver() {
+        let artifact = RuntimeArtifact::new(
+            "a3s-oci-runtime",
+            "0.2.0",
+            format!("sha256:{}", "a".repeat(64)),
+            Some("containerd-exact-driver-test".to_string()),
+        )
+        .expect("runtime artifact");
+        let extensions = RuntimeExtensions::new(
+            artifact,
+            vec![RuntimeDriverCapabilities::new(
+                DriverKind::NativeLinux,
+                vec![IsolationClass::SharedHostKernel],
+                [RuntimeOperation::Checkpoint, RuntimeOperation::Restore]
+                    .into_iter()
+                    .map(RuntimeOperationCapability::v1)
+                    .collect(),
+                AttachmentCapabilities::base_v1(),
+            )
+            .expect("runtime driver capabilities")],
+        )
+        .expect("runtime extensions");
+        let adapter = RuntimeAdapter::from_client_with_extensions(
+            RuntimeClient::new(RecordingService::default()),
+            IsolationRequest::SharedHostKernel,
+            extensions,
+        );
+
+        adapter
+            .ensure_optional_operation(
+                IsolationClass::SharedHostKernel,
+                DriverKind::NativeLinux,
+                RuntimeOperation::Checkpoint,
+            )
+            .expect("exact driver operation");
+        let error = adapter
+            .ensure_optional_operation(
+                IsolationClass::SharedHostKernel,
+                DriverKind::LibkrunKvm,
+                RuntimeOperation::Checkpoint,
+            )
+            .expect_err("different task driver must fail");
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error.message.contains("exact task driver"));
     }
 
     #[tokio::test]

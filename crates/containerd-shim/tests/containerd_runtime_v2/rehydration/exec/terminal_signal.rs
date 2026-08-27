@@ -302,9 +302,9 @@ async fn read_exec_evidence(bundle: &Path) -> TestResult<ExecEvidence> {
             .map_err(|error| qualification_error(format!("read shim metadata: {error}")))?,
     )
     .map_err(|error| qualification_error(format!("decode shim metadata: {error}")))?;
-    if document.schema_version != 9 {
+    if document.schema_version != 10 {
         return Err(qualification_error(format!(
-            "committed terminal-SignalProcess requires shim metadata schema 9, observed {}",
+            "committed terminal-SignalProcess requires shim metadata schema 10, observed {}",
             document.schema_version
         ))
         .into());

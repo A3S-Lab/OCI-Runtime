@@ -46,12 +46,12 @@ pub(super) async fn qualify(
     mut old_replacement: Child,
 ) -> TestResult<(Channel, Child)> {
     let baseline = read_task_signal_journal(bundle).await?;
-    if baseline.schema_version != 9
+    if baseline.schema_version != 10
         || baseline.completed_sequence != 0
         || baseline.pending.is_some()
     {
         return Err(qualification_error(format!(
-            "init signal journal before committed replacement was {baseline:?}; expected schema 9, sequence 0, and no pending signal"
+            "init signal journal before committed replacement was {baseline:?}; expected schema 10, sequence 0, and no pending signal"
         ))
         .into());
     }
@@ -170,12 +170,12 @@ pub(super) async fn qualify(
     wait_for_process_stopped(exec.pid, false, "final exec running state").await?;
 
     let final_state = read_task_signal_journal(bundle).await?;
-    if final_state.schema_version != 9
+    if final_state.schema_version != 10
         || final_state.completed_sequence != 4
         || final_state.pending.is_some()
     {
         return Err(qualification_error(format!(
-            "init SIGSTOP→SIGCONT→SIGSTOP→SIGCONT did not finish at schema 9, sequence 4: {final_state:?}"
+            "init SIGSTOP→SIGCONT→SIGSTOP→SIGCONT did not finish at schema 10, sequence 4: {final_state:?}"
         ))
         .into());
     }
@@ -201,7 +201,7 @@ pub(super) async fn wait_for_pending_signal(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         let evidence = read_task_signal_journal(bundle).await?;
-        if evidence.schema_version == 9
+        if evidence.schema_version == 10
             && evidence.completed_sequence == completed_sequence
             && evidence.pending.as_ref() == Some(&expected)
         {
@@ -237,7 +237,7 @@ async fn wait_for_completed_signal(bundle: &Path, sequence: u64) -> TestResult<(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         let evidence = read_task_signal_journal(bundle).await?;
-        if evidence.schema_version == 9
+        if evidence.schema_version == 10
             && evidence.completed_sequence == sequence
             && evidence.pending.is_none()
         {

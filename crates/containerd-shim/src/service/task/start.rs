@@ -7,21 +7,52 @@ impl Service {
     ) -> TtrpcResult<api::StartResponse> {
         let task_id = req.id().to_string();
         let exec_id = req.exec_id().to_string();
-        let snapshot = self.task_snapshot(&task_id).await?;
+        let initial = self.task_snapshot(&task_id).await?;
+        let _control_guard = if exec_id.is_empty() {
+            Some(Arc::clone(&initial.control_gate).lock_owned().await)
+        } else {
+            None
+        };
+        let snapshot = if exec_id.is_empty() {
+            self.task_snapshot(&task_id).await?
+        } else {
+            initial
+        };
         let pid = if exec_id.is_empty() {
             let adapter = self.adapter().await.map_err(runtime_error)?;
-            let publish_started = adapter::task_status(&snapshot.record) == 1;
-            let record = adapter
-                .start(&snapshot.identity, snapshot.record.generation)
-                .await
-                .map_err(runtime_error)?;
+            let publish_started = match snapshot.restore_state {
+                RestoreState::PendingStart => true,
+                RestoreState::Started => false,
+                RestoreState::None => adapter::task_status(&snapshot.record) == 1,
+            };
+            let record = match snapshot.restore_state {
+                RestoreState::PendingStart => {
+                    adapter
+                        .start_restored(&snapshot.identity, snapshot.record.generation)
+                        .await
+                }
+                RestoreState::Started => {
+                    adapter
+                        .exact_state(&snapshot.identity, snapshot.record.generation)
+                        .await
+                }
+                RestoreState::None => {
+                    adapter
+                        .start(&snapshot.identity, snapshot.record.generation)
+                        .await
+                }
+            }
+            .map_err(runtime_error)?;
             let pid = record_pid(&record);
             let mut state = self.state.lock().await;
-            state
+            let task = state
                 .tasks
                 .get_mut(&task_id)
-                .ok_or_else(|| ttrpc_error(format!("task {task_id} disappeared")))?
-                .record = record;
+                .ok_or_else(|| ttrpc_error(format!("task {task_id} disappeared")))?;
+            task.record = record;
+            if task.restore_state == RestoreState::PendingStart {
+                task.restore_state = RestoreState::Started;
+            }
             state
                 .pumps
                 .get(&Self::pump_key(&task_id, None))

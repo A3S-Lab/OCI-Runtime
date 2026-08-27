@@ -348,7 +348,7 @@ async fn wait_for_settled_terminal_kill(
                 .map_err(|error| qualification_error(format!("read shim metadata: {error}")))?,
         )
         .map_err(|error| qualification_error(format!("decode shim metadata: {error}")))?;
-        if evidence.schema_version == 9
+        if evidence.schema_version == 10
             && evidence.signal_sequence == 1
             && evidence.pending_signal.is_none()
             && evidence.exit.as_ref() == Some(expected_exit)

@@ -26,7 +26,7 @@ pub(crate) use task_delete::TaskDeleteReceipt;
 
 const METADATA_FILE_NAME: &str = "a3s-oci-shim-v1.json";
 const INCARNATION_FILE_NAME: &str = "a3s-oci-shim-incarnation-v1";
-const METADATA_SCHEMA_VERSION: u32 = 9;
+const METADATA_SCHEMA_VERSION: u32 = 10;
 const MIN_METADATA_SCHEMA_VERSION: u32 = 1;
 const CONTROL_RESOURCES_SCHEMA_VERSION: u32 = 9;
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
@@ -50,6 +50,8 @@ pub(crate) struct ShimMetadata {
     stdout: String,
     stderr: String,
     terminal: bool,
+    #[serde(default, skip_serializing_if = "RestoreState::is_none")]
+    restore_state: RestoreState,
     #[serde(default, skip_serializing_if = "is_zero")]
     stdin_sequence: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,6 +132,21 @@ pub(crate) enum ExecStage {
     Starting,
     Started,
     Exited,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum RestoreState {
+    #[default]
+    None,
+    PendingStart,
+    Started,
+}
+
+impl RestoreState {
+    fn is_none(&self) -> bool {
+        *self == Self::None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -307,6 +324,7 @@ pub(crate) struct NewShimMetadata {
     pub(crate) stdout: String,
     pub(crate) stderr: String,
     pub(crate) terminal: bool,
+    pub(crate) restore_state: RestoreState,
     pub(crate) output_cursor: u64,
     pub(crate) rootfs_mounted: bool,
 }
@@ -333,6 +351,7 @@ impl ShimMetadata {
             stdout: value.stdout,
             stderr: value.stderr,
             terminal: value.terminal,
+            restore_state: value.restore_state,
             stdin_sequence: 0,
             pending_stdin_write: None,
             stdin_close_state: StdinCloseState::Open,
@@ -558,6 +577,10 @@ impl ShimMetadata {
         self.terminal_size
     }
 
+    pub(crate) fn restore_state(&self) -> RestoreState {
+        self.restore_state
+    }
+
     pub(crate) fn signal_sequence(&self) -> u64 {
         self.signal_sequence
     }
@@ -745,6 +768,25 @@ impl ShimMetadata {
                 "shim metadata schema {} cannot contain schema-v8 exec incarnation state",
                 self.schema_version
             )));
+        }
+        if self.schema_version < 10 && self.restore_state != RestoreState::None {
+            return Err(metadata_error(format!(
+                "shim metadata schema {} cannot contain schema-v10 restore state",
+                self.schema_version
+            )));
+        }
+        if self.restore_state == RestoreState::PendingStart
+            && (self.control_sequence != 0
+                || self.pending_control.is_some()
+                || self.last_update_digest.is_some()
+                || self.exit.is_some()
+                || self.exited_at_unix_nanos.is_some()
+                || self.exec_sequence != 0
+                || !self.execs.is_empty())
+        {
+            return Err(metadata_error(
+                "a pending containerd checkpoint restore cannot retain control, exit, or exec state",
+            ));
         }
         validate_stdin_state(
             self.stdin_sequence,
@@ -1148,6 +1190,7 @@ mod tests {
             stdout: "stdout".to_string(),
             stderr: "stderr".to_string(),
             terminal: false,
+            restore_state: RestoreState::None,
             output_cursor: 0,
             rootfs_mounted: true,
         })
@@ -1329,6 +1372,7 @@ mod tests {
     fn schema_v9_metadata_round_trip_preserves_pending_update_resources() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let mut expected = metadata(directory.path());
+        expected.schema_version = 9;
         let resources: a3s_oci_sdk::oci_spec::runtime::LinuxResources =
             serde_json::from_value(serde_json::json!({
                 "unified": {
@@ -1369,6 +1413,7 @@ mod tests {
     fn schema_v9_metadata_rejects_missing_mismatched_or_non_update_resources() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let mut expected = metadata(directory.path());
+        expected.schema_version = 9;
         let resources: a3s_oci_sdk::oci_spec::runtime::LinuxResources =
             serde_json::from_value(serde_json::json!({"pids": {"limit": 64}}))
                 .expect("Linux resources");
@@ -1785,6 +1830,41 @@ mod tests {
                 .code,
             ErrorCode::FailedPrecondition
         );
+    }
+
+    #[test]
+    fn schema_v10_restore_barrier_round_trips_and_rejects_legacy_or_mutated_state() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut pending = metadata(directory.path());
+        pending.restore_state = RestoreState::PendingStart;
+        pending.store().expect("store pending restore barrier");
+        let loaded = ShimMetadata::load(&ShimMetadata::path(directory.path()))
+            .expect("load pending restore barrier")
+            .expect("metadata exists");
+        assert_eq!(loaded.schema_version(), 10);
+        assert_eq!(loaded.restore_state(), RestoreState::PendingStart);
+
+        let path = ShimMetadata::path(directory.path());
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("read restore metadata"))
+                .expect("decode restore metadata");
+        legacy["schema_version"] = serde_json::json!(9);
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&legacy).expect("encode legacy restore metadata"),
+        )
+        .expect("write legacy restore metadata");
+        let error = ShimMetadata::load(&path).expect_err("schema v9 restore state must fail");
+        assert!(error.message.contains("schema-v10 restore state"));
+
+        let mut invalid = pending;
+        invalid.set_control_state(1, None, Some(format!("sha256:{}", "a".repeat(64))));
+        let error = invalid
+            .store()
+            .expect_err("pending restore cannot retain control state");
+        assert!(error
+            .message
+            .contains("pending containerd checkpoint restore"));
     }
 
     #[test]

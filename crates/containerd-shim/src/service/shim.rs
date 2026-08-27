@@ -180,19 +180,30 @@ impl Shim for Service {
                 .await
                 .map_err(|error| Error::Other(error.to_string()))?
                 .with_isolation(intent.isolation().clone());
-            let record = adapter
-                .replay_create_for_cleanup(
-                    &identity,
-                    intent.bundle(),
-                    adapter::process_io(
-                        intent.terminal(),
-                        !intent.stdin().is_empty(),
-                        !intent.stdout().is_empty(),
-                        !intent.stderr().is_empty(),
-                    ),
-                )
-                .await
-                .map_err(|error| Error::Other(error.to_string()))?;
+            let process_io = adapter::process_io(
+                intent.terminal(),
+                !intent.stdin().is_empty(),
+                !intent.stdout().is_empty(),
+                !intent.stderr().is_empty(),
+            );
+            let record = match intent.restore() {
+                Some((artifact_path, reference)) => adapter
+                    .replay_restore_for_cleanup(
+                        &identity,
+                        intent.bundle(),
+                        process_io,
+                        artifact_path.clone(),
+                        reference.clone(),
+                    )
+                    .await
+                    .map(|response| response.restored().clone()),
+                None => {
+                    adapter
+                        .replay_create_for_cleanup(&identity, intent.bundle(), process_io)
+                        .await
+                }
+            }
+            .map_err(|error| Error::Other(error.to_string()))?;
             let pid = record_pid(&record);
             let _ = adapter.kill(&identity, record.generation, 9, true).await;
             let exit = tokio::time::timeout(

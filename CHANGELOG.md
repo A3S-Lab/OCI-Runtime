@@ -27,6 +27,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Bridged containerd runtime-v2 `Task.Checkpoint` and checkpoint-backed
+  `Task.Create` into the SDK checkpoint and restore contracts. The shim now
+  commits a digest-verified immutable checkpoint package, restores into a
+  durable created-before-start barrier, resumes exactly once from `Task.Start`,
+  and rehydrates or cleans up interrupted restore operations without exposing
+  the SDK's paused runtime state early. Optional capability negotiation remains
+  bound to the exact source isolation and driver, and metadata schema v10 plus
+  create-intent schema v2 retain the restore state across shim restarts.
 - Added the protocol-9 policy-neutral TEE launch and attestation boundary
   without widening any production driver capability. Dedicated-VM create and
   restore can carry one exact AMD SEV-SNP or Intel TDX required extension in

@@ -32,6 +32,17 @@ impl Service {
                 format!("task {task_id} was replaced while waiting for its control lock"),
             )));
         }
+        if task.restore_state == RestoreState::PendingStart {
+            return Err(runtime_error(
+                RuntimeError::new(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "containerd {kind:?} requires the restored task to pass its Start barrier"
+                    ),
+                )
+                .for_operation("containerd-restore-start-barrier"),
+            ));
+        }
 
         if let Some(pending) = task.pending_control.clone() {
             if pending.kind() != kind || pending.request_digest() != request_digest.as_deref() {

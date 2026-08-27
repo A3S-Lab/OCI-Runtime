@@ -1396,7 +1396,12 @@ impl OciRuntimeService for HostRuntimeService {
     async fn checkpoint(&self, request: CheckpointRequest) -> Result<CheckpointResponse> {
         request.validate()?;
         let lifecycle = self.lifecycle("checkpoint")?;
-        lifecycle.ensure_operation(RuntimeOperation::Checkpoint, "checkpoint")?;
+        if !lifecycle
+            .drivers
+            .any_driver_supports(RuntimeOperation::Checkpoint)
+        {
+            return Err(Error::unsupported("checkpoint"));
+        }
         let operation_id = request.context().operation_id.clone();
         let runtime_artifact = artifact::current()
             .await
@@ -1411,7 +1416,10 @@ impl OciRuntimeService for HostRuntimeService {
             | CheckpointOperationPreparation::Resume(source) => source,
         };
         let registered = lifecycle.driver(source.driver, "checkpoint")?;
-        registered.ensure_operation(RuntimeOperation::Checkpoint, "checkpoint")?;
+        if let Err(error) = registered.ensure_operation(RuntimeOperation::Checkpoint, "checkpoint")
+        {
+            return lifecycle.fail_driver_operation(&operation_id, error).await;
+        }
         lifecycle.driver_boundary(DriverOperation::Checkpoint, DriverBoundaryStage::BeforeCall)?;
         let result = registered
             .driver()
@@ -1473,7 +1481,12 @@ impl OciRuntimeService for HostRuntimeService {
         request.validate()?;
         let tee_launch = request.attachments().tee_launch(request.bundle())?;
         let lifecycle = self.lifecycle("restore")?;
-        lifecycle.ensure_operation(RuntimeOperation::Restore, "restore")?;
+        if !lifecycle
+            .drivers
+            .any_driver_supports(RuntimeOperation::Restore)
+        {
+            return Err(Error::unsupported("restore"));
+        }
         let operation_id = request.context().operation_id.clone();
         if let RestoreOperationLookup::Replayed(response) =
             lifecycle.store.lookup_restore(&request).await?
