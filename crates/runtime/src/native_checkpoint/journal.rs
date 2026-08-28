@@ -747,7 +747,7 @@ fn decode_token(encoded: &str) -> Result<[u8; 32]> {
         ));
     }
     let mut token = [0_u8; 32];
-    for (index, pair) in encoded.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in encoded.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let text = std::str::from_utf8(pair).map_err(|_| {
             checkpoint_error(
                 ErrorCode::FailedPrecondition,
