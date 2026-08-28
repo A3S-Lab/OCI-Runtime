@@ -80,6 +80,15 @@ same source or matching destination evidence, while cleanup removes only a
 marker-proven runtime-owned bundle. Requests without the extension retain the
 strict fixed-bundle containment behavior used by qualification gates.
 
+For both bundle-handoff and pre-positioned qualification bundles, the driver
+creates and protects the exact share's `run` directory inside the serialized
+Create boundary immediately before the first VM launch. Callers own neither
+that runtime-state directory nor its ordering. If a shim exits or is terminated
+before the authenticated Agent session passes its contract checks, the Host
+removes only the console and recovery handoff paths that were absent before
+that launch. Once the session is established, cleanup is disarmed so the
+console and owner-death recovery handoff remain available as exact evidence.
+
 The capability query follows the
 [Windows Hypervisor Platform API](https://learn.microsoft.com/en-us/virtualization/api/hypervisor-platform/hypervisor-platform).
 The smoke operation uses

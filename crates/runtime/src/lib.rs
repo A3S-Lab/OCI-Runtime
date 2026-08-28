@@ -6,6 +6,15 @@
     all(target_os = "macos", target_arch = "aarch64")
 ))]
 mod agent_driver;
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
+mod agent_launch_cleanup;
 #[cfg(windows)]
 mod agent_pipe;
 #[cfg(any(

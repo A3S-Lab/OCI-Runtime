@@ -30,6 +30,7 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
+use crate::agent_launch_cleanup::FailedAgentVmLaunchCleanup;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use crate::agent_pipe::WindowsAgentPipeListener;
 use crate::agent_smoke_process::{BoundedOutput, CompletedShim, RunningShim, MAX_CAPTURE_BYTES};
@@ -895,6 +896,15 @@ impl AgentVmSession {
             Err(error) => return Err(failed(report, error.to_string())),
         };
         report.endpoint_name = Some(endpoint.pipe_name().to_string());
+        let failed_launch_cleanup = match FailedAgentVmLaunchCleanup::new(
+            &console,
+            runtime_share_path,
+            &endpoint,
+            recovery_report.as_deref(),
+        ) {
+            Ok(cleanup) => cleanup,
+            Err(reason) => return Err(failed(report, reason)),
+        };
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         let bootstrap_cleanup = BootstrapTokenCleanup::new(runtime_share_path, &endpoint);
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -1131,6 +1141,7 @@ impl AgentVmSession {
         if let Some(reason) = session.contract_failure() {
             return Err(session.finish_with_failure(reason).await);
         }
+        failed_launch_cleanup.preserve();
         Ok(session)
     }
 

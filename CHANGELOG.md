@@ -1338,6 +1338,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Prepare the protected `run` directory for both pre-positioned and
+  runtime-owned WHPX bundles inside the serialized Create boundary before the
+  first utility-VM launch. Failed Agent-session establishment now also removes
+  only the attempt-owned console, recovery directories, reports, and pending
+  markers, while established sessions preserve the same artifacts for exact
+  evidence and owner-death recovery. This keeps an exact-generation Create
+  retryable after a pre-negotiation shim timeout without weakening existing
+  recovery evidence.
 - Prevent OCI Hook process groups from surviving an uncatchable runtime or
   Agent-owner exit. Every Hook now starts a detached, descriptor-minimal
   watchdog bound to exact owner and Hook-leader pidfds before `exec`; owner

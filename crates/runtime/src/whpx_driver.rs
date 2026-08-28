@@ -901,16 +901,16 @@ impl RuntimeDriver for WhpxRuntimeDriver {
             .for_operation("whpx-create"));
         }
         require_exact_generation(&request.target, "whpx-create")?;
-        let runtime_share =
-            exact_runtime_share_path(&self.runtime_share_root, &request.target).await?;
-        let guest_directory = guest_bundle_path(&runtime_share, request.bundle.directory()).await?;
         let target = request.target.clone();
 
         let create_gate = self.create_gate_for(&target.id).await;
         let _create_guard = create_gate.lock().await;
+        let runtime_share = exact_runtime_share_path(&self.runtime_share_root, &target).await?;
+        let guest_directory = guest_bundle_path(&runtime_share, request.bundle.directory()).await?;
         let session = match self.session_for_existing_create(&target).await? {
             Some(session) => session,
             None => {
+                ensure_runtime_state_directory(&runtime_share).await?;
                 let launched = match self.factory.launch(&target, &runtime_share).await {
                     Ok(launched) => launched,
                     Err(error) if error.retryable => return Err(error),
@@ -1514,8 +1514,12 @@ async fn ensure_exact_runtime_share_path(
     )
     .await?;
     let runtime_share = exact_runtime_share_path(runtime_share_root, target).await?;
-    ensure_private_directory(runtime_share.join("run"), "runtime-state").await?;
+    ensure_runtime_state_directory(&runtime_share).await?;
     Ok(runtime_share)
+}
+
+async fn ensure_runtime_state_directory(runtime_share: &Path) -> Result<()> {
+    ensure_private_directory(runtime_share.join("run"), "runtime-state").await
 }
 
 async fn existing_exact_runtime_share_path(
@@ -2334,6 +2338,7 @@ mod tests {
         active_launches: AtomicUsize,
         max_active_launches: AtomicUsize,
         launch_shares: StdMutex<Vec<PathBuf>>,
+        launch_state_directories: StdMutex<Vec<bool>>,
         launch_barrier: StdMutex<Option<Arc<tokio::sync::Barrier>>>,
         guest: Arc<FakeGuest>,
         owner: Arc<FakeOwner>,
@@ -2358,6 +2363,10 @@ mod tests {
                 .lock()
                 .expect("launch-share lock")
                 .push(runtime_share.to_path_buf());
+            self.launch_state_directories
+                .lock()
+                .expect("launch-state-directory lock")
+                .push(runtime_share.join("run").is_dir());
             let active = self.active_launches.fetch_add(1, Ordering::Relaxed) + 1;
             self.max_active_launches
                 .fetch_max(active, Ordering::Relaxed);
@@ -2421,6 +2430,7 @@ mod tests {
                 active_launches: AtomicUsize::new(0),
                 max_active_launches: AtomicUsize::new(0),
                 launch_shares: StdMutex::new(Vec::new()),
+                launch_state_directories: StdMutex::new(Vec::new()),
                 launch_barrier: StdMutex::new(None),
                 guest: guest.clone(),
                 owner: owner.clone(),
@@ -2685,6 +2695,35 @@ mod tests {
         .await
         .expect_err("mutable runtime roots must not contain immutable system assets");
         assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    }
+
+    #[tokio::test]
+    async fn create_prepares_runtime_state_before_vm_launch() {
+        let fixture = Fixture::new();
+        let runtime_share = fixture.runtime_share_root.join("whpx-test/1");
+        assert!(!runtime_share.join("run").exists());
+
+        fixture
+            .driver
+            .create(fixture.create_request(1, "create-runtime-state"))
+            .await
+            .expect("create with runtime state");
+
+        assert_eq!(
+            fixture
+                .factory
+                .launch_state_directories
+                .lock()
+                .expect("launch-state-directory lock")
+                .as_slice(),
+            [true],
+            "the VM factory must receive a share with its runtime-owned state directory"
+        );
+        fixture
+            .driver
+            .delete(delete_request(1))
+            .await
+            .expect("delete");
     }
 
     #[tokio::test]

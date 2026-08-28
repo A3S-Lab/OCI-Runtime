@@ -383,7 +383,7 @@ mod windows {
             .join("console")
             .join(format!("{}-{}.log", target.id, generation.0));
         report.console_created = plain_file(&console).await.unwrap_or(false);
-        if !report.console_created {
+        if exercise.is_ok() && !report.console_created {
             append_reason(
                 &mut report,
                 format!(
