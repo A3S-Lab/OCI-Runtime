@@ -169,6 +169,55 @@ impl DeviceNode {
         verify_ownership: bool,
         prepared: &PreparedDeviceSources,
     ) -> Result<()> {
+        let (target, relative) = self.resolve_target(rootfs)?;
+        if !self.create_placeholder(&target, &relative, prepared)? {
+            return if verify_ownership {
+                self.verify_at(&target, self.uid, self.gid)
+            } else {
+                self.verify_device_at(&target)
+            };
+        }
+
+        let PreparedDeviceSource::DetachedMount(source) = source;
+        attach_device_mount(source, &target, &self.path)?;
+        if verify_ownership {
+            self.verify_at(&target, self.uid, self.gid)
+        } else {
+            self.verify_device_at(&target)
+        }
+    }
+
+    pub(super) fn prepare_restore_target(
+        &self,
+        rootfs: &Path,
+        prepared: &PreparedDeviceSources,
+    ) -> Result<()> {
+        let (target, relative) = self.resolve_target(rootfs)?;
+        if self.create_placeholder(&target, &relative, prepared)? {
+            return Ok(());
+        }
+        let metadata = fs::symlink_metadata(&target).map_err(|error| {
+            device_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "failed to inspect existing restore mount target {}: {error}",
+                    self.path.display()
+                ),
+            )
+        })?;
+        if metadata.file_type().is_symlink() || metadata.is_dir() {
+            return Err(device_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "restore mount target must be a nonsymlink file: {}",
+                    self.path.display()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn resolve_target(&self, rootfs: &Path) -> Result<(PathBuf, PathBuf)> {
         let canonical_rootfs = rootfs.canonicalize().map_err(|error| {
             invalid(format!(
                 "failed to resolve the container rootfs while binding {}: {error}",
@@ -203,20 +252,23 @@ impl DeviceNode {
                 ),
             ));
         }
+        Ok((target, relative.to_path_buf()))
+    }
+
+    fn create_placeholder(
+        &self,
+        target: &Path,
+        relative: &Path,
+        prepared: &PreparedDeviceSources,
+    ) -> Result<bool> {
         match OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
-            .open(&target)
+            .open(target)
         {
             Ok(target) => drop(target),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                return if verify_ownership {
-                    self.verify_at(&target, self.uid, self.gid)
-                } else {
-                    self.verify_device_at(&target)
-                };
-            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(false),
             Err(error) => {
                 return Err(invalid(format!(
                     "failed to create OCI device bind target {}: {error}",
@@ -224,15 +276,8 @@ impl DeviceNode {
                 )));
             }
         }
-        prepared.record_created_target(&target, relative)?;
-
-        let PreparedDeviceSource::DetachedMount(source) = source;
-        attach_device_mount(source, &target, &self.path)?;
-        if verify_ownership {
-            self.verify_at(&target, self.uid, self.gid)
-        } else {
-            self.verify_device_at(&target)
-        }
+        prepared.record_created_target(target, relative)?;
+        Ok(true)
     }
 
     pub(super) fn create(&self) -> Result<()> {

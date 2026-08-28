@@ -8,8 +8,9 @@ use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     CheckpointArtifactPath, CheckpointRequest, ContainerId, ContainerOperationRequest,
     ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
-    IoMode, IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId, ProcessIo,
-    Result, RuntimeClient, RuntimeOperation, Signal, StartRequest, StateRequest, WaitRequest,
+    ExitStatus, IoMode, IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId,
+    ProcessIo, RestoreRequest, Result, RuntimeClient, RuntimeOperation, Signal, StartRequest,
+    StateRequest, WaitRequest,
 };
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
@@ -32,31 +33,43 @@ const PREEXISTING_CONTENT: &[u8] = b"caller-owned-checkpoint-destination\n";
 const CHECKPOINT_STATE_DIRECTORY: &str = ".a3s-oci-native-checkpoint-v1";
 
 #[derive(Debug)]
-struct CheckpointAfterCallFault {
+struct LifecycleAfterCallFault {
     artifact_path: PathBuf,
-    armed: AtomicBool,
-    fired: AtomicBool,
+    checkpoint_armed: AtomicBool,
+    checkpoint_fired: AtomicBool,
+    restore_armed: AtomicBool,
+    restore_fired: AtomicBool,
 }
 
-impl CheckpointAfterCallFault {
+impl LifecycleAfterCallFault {
     fn new(artifact_path: PathBuf) -> Self {
         Self {
             artifact_path,
-            armed: AtomicBool::new(false),
-            fired: AtomicBool::new(false),
+            checkpoint_armed: AtomicBool::new(false),
+            checkpoint_fired: AtomicBool::new(false),
+            restore_armed: AtomicBool::new(false),
+            restore_fired: AtomicBool::new(false),
         }
     }
 
-    fn arm(&self) {
-        self.armed.store(true, Ordering::SeqCst);
+    fn arm_checkpoint(&self) {
+        self.checkpoint_armed.store(true, Ordering::SeqCst);
     }
 
-    fn fired(&self) -> bool {
-        self.fired.load(Ordering::SeqCst)
+    fn checkpoint_fired(&self) -> bool {
+        self.checkpoint_fired.load(Ordering::SeqCst)
+    }
+
+    fn arm_restore(&self) {
+        self.restore_armed.store(true, Ordering::SeqCst);
+    }
+
+    fn restore_fired(&self) -> bool {
+        self.restore_fired.load(Ordering::SeqCst)
     }
 }
 
-impl FaultInjector for CheckpointAfterCallFault {
+impl FaultInjector for LifecycleAfterCallFault {
     fn check(&self, point: FaultPoint) -> Result<()> {
         if matches!(
             point,
@@ -64,15 +77,31 @@ impl FaultInjector for CheckpointAfterCallFault {
                 operation: DriverOperation::Checkpoint,
                 stage: DriverBoundaryStage::AfterCall,
             }
-        ) && self.armed.load(Ordering::SeqCst)
+        ) && self.checkpoint_armed.load(Ordering::SeqCst)
             && self.artifact_path.is_file()
-            && !self.fired.swap(true, Ordering::SeqCst)
+            && !self.checkpoint_fired.swap(true, Ordering::SeqCst)
         {
             return Err(Error::new(
                 ErrorCode::Unavailable,
                 "injected one-shot failure after native checkpoint driver return",
             )
             .for_operation("native-linux-checkpoint-smoke")
+            .retryable(true));
+        }
+        if matches!(
+            point,
+            FaultPoint::DriverBoundary {
+                operation: DriverOperation::Restore,
+                stage: DriverBoundaryStage::AfterCall,
+            }
+        ) && self.restore_armed.load(Ordering::SeqCst)
+            && !self.restore_fired.swap(true, Ordering::SeqCst)
+        {
+            return Err(Error::new(
+                ErrorCode::Unavailable,
+                "injected one-shot failure after native restore driver return",
+            )
+            .for_operation("native-linux-restore-smoke")
             .retryable(true));
         }
         Ok(())
@@ -159,7 +188,7 @@ pub(super) async fn run(
     };
     let executor_root = driver.executor_root().to_path_buf();
     let runtime_driver: Arc<dyn RuntimeDriver> = driver.clone();
-    let fault = Arc::new(CheckpointAfterCallFault::new(
+    let fault = Arc::new(LifecycleAfterCallFault::new(
         session_root.join("checkpoint.bin"),
     ));
     let fault_injector: Arc<dyn FaultInjector> = fault.clone();
@@ -245,24 +274,26 @@ async fn exercise(
     executor_parent: &Path,
     marker: &Path,
     nonce: &str,
-    fault: &CheckpointAfterCallFault,
+    fault: &LifecycleAfterCallFault,
     cleanup_target: &mut Option<ContainerTarget>,
     report: &mut NativeLinuxCheckpointSmokeReport,
 ) -> std::result::Result<(), String> {
     let features = call("features", CALL_TIMEOUT, client.features()).await?;
     report.checkpoint_advertised = features.operations.contains(&RuntimeOperation::Checkpoint);
-    report.restore_not_advertised = !features.operations.contains(&RuntimeOperation::Restore);
+    report.restore_advertised = features.operations.contains(&RuntimeOperation::Restore);
     let capability = features
         .drivers
         .driver(DriverKind::NativeLinux)
         .ok_or_else(|| "checkpoint feature inventory omits Native Linux".to_string())?;
     report.driver_evidence = capability.evidence.clone();
-    if !report.checkpoint_advertised || !report.restore_not_advertised {
-        return Err("CRIU-backed driver did not expose exactly Checkpoint without Restore".into());
+    if !report.checkpoint_advertised || !report.restore_advertised {
+        return Err("CRIU-backed driver did not expose Checkpoint and Restore together".into());
     }
 
     let id = ContainerId::new(format!("checkpoint-{nonce}"))
         .map_err(|error| format!("failed to construct checkpoint container ID: {error}"))?;
+    let attachments = CreateAttachments::from_bundle(bundle, configured_init_io(bundle))
+        .map_err(|error| format!("failed to derive checkpoint attachments: {error}"))?;
     let created = call(
         "create checkpoint source",
         CALL_TIMEOUT,
@@ -271,15 +302,14 @@ async fn exercise(
             id: id.clone(),
             bundle: bundle.clone(),
             isolation: IsolationRequest::SharedHostKernel,
-            attachments: CreateAttachments::from_bundle(bundle, configured_init_io(bundle))
-                .map_err(|error| format!("failed to derive checkpoint attachments: {error}"))?,
+            attachments: attachments.clone(),
         }),
     )
     .await?;
     if *created.state.status() != ContainerState::Created {
         return Err("checkpoint source create did not preserve the OCI created barrier".into());
     }
-    let target = ContainerTarget::exact(id, created.generation);
+    let target = ContainerTarget::exact(id.clone(), created.generation);
     *cleanup_target = Some(target.clone());
     let started = call(
         "start checkpoint source",
@@ -341,7 +371,7 @@ async fn exercise(
             .map_err(|error| format!("invalid checkpoint artifact path: {error}"))?,
     )
     .map_err(|error| format!("failed to construct checkpoint request: {error}"))?;
-    fault.arm();
+    fault.arm_checkpoint();
     let first_error = match timeout(CHECKPOINT_TIMEOUT, client.checkpoint(request.clone()))
         .await
         .map_err(|_| "faulted checkpoint attempt timed out".to_string())?
@@ -349,8 +379,9 @@ async fn exercise(
         Err(error) => error,
         Ok(_) => return Err("checkpoint Host fault did not interrupt the first response".into()),
     };
-    report.driver_after_call_fault_injected =
-        fault.fired() && first_error.code == ErrorCode::Unavailable && first_error.retryable;
+    report.driver_after_call_fault_injected = fault.checkpoint_fired()
+        && first_error.code == ErrorCode::Unavailable
+        && first_error.retryable;
     if !report.driver_after_call_fault_injected {
         return Err(format!(
             "native checkpoint driver failed before the injected Host boundary: {first_error}"
@@ -375,7 +406,7 @@ async fn exercise(
     report.host_replay_exact = host_replay == response;
     let after_replay = artifact_identity(&artifact_path).await?;
     report.artifact_bytes_unchanged_across_replay = before_replay == after_replay;
-    let reference = response.reference();
+    let reference = response.reference().clone();
     report.artifact_digest = Some(reference.artifact_digest().to_string());
     report.artifact_size_bytes = Some(reference.artifact_size_bytes());
     report.artifact_digest_verified = after_replay.0 == reference.artifact_digest().as_str()
@@ -402,7 +433,7 @@ async fn exercise(
         }),
     )
     .await?;
-    report.resume_succeeded = !resumed.is_paused();
+    report.source_resume_succeeded = !resumed.is_paused();
     call(
         "kill checkpoint source",
         CALL_TIMEOUT,
@@ -435,7 +466,122 @@ async fn exercise(
     )
     .await?;
     *cleanup_target = None;
-    report.artifact_survived_container_delete = path_exists(&artifact_path).await?;
+    report.artifact_survived_source_delete = path_exists(&artifact_path).await?;
+
+    let restore_request = RestoreRequest::new(
+        operation(nonce, "restore")?,
+        id,
+        bundle.clone(),
+        CheckpointArtifactPath::new(artifact_path.clone())
+            .map_err(|error| format!("invalid restore artifact path: {error}"))?,
+        IsolationRequest::SharedHostKernel,
+        attachments,
+        reference,
+    )
+    .map_err(|error| format!("failed to construct restore request: {error}"))?;
+    fault.arm_restore();
+    let first_restore_error =
+        match timeout(CHECKPOINT_TIMEOUT, client.restore(restore_request.clone()))
+            .await
+            .map_err(|_| "faulted restore attempt timed out".to_string())?
+        {
+            Err(error) => error,
+            Ok(_) => return Err("restore Host fault did not interrupt the first response".into()),
+        };
+    report.restore_after_call_fault_injected = fault.restore_fired()
+        && first_restore_error.code == ErrorCode::Unavailable
+        && first_restore_error.retryable;
+    if !report.restore_after_call_fault_injected {
+        return Err(format!(
+            "native restore driver failed before the injected Host boundary: {first_restore_error}"
+        ));
+    }
+    let restored = call(
+        "resume restore through driver replay",
+        CHECKPOINT_TIMEOUT,
+        client.restore(restore_request.clone()),
+    )
+    .await?;
+    report.driver_restore_replay_completed_host_commit = restored.restored().is_paused();
+    let restored_target =
+        ContainerTarget::exact(restore_request.id().clone(), restored.restored().generation);
+    *cleanup_target = Some(restored_target.clone());
+    let restore_replay = call(
+        "replay committed restore",
+        CALL_TIMEOUT,
+        client.restore(restore_request),
+    )
+    .await?;
+    report.restore_host_replay_exact = restore_replay == restored;
+    report.restored_generation_newer = restored.restored().generation > created.generation;
+    report.restored_running_paused = *restored.restored().state.status() == ContainerState::Running
+        && restored.restored().is_paused();
+    let restored_state = call(
+        "state after restore replay",
+        CALL_TIMEOUT,
+        client.state(StateRequest {
+            target: restored_target.clone(),
+        }),
+    )
+    .await?;
+    report.restored_state_exact = restored_state == *restored.restored();
+    report.artifact_bytes_unchanged_across_restore =
+        artifact_identity(&artifact_path).await? == after_replay;
+    if !report.restore_host_replay_exact
+        || !report.restored_generation_newer
+        || !report.restored_running_paused
+        || !report.restored_state_exact
+        || !report.artifact_bytes_unchanged_across_restore
+    {
+        return Err("restore replay changed its paused generation or immutable artifact".into());
+    }
+
+    let restored_resumed = call(
+        "resume restored container",
+        CALL_TIMEOUT,
+        client.resume(ContainerOperationRequest {
+            context: operation(nonce, "restore-resume")?,
+            target: restored_target.clone(),
+        }),
+    )
+    .await?;
+    report.restored_resume_succeeded = !restored_resumed.is_paused();
+    call(
+        "kill restored container",
+        CALL_TIMEOUT,
+        client.kill(KillRequest {
+            context: operation(nonce, "restore-kill")?,
+            target: restored_target.clone(),
+            signal: Signal::new(libc::SIGKILL)
+                .map_err(|error| format!("failed to construct restore SIGKILL: {error}"))?,
+            all: true,
+        }),
+    )
+    .await?;
+    let restored_exit = call(
+        "wait restored container",
+        CALL_TIMEOUT,
+        client.wait(WaitRequest {
+            target: restored_target.clone(),
+            timeout_ms: Some(10_000),
+        }),
+    )
+    .await?;
+    report.restored_exit_status_exact = restored_exit
+        == ExitStatus::signaled(libc::SIGKILL, false)
+            .map_err(|error| format!("failed to construct restored exit status: {error}"))?;
+    call(
+        "delete restored container",
+        CALL_TIMEOUT,
+        client.delete(DeleteRequest {
+            context: operation(nonce, "restore-delete")?,
+            target: restored_target,
+            mode: DeleteMode::Force,
+        }),
+    )
+    .await?;
+    *cleanup_target = None;
+    report.artifact_survived_restored_delete = path_exists(&artifact_path).await?;
     let operations = executor_parent
         .join(CHECKPOINT_STATE_DIRECTORY)
         .join("operations");

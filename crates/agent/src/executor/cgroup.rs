@@ -323,6 +323,109 @@ impl CgroupHandle {
         &self.leaf
     }
 
+    pub(super) fn restore_control_procs(&self) -> Result<File> {
+        self.control_workload
+            .as_ref()
+            .ok_or_else(|| {
+                cgroup_error(
+                    ErrorCode::FailedPrecondition,
+                    "native restore requires a dedicated control cgroup",
+                )
+            })?
+            .control_procs
+            .try_clone()
+            .map_err(|error| {
+                cgroup_error(
+                    ErrorCode::Internal,
+                    format!("failed to clone restore control cgroup descriptor: {error}"),
+                )
+            })
+    }
+
+    pub(super) fn restore_management_procs(&self) -> Result<File> {
+        if self.control_workload.is_none() {
+            return Err(cgroup_error(
+                ErrorCode::FailedPrecondition,
+                "native restore requires a control/workload cgroup envelope",
+            ));
+        }
+        self.init_procs.try_clone().map_err(|error| {
+            cgroup_error(
+                ErrorCode::Internal,
+                format!("failed to clone restore management cgroup descriptor: {error}"),
+            )
+        })
+    }
+
+    pub(super) fn move_restore_helper_to_control(&self, pid: i32) -> Result<()> {
+        let layout = self.control_workload.as_ref().ok_or_else(|| {
+            cgroup_error(
+                ErrorCode::FailedPrecondition,
+                "native restore requires a dedicated control cgroup",
+            )
+        })?;
+        move_process(
+            layout.control_procs.as_raw_fd(),
+            pid,
+            "restore namespace helper",
+        )
+    }
+
+    /// Move the stopped CRIU-restored process group out of the trusted control
+    /// cgroup and into the already-frozen workload leaf. The control cgroup is
+    /// private to this generation, so every non-supervisor member must belong
+    /// to the restored init process group before any membership is changed.
+    pub(super) async fn adopt_restored_members(
+        &self,
+        supervisor_pid: i32,
+        expected_pid: i32,
+    ) -> Result<()> {
+        let layout = self.control_workload.as_ref().ok_or_else(|| {
+            cgroup_error(
+                ErrorCode::FailedPrecondition,
+                "native restore requires a dedicated control cgroup",
+            )
+        })?;
+        let control_path = layout.management.join(CONTROL_CGROUP_NAME);
+        let members = read_cgroup_members(&control_path, "restore control").await?;
+        if !members.contains(&supervisor_pid) || !members.contains(&expected_pid) {
+            return Err(cgroup_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "restore control cgroup does not contain supervisor {supervisor_pid} and init {expected_pid}"
+                ),
+            ));
+        }
+        for pid in members.iter().copied().filter(|pid| *pid != supervisor_pid) {
+            let process_group = process_group_id(pid).await?;
+            if process_group != expected_pid {
+                return Err(cgroup_error(
+                    ErrorCode::PermissionDenied,
+                    format!(
+                        "restore control member {pid} belongs to process group {process_group}, expected {expected_pid}"
+                    ),
+                ));
+            }
+        }
+        for pid in members.iter().copied().filter(|pid| *pid != supervisor_pid) {
+            move_process(
+                layout.workload_procs.as_raw_fd(),
+                pid,
+                "restored workload member",
+            )?;
+        }
+        let remaining = read_cgroup_members(&control_path, "restore control").await?;
+        if remaining != [supervisor_pid] {
+            return Err(cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "restore control cgroup retained unexpected members after adoption: {remaining:?}"
+                ),
+            ));
+        }
+        self.require_checkpoint_member(expected_pid).await
+    }
+
     pub(super) const fn has_isolated_workload(&self) -> bool {
         self.control_workload.is_some()
     }
@@ -362,6 +465,67 @@ impl CgroupHandle {
                 ),
             ))
         }
+    }
+
+    /// Clear CRIU's per-task SIGSTOP state only after the workload cgroup has
+    /// reached the frozen state. The container therefore remains paused solely
+    /// by the executor-owned cgroup freezer and can later use the normal resume
+    /// path without retaining an invisible signal stop.
+    pub(super) async fn continue_stopped_restore_members(&self, expected_pid: i32) -> Result<()> {
+        let path = self.leaf.join(CGROUP_PROCS);
+        let encoded = tokio::fs::read_to_string(&path).await.map_err(|error| {
+            cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "failed to read restored workload membership {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+        let mut found_expected = false;
+        let mut members = Vec::new();
+        for line in encoded.lines() {
+            let pid = line.trim().parse::<i32>().map_err(|error| {
+                cgroup_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "restored workload membership {} contains invalid PID {line:?}: {error}",
+                        path.display()
+                    ),
+                )
+            })?;
+            if pid <= 0 {
+                return Err(cgroup_error(
+                    ErrorCode::FailedPrecondition,
+                    "restored workload membership contains a non-positive PID",
+                ));
+            }
+            found_expected |= pid == expected_pid;
+            members.push(pid);
+        }
+        if !found_expected || members.is_empty() {
+            return Err(cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "restored init PID {expected_pid} is not in workload cgroup {}",
+                    self.leaf.display()
+                ),
+            ));
+        }
+        for pid in members {
+            // SAFETY: every PID is a positive value read from this exact
+            // retained cgroup; SIGCONT has no pointer arguments.
+            if unsafe { libc::kill(pid, libc::SIGCONT) } != 0 {
+                let error = std_io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(cgroup_error(
+                        ErrorCode::PermissionDenied,
+                        format!("failed to clear restored SIGSTOP for PID {pid}: {error}"),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(super) async fn terminate_all(&self) -> Result<()> {
@@ -564,6 +728,109 @@ pub(super) fn join_current_process(descriptor: RawFd) -> std_io::Result<()> {
             "partial write to cgroup.procs",
         ))
     }
+}
+
+fn move_process(descriptor: RawFd, pid: i32, label: &str) -> Result<()> {
+    if pid <= 0 {
+        return Err(cgroup_error(
+            ErrorCode::InvalidArgument,
+            format!("{label} PID must be positive; received {pid}"),
+        ));
+    }
+    let payload = pid.to_string();
+    // SAFETY: descriptor is a retained cgroup.procs file and payload is a live
+    // decimal byte slice. This moves exactly the supplied process.
+    let written = unsafe { libc::write(descriptor, payload.as_ptr().cast(), payload.len()) };
+    if written == payload.len() as isize {
+        Ok(())
+    } else {
+        let error = if written < 0 {
+            std_io::Error::last_os_error()
+        } else {
+            std_io::Error::new(
+                std_io::ErrorKind::WriteZero,
+                "partial write to cgroup.procs",
+            )
+        };
+        Err(cgroup_error(
+            cgroup_move_error_code(&error),
+            format!("failed to move {label} PID {pid}: {error}"),
+        ))
+    }
+}
+
+fn cgroup_move_error_code(error: &std_io::Error) -> ErrorCode {
+    match error.raw_os_error() {
+        Some(libc::EACCES | libc::EPERM) => ErrorCode::PermissionDenied,
+        Some(libc::ENOENT | libc::ESRCH | libc::EINVAL) => ErrorCode::FailedPrecondition,
+        Some(libc::ENOMEM | libc::ENOSPC) => ErrorCode::ResourceExhausted,
+        _ => ErrorCode::Internal,
+    }
+}
+
+async fn read_cgroup_members(path: &Path, label: &str) -> Result<Vec<i32>> {
+    let path = path.join(CGROUP_PROCS);
+    let encoded = tokio::fs::read_to_string(&path).await.map_err(|error| {
+        cgroup_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to read {label} membership {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    let mut members = Vec::new();
+    for line in encoded.lines() {
+        let pid = line.trim().parse::<i32>().map_err(|error| {
+            cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "{label} membership {} contains invalid PID {line:?}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+        if pid <= 0 {
+            return Err(cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!("{label} membership contains non-positive PID {pid}"),
+            ));
+        }
+        members.push(pid);
+    }
+    members.sort_unstable();
+    members.dedup();
+    Ok(members)
+}
+
+async fn process_group_id(pid: i32) -> Result<i32> {
+    let path = PathBuf::from(format!("/proc/{pid}/stat"));
+    let stat = tokio::fs::read_to_string(&path).await.map_err(|error| {
+        cgroup_error(
+            ErrorCode::PermissionDenied,
+            format!("failed to inspect restored PID {pid} process group: {error}"),
+        )
+    })?;
+    let suffix = stat
+        .rsplit_once(')')
+        .map(|(_, suffix)| suffix.trim())
+        .ok_or_else(|| {
+            cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!("restored PID {pid} proc stat is malformed"),
+            )
+        })?;
+    suffix
+        .split_whitespace()
+        .nth(2)
+        .and_then(|value| value.parse::<i32>().ok())
+        .filter(|process_group| *process_group > 0)
+        .ok_or_else(|| {
+            cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!("restored PID {pid} proc stat omits a valid process group"),
+            )
+        })
 }
 
 pub(super) fn install_control_workload_descriptors_from_pre_exec(
@@ -970,11 +1237,28 @@ mod tests {
     use a3s_oci_sdk::ErrorCode;
 
     use super::{
-        apply_settings, cgroup_event_value, cleanup_directories_checked, enable_controllers,
-        install_control_workload_descriptors_from_pre_exec, open_cgroup_procs,
+        apply_settings, cgroup_event_value, cgroup_move_error_code, cleanup_directories_checked,
+        enable_controllers, install_control_workload_descriptors_from_pre_exec, open_cgroup_procs,
         open_control_workload_membership, prepare_parent_cpuset, unified::UnifiedPlan,
         CgroupSetting,
     };
+
+    #[test]
+    fn classifies_cgroup_membership_move_failures_by_errno() {
+        for (errno, expected) in [
+            (libc::EPERM, ErrorCode::PermissionDenied),
+            (libc::EACCES, ErrorCode::PermissionDenied),
+            (libc::ESRCH, ErrorCode::FailedPrecondition),
+            (libc::EINVAL, ErrorCode::FailedPrecondition),
+            (libc::ENOSPC, ErrorCode::ResourceExhausted),
+            (libc::EIO, ErrorCode::Internal),
+        ] {
+            assert_eq!(
+                cgroup_move_error_code(&std::io::Error::from_raw_os_error(errno)),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn authority_cpuset_is_validated_without_mutating_host_owned_values() {

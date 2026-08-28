@@ -8,6 +8,7 @@ criu_binary="${A3S_OCI_CRIU_BINARY:-}"
 source_commit="${A3S_QUALIFICATION_SOURCE_COMMIT:-}"
 report_path="${A3S_OCI_NATIVE_CHECKPOINT_REPORT:-}"
 negative_report_path="${A3S_OCI_NATIVE_CHECKPOINT_PIDNS_REPORT:-}"
+network_report_path="${A3S_OCI_NATIVE_CHECKPOINT_NETNS_REPORT:-}"
 qualification_root=""
 owned_cgroups=()
 
@@ -146,8 +147,9 @@ nonce="${qualification_root##*.}"
 work_parent="$qualification_root/work"
 supported_bundle="$qualification_root/supported"
 pidns_bundle="$qualification_root/private-pidns"
+network_bundle="$qualification_root/private-network"
 "${sudo_command[@]}" install -d -m 0700 -o root -g root "$work_parent"
-for bundle in "$supported_bundle" "$pidns_bundle"; do
+for bundle in "$supported_bundle" "$pidns_bundle" "$network_bundle"; do
   "${sudo_command[@]}" install -d -m 0755 -o root -g root \
     "$bundle" "$bundle/rootfs" "$bundle/rootfs/bin"
   "${sudo_command[@]}" install -m 0755 -o root -g root \
@@ -156,7 +158,8 @@ done
 
 supported_cgroup="a3s-oci-checkpoint-${nonce}"
 pidns_cgroup="a3s-oci-checkpoint-pidns-${nonce}"
-for cgroup in "$supported_cgroup" "$pidns_cgroup"; do
+network_cgroup="a3s-oci-checkpoint-netns-${nonce}"
+for cgroup in "$supported_cgroup" "$pidns_cgroup" "$network_cgroup"; do
   cgroup_host_path="/sys/fs/cgroup/$cgroup"
   if [[ -e "$cgroup_host_path" ]]; then
     printf 'Refusing to reuse checkpoint qualification cgroup: %s\n' \
@@ -173,7 +176,8 @@ jq \
   '
     del(.hooks, .linux.uidMappings, .linux.gidMappings)
     | .linux.cgroupsPath = $cgroup
-    | .linux.namespaces |= map(select(.type != "user" and .type != "pid"))
+    | .linux.namespaces |= map(select(.type != "user" and .type != "pid" and .type != "network"))
+    | del(.linux.sysctl["net.ipv4.ip_forward"])
     | .process.args = ["/bin/busybox", "sh", "-c", $command]
     | .linux.resources = {
         memory: {limit: 268435456},
@@ -203,6 +207,14 @@ jq \
   "${sudo_command[@]}" tee "$pidns_bundle/config.json.next" >/dev/null
 "${sudo_command[@]}" mv -- \
   "$pidns_bundle/config.json.next" "$pidns_bundle/config.json"
+"${sudo_command[@]}" cp -- "$supported_bundle/config.json" "$network_bundle/config.json"
+"${sudo_command[@]}" jq \
+  --arg cgroup "$network_cgroup" \
+  '.linux.cgroupsPath = $cgroup | .linux.namespaces += [{type: "network"}]' \
+  "$network_bundle/config.json" |
+  "${sudo_command[@]}" tee "$network_bundle/config.json.next" >/dev/null
+"${sudo_command[@]}" mv -- \
+  "$network_bundle/config.json.next" "$network_bundle/config.json"
 
 run_checkpoint_smoke() {
   local bundle=$1
@@ -227,10 +239,10 @@ jq --exit-status \
   --arg source "$source_commit" \
   --arg criu_digest "sha256:$(sha256sum "$criu_binary" | cut -d ' ' -f 1)" \
   '
-    .schemaVersion == "a3s.oci.native-linux-checkpoint-smoke.v1"
+    .schemaVersion == "a3s.oci.native-linux-checkpoint-smoke.v2"
     and .platform == "linux" and .status == "available"
     and .sourceRevision == $source
-    and .checkpointAdvertised and .restoreNotAdvertised
+    and .checkpointAdvertised and .restoreAdvertised
     and .preexistingDestinationRejected
     and .preexistingDestinationPreserved
     and .driverAfterCallFaultInjected
@@ -238,11 +250,19 @@ jq --exit-status \
     and .driverReplayCompletedHostCommit
     and .hostReplayExact and .artifactDigestVerified
     and .artifactBytesUnchangedAcrossReplay
-    and .sourceRemainedPaused and .resumeSucceeded
-    and .artifactSurvivedContainerDelete
+    and .sourceRemainedPaused and .sourceResumeSucceeded
+    and .artifactSurvivedSourceDelete
+    and .restoreAfterCallFaultInjected
+    and .driverRestoreReplayCompletedHostCommit
+    and .restoreHostReplayExact and .restoredGenerationNewer
+    and .restoredRunningPaused and .restoredStateExact
+    and .restoredResumeSucceeded and .restoredExitStatusExact
+    and .artifactBytesUnchangedAcrossRestore
+    and .artifactSurvivedRestoredDelete
     and .driverJournalAcknowledged and .unpublishedPartialsAbsent
     and .executorRuntimeClean and .sessionRootClean
     and .driverEvidence.checkpoint_backend == "criu"
+    and .driverEvidence.restore_backend == "criu"
     and .driverEvidence.checkpoint_format == "native-linux-criu-v1"
     and .driverEvidence.checkpoint_criu_digest == $criu_digest
     and (.driverEvidence.checkpoint_driver_build_digest | test("^sha256:[0-9a-f]{64}$"))
@@ -266,9 +286,9 @@ if ((pidns_status == 0)); then
 fi
 jq --exit-status \
   '
-    .schemaVersion == "a3s.oci.native-linux-checkpoint-smoke.v1"
+    .schemaVersion == "a3s.oci.native-linux-checkpoint-smoke.v2"
     and .status == "unavailable"
-    and .checkpointAdvertised and .restoreNotAdvertised
+    and .checkpointAdvertised and .restoreAdvertised
     and .pausedSourceObserved
     and .preexistingDestinationRejected
     and .preexistingDestinationPreserved
@@ -278,4 +298,29 @@ jq --exit-status \
   <<<"$pidns_report" >/dev/null
 if [[ -n "$negative_report_path" ]]; then
   (umask 077; printf '%s\n' "$pidns_report" >"$negative_report_path")
+fi
+
+set +e
+network_report="$(run_checkpoint_smoke "$network_bundle")"
+network_status=$?
+set -e
+printf '%s\n' "$network_report"
+if ((network_status == 0)); then
+  printf '%s\n' 'Private network namespace checkpoint unexpectedly succeeded' >&2
+  exit 1
+fi
+jq --exit-status \
+  '
+    .schemaVersion == "a3s.oci.native-linux-checkpoint-smoke.v2"
+    and .status == "unavailable"
+    and .checkpointAdvertised and .restoreAdvertised
+    and .pausedSourceObserved
+    and .preexistingDestinationRejected
+    and .preexistingDestinationPreserved
+    and .executorRuntimeClean and .sessionRootClean
+    and (.reason | contains("format v1 does not support a configured network namespace"))
+  ' \
+  <<<"$network_report" >/dev/null
+if [[ -n "$network_report_path" ]]; then
+  (umask 077; printf '%s\n' "$network_report" >"$network_report_path")
 fi

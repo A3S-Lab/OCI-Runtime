@@ -18,6 +18,13 @@ pub struct LinuxExecutorCheckpointSource {
     checkpoint_root_pid: i32,
     init_pid: i32,
     cgroup_path: PathBuf,
+    external_mounts: Vec<LinuxCheckpointExternalMount>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LinuxCheckpointExternalMount {
+    name: String,
+    mountpoint: PathBuf,
 }
 
 impl LinuxExecutorCheckpointSource {
@@ -53,6 +60,13 @@ impl LinuxExecutorCheckpointSource {
     #[must_use]
     pub fn cgroup_path(&self) -> &Path {
         &self.cgroup_path
+    }
+
+    /// Stable explicit external-mount identities committed to the CRIU image.
+    pub fn external_mounts(&self) -> impl Iterator<Item = (&str, &Path)> {
+        self.external_mounts
+            .iter()
+            .map(|mount| (mount.name.as_str(), mount.mountpoint.as_path()))
     }
 }
 
@@ -111,6 +125,33 @@ impl LinuxExecutor {
                 "native checkpoint format v1 does not support a private PID namespace",
             ));
         }
+        if record.process.has_configured_network_namespace() {
+            return Err(executor_error(
+                ErrorCode::FailedPrecondition,
+                "native checkpoint format v1 does not support a configured network namespace",
+            ));
+        }
+        if record.process.has_configured_user_namespace() {
+            return Err(executor_error(
+                ErrorCode::FailedPrecondition,
+                "native checkpoint format v1 does not support a configured user namespace",
+            ));
+        }
+        if record.process.uses_terminal() {
+            return Err(executor_error(
+                ErrorCode::FailedPrecondition,
+                "native checkpoint format v1 does not support terminal-backed init I/O",
+            ));
+        }
+        if record.process.has_intel_rdt()
+            || record.process.has_network_devices()
+            || record.process.has_hooks()
+        {
+            return Err(executor_error(
+                ErrorCode::FailedPrecondition,
+                "native checkpoint format v1 does not support Intel RDT, network devices, or OCI hooks",
+            ));
+        }
 
         // Reassert and observe the kernel freezer instead of trusting only the
         // executor's cached pause flag. This is idempotent and keeps the source
@@ -138,12 +179,22 @@ impl LinuxExecutor {
                 )
             })?
             .to_path_buf();
+        let external_mounts = record
+            .process
+            .checkpoint_external_mounts()
+            .iter()
+            .map(|(name, mountpoint)| LinuxCheckpointExternalMount {
+                name: name.clone(),
+                mountpoint: mountpoint.clone(),
+            })
+            .collect();
         Ok(LinuxExecutorCheckpointSource {
             target: record.target.clone(),
             launcher_pid,
             checkpoint_root_pid,
             init_pid,
             cgroup_path,
+            external_mounts,
         })
     }
 }

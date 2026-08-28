@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 
 /// Schema emitted by the real native Linux CRIU checkpoint qualification.
 pub const NATIVE_LINUX_CHECKPOINT_SMOKE_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-checkpoint-smoke.v1";
+    "a3s.oci.native-linux-checkpoint-smoke.v2";
 
-/// Bounded evidence for immutable native Linux checkpoint creation and replay.
+/// Bounded evidence for immutable native Linux checkpoint and restore replay.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeLinuxCheckpointSmokeReport {
@@ -16,7 +16,7 @@ pub struct NativeLinuxCheckpointSmokeReport {
     pub status: CapabilityStatus,
     pub source_revision: String,
     pub checkpoint_advertised: bool,
-    pub restore_not_advertised: bool,
+    pub restore_advertised: bool,
     pub driver_evidence: BTreeMap<String, String>,
     pub lifecycle_started: bool,
     pub paused_source_observed: bool,
@@ -33,8 +33,18 @@ pub struct NativeLinuxCheckpointSmokeReport {
     pub artifact_size_bytes: Option<u64>,
     pub artifact_bytes_unchanged_across_replay: bool,
     pub source_remained_paused: bool,
-    pub resume_succeeded: bool,
-    pub artifact_survived_container_delete: bool,
+    pub source_resume_succeeded: bool,
+    pub artifact_survived_source_delete: bool,
+    pub restore_after_call_fault_injected: bool,
+    pub driver_restore_replay_completed_host_commit: bool,
+    pub restore_host_replay_exact: bool,
+    pub restored_generation_newer: bool,
+    pub restored_running_paused: bool,
+    pub restored_state_exact: bool,
+    pub restored_resume_succeeded: bool,
+    pub restored_exit_status_exact: bool,
+    pub artifact_bytes_unchanged_across_restore: bool,
+    pub artifact_survived_restored_delete: bool,
     pub driver_journal_acknowledged: bool,
     pub unpublished_partials_absent: bool,
     pub executor_runtime_clean: bool,
@@ -51,7 +61,7 @@ impl NativeLinuxCheckpointSmokeReport {
             status: CapabilityStatus::Unavailable,
             source_revision,
             checkpoint_advertised: false,
-            restore_not_advertised: false,
+            restore_advertised: false,
             driver_evidence: BTreeMap::new(),
             lifecycle_started: false,
             paused_source_observed: false,
@@ -66,8 +76,18 @@ impl NativeLinuxCheckpointSmokeReport {
             artifact_size_bytes: None,
             artifact_bytes_unchanged_across_replay: false,
             source_remained_paused: false,
-            resume_succeeded: false,
-            artifact_survived_container_delete: false,
+            source_resume_succeeded: false,
+            artifact_survived_source_delete: false,
+            restore_after_call_fault_injected: false,
+            driver_restore_replay_completed_host_commit: false,
+            restore_host_replay_exact: false,
+            restored_generation_newer: false,
+            restored_running_paused: false,
+            restored_state_exact: false,
+            restored_resume_succeeded: false,
+            restored_exit_status_exact: false,
+            artifact_bytes_unchanged_across_restore: false,
+            artifact_survived_restored_delete: false,
             driver_journal_acknowledged: false,
             unpublished_partials_absent: false,
             executor_runtime_clean: false,
@@ -92,7 +112,7 @@ impl NativeLinuxCheckpointSmokeReport {
             && self.status == CapabilityStatus::Available
             && !self.source_revision.is_empty()
             && self.checkpoint_advertised
-            && self.restore_not_advertised
+            && self.restore_advertised
             && self.driver_evidence.contains_key("checkpoint_criu_digest")
             && self
                 .driver_evidence
@@ -110,8 +130,18 @@ impl NativeLinuxCheckpointSmokeReport {
             && self.artifact_size_bytes.is_some_and(|size| size > 0)
             && self.artifact_bytes_unchanged_across_replay
             && self.source_remained_paused
-            && self.resume_succeeded
-            && self.artifact_survived_container_delete
+            && self.source_resume_succeeded
+            && self.artifact_survived_source_delete
+            && self.restore_after_call_fault_injected
+            && self.driver_restore_replay_completed_host_commit
+            && self.restore_host_replay_exact
+            && self.restored_generation_newer
+            && self.restored_running_paused
+            && self.restored_state_exact
+            && self.restored_resume_succeeded
+            && self.restored_exit_status_exact
+            && self.artifact_bytes_unchanged_across_restore
+            && self.artifact_survived_restored_delete
             && self.driver_journal_acknowledged
             && self.unpublished_partials_absent
             && self.executor_runtime_clean

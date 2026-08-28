@@ -132,6 +132,49 @@ pub(super) async fn validate_runtime_pid(
     validate_created_namespace_identities(plan, launcher_pid, runtime_pid).await
 }
 
+pub(super) async fn validate_restored_runtime_pid(
+    plan: &InitPlan,
+    supervisor_pid: i32,
+    runtime_pid: i32,
+) -> Result<()> {
+    if plan.namespaces.new_pid() {
+        return Err(pid_error(
+            ErrorCode::Unsupported,
+            "restored runtime PID validation does not support a private PID namespace",
+        ));
+    }
+    if runtime_pid == supervisor_pid {
+        return Err(pid_error(
+            ErrorCode::PermissionDenied,
+            "restored payload must differ from its authenticated supervisor",
+        ));
+    }
+    let identity = read_pid_identity(runtime_pid, "restored container payload").await?;
+    if identity.parent_pid != supervisor_pid {
+        return Err(pid_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "restored container payload {runtime_pid} has parent {}, expected authenticated supervisor {supervisor_pid}",
+                identity.parent_pid
+            ),
+        ));
+    }
+    for (created, namespace) in [
+        (plan.namespaces.new_user(), "user"),
+        (plan.namespaces.new_cgroup(), "cgroup"),
+        (plan.namespaces.new_ipc(), "ipc"),
+        (plan.namespaces.new_uts(), "uts"),
+        (plan.namespaces.new_network(), "net"),
+        (plan.namespaces.new_mount(), "mnt"),
+        (plan.namespaces.new_time(), "time"),
+    ] {
+        if created {
+            validate_restored_namespace_identity(namespace, runtime_pid).await?;
+        }
+    }
+    Ok(())
+}
+
 pub(super) async fn validate_exec_runtime_pid(
     launcher_pid: i32,
     runtime_pid: i32,
@@ -322,6 +365,31 @@ async fn validate_namespace_identity(
         Err(pid_error(
             ErrorCode::PermissionDenied,
             format!("container init did not enter the authenticated new {namespace} namespace"),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+async fn validate_restored_namespace_identity(namespace: &str, runtime_pid: i32) -> Result<()> {
+    let actual_path = format!("/proc/{runtime_pid}/ns/{namespace}");
+    let actual = tokio::fs::read_link(&actual_path).await.map_err(|error| {
+        pid_error(
+            ErrorCode::PermissionDenied,
+            format!("failed to inspect restored container {namespace} namespace: {error}"),
+        )
+    })?;
+    let runtime_path = format!("/proc/self/ns/{namespace}");
+    let runtime = tokio::fs::read_link(&runtime_path).await.map_err(|error| {
+        pid_error(
+            ErrorCode::Internal,
+            format!("failed to inspect runtime {namespace} namespace: {error}"),
+        )
+    })?;
+    if actual == runtime {
+        Err(pid_error(
+            ErrorCode::PermissionDenied,
+            format!("restored container init did not enter a new {namespace} namespace"),
         ))
     } else {
         Ok(())

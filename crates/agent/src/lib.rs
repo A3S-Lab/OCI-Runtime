@@ -44,7 +44,7 @@ mod vsock;
 #[cfg(target_os = "linux")]
 pub use executor::{
     InheritedDescriptorPlan, LinuxExecutor, LinuxExecutorCheckpointSource, LinuxExecutorTombstone,
-    RootlessDevicePolicyBootstrap,
+    LinuxRestoreSpawnRequest, LinuxRestoreSpawner, RootlessDevicePolicyBootstrap,
 };
 pub use linux_device::{OciLinuxDefaultDeviceNode, OCI_LINUX_DEFAULT_DEVICE_NODES};
 #[cfg(target_os = "linux")]

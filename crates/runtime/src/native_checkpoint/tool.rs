@@ -7,13 +7,14 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use a3s_oci_agent::LinuxExecutorCheckpointSource;
-use a3s_oci_sdk::{CheckpointDigest, ErrorCode, OperationContext, Result};
+use a3s_oci_agent::{LinuxExecutorCheckpointSource, LinuxRestoreSpawnRequest, LinuxRestoreSpawner};
+use a3s_oci_sdk::{async_trait, CheckpointDigest, ErrorCode, OperationContext, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+use super::artifact::ExternalMountManifestEntry;
 use super::{checkpoint_error, io_error};
 
 const TOOL_OUTPUT_LIMIT: usize = 64 * 1024;
@@ -26,6 +27,15 @@ const CRIU_DUMP_OPTIONS: [&str; 6] = [
     "--manage-cgroups=soft",
     "--external",
     "mnt[]",
+];
+const CRIU_RESTORE_OPTIONS: [&str; 7] = [
+    "--leave-stopped",
+    "--shell-job",
+    "--file-locks",
+    "--manage-cgroups=ignore",
+    "--external",
+    "mnt[]",
+    "--exec-cmd",
 ];
 
 #[derive(Debug)]
@@ -52,6 +62,13 @@ struct CommandOutput {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     output_overflowed: bool,
+}
+
+pub(super) struct CriuRestoreSpawner<'a> {
+    tool: &'a CriuTool,
+    images_directory: &'a Path,
+    work_directory: &'a Path,
+    external_mounts: &'a [ExternalMountManifestEntry],
 }
 
 impl CriuTool {
@@ -116,18 +133,50 @@ impl CriuTool {
             .iter()
             .map(|value| (*value).to_string())
             .collect::<Vec<_>>();
-        options.extend(["--freeze-cgroup".to_string(), "<source-cgroup>".to_string()]);
+        options.extend([
+            "--external".to_string(),
+            "mnt[<oci-device-mountpoint>]:<a3s-device-cookie>".to_string(),
+            "--freeze-cgroup".to_string(),
+            "<source-cgroup>".to_string(),
+            "--cgroup-root".to_string(),
+            "<source-cgroup-root>".to_string(),
+        ]);
         options
     }
 
-    pub(super) fn dump_options(cgroup_path: &str) -> Vec<String> {
+    pub(super) fn restore_option_identity() -> Vec<String> {
+        let mut options = CRIU_RESTORE_OPTIONS
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect::<Vec<_>>();
+        options.extend([
+            "--external".to_string(),
+            "mnt[<a3s-device-cookie>]:<target-device-source>".to_string(),
+            "--root".to_string(),
+            "<target-rootfs>".to_string(),
+            "--pidfile".to_string(),
+            "<restore-pidfile>".to_string(),
+        ]);
+        options
+    }
+
+    pub(super) fn dump_options<'a>(
+        cgroup_path: &str,
+        external_mounts: impl IntoIterator<Item = (&'a str, &'a Path)>,
+    ) -> Result<Vec<String>> {
         let mut options = CRIU_DUMP_OPTIONS
             .iter()
             .map(|value| (*value).to_string())
             .collect::<Vec<_>>();
+        for (name, mountpoint) in external_mounts {
+            options.push("--external".to_string());
+            options.push(dump_external_mount_option(name, mountpoint)?);
+        }
         options.push("--freeze-cgroup".to_string());
         options.push(cgroup_path.to_string());
-        options
+        options.push("--cgroup-root".to_string());
+        options.push(cgroup_root(Path::new(cgroup_path))?.display().to_string());
+        Ok(options)
     }
 
     pub(super) async fn verify_identity(&self) -> Result<()> {
@@ -174,8 +223,20 @@ impl CriuTool {
             OsString::from("dump.log"),
         ];
         arguments.extend(CRIU_DUMP_OPTIONS.iter().map(OsString::from));
+        for (name, mountpoint) in source.external_mounts() {
+            arguments.push(OsString::from("--external"));
+            arguments.push(OsString::from(dump_external_mount_option(
+                name, mountpoint,
+            )?));
+        }
         arguments.push(OsString::from("--freeze-cgroup"));
         arguments.push(source.cgroup_path().as_os_str().to_os_string());
+        arguments.push(OsString::from("--cgroup-root"));
+        arguments.push(
+            cgroup_root(source.cgroup_path())?
+                .as_os_str()
+                .to_os_string(),
+        );
         let timeout = dump_timeout(context)?;
         let output = self
             .run(arguments.iter().map(OsString::as_os_str), timeout)
@@ -249,6 +310,140 @@ impl CriuTool {
             output_overflowed: stdout_overflowed || stderr_overflowed,
         })
     }
+}
+
+impl<'a> CriuRestoreSpawner<'a> {
+    pub(super) const fn new(
+        tool: &'a CriuTool,
+        images_directory: &'a Path,
+        work_directory: &'a Path,
+        external_mounts: &'a [ExternalMountManifestEntry],
+    ) -> Self {
+        Self {
+            tool,
+            images_directory,
+            work_directory,
+            external_mounts,
+        }
+    }
+}
+
+#[async_trait]
+impl LinuxRestoreSpawner for CriuRestoreSpawner<'_> {
+    async fn spawn(&self, request: LinuxRestoreSpawnRequest) -> Result<tokio::process::Child> {
+        self.tool.verify_identity().await?;
+        let pidfile = self.work_directory.join("restore.pid");
+        let log_path = self.work_directory.join("restore.log");
+        let external_mounts = request.external_mounts().collect::<Vec<_>>();
+        if external_mounts.len() != self.external_mounts.len()
+            || external_mounts.iter().zip(self.external_mounts).any(
+                |((name, mountpoint, _), expected)| {
+                    *name != expected.name() || *mountpoint != expected.mountpoint()
+                },
+            )
+        {
+            return Err(checkpoint_error(
+                ErrorCode::FailedPrecondition,
+                "restore device mount contract differs from the checkpoint artifact",
+            ));
+        }
+        let mut command = Command::new(self.tool.descriptor_path());
+        command
+            .arg("restore")
+            .arg("--images-dir")
+            .arg(self.images_directory)
+            .arg("--work-dir")
+            .arg(self.work_directory)
+            .arg("--log-file")
+            .arg("restore.log")
+            .args(CRIU_RESTORE_OPTIONS);
+        for (name, _, source) in external_mounts {
+            command
+                .arg("--external")
+                .arg(restore_external_mount_option(name, source));
+        }
+        command
+            .arg("--root")
+            .arg(request.rootfs())
+            .arg("--pidfile")
+            .arg(&pidfile)
+            .arg("--")
+            .arg(request.supervisor_executable())
+            .arg("container-restore-supervisor")
+            .arg(request.config_snapshot())
+            .arg(request.control_name())
+            .arg(&pidfile)
+            .arg(request.expected_owner_pid().to_string())
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        request.prepare_command(&mut command)?;
+        command
+            .spawn()
+            .map_err(|error| {
+                io_error(
+                    "spawn retained CRIU restore executable",
+                    &self.tool.canonical_path,
+                    error,
+                )
+            })
+            .map_err(|mut error| {
+                error.message = format!("{}; restore log: {}", error.message, log_path.display());
+                error
+            })
+    }
+}
+
+fn dump_external_mount_option(name: &str, mountpoint: &Path) -> Result<String> {
+    let mountpoint = mountpoint.to_str().ok_or_else(|| {
+        checkpoint_error(
+            ErrorCode::FailedPrecondition,
+            "checkpoint external device mountpoint is not valid UTF-8",
+        )
+    })?;
+    Ok(format!("mnt[{mountpoint}]:{name}"))
+}
+
+fn restore_external_mount_option(name: &str, source: &Path) -> OsString {
+    let mut option = OsString::from(format!("mnt[{name}]:"));
+    option.push(source);
+    option
+}
+
+fn cgroup_root(workload: &Path) -> Result<PathBuf> {
+    let root = workload
+        .parent()
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| {
+            checkpoint_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "native checkpoint workload has no absolute management cgroup parent: {}",
+                    workload.display()
+                ),
+            )
+        })?;
+    cgroup_argument(root)
+}
+
+fn cgroup_argument(root: &Path) -> Result<PathBuf> {
+    const CGROUP2_MOUNT: &str = "/sys/fs/cgroup";
+    let relative = root
+        .strip_prefix(CGROUP2_MOUNT)
+        .ok()
+        .filter(|relative| !relative.as_os_str().is_empty())
+        .ok_or_else(|| {
+            checkpoint_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "native CRIU cgroup root is outside {CGROUP2_MOUNT}: {}",
+                    root.display()
+                ),
+            )
+        })?;
+    Ok(Path::new("/").join(relative))
 }
 
 fn open_verified_executable(path: &Path) -> Result<(File, PathBuf, CheckpointDigest)> {
@@ -417,7 +612,7 @@ async fn require_success(
     ))
 }
 
-async fn read_log_bounded(path: &Path) -> (String, bool) {
+pub(super) async fn read_log_bounded(path: &Path) -> (String, bool) {
     let file = match tokio::fs::File::open(path).await {
         Ok(file) => file,
         Err(error) => return (format!("<unavailable: {error}>"), false),
@@ -462,6 +657,8 @@ fn dump_timeout(context: &OperationContext) -> Result<Duration> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::{dump_timeout, parse_version_output, CriuTool, OperationContext};
     use a3s_oci_sdk::OperationId;
 
@@ -485,13 +682,28 @@ mod tests {
     #[test]
     fn dump_identity_binds_the_dynamic_freezer_boundary() {
         let identity = CriuTool::dump_option_identity();
-        let options = CriuTool::dump_options("/sys/fs/cgroup/a3s/workload");
-        assert_eq!(identity.last().map(String::as_str), Some("<source-cgroup>"));
-        assert_eq!(
-            options.last().map(String::as_str),
-            Some("/sys/fs/cgroup/a3s/workload")
-        );
-        assert_eq!(identity[..identity.len() - 1], options[..options.len() - 1]);
+        let options = CriuTool::dump_options(
+            "/sys/fs/cgroup/a3s/workload",
+            [("a3s-oci-device-0000", Path::new("/dev/null"))],
+        )
+        .expect("valid source cgroup path");
+        let mut expected = identity.clone();
+        let external = expected
+            .iter()
+            .position(|value| value == "mnt[<oci-device-mountpoint>]:<a3s-device-cookie>")
+            .expect("external mount placeholder");
+        expected[external] = "mnt[/dev/null]:a3s-oci-device-0000".to_string();
+        let source = expected
+            .iter()
+            .position(|value| value == "<source-cgroup>")
+            .expect("source cgroup placeholder");
+        expected[source] = "/sys/fs/cgroup/a3s/workload".to_string();
+        let root = expected
+            .iter()
+            .position(|value| value == "<source-cgroup-root>")
+            .expect("source cgroup root placeholder");
+        expected[root] = "/a3s".to_string();
+        assert_eq!(expected, options);
         assert!(options
             .windows(2)
             .any(|pair| { pair == ["--external".to_string(), "mnt[]".to_string(),] }));

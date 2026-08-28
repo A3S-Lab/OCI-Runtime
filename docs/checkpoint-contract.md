@@ -10,10 +10,10 @@ permits a current-platform driver to advertise `Checkpoint`, and permits
 The default Native Linux feature inventory and
 `NativeLinuxDriver::open_experimental` advertise neither operation. The
 separate rootful `NativeLinuxDriver::open_experimental_with_criu` constructor
-advertises `Checkpoint` only after it binds and probes one exact CRIU
-executable. It does not advertise `Restore`. No production driver advertises
-either operation, so callers must treat absence from `RuntimeInfo::operations`
-and the exact-artifact extension catalog as authoritative.
+advertises `Checkpoint` and `Restore` only after it binds and probes one exact
+CRIU executable. No production driver advertises either operation, so callers
+must treat absence from `RuntimeInfo::operations` and the exact-artifact
+extension catalog as authoritative.
 
 A production driver may advertise checkpoint only after it provides the
 required atomic artifact and cleanup behavior and the relevant real-host
@@ -41,25 +41,44 @@ Version 1 has a deliberately narrow source profile:
   `a3s-workload` leaf;
 - a private PID namespace is rejected because this version checkpoints the OCI
   init payload, not the runtime's namespace supervisor;
-- live exec processes are rejected; and
+- configured user and network namespaces, terminal-backed init I/O, Intel RDT,
+  moved network devices, OCI hooks, and live exec processes are rejected; and
 - unresolved external file descriptors fail the CRIU dump. The qualification
   workload closes host-attached standard I/O and launch-control descriptors
-  before checkpoint. A private time namespace remains in the qualified
-  positive profile.
+  before checkpoint. Newly created UTS, mount, IPC, cgroup, and time namespaces
+  remain in the qualified positive profile.
 
 The backend invokes CRIU with `--leave-running`, `--shell-job`, `--file-locks`,
-`--manage-cgroups=soft`, `--external mnt[]`, and `--freeze-cgroup` set to the
-exact workload leaf. The kernel freezer is reasserted and checked before and
-after the bounded dump, so success and failure both leave the source paused.
+`--manage-cgroups=soft`, automatic external-mount discovery, explicit stable
+cookies for every OCI device mount, `--freeze-cgroup` set to the exact workload
+leaf, and the exact management cgroup root. The kernel freezer is reasserted
+and checked before and after the bounded dump. The complete source PID, cgroup,
+and external-mount snapshot must also remain unchanged, so success and failure
+both leave the exact source paused.
 
 The single-file artifact begins with a versioned binary envelope and contains
 one canonical manifest followed by CRIU image bodies in sorted name order.
 The manifest binds the exact source and compatibility evidence, launcher and
-OCI init PIDs, workload cgroup, CRIU identity and arguments, and every image's
-size and SHA-256 digest. `inventory.img` is mandatory. Packaging and validation
-stream image bytes instead of accumulating memory pages in process memory.
-This artifact is immutable checkpoint output; there is no v1 Native Linux
-restore implementation yet.
+OCI init PIDs, workload cgroup, CRIU identity and arguments, the sorted
+cookie-to-container-mountpoint device contract, and every image's size and
+SHA-256 digest. `inventory.img` is mandatory. Packaging, validation, and
+extraction stream image bytes instead of accumulating memory pages in process
+memory.
+
+Version 1 restore is an explicit rootful Native Linux profile. It requires the
+same configuration and attachments, null non-terminal init I/O,
+`control-workload-v1`, no PID, user, or network namespace, no joined namespace,
+and no hooks, Intel RDT, or moved network devices. Newly created UTS, mount,
+IPC, cgroup, and time namespaces are accepted. The runtime validates the
+artifact read-only, extracts images into an operation-owned stage, recreates
+device placeholders without replacing bundle-owned files, prepares new
+generation device sources, and supplies the exact recorded cookies to CRIU.
+CRIU restores with `--leave-stopped` and `--manage-cgroups=ignore` beneath an
+A3S supervisor that becomes the restored init's authenticated direct parent.
+The executor adopts the supervisor and restored tree into the new generation's
+control/workload cgroups, retains their namespace and pidfd evidence, and
+returns the generation running but cgroup-paused. Resume remains an explicit
+caller operation.
 
 Driver-local state beneath `.a3s-oci-native-checkpoint-v1` records allocated,
 prepared, and published phases under an exclusive process lock. Publication
@@ -69,6 +88,11 @@ directory. A retry can finish an interrupted publish or return the retained
 published result without reading the caller-owned final artifact. Host
 acknowledgement removes the operation journal, staging directory, and any
 owned pending link; it never removes the published artifact.
+
+The Host operation journal and live executor provide exact restore replay for
+response loss in the qualified process. A driver-local restore stage journal
+and cross-process adoption/recreation gate remain required before this
+experimental profile can be promoted or included in a published package.
 
 ## Artifact And Reference
 

@@ -94,6 +94,92 @@ fn cleanup_device_target_removes_exact_placeholder_file() {
 }
 
 #[test]
+fn restore_preparation_recreates_and_owns_every_default_device_mountpoint() {
+    let temporary = tempdir().expect("temporary restore device workspace");
+    let runtime_directory = temporary.path().join("runtime");
+    let rootfs = temporary.path().join("rootfs");
+    std::fs::create_dir(&runtime_directory).expect("runtime directory");
+    std::fs::create_dir(&rootfs).expect("rootfs directory");
+    std::fs::create_dir(rootfs.join("dev")).expect("rootfs device directory");
+    let plan = DevicePlan::from_linux(Some(&Linux::default()), &[], false, true)
+        .expect("default device plan");
+
+    plan.prepare_restore_targets(&rootfs, &runtime_directory)
+        .expect("prepare restore device targets");
+
+    let manifest = load_device_target_manifest(&runtime_directory)
+        .expect("load restore device manifest")
+        .expect("restore device manifest");
+    assert_eq!(manifest.targets.len(), plan.nodes.len());
+    for node in &plan.nodes {
+        let relative = node.path.strip_prefix("/").expect("relative device path");
+        assert!(rootfs.join(relative).is_file());
+        assert!(manifest
+            .targets
+            .iter()
+            .any(|target| target.relative_path == relative));
+    }
+
+    cleanup_device_target_manifest(&manifest).expect("cleanup restore device targets");
+    assert!(plan.nodes.iter().all(|node| {
+        let relative = node.path.strip_prefix("/").expect("relative device path");
+        !rootfs.join(relative).exists()
+    }));
+}
+
+#[test]
+fn restore_preparation_preserves_preexisting_device_mountpoints() {
+    let temporary = tempdir().expect("temporary restore device workspace");
+    let runtime_directory = temporary.path().join("runtime");
+    let rootfs = temporary.path().join("rootfs");
+    let null = rootfs.join("dev/null");
+    std::fs::create_dir(&runtime_directory).expect("runtime directory");
+    std::fs::create_dir_all(null.parent().expect("device parent"))
+        .expect("rootfs device directory");
+    std::fs::write(&null, b"bundle-owned").expect("preexisting device mountpoint");
+    let plan = DevicePlan::from_linux(Some(&Linux::default()), &[], false, true)
+        .expect("default device plan");
+
+    plan.prepare_restore_targets(&rootfs, &runtime_directory)
+        .expect("prepare restore device targets");
+
+    let manifest = load_device_target_manifest(&runtime_directory)
+        .expect("load restore device manifest")
+        .expect("restore device manifest");
+    assert_eq!(manifest.targets.len() + 1, plan.nodes.len());
+    assert!(!manifest
+        .targets
+        .iter()
+        .any(|target| target.relative_path == std::path::Path::new("dev/null")));
+    cleanup_device_target_manifest(&manifest).expect("cleanup restore device targets");
+    assert_eq!(
+        std::fs::read(&null).expect("preexisting mountpoint after cleanup"),
+        b"bundle-owned"
+    );
+}
+
+#[test]
+fn checkpoint_device_mount_contract_is_stable_and_ordered() {
+    let plan = DevicePlan::from_linux(Some(&Linux::default()), &[], false, true)
+        .expect("default device plan");
+    let mounts = plan.checkpoint_external_mounts();
+
+    assert_eq!(mounts.len(), crate::OCI_LINUX_DEFAULT_DEVICE_NODES.len());
+    for (index, ((cookie, mountpoint), expected)) in mounts
+        .iter()
+        .zip(crate::OCI_LINUX_DEFAULT_DEVICE_NODES)
+        .enumerate()
+    {
+        assert_eq!(cookie, &format!("a3s-oci-device-{index:04}"));
+        assert_eq!(mountpoint, std::path::Path::new(expected.path));
+    }
+
+    let inherited = DevicePlan::from_linux(Some(&Linux::default()), &[], false, false)
+        .expect("inherited mount namespace device plan");
+    assert!(inherited.checkpoint_external_mounts().is_empty());
+}
+
+#[test]
 fn cleanup_record_uses_host_owner_for_user_namespace_placeholder() {
     let temporary = tempdir().expect("temporary device target directory");
     let path = temporary.path().join("null");

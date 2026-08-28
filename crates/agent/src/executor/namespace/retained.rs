@@ -177,6 +177,18 @@ impl RetainedExecutionContext {
             .collect()
     }
 
+    pub(crate) fn has_configured_network_namespace(&self) -> bool {
+        self.namespaces
+            .iter()
+            .any(|namespace| namespace.kind.clone_flag == libc::CLONE_NEWNET)
+    }
+
+    pub(crate) fn has_configured_user_namespace(&self) -> bool {
+        self.namespaces
+            .iter()
+            .any(|namespace| namespace.kind.clone_flag == libc::CLONE_NEWUSER)
+    }
+
     pub(crate) fn duplicate_network_namespace(&self) -> Result<File> {
         let namespace = self
             .namespaces

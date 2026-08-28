@@ -55,6 +55,27 @@ pub(super) struct ProcessIoSetup {
 }
 
 impl ProcessIoHandle {
+    /// Represent an init whose standard descriptors were intentionally closed
+    /// before checkpoint and are owned by the restored process image rather
+    /// than by new host-side pipes.
+    pub(super) fn restored_null() -> Self {
+        let (serving_stdin_operation, _) = watch::channel(0);
+        Self {
+            inner: Arc::new(ProcessIoInner {
+                stdin_mode: IoMode::Null,
+                stdin: Mutex::new(None),
+                next_stdin_operation: AtomicU64::new(0),
+                serving_stdin_operation,
+                output: None,
+                terminal: None,
+            }),
+        }
+    }
+
+    pub(super) fn uses_terminal(&self) -> bool {
+        self.inner.terminal.is_some()
+    }
+
     /// Configure supported child descriptors before spawn.
     pub(super) fn configure(command: &mut Command, io: &ProcessIo) -> Result<ProcessIoSetup> {
         if terminal_io(io) {

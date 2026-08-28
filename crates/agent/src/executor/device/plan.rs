@@ -30,6 +30,7 @@ use super::{device_error, invalid, unsupported};
 
 const MAX_DEVICES: usize = 256;
 const MAX_SCANNED_ROOTFS_ENTRIES: usize = 1_000_000;
+const CHECKPOINT_DEVICE_COOKIE_PREFIX: &str = "a3s-oci-device";
 impl DevicePlan {
     pub(in crate::executor) fn from_linux(
         linux: Option<&Linux>,
@@ -323,6 +324,89 @@ impl DevicePlan {
         Ok(())
     }
 
+    /// Recreate only the file mountpoints that CRIU needs before rebuilding
+    /// the saved mount tree. The restored namespace supplies the device
+    /// mounts themselves; the host rootfs receives only runtime-owned regular
+    /// placeholders tracked by the ordinary device cleanup manifest.
+    pub(in crate::executor) fn prepare_restore_targets(
+        &self,
+        rootfs: &Path,
+        runtime_directory: &Path,
+    ) -> Result<()> {
+        if !self.create_nodes || self.nodes.is_empty() {
+            return Ok(());
+        }
+        let prepared = PreparedDeviceSources {
+            sources: None,
+            console: None,
+            verify_ownership: true,
+            target_host_owner: None,
+            manifest: Mutex::new(None),
+            manifest_file: Mutex::new(None),
+            manifest_path: Some(runtime_directory.join(DEVICE_TARGETS_RECORD_NAME)),
+        };
+        prepared.bind_rootfs(rootfs)?;
+        for node in &self.nodes {
+            node.prepare_restore_target(rootfs, &prepared)?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::executor) fn checkpoint_external_mounts(&self) -> Vec<(String, PathBuf)> {
+        if !self.create_nodes {
+            return Vec::new();
+        }
+        self.nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (checkpoint_device_cookie(index), node.path.clone()))
+            .collect()
+    }
+
+    pub(in crate::executor) fn prepare_restore_external_mounts(
+        &self,
+        namespaces: &NamespacePlan,
+        runtime_directory: &Path,
+    ) -> Result<Vec<(String, PathBuf, PathBuf)>> {
+        if !self.create_nodes || self.nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let prepared =
+            self.prepare_sources(namespaces, runtime_directory, runtime_directory, false, &[])?;
+        drop(prepared);
+        let source_directory = runtime_directory.join("devices");
+        self.nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| {
+                let source = source_directory.join(format!("device-{index:04}"));
+                let metadata = fs::symlink_metadata(&source).map_err(|error| {
+                    device_error(
+                        ErrorCode::FailedPrecondition,
+                        format!(
+                            "failed to inspect prepared restore device source {}: {error}",
+                            source.display()
+                        ),
+                    )
+                })?;
+                if metadata.file_type().is_symlink()
+                    || !(metadata.file_type().is_char_device()
+                        || metadata.file_type().is_block_device()
+                        || metadata.file_type().is_fifo())
+                {
+                    return Err(device_error(
+                        ErrorCode::PermissionDenied,
+                        format!(
+                            "prepared restore device source has an invalid type: {}",
+                            source.display()
+                        ),
+                    ));
+                }
+                Ok((checkpoint_device_cookie(index), node.path.clone(), source))
+            })
+            .collect()
+    }
+
     pub(in crate::executor) fn create_all(&self) -> Result<()> {
         debug_assert!(self.create_nodes);
         for node in &self.nodes {
@@ -573,6 +657,10 @@ impl DevicePlan {
     pub(in crate::executor) fn len(&self) -> usize {
         self.nodes.len()
     }
+}
+
+fn checkpoint_device_cookie(index: usize) -> String {
+    format!("{CHECKPOINT_DEVICE_COOKIE_PREFIX}-{index:04}")
 }
 
 fn validate_bind_mounts_are_nodev(mounts: &[MountPlan]) -> Result<()> {

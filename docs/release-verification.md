@@ -129,21 +129,24 @@ A3S_OCI_NATIVE_RUNTIME_BINARY=/absolute/path/to/a3s-oci \
   A3S_QUALIFICATION_SOURCE_COMMIT=<40-character-commit> \
   A3S_OCI_NATIVE_CHECKPOINT_REPORT=/absolute/path/to/checkpoint.json \
   A3S_OCI_NATIVE_CHECKPOINT_PIDNS_REPORT=/absolute/path/to/checkpoint-pidns.json \
+  A3S_OCI_NATIVE_CHECKPOINT_NETNS_REPORT=/absolute/path/to/checkpoint-netns.json \
   bash .github/scripts/native-linux-checkpoint.sh
 ```
 
 The positive report schema is
-`a3s.oci.native-linux-checkpoint-smoke.v1`. It proves atomic no-replace
-publication, driver and Host replay after a post-publication fault, exact
-artifact digest and size, paused-source preservation, later resume, caller
-artifact survival, and scoped cleanup. The companion unavailable report proves
-the version-1 private-PID-namespace rejection. Default Features must still omit
-Checkpoint and Restore, while the explicit CRIU-qualified driver advertises
-Checkpoint only.
+`a3s.oci.native-linux-checkpoint-smoke.v2`. It proves atomic no-replace
+publication, checkpoint and restore replay after response-loss faults, exact
+artifact digest and size, paused-source preservation and resume, exact newer
+paused-generation restore, restored resume and exit, caller-artifact
+immutability and survival, and scoped cleanup. Companion unavailable reports
+prove the version-1 private-PID-namespace and configured-network-namespace
+rejections. Default Features must still omit Checkpoint and Restore, while the
+explicit CRIU-qualified driver advertises both operations.
 
-These two reports are not yet members of
+These three reports are not yet members of
 `a3s.oci.native-linux-package-qualification.v3` and are not covered merely by
 verifying a release archive's provenance. Retain them beside the exact host
-and CRIU identity when evaluating the experimental checkpoint profile. Restore,
-broader source profiles, multi-architecture package qualification, security,
-upgrade, rollback, and release soak remain open.
+and CRIU identity when evaluating the experimental checkpoint profile.
+Driver-local cross-process restore replay, broader source profiles,
+multi-architecture package qualification, security, upgrade, rollback, and
+release soak remain open.

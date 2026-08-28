@@ -110,7 +110,7 @@ impl PreparedDeviceSources {
     /// Bind the cleanup manifest to the exact retained rootfs before the
     /// supervised child enters its mount namespace.
     pub(in crate::executor) fn bind_rootfs(&self, rootfs: &Path) -> Result<()> {
-        if self.sources.is_none() || self.manifest_path.is_none() {
+        if self.manifest_path.is_none() {
             return Ok(());
         }
         let canonical_rootfs = rootfs.canonicalize().map_err(|error| {

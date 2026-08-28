@@ -43,6 +43,9 @@ mod process_io;
 mod recovery;
 #[cfg(test)]
 mod recovery_mode_tests;
+mod restore;
+mod restore_cgroup_namespace;
+mod restore_supervisor;
 mod rlimit;
 mod rootfs;
 #[cfg(test)]
@@ -94,6 +97,7 @@ pub use checkpoint::LinuxExecutorCheckpointSource;
 pub use inherited_descriptor::InheritedDescriptorPlan;
 pub(crate) use pidfd::verify_support as verify_pidfd_support;
 pub use recovery::LinuxExecutorTombstone;
+pub use restore::{LinuxRestoreSpawnRequest, LinuxRestoreSpawner};
 
 /// One-shot rootless device bootstrap completed before Tokio starts.
 #[derive(Debug)]
@@ -174,6 +178,8 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     init::run_container_init_if_requested()
         .or_else(exec_process::run_container_exec_if_requested)
         .or_else(filesystem::run_container_filesystem_if_requested)
+        .or_else(restore_cgroup_namespace::run_if_requested)
+        .or_else(restore_supervisor::run_if_requested)
 }
 
 /// Fail-closed Linux OCI executor shared by native and utility-VM drivers.

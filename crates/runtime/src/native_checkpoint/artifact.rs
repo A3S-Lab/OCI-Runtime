@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -13,8 +14,11 @@ use sha2::{Digest, Sha256};
 use super::tool::CriuIdentity;
 use super::{checkpoint_error, io_error};
 
+// Framing version 1 remains stable. Manifest schema v2 adds the exact
+// external-device mount contract needed by restore without changing how the
+// length-delimited manifest and image bodies are encoded.
 const ARTIFACT_MAGIC: [u8; 16] = *b"A3SOCI-CRIU-V1\0\0";
-const ARTIFACT_SCHEMA_V1: &str = "a3s.oci.native-criu-checkpoint.v1";
+const ARTIFACT_SCHEMA_V2: &str = "a3s.oci.native-criu-checkpoint.v2";
 const INVENTORY_IMAGE: &str = "inventory.img";
 const MAX_IMAGE_FILES: usize = 4_096;
 const MAX_IMAGE_NAME_BYTES: usize = 255;
@@ -33,6 +37,7 @@ pub(super) struct ArtifactMetadata {
     pub(super) cgroup_path: String,
     pub(super) criu: CriuIdentity,
     pub(super) dump_options: Vec<String>,
+    pub(super) external_mounts: Vec<ExternalMountManifestEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,7 +63,15 @@ pub(super) struct CheckpointArtifactManifest {
     cgroup_path: String,
     criu: CriuIdentity,
     dump_options: Vec<String>,
+    external_mounts: Vec<ExternalMountManifestEntry>,
     images: Vec<ImageManifestEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ExternalMountManifestEntry {
+    name: String,
+    mountpoint: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,8 +92,36 @@ impl CheckpointArtifactManifest {
         &self.compatibility
     }
 
+    pub(super) const fn source(&self) -> &ContainerTarget {
+        &self.source
+    }
+
+    pub(super) const fn source_config_digest(&self) -> &CheckpointDigest {
+        &self.source_config_digest
+    }
+
+    pub(super) const fn source_attachments_digest(&self) -> &CheckpointDigest {
+        &self.source_attachments_digest
+    }
+
+    pub(super) fn cgroup_path(&self) -> &str {
+        &self.cgroup_path
+    }
+
+    pub(super) const fn criu(&self) -> &CriuIdentity {
+        &self.criu
+    }
+
+    pub(super) fn dump_options(&self) -> &[String] {
+        &self.dump_options
+    }
+
+    pub(super) fn external_mounts(&self) -> &[ExternalMountManifestEntry] {
+        &self.external_mounts
+    }
+
     fn validate(&self, expected_token: &[u8; 32]) -> Result<()> {
-        if self.schema_version != ARTIFACT_SCHEMA_V1
+        if self.schema_version != ARTIFACT_SCHEMA_V2
             || self.publication_token != encode_token(expected_token)
             || self.quiesce != "paused"
             || self.launcher_pid <= 0
@@ -89,11 +130,31 @@ impl CheckpointArtifactManifest {
             || self.checkpoint_root_pid != self.init_pid
             || !Path::new(&self.cgroup_path).is_absolute()
             || self.dump_options.is_empty()
+            || self.external_mounts.is_empty()
+            || self.external_mounts.len() > 256
             || self.images.is_empty()
             || self.images.len() > MAX_IMAGE_FILES
         {
             return Err(invalid_artifact(
                 "native checkpoint manifest has invalid identity, quiescence, process, cgroup, or image metadata",
+            ));
+        }
+        for mount in &self.external_mounts {
+            mount.validate()?;
+        }
+        let mountpoints = self
+            .external_mounts
+            .iter()
+            .map(|mount| &mount.mountpoint)
+            .collect::<BTreeSet<_>>();
+        if self
+            .external_mounts
+            .windows(2)
+            .any(|pair| pair[0].name >= pair[1].name)
+            || mountpoints.len() != self.external_mounts.len()
+        {
+            return Err(invalid_artifact(
+                "native checkpoint external mounts are not unique and sorted",
             ));
         }
         if !self
@@ -115,6 +176,63 @@ impl CheckpointArtifactManifest {
         {
             return Err(invalid_artifact(
                 "native checkpoint image entries are not unique and sorted",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl ExternalMountManifestEntry {
+    pub(super) fn new(name: &str, mountpoint: &Path) -> Result<Self> {
+        let entry = Self {
+            name: name.to_string(),
+            mountpoint: mountpoint.to_path_buf(),
+        };
+        entry.validate()?;
+        Ok(entry)
+    }
+
+    pub(super) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(super) fn mountpoint(&self) -> &Path {
+        &self.mountpoint
+    }
+
+    fn validate(&self) -> Result<()> {
+        let Some(index) = self.name.strip_prefix("a3s-oci-device-") else {
+            return Err(invalid_artifact(
+                "native checkpoint external mount has an invalid cookie",
+            ));
+        };
+        if index.len() != 4
+            || !index.bytes().all(|byte| byte.is_ascii_digit())
+            || index.parse::<usize>().ok().is_none_or(|index| index >= 256)
+        {
+            return Err(invalid_artifact(
+                "native checkpoint external mount has an invalid cookie index",
+            ));
+        }
+        let Some(mountpoint) = self.mountpoint.to_str() else {
+            return Err(invalid_artifact(
+                "native checkpoint external mountpoint is not valid UTF-8",
+            ));
+        };
+        let components = mountpoint
+            .strip_prefix('/')
+            .filter(|relative| !relative.is_empty())
+            .map(|relative| relative.split('/').collect::<Vec<_>>());
+        if mountpoint.len() > 4_096
+            || mountpoint.as_bytes().contains(&0)
+            || components.as_ref().is_none_or(|components| {
+                components.iter().any(|component| {
+                    component.is_empty() || *component == "." || *component == ".."
+                })
+            })
+        {
+            return Err(invalid_artifact(
+                "native checkpoint external mountpoint is not normalized and absolute",
             ));
         }
         Ok(())
@@ -156,6 +274,7 @@ pub(super) async fn validate(
             &expected_digest,
             expected_size,
             &publication_token,
+            None,
         )
     })
     .await
@@ -163,6 +282,56 @@ pub(super) async fn validate(
         checkpoint_error(
             ErrorCode::Internal,
             format!("checkpoint artifact validation task failed: {error}"),
+        )
+    })?
+}
+
+pub(super) async fn validate_external(
+    mut artifact: File,
+    expected_digest: CheckpointDigest,
+    expected_size: u64,
+) -> Result<BuiltArtifact> {
+    tokio::task::spawn_blocking(move || {
+        let publication_token = read_publication_token(&mut artifact)?;
+        validate_blocking(
+            &mut artifact,
+            &expected_digest,
+            expected_size,
+            &publication_token,
+            None,
+        )
+    })
+    .await
+    .map_err(|error| {
+        checkpoint_error(
+            ErrorCode::Internal,
+            format!("external checkpoint validation task failed: {error}"),
+        )
+    })?
+}
+
+pub(super) async fn extract_external(
+    mut artifact: File,
+    expected_digest: CheckpointDigest,
+    expected_size: u64,
+    images_directory: PathBuf,
+) -> Result<BuiltArtifact> {
+    tokio::task::spawn_blocking(move || {
+        validate_empty_image_destination(&images_directory)?;
+        let publication_token = read_publication_token(&mut artifact)?;
+        validate_blocking(
+            &mut artifact,
+            &expected_digest,
+            expected_size,
+            &publication_token,
+            Some(&images_directory),
+        )
+    })
+    .await
+    .map_err(|error| {
+        checkpoint_error(
+            ErrorCode::Internal,
+            format!("checkpoint extraction task failed: {error}"),
         )
     })?
 }
@@ -234,7 +403,7 @@ fn build_blocking(
     }
     let mut sources = inspect_images(images_directory)?;
     let manifest = CheckpointArtifactManifest {
-        schema_version: ARTIFACT_SCHEMA_V1.to_string(),
+        schema_version: ARTIFACT_SCHEMA_V2.to_string(),
         publication_token: encode_token(publication_token),
         source: metadata.source,
         source_config_digest: metadata.source_config_digest,
@@ -247,6 +416,7 @@ fn build_blocking(
         cgroup_path: metadata.cgroup_path,
         criu: metadata.criu,
         dump_options: metadata.dump_options,
+        external_mounts: metadata.external_mounts,
         images: sources
             .iter()
             .map(|source| source.manifest.clone())
@@ -342,7 +512,7 @@ fn build_blocking(
         .sync_all()
         .map_err(|error| io_error("sync checkpoint artifact", Path::new("<pending>"), error))?;
     let digest = CheckpointDigest::new(format!("sha256:{:x}", artifact_digest.finalize()))?;
-    let verified = validate_blocking(destination, &digest, size_bytes, publication_token)?;
+    let verified = validate_blocking(destination, &digest, size_bytes, publication_token, None)?;
     if verified.manifest != manifest {
         return Err(invalid_artifact(
             "checkpoint artifact manifest changed during verification",
@@ -429,6 +599,7 @@ fn validate_blocking(
     expected_digest: &CheckpointDigest,
     expected_size: u64,
     publication_token: &[u8; 32],
+    images_directory: Option<&Path>,
 ) -> Result<BuiltArtifact> {
     let metadata = artifact
         .metadata()
@@ -470,6 +641,21 @@ fn validate_blocking(
     manifest.validate(publication_token)?;
     let mut buffer = vec![0_u8; COPY_BUFFER_BYTES];
     for image in &manifest.images {
+        let mut extracted = match images_directory {
+            Some(directory) => {
+                let path = directory.join(&image.name);
+                let mut options = OpenOptions::new();
+                options
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+                Some(options.open(&path).map_err(|error| {
+                    image_io("create extracted CRIU image", directory, &image.name, error)
+                })?)
+            }
+            None => None,
+        };
         let mut image_digest = Sha256::new();
         let mut remaining = image.size_bytes;
         while remaining > 0 {
@@ -489,6 +675,11 @@ fn validate_blocking(
             }
             digest.update(&buffer[..read]);
             image_digest.update(&buffer[..read]);
+            if let (Some(extracted), Some(directory)) = (extracted.as_mut(), images_directory) {
+                extracted.write_all(&buffer[..read]).map_err(|error| {
+                    image_io("write extracted CRIU image", directory, &image.name, error)
+                })?;
+            }
             remaining -= read as u64;
         }
         let actual = format!("sha256:{:x}", image_digest.finalize());
@@ -497,6 +688,11 @@ fn validate_blocking(
                 "checkpoint artifact CRIU image {} has the wrong digest",
                 image.name
             )));
+        }
+        if let (Some(extracted), Some(directory)) = (extracted, images_directory) {
+            extracted.sync_all().map_err(|error| {
+                image_io("sync extracted CRIU image", directory, &image.name, error)
+            })?;
         }
     }
     let mut trailing = [0_u8; 1];
@@ -518,11 +714,60 @@ fn validate_blocking(
             "checkpoint artifact digest differs from retained evidence",
         ));
     }
+    if let Some(directory) = images_directory {
+        File::open(directory)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| io_error("sync extracted CRIU image directory", directory, error))?;
+    }
     Ok(BuiltArtifact {
         manifest,
         digest: actual_digest,
         size_bytes: expected_size,
     })
+}
+
+fn read_publication_token(artifact: &mut File) -> Result<[u8; 32]> {
+    artifact
+        .seek(SeekFrom::Start(0))
+        .map_err(|error| io_error("rewind checkpoint artifact", Path::new("<external>"), error))?;
+    let mut header = [0_u8; 48];
+    artifact.read_exact(&mut header).map_err(|error| {
+        io_error(
+            "read checkpoint artifact ownership header",
+            Path::new("<external>"),
+            error,
+        )
+    })?;
+    if header[..16] != ARTIFACT_MAGIC {
+        return Err(invalid_artifact("checkpoint artifact magic does not match"));
+    }
+    header[16..48]
+        .try_into()
+        .map_err(|_| invalid_artifact("checkpoint publication token has an invalid width"))
+}
+
+fn validate_empty_image_destination(directory: &Path) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(directory)
+        .map_err(|error| io_error("inspect restore image directory", directory, error))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(invalid_artifact(format!(
+            "restore image destination is not a real directory: {}",
+            directory.display()
+        )));
+    }
+    if std::fs::read_dir(directory)
+        .map_err(|error| io_error("list restore image directory", directory, error))?
+        .next()
+        .transpose()
+        .map_err(|error| io_error("read restore image directory", directory, error))?
+        .is_some()
+    {
+        return Err(invalid_artifact(format!(
+            "restore image destination is not empty: {}",
+            directory.display()
+        )));
+    }
+    Ok(())
 }
 
 fn write_hashed(
@@ -631,6 +876,11 @@ mod tests {
                 git_id: Some("v4.2.1".to_string()),
             },
             dump_options: vec!["--leave-running".to_string()],
+            external_mounts: vec![ExternalMountManifestEntry::new(
+                "a3s-oci-device-0000",
+                Path::new("/dev/null"),
+            )
+            .expect("external mount")],
         }
     }
 
@@ -675,18 +925,91 @@ mod tests {
         )
         .await
         .unwrap();
+        assert_eq!(
+            validate_external(
+                File::open(&artifact_path).unwrap(),
+                built.digest.clone(),
+                built.size_bytes,
+            )
+            .await
+            .unwrap(),
+            built
+        );
+
+        let extracted = temporary.path().join("extracted");
+        std::fs::create_dir(&extracted).unwrap();
+        assert_eq!(
+            extract_external(
+                File::open(&artifact_path).unwrap(),
+                built.digest.clone(),
+                built.size_bytes,
+                extracted.clone(),
+            )
+            .await
+            .unwrap(),
+            built
+        );
+        assert_eq!(
+            std::fs::read(extracted.join(INVENTORY_IMAGE)).unwrap(),
+            b"inventory"
+        );
+        assert_eq!(
+            std::fs::read(extracted.join("pages-1.img")).unwrap(),
+            b"pages"
+        );
 
         let mut bytes = std::fs::read(&artifact_path).unwrap();
         *bytes.last_mut().unwrap() ^= 1;
         std::fs::write(&artifact_path, bytes).unwrap();
         assert!(validate(
             File::open(&artifact_path).unwrap(),
-            built.digest,
+            built.digest.clone(),
             built.size_bytes,
             token,
         )
         .await
         .is_err());
+        assert!(validate_external(
+            File::open(&artifact_path).unwrap(),
+            built.digest,
+            built.size_bytes,
+        )
+        .await
+        .is_err());
+    }
+
+    #[test]
+    fn validates_exact_external_mount_cookie_and_path_contract() {
+        let mount = ExternalMountManifestEntry::new(
+            "a3s-oci-device-0255",
+            Path::new("/dev/qualified-device"),
+        )
+        .expect("bounded external device mount");
+        assert_eq!(mount.name(), "a3s-oci-device-0255");
+        assert_eq!(mount.mountpoint(), Path::new("/dev/qualified-device"));
+
+        for cookie in [
+            "device-0000",
+            "a3s-oci-device-000",
+            "a3s-oci-device-00000",
+            "a3s-oci-device-0256",
+            "a3s-oci-device-abcd",
+        ] {
+            assert!(ExternalMountManifestEntry::new(cookie, Path::new("/dev/null")).is_err());
+        }
+        for mountpoint in [
+            "dev/null",
+            "/",
+            "/dev//null",
+            "/dev/./null",
+            "/dev/../null",
+            "/dev/null/",
+        ] {
+            assert!(
+                ExternalMountManifestEntry::new("a3s-oci-device-0000", Path::new(mountpoint),)
+                    .is_err()
+            );
+        }
     }
 
     #[test]

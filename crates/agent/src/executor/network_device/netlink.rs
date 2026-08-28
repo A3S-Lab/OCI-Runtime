@@ -150,7 +150,7 @@ impl NetworkDeviceLease {
         run_disposable_thread("a3s-oci-net-device-rollback", move || rollback_sync(&state)).await
     }
 
-    pub(in crate::executor) fn commit(mut self) {
+    pub(in crate::executor) fn commit(&mut self) {
         self.rollback.take();
     }
 }

@@ -20,9 +20,10 @@ use crate::driver::{
     DriverCheckpointRequest, DriverCheckpointResult, DriverCloseStdinRequest,
     DriverContainerOperationRequest, DriverCreateAttachments, DriverCreateRequest,
     DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
-    DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest,
-    DriverState, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
-    DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
+    DriverReadOutputRequest, DriverResizeRequest, DriverRestoreRequest,
+    DriverRestoreValidationRequest, DriverSignalProcessRequest, DriverStartRequest, DriverState,
+    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
+    OciHookPhase, RuntimeDriver,
 };
 use crate::native_checkpoint::NativeCriuCheckpoint;
 
@@ -96,9 +97,9 @@ impl NativeLinuxDriver {
 
     /// Open the rootful experimental native driver with one exact CRIU binary.
     ///
-    /// This is the only constructor that advertises `Checkpoint`. It verifies
-    /// CRIU's immutable executable identity and host feature probe before the
-    /// driver becomes visible. Restore remains intentionally unavailable.
+    /// This is the only constructor that advertises `Checkpoint` and `Restore`.
+    /// It verifies CRIU's immutable executable identity and host feature probe
+    /// before the driver becomes visible.
     pub async fn open_experimental_with_criu(
         runtime_parent: impl AsRef<Path>,
         init_executable: impl AsRef<Path>,
@@ -111,6 +112,7 @@ impl NativeLinuxDriver {
         );
         let mut driver = Self::open_experimental(&runtime_parent, &init_executable).await?;
         driver.operations.push(RuntimeOperation::Checkpoint);
+        driver.operations.push(RuntimeOperation::Restore);
         driver
             .capability
             .evidence
@@ -139,6 +141,10 @@ impl NativeLinuxDriver {
             "checkpoint_opt_in".to_string(),
             "open-experimental-with-criu".to_string(),
         );
+        driver
+            .capability
+            .evidence
+            .insert("restore_backend".to_string(), "criu".to_string());
         driver.checkpoint = Some(checkpoint);
         Ok(driver)
     }
@@ -600,6 +606,51 @@ impl RuntimeDriver for NativeLinuxDriver {
         self.require_live(&target, "native-linux-checkpoint")
             .await?;
         checkpoint.checkpoint(&self.executor, request).await
+    }
+
+    async fn validate_restore_artifact(
+        &self,
+        request: DriverRestoreValidationRequest,
+    ) -> Result<()> {
+        let checkpoint = self
+            .checkpoint
+            .as_ref()
+            .ok_or_else(|| Error::unsupported("restore").for_operation("native-linux-restore"))?;
+        checkpoint.validate_restore_artifact(&request).await
+    }
+
+    async fn restore(&self, request: DriverRestoreRequest) -> Result<DriverState> {
+        let checkpoint = self
+            .checkpoint
+            .as_ref()
+            .ok_or_else(|| Error::unsupported("restore").for_operation("native-linux-restore"))?;
+        if request.isolation.class() != IsolationClass::SharedHostKernel {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                "native Linux restore requires shared-host-kernel isolation",
+            )
+            .for_operation("native-linux-restore"));
+        }
+        if let Some(tombstone) = self.recovered.lock().await.get(&request.target.id) {
+            return Err(recovered_stopped_error(
+                tombstone.target(),
+                "native-linux-restore",
+            ));
+        }
+        let guest_directory = guest_path(request.bundle.directory()).await?;
+        let expected_target = request.target.clone();
+        let expected_digest = request.bundle.config_digest().to_string();
+        let agent_request = AgentCreateRequest {
+            context: request.context.clone(),
+            target: request.target.clone(),
+            bundle: AgentBundle::new(&request.bundle, guest_directory),
+            io: request.io.clone(),
+        };
+        let state = checkpoint
+            .restore(&self.executor, &request, agent_request)
+            .await?;
+        self.client
+            .map_state(&expected_target, Some(&expected_digest), state)
     }
 }
 

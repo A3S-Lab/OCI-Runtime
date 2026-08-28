@@ -9,21 +9,26 @@ use std::path::Path;
 use std::sync::{Arc, Weak};
 
 use a3s_oci_agent::LinuxExecutor;
+use a3s_oci_agent_protocol::{AgentCreateRequest, AgentState};
 use a3s_oci_core::{DriverKind, HostPlatform, IsolationClass};
 use a3s_oci_sdk::{
-    canonical_json_bytes, CheckpointCompatibility, CheckpointDigest, CheckpointFormat, ContainerId,
-    ContainerTarget, Error, ErrorCode, OperationId, Result, RuntimeArtifact,
+    canonical_json_bytes, CheckpointCompatibility, CheckpointDigest, CheckpointFormat,
+    CheckpointReference, ContainerId, ContainerTarget, Error, ErrorCode, OperationId, Result,
+    RuntimeArtifact,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
 
-use crate::{DriverCheckpointRequest, DriverCheckpointResult};
-use artifact::{ArtifactMetadata, BuiltArtifact};
+use crate::{
+    DriverCheckpointRequest, DriverCheckpointResult, DriverRestoreRequest,
+    DriverRestoreValidationRequest,
+};
+use artifact::{ArtifactMetadata, BuiltArtifact, ExternalMountManifestEntry};
 use journal::{CheckpointJournalStore, JournalOutcome, JournalRecord, JournalResult};
 use publication::ArtifactDestination;
-use tool::CriuTool;
+use tool::{CriuRestoreSpawner, CriuTool};
 
 const CHECKPOINT_FORMAT_NAME: &str = "native-linux-criu";
 const CHECKPOINT_FORMAT_VERSION: u16 = 1;
@@ -51,6 +56,7 @@ struct DriverBuildIdentity {
     format_name: &'static str,
     format_version: u16,
     dump_options: Vec<String>,
+    restore_options: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -81,6 +87,7 @@ impl NativeCriuCheckpoint {
             format_name: CHECKPOINT_FORMAT_NAME,
             format_version: CHECKPOINT_FORMAT_VERSION,
             dump_options: CriuTool::dump_option_identity(),
+            restore_options: CriuTool::restore_option_identity(),
         };
         let encoded = canonical_json_bytes(&identity).map_err(|error| {
             checkpoint_error(
@@ -145,6 +152,97 @@ impl NativeCriuCheckpoint {
             .await
     }
 
+    pub(super) async fn validate_restore_artifact(
+        &self,
+        request: &DriverRestoreValidationRequest,
+    ) -> Result<()> {
+        validate_restore_stack(
+            &request.reference,
+            &request.runtime_artifact,
+            &self.driver_build_digest,
+            &self.format,
+        )?;
+        let artifact = self.open_external_artifact(&request.artifact_path).await?;
+        let built = artifact::validate_external(
+            artifact,
+            request.reference.artifact_digest().clone(),
+            request.reference.artifact_size_bytes(),
+        )
+        .await?;
+        self.require_restore_manifest(&built, &request.reference)
+    }
+
+    pub(super) async fn restore(
+        &self,
+        executor: &LinuxExecutor,
+        request: &DriverRestoreRequest,
+        agent_request: AgentCreateRequest,
+    ) -> Result<AgentState> {
+        validate_restore_stack(
+            &request.reference,
+            &request.runtime_artifact,
+            &self.driver_build_digest,
+            &self.format,
+        )?;
+        validate_restore_request_v1(request)?;
+        let operation_lock = self.operation_lock(&request.context.operation_id).await;
+        let _guard = operation_lock.lock().await;
+        let stage = self
+            .journals
+            .create_stage(&request.context.operation_id)
+            .await?;
+        let mut result = async {
+            let artifact = self.open_external_artifact(&request.artifact_path).await?;
+            let built = artifact::extract_external(
+                artifact,
+                request.reference.artifact_digest().clone(),
+                request.reference.artifact_size_bytes(),
+                stage.images().to_path_buf(),
+            )
+            .await?;
+            self.require_restore_manifest(&built, &request.reference)?;
+            let spawner = CriuRestoreSpawner::new(
+                &self.tool,
+                stage.images(),
+                stage.work(),
+                built.manifest.external_mounts(),
+            );
+            executor.restore_with(agent_request, &spawner).await
+        }
+        .await;
+        if let Err(error) = &mut result {
+            let (log, truncated) = tool::read_log_bounded(&stage.work().join("restore.log")).await;
+            error.message = format!(
+                "{}; CRIU restore log={:?}; log_truncated={truncated}",
+                error.message,
+                log.trim()
+            );
+        }
+        match self
+            .journals
+            .cleanup_stage(&request.context.operation_id)
+            .await
+        {
+            Ok(()) => result,
+            Err(cleanup) => match result {
+                Ok(_) => {
+                    let rollback = executor
+                        .rollback_restore(&request.target, request.bundle.config_digest())
+                        .await;
+                    let mut error = cleanup;
+                    if let Err(rollback) = rollback {
+                        append_failure(&mut error, "restored generation rollback", &rollback);
+                    }
+                    Err(error)
+                }
+                Err(mut error) => {
+                    append_failure(&mut error, "restore stage cleanup", &cleanup);
+                    Err(error)
+                }
+            },
+        }
+    }
+
     pub(super) async fn acknowledge(&self, operation_id: &OperationId) -> Result<()> {
         let operation_lock = self.operation_lock(operation_id).await;
         let _guard = operation_lock.lock().await;
@@ -200,6 +298,10 @@ impl NativeCriuCheckpoint {
                 )
             })?
             .to_string();
+        let external_mounts = source
+            .external_mounts()
+            .map(|(name, mountpoint)| ExternalMountManifestEntry::new(name, mountpoint))
+            .collect::<Result<Vec<_>>>()?;
         let metadata = ArtifactMetadata {
             source: expected_target.clone(),
             source_config_digest: CheckpointDigest::new(request.source.config_digest.clone())?,
@@ -217,7 +319,13 @@ impl NativeCriuCheckpoint {
             init_pid: source.init_pid(),
             cgroup_path: cgroup_path.clone(),
             criu: self.tool.identity(),
-            dump_options: CriuTool::dump_options(&cgroup_path),
+            dump_options: CriuTool::dump_options(
+                &cgroup_path,
+                external_mounts
+                    .iter()
+                    .map(|mount| (mount.name(), mount.mountpoint())),
+            )?,
+            external_mounts,
         };
         let operation_id = request.context.operation_id.clone();
         let stage = self.journals.create_stage(&operation_id).await?;
@@ -241,7 +349,20 @@ impl NativeCriuCheckpoint {
             }
             return Err(error);
         }
-        if let Err(mut error) = rechecked {
+        let rechecked = match rechecked {
+            Ok(rechecked) => rechecked,
+            Err(mut error) => {
+                if let Err(cleanup) = self.journals.cleanup_stage(&operation_id).await {
+                    append_failure(&mut error, "checkpoint stage cleanup", &cleanup);
+                }
+                return Err(error);
+            }
+        };
+        if rechecked != source {
+            let mut error = checkpoint_error(
+                ErrorCode::Conflict,
+                "native checkpoint source identity changed while CRIU produced the image",
+            );
             if let Err(cleanup) = self.journals.cleanup_stage(&operation_id).await {
                 append_failure(&mut error, "checkpoint stage cleanup", &cleanup);
             }
@@ -444,6 +565,91 @@ impl NativeCriuCheckpoint {
         locks.insert(operation_id.clone(), Arc::downgrade(&lock));
         lock
     }
+
+    async fn open_external_artifact(
+        &self,
+        path: &a3s_oci_sdk::CheckpointArtifactPath,
+    ) -> Result<std::fs::File> {
+        ArtifactDestination::open(path)
+            .await?
+            .open_final()
+            .await?
+            .ok_or_else(|| {
+                checkpoint_error(
+                    ErrorCode::NotFound,
+                    format!(
+                        "checkpoint artifact does not exist: {}",
+                        path.as_path().display()
+                    ),
+                )
+            })
+    }
+
+    fn require_restore_manifest(
+        &self,
+        built: &BuiltArtifact,
+        reference: &CheckpointReference,
+    ) -> Result<()> {
+        let manifest = &built.manifest;
+        if manifest.source() != reference.source()
+            || manifest.source_config_digest() != reference.source_config_digest()
+            || manifest.source_attachments_digest() != reference.source_attachments_digest()
+            || manifest.compatibility() != reference.compatibility()
+            || manifest.criu() != &self.tool.identity()
+            || manifest.dump_options()
+                != CriuTool::dump_options(
+                    manifest.cgroup_path(),
+                    manifest
+                        .external_mounts()
+                        .iter()
+                        .map(|mount| (mount.name(), mount.mountpoint())),
+                )?
+        {
+            return Err(checkpoint_error(
+                ErrorCode::FailedPrecondition,
+                "checkpoint artifact manifest does not match its immutable reference or current CRIU backend",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn validate_restore_stack(
+    reference: &CheckpointReference,
+    runtime_artifact: &RuntimeArtifact,
+    driver_build_digest: &CheckpointDigest,
+    format: &CheckpointFormat,
+) -> Result<()> {
+    let compatibility = reference.compatibility();
+    if compatibility.driver() != DriverKind::NativeLinux
+        || compatibility.isolation() != IsolationClass::SharedHostKernel
+        || compatibility.platform() != HostPlatform::Linux
+        || compatibility.architecture() != std::env::consts::ARCH
+        || compatibility.runtime_artifact() != runtime_artifact
+        || compatibility.driver_build_digest() != driver_build_digest
+        || compatibility.format() != format
+    {
+        return Err(checkpoint_error(
+            ErrorCode::FailedPrecondition,
+            "checkpoint reference is incompatible with the current native CRIU restore stack",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_restore_request_v1(request: &DriverRestoreRequest) -> Result<()> {
+    if request.isolation.class() != IsolationClass::SharedHostKernel
+        || request.tee_launch.is_some()
+        || request.bundle.config_digest() != request.reference.source_config_digest().as_str()
+        || request.attachment_contract.digest()?
+            != request.reference.source_attachments_digest().as_str()
+    {
+        return Err(checkpoint_error(
+            ErrorCode::Unsupported,
+            "native CRIU restore v1 requires the source configuration, source attachments, shared-host-kernel isolation, and no TEE launch",
+        ));
+    }
+    Ok(())
 }
 
 fn request_digest(request: &DriverCheckpointRequest) -> Result<CheckpointDigest> {
