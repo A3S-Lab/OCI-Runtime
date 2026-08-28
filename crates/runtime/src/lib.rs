@@ -73,6 +73,9 @@ mod marker;
 mod multi_container_report;
 mod namespace_join;
 #[cfg(target_os = "linux")]
+mod native_checkpoint;
+mod native_checkpoint_report;
+#[cfg(target_os = "linux")]
 mod native_control;
 #[cfg(target_os = "linux")]
 mod native_hook_recovery_smoke;
@@ -219,6 +222,9 @@ pub use multi_container_report::{
     OciVmMultiContainerSmokeReport, PidSupervisionEvidence, RootfsMountEvidence,
     StorageVolumeEvidence, WindowsOciVmMultiContainerSmokeReport,
 };
+pub use native_checkpoint_report::{
+    NativeLinuxCheckpointSmokeReport, NATIVE_LINUX_CHECKPOINT_SMOKE_SCHEMA_VERSION,
+};
 #[cfg(target_os = "linux")]
 pub use native_control::{
     NativeControlDescriptors, EXEC_LISTENER_FD, INIT_LOG_FD, PTY_LISTENER_FD,
@@ -252,7 +258,7 @@ pub use native_service::{
     NativeLinuxServiceConfig,
 };
 pub use native_smoke::{
-    native_linux_fault_cleanup, native_linux_multi_container_smoke,
+    native_linux_checkpoint_smoke, native_linux_fault_cleanup, native_linux_multi_container_smoke,
     native_linux_network_enforcement_smoke, native_linux_rootless_device_policy_smoke,
     native_linux_rootless_smoke, native_linux_rootless_smoke_with_cgroup_delegation,
     native_linux_rootless_smoke_with_cgroup_delegation_barrier,

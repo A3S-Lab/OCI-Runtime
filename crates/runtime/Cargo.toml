@@ -15,6 +15,7 @@ base64.workspace = true
 cap-fs-ext.workspace = true
 cap-std.workspace = true
 fs2.workspace = true
+getrandom.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

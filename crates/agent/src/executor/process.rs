@@ -49,6 +49,7 @@ pub(super) struct PreparedProcess {
     child: Child,
     control: Option<UnixStream>,
     pid: i32,
+    namespace_init_pid: Option<i32>,
     pidfd: PidFd,
     process_group: ProcessGroupLease,
     execution_context: RetainedExecutionContext,
@@ -299,7 +300,7 @@ impl PreparedProcess {
         drop(rootless_device_mounts);
         let mut user_mapping_installed = false;
         let mut create_hooks_ready = None;
-        let runtime_pid = loop {
+        let (runtime_pid, namespace_init_pid) = loop {
             match timeout(INIT_READY_TIMEOUT, read_outcome(&mut control)).await {
                 Ok(Ok(InitOutcome::UserMappingRequired)) => {
                     if !plan.namespaces.new_user()
@@ -506,7 +507,7 @@ impl PreparedProcess {
                         )
                         .await);
                     }
-                    break runtime_pid;
+                    break (runtime_pid, namespace_init_pid);
                 }
                 Ok(Ok(InitOutcome::Rejected(error))) => {
                     return Err(if create_hooks_ready.is_some() {
@@ -621,6 +622,7 @@ impl PreparedProcess {
             child,
             control: Some(control),
             pid: runtime_pid,
+            namespace_init_pid,
             pidfd,
             process_group,
             execution_context,
@@ -638,6 +640,14 @@ impl PreparedProcess {
 
     pub(super) const fn pid(&self) -> i32 {
         self.pid
+    }
+
+    pub(super) const fn checkpoint_root_pid(&self) -> i32 {
+        self.pid
+    }
+
+    pub(super) const fn has_pid_namespace_supervisor(&self) -> bool {
+        self.namespace_init_pid.is_some()
     }
 
     pub(super) fn launcher_pid(&self) -> Result<i32> {
@@ -659,6 +669,31 @@ impl PreparedProcess {
         self.cgroup
             .as_ref()
             .map(super::cgroup::CgroupHandle::recovery_paths)
+    }
+
+    pub(super) fn checkpoint_cgroup_path(&self) -> Option<&Path> {
+        self.cgroup
+            .as_ref()
+            .map(super::cgroup::CgroupHandle::checkpoint_path)
+    }
+
+    pub(super) fn has_isolated_checkpoint_workload(&self) -> bool {
+        self.cgroup
+            .as_ref()
+            .is_some_and(super::cgroup::CgroupHandle::has_isolated_workload)
+    }
+
+    pub(super) async fn require_checkpoint_membership(&self) -> Result<()> {
+        self.cgroup
+            .as_ref()
+            .ok_or_else(|| {
+                process_error(
+                    ErrorCode::FailedPrecondition,
+                    "native checkpoint requires an explicit cgroup-v2 path",
+                )
+            })?
+            .require_checkpoint_member(self.pid)
+            .await
     }
 
     pub(super) fn recovery_intel_rdt(&self) -> Option<IntelRdtRecovery> {

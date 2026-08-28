@@ -2,14 +2,18 @@
 
 ## Status
 
-SDK protocol 8 freezes the public checkpoint and restore contract. It does not
-claim that a production driver can execute either operation. The Host Service
-implements durable orchestration for both operations. The registry permits a
-current-platform driver to advertise `Checkpoint`, and permits `Restore` only
-when that same driver also advertises `Checkpoint`. No production driver
-advertises either operation, so callers must still treat absence from
-`RuntimeInfo::operations` and the exact-artifact extension catalog as
-authoritative.
+SDK protocol 8 freezes the public checkpoint and restore contract. The Host
+Service implements durable orchestration for both operations. The registry
+permits a current-platform driver to advertise `Checkpoint`, and permits
+`Restore` only when that same driver also advertises `Checkpoint`.
+
+The default Native Linux feature inventory and
+`NativeLinuxDriver::open_experimental` advertise neither operation. The
+separate rootful `NativeLinuxDriver::open_experimental_with_criu` constructor
+advertises `Checkpoint` only after it binds and probes one exact CRIU
+executable. It does not advertise `Restore`. No production driver advertises
+either operation, so callers must treat absence from `RuntimeInfo::operations`
+and the exact-artifact extension catalog as authoritative.
 
 A production driver may advertise checkpoint only after it provides the
 required atomic artifact and cleanup behavior and the relevant real-host
@@ -17,6 +21,54 @@ qualification passes. Restore additionally requires read-only artifact
 validation, exact compatibility checks, idempotent paused-process recreation,
 and scoped terminal cleanup. Protocol and Host availability alone are never
 capability evidence.
+
+## Native Linux CRIU Format V1
+
+The explicit Native Linux backend emits format `native-linux-criu` version 1.
+Opening it requires effective UID 0 and an absolute, canonical, root-owned
+regular CRIU executable that is executable and not group- or world-writable.
+The backend retains an open descriptor, SHA-256-binds that exact file, obtains
+bounded `--version` evidence, and requires `criu check` to pass before the
+driver is registered. It rehashes the retained descriptor before every dump.
+The driver-build digest also binds the matching Agent executable, package and
+source identity, format version, CRIU identity, and dump-option template.
+
+Version 1 has a deliberately narrow source profile:
+
+- the source is rootful Native Linux, running and already paused;
+- its cgroup annotation selects `control-workload-v1`, and the exact OCI init
+  PID is the only runtime-tracked live process and is a member of the frozen
+  `a3s-workload` leaf;
+- a private PID namespace is rejected because this version checkpoints the OCI
+  init payload, not the runtime's namespace supervisor;
+- live exec processes are rejected; and
+- unresolved external file descriptors fail the CRIU dump. The qualification
+  workload closes host-attached standard I/O and launch-control descriptors
+  before checkpoint. A private time namespace remains in the qualified
+  positive profile.
+
+The backend invokes CRIU with `--leave-running`, `--shell-job`, `--file-locks`,
+`--manage-cgroups=soft`, `--external mnt[]`, and `--freeze-cgroup` set to the
+exact workload leaf. The kernel freezer is reasserted and checked before and
+after the bounded dump, so success and failure both leave the source paused.
+
+The single-file artifact begins with a versioned binary envelope and contains
+one canonical manifest followed by CRIU image bodies in sorted name order.
+The manifest binds the exact source and compatibility evidence, launcher and
+OCI init PIDs, workload cgroup, CRIU identity and arguments, and every image's
+size and SHA-256 digest. `inventory.img` is mandatory. Packaging and validation
+stream image bytes instead of accumulating memory pages in process memory.
+This artifact is immutable checkpoint output; there is no v1 Native Linux
+restore implementation yet.
+
+Driver-local state beneath `.a3s-oci-native-checkpoint-v1` records allocated,
+prepared, and published phases under an exclusive process lock. Publication
+creates one owner-token-bound sibling pending file, flushes and validates it,
+uses a no-replace hard link for the final name, and flushes the parent
+directory. A retry can finish an interrupted publish or return the retained
+published result without reading the caller-owned final artifact. Host
+acknowledgement removes the operation journal, staging directory, and any
+owned pending link; it never removes the published artifact.
 
 ## Artifact And Reference
 

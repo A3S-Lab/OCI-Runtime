@@ -1,6 +1,7 @@
 mod bundle_scope;
 mod capability;
 mod cgroup;
+mod checkpoint;
 mod control;
 mod cpu_affinity;
 mod device;
@@ -89,6 +90,7 @@ use state::{
     ContainerKey, ContainerRecord, ExecutorState, MutationKind, RecordedOutcome, RecordedRequest,
 };
 
+pub use checkpoint::LinuxExecutorCheckpointSource;
 pub use inherited_descriptor::InheritedDescriptorPlan;
 pub(crate) use pidfd::verify_support as verify_pidfd_support;
 pub use recovery::LinuxExecutorTombstone;

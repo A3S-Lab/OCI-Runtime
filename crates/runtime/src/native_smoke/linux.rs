@@ -11,6 +11,7 @@ use crate::{
     NativeLinuxSmokeReport, RuntimeDriver,
 };
 
+mod checkpoint;
 mod control_descriptors;
 mod fault_cleanup;
 mod filesystem;
@@ -30,6 +31,23 @@ use filesystem::{
 use lifecycle::{best_effort_delete, exercise, exercise_bound_service, HOOK_TRACE_NAME};
 
 const SERVICE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
+
+pub(super) async fn run_checkpoint(
+    init_executable: &Path,
+    criu_executable: &Path,
+    bundle: &Path,
+    work_parent: &Path,
+    source_revision: String,
+) -> crate::NativeLinuxCheckpointSmokeReport {
+    checkpoint::run(
+        init_executable,
+        criu_executable,
+        bundle,
+        work_parent,
+        source_revision,
+    )
+    .await
+}
 
 pub(super) async fn run_fault_cleanup(
     init_executable: &Path,

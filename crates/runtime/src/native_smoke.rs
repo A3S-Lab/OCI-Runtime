@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 use a3s_oci_core::HostPlatform;
 
 use crate::{
-    LifecycleFaultPoint, NativeLinuxFaultCleanupReport, NativeLinuxMultiContainerSmokeReport,
-    NativeLinuxNetworkEnforcementSmokeConfig, NativeLinuxNetworkEnforcementSmokeReport,
-    NativeLinuxRootlessSmokeReport, NativeLinuxSmokeReport, NativeLinuxSoakConfig,
-    NativeLinuxSoakReport,
+    LifecycleFaultPoint, NativeLinuxCheckpointSmokeReport, NativeLinuxFaultCleanupReport,
+    NativeLinuxMultiContainerSmokeReport, NativeLinuxNetworkEnforcementSmokeConfig,
+    NativeLinuxNetworkEnforcementSmokeReport, NativeLinuxRootlessSmokeReport,
+    NativeLinuxSmokeReport, NativeLinuxSoakConfig, NativeLinuxSoakReport,
 };
 
 #[cfg(target_os = "linux")]
@@ -219,6 +219,33 @@ pub async fn native_linux_multi_container_smoke(
     {
         let _ = (init_executable, bundle_a, bundle_b, work_parent);
         NativeLinuxMultiContainerSmokeReport::unsupported(HostPlatform::current())
+    }
+}
+
+/// Qualify immutable CRIU checkpoint creation and driver/Host replay on Linux.
+pub async fn native_linux_checkpoint_smoke(
+    init_executable: &Path,
+    criu_executable: &Path,
+    bundle: &Path,
+    work_parent: &Path,
+    source_revision: String,
+) -> NativeLinuxCheckpointSmokeReport {
+    #[cfg(target_os = "linux")]
+    {
+        linux::run_checkpoint(
+            init_executable,
+            criu_executable,
+            bundle,
+            work_parent,
+            source_revision,
+        )
+        .await
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (init_executable, criu_executable, bundle, work_parent);
+        NativeLinuxCheckpointSmokeReport::unsupported(HostPlatform::current(), source_revision)
     }
 }
 

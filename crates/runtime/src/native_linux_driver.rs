@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use a3s_oci_agent::{
@@ -17,12 +17,14 @@ use tokio::sync::Mutex;
 
 use crate::agent_driver::{AgentDriverClient, AGENT_DRIVER_HOOKS, AGENT_DRIVER_OPERATIONS};
 use crate::driver::{
-    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateAttachments,
-    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
+    DriverCheckpointRequest, DriverCheckpointResult, DriverCloseStdinRequest,
+    DriverContainerOperationRequest, DriverCreateAttachments, DriverCreateRequest,
+    DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
     DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest,
     DriverState, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
     DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
 };
+use crate::native_checkpoint::NativeCriuCheckpoint;
 
 /// Explicitly opted-in native Linux runtime driver.
 ///
@@ -34,8 +36,10 @@ use crate::driver::{
 pub struct NativeLinuxDriver {
     capability: DriverCapability,
     attachment_capabilities: AttachmentCapabilities,
+    operations: Vec<RuntimeOperation>,
     executor: Arc<LinuxExecutor>,
     client: AgentDriverClient,
+    checkpoint: Option<Arc<NativeCriuCheckpoint>>,
     recovered: Mutex<BTreeMap<ContainerId, LinuxExecutorTombstone>>,
 }
 
@@ -82,10 +86,61 @@ impl NativeLinuxDriver {
         Ok(Self {
             capability,
             attachment_capabilities,
+            operations: AGENT_DRIVER_OPERATIONS.to_vec(),
             executor,
             client: AgentDriverClient::new(service, "native Linux executor", "native-linux"),
+            checkpoint: None,
             recovered: Mutex::new(BTreeMap::new()),
         })
+    }
+
+    /// Open the rootful experimental native driver with one exact CRIU binary.
+    ///
+    /// This is the only constructor that advertises `Checkpoint`. It verifies
+    /// CRIU's immutable executable identity and host feature probe before the
+    /// driver becomes visible. Restore remains intentionally unavailable.
+    pub async fn open_experimental_with_criu(
+        runtime_parent: impl AsRef<Path>,
+        init_executable: impl AsRef<Path>,
+        criu_executable: impl AsRef<Path>,
+    ) -> Result<Self> {
+        let runtime_parent = PathBuf::from(runtime_parent.as_ref());
+        let init_executable = PathBuf::from(init_executable.as_ref());
+        let checkpoint = Arc::new(
+            NativeCriuCheckpoint::open(&runtime_parent, &init_executable, criu_executable).await?,
+        );
+        let mut driver = Self::open_experimental(&runtime_parent, &init_executable).await?;
+        driver.operations.push(RuntimeOperation::Checkpoint);
+        driver
+            .capability
+            .evidence
+            .insert("checkpoint_backend".to_string(), "criu".to_string());
+        driver.capability.evidence.insert(
+            "checkpoint_format".to_string(),
+            format!(
+                "{}-v{}",
+                checkpoint.format().name(),
+                checkpoint.format().version()
+            ),
+        );
+        driver.capability.evidence.insert(
+            "checkpoint_criu_version".to_string(),
+            checkpoint.tool_version().to_string(),
+        );
+        driver.capability.evidence.insert(
+            "checkpoint_criu_digest".to_string(),
+            checkpoint.tool_digest().to_string(),
+        );
+        driver.capability.evidence.insert(
+            "checkpoint_driver_build_digest".to_string(),
+            checkpoint.driver_build_digest().to_string(),
+        );
+        driver.capability.evidence.insert(
+            "checkpoint_opt_in".to_string(),
+            "open-experimental-with-criu".to_string(),
+        );
+        driver.checkpoint = Some(checkpoint);
+        Ok(driver)
     }
 
     /// Open the experimental native driver with one explicit rootless
@@ -133,8 +188,10 @@ impl NativeLinuxDriver {
         Ok(Self {
             capability,
             attachment_capabilities,
+            operations: AGENT_DRIVER_OPERATIONS.to_vec(),
             executor,
             client: AgentDriverClient::new(service, "native Linux executor", "native-linux"),
+            checkpoint: None,
             recovered: Mutex::new(BTreeMap::new()),
         })
     }
@@ -193,8 +250,10 @@ impl NativeLinuxDriver {
         Ok(Self {
             capability,
             attachment_capabilities,
+            operations: AGENT_DRIVER_OPERATIONS.to_vec(),
             executor,
             client: AgentDriverClient::new(service, "native Linux executor", "native-linux"),
+            checkpoint: None,
             recovered: Mutex::new(BTreeMap::new()),
         })
     }
@@ -254,7 +313,7 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     fn operations(&self) -> &[RuntimeOperation] {
-        &AGENT_DRIVER_OPERATIONS
+        &self.operations
     }
 
     fn hooks(&self) -> &[OciHookPhase] {
@@ -266,6 +325,9 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn acknowledge_operation(&self, operation_id: &OperationId) -> Result<()> {
+        if let Some(checkpoint) = &self.checkpoint {
+            checkpoint.acknowledge(operation_id).await?;
+        }
         self.client.acknowledge_operation(operation_id).await
     }
 
@@ -525,6 +587,19 @@ impl RuntimeDriver for NativeLinuxDriver {
         self.require_live(&request.target, "native-linux-filesystem")
             .await?;
         self.client.filesystem(request).await
+    }
+
+    async fn checkpoint(&self, request: DriverCheckpointRequest) -> Result<DriverCheckpointResult> {
+        let checkpoint = self.checkpoint.as_ref().ok_or_else(|| {
+            Error::unsupported("checkpoint").for_operation("native-linux-checkpoint")
+        })?;
+        let target = ContainerTarget::exact(
+            ContainerId::new(request.source.state.id().to_string())?,
+            request.source.generation,
+        );
+        self.require_live(&target, "native-linux-checkpoint")
+            .await?;
+        checkpoint.checkpoint(&self.executor, request).await
     }
 }
 

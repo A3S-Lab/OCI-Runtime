@@ -91,6 +91,29 @@ fn dispatch(
                 ExitCode::from(2)
             })
         }),
+        Command::NativeLinuxCheckpointSmoke {
+            agent,
+            criu,
+            bundle,
+            work_parent,
+            source_revision,
+        } => command_future!({
+            let report = a3s_oci_runtime::native_linux_checkpoint_smoke(
+                &agent,
+                &criu,
+                &bundle,
+                &work_parent,
+                source_revision,
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }),
         Command::NativeLinuxNetworkEnforcementSmoke {
             agent,
             bundle,

@@ -114,3 +114,36 @@ This report qualifies the packaged Native mechanism only. It does not turn
 the `probe-only` driver into a supported capability or substitute the separate
 A3S Box consumer, upstream OCI, security, upgrade, rollback, and long-running
 release gates.
+
+## Native Linux CRIU checkpoint qualification
+
+CRIU is host-provided and is not bundled into the Runtime archive. The initial
+`native-linux-criu` checkpoint format therefore has a separate rootful gate
+that binds the exact CRIU, CLI, Agent, source commit, driver-build digest, and
+resulting immutable artifact:
+
+```bash
+A3S_OCI_NATIVE_RUNTIME_BINARY=/absolute/path/to/a3s-oci \
+  A3S_OCI_NATIVE_AGENT_BINARY=/absolute/path/to/a3s-oci-agent \
+  A3S_OCI_CRIU_BINARY=/absolute/path/to/criu \
+  A3S_QUALIFICATION_SOURCE_COMMIT=<40-character-commit> \
+  A3S_OCI_NATIVE_CHECKPOINT_REPORT=/absolute/path/to/checkpoint.json \
+  A3S_OCI_NATIVE_CHECKPOINT_PIDNS_REPORT=/absolute/path/to/checkpoint-pidns.json \
+  bash .github/scripts/native-linux-checkpoint.sh
+```
+
+The positive report schema is
+`a3s.oci.native-linux-checkpoint-smoke.v1`. It proves atomic no-replace
+publication, driver and Host replay after a post-publication fault, exact
+artifact digest and size, paused-source preservation, later resume, caller
+artifact survival, and scoped cleanup. The companion unavailable report proves
+the version-1 private-PID-namespace rejection. Default Features must still omit
+Checkpoint and Restore, while the explicit CRIU-qualified driver advertises
+Checkpoint only.
+
+These two reports are not yet members of
+`a3s.oci.native-linux-package-qualification.v3` and are not covered merely by
+verifying a release archive's provenance. Retain them beside the exact host
+and CRIU identity when evaluating the experimental checkpoint profile. Restore,
+broader source profiles, multi-architecture package qualification, security,
+upgrade, rollback, and release soak remain open.

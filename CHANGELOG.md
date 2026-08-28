@@ -27,6 +27,18 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added the OAR-03 explicit rootful Native Linux CRIU checkpoint backend
+  without changing default capability advertisement. The opt-in constructor
+  binds one exact root-owned CRIU executable and advertises Checkpoint only;
+  Restore remains absent. Format `native-linux-criu` v1 requires a paused
+  `control-workload-v1` source with exact init membership, no private PID
+  namespace, and no live execs. It streams sorted CRIU images and a canonical
+  evidence manifest into one digest-bound artifact, publishes with no-replace
+  filesystem semantics, and durably replays allocated, prepared, and published
+  driver phases through Host acknowledgement. A real-kernel qualification
+  injects a fault after publication, proves driver and Host replay, source
+  pause/resume, caller-artifact survival, scoped cleanup, exact CRIU/build
+  evidence, and deterministic private-PID-namespace rejection.
 - Added signed SLSA build provenance for all five full Runtime archives and
   `SHA256SUMS`. The tag workflow grants signing and artifact metadata access
   only to the publish job, pins every external release Action to an immutable

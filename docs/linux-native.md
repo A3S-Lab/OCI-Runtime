@@ -344,6 +344,52 @@ x86_64 and AArch64 KVM hosts retain all three available reports, including the
 integrated Guest path-isolation evidence. Other real-entry Guest
 negative-isolation profiles remain separate promotion gates.
 
+## Experimental CRIU checkpoint gate
+
+Checkpoint is a separate explicit opt-in from the normal Native Linux
+lifecycle. `NativeLinuxDriver::open_experimental_with_criu` is rootful, binds
+one exact CRIU executable, and advertises `Checkpoint` only. The default
+feature inventory and `open_experimental` still advertise neither Checkpoint
+nor Restore, and the CRIU constructor does not advertise Restore.
+
+The initial `native-linux-criu` format version 1 checkpoints the exact OCI init
+payload while its `a3s-workload` cgroup leaf is frozen. It requires the
+`control-workload-v1` layout, exact init membership in that leaf, no live exec
+process, and no private PID namespace. The source must already be paused and
+remains paused on every success or failure. The positive qualification fixture
+retains a private time namespace and closes its host-attached standard I/O and
+launch-control descriptors before the dump. Broader external-descriptor,
+private-PID-namespace, and live-exec profiles remain unsupported.
+
+Run the bounded real-kernel qualification with an exact root-owned CRIU binary:
+
+```bash
+A3S_OCI_CRIU_BINARY=/absolute/path/to/criu \
+  A3S_QUALIFICATION_SOURCE_COMMIT="$(git rev-parse HEAD)" \
+  A3S_OCI_NATIVE_CHECKPOINT_REPORT=/absolute/path/to/checkpoint.json \
+  A3S_OCI_NATIVE_CHECKPOINT_PIDNS_REPORT=/absolute/path/to/checkpoint-pidns.json \
+  bash .github/scripts/native-linux-checkpoint.sh
+```
+
+The script requires root or `sudo`, `jq`, `realpath`, `sha256sum`, `stat`, and
+BusyBox. When `A3S_OCI_NATIVE_RUNTIME_BINARY` and
+`A3S_OCI_NATIVE_AGENT_BINARY` are both omitted it builds development binaries;
+when supplied, both must be distinct real executables. Before host mutation it
+verifies that default Features omit Checkpoint and Restore and that the CRIU
+path is a canonical, nonsymlink, root-owned executable without group/world
+write access. Driver startup additionally SHA-256-binds the retained CRIU
+descriptor and requires bounded `--version` and `criu check` probes.
+
+The positive `a3s.oci.native-linux-checkpoint-smoke.v1` report proves exact
+artifact digest and size, no-replace destination handling, a fault after driver
+publication, driver-journal replay into Host commit, exact Host replay, paused
+source preservation, later resume, artifact survival after container Delete,
+and complete journal/staging/executor/session cleanup. The second report proves
+that a private PID namespace is rejected deterministically without residue.
+This is a checkpoint mechanism gate, not Restore support, published-package
+qualification, or production readiness. The immutable format and replay
+contract are documented in [the checkpoint contract](checkpoint-contract.md).
+
 ## Experimental lifecycle gate
 
 The `native-linux-smoke` command opens the native driver beneath isolated
@@ -1178,8 +1224,12 @@ following pass:
   path handling,
   transport-level fault injection, and adversarial cleanup beyond the bounded
   native lifecycle churn gate;
+- Native Linux CRIU Restore, wider checkpoint namespace and descriptor
+  profiles, published-package execution, multi-architecture real-host
+  qualification, upgrade compatibility, and release soak;
 - the complete A3S Box Rust, Python, and TypeScript Sandbox SDK suites on
   x86_64 and aarch64 without KVM.
 
 Only a caller that deliberately constructs `open_experimental` can use the
-current lifecycle slice.
+current lifecycle slice. Checkpoint additionally requires the separate
+`open_experimental_with_criu` constructor.

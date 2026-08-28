@@ -45,6 +45,24 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         work_parent: PathBuf,
     },
+    /// Qualify immutable Native Linux checkpoints with one exact CRIU binary.
+    NativeLinuxCheckpointSmoke {
+        /// Matching a3s-oci-agent executable used for the prepared init mode.
+        #[arg(long, value_name = "FILE")]
+        agent: PathBuf,
+        /// Exact root-owned CRIU executable qualified by this run.
+        #[arg(long, value_name = "FILE")]
+        criu: PathBuf,
+        /// OCI bundle containing config.json and rootfs.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// Existing directory beneath which isolated smoke state is created.
+        #[arg(long, value_name = "DIR")]
+        work_parent: PathBuf,
+        /// Exact source revision embedded in qualification evidence.
+        #[arg(long, value_name = "REVISION")]
+        source_revision: String,
+    },
     /// Qualify one opaque caller-owned network enforcement and redirect mechanism.
     NativeLinuxNetworkEnforcementSmoke {
         /// Matching a3s-oci-agent executable used for the prepared init mode.

@@ -319,6 +319,51 @@ impl CgroupHandle {
         (&self.leaf, &self.created)
     }
 
+    pub(super) fn checkpoint_path(&self) -> &Path {
+        &self.leaf
+    }
+
+    pub(super) const fn has_isolated_workload(&self) -> bool {
+        self.control_workload.is_some()
+    }
+
+    pub(super) async fn require_checkpoint_member(&self, pid: i32) -> Result<()> {
+        let path = self.leaf.join(CGROUP_PROCS);
+        let encoded = tokio::fs::read_to_string(&path).await.map_err(|error| {
+            cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "failed to read checkpoint workload membership {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+        let mut found = false;
+        for line in encoded.lines() {
+            let member = line.trim().parse::<i32>().map_err(|error| {
+                cgroup_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "checkpoint workload membership {} contains invalid PID {line:?}: {error}",
+                        path.display()
+                    ),
+                )
+            })?;
+            found |= member == pid;
+        }
+        if found {
+            Ok(())
+        } else {
+            Err(cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "configured OCI init PID {pid} is not in the frozen checkpoint workload {}",
+                    self.leaf.display()
+                ),
+            ))
+        }
+    }
+
     pub(super) async fn terminate_all(&self) -> Result<()> {
         let kill_path = self.device_filter_path.join(CGROUP_KILL);
         tokio::fs::write(&kill_path, b"1").await.map_err(|error| {
