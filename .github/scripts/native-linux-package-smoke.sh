@@ -10,6 +10,8 @@ fi
 package_directory=$1
 source_commit="${A3S_QUALIFICATION_SOURCE_COMMIT:-}"
 criu_binary="${A3S_OCI_CRIU_BINARY:-}"
+runtime_tools_binary="${A3S_OCI_UPSTREAM_RUNTIME_TOOL:-}"
+runtime_tools_manifest="${A3S_OCI_UPSTREAM_RUNTIME_TOOL_MANIFEST:-}"
 if [[ ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
   printf '%s\n' \
     'A3S_QUALIFICATION_SOURCE_COMMIT must be one lowercase 40-character Git commit' >&2
@@ -21,6 +23,29 @@ if [[ -z "$criu_binary" || "$criu_binary" != /* ]] ||
     'A3S_OCI_CRIU_BINARY must name one absolute regular nonsymlink executable' >&2
   exit 2
 fi
+for runtime_tools_input in "$runtime_tools_binary" "$runtime_tools_manifest"; do
+  if [[ -z "$runtime_tools_input" || "$runtime_tools_input" != /* ]] ||
+    [[ ! -f "$runtime_tools_input" || -L "$runtime_tools_input" ]]; then
+    printf '%s\n' \
+      'A3S_OCI_UPSTREAM_RUNTIME_TOOL and its MANIFEST must name absolute regular nonsymlink files' >&2
+    exit 2
+  fi
+done
+if [[ ! -x "$runtime_tools_binary" ]]; then
+  printf '%s\n' 'A3S_OCI_UPSTREAM_RUNTIME_TOOL must be executable' >&2
+  exit 2
+fi
+runtime_tools_binary="$(realpath -e -- "$runtime_tools_binary")"
+runtime_tools_manifest="$(realpath -e -- "$runtime_tools_manifest")"
+for runtime_tools_input in "$runtime_tools_binary" "$runtime_tools_manifest"; do
+  runtime_tools_mode="$(stat --format '%a' -- "$runtime_tools_input")"
+  if [[ "$(stat --format '%u:%g' -- "$runtime_tools_input")" != '0:0' ]] ||
+    (((8#$runtime_tools_mode & 8#022) != 0)); then
+    printf '%s\n' \
+      'OCI Runtime Tools inputs must be root-owned without group/world write access' >&2
+    exit 2
+  fi
+done
 criu_binary="$(realpath -e -- "$criu_binary")"
 criu_mode="$(stat --format '%a' -- "$criu_binary")"
 if [[ "$(stat --format '%u:%g' -- "$criu_binary")" != '0:0' ]] ||
@@ -46,6 +71,7 @@ package_name="$(basename "$package_directory")"
 runtime_binary="$package_directory/a3s-oci"
 agent_binary="$package_directory/a3s-oci-agent"
 shim_binary="$package_directory/containerd-shim-a3s-oci-v2"
+runtime_tools_lock="$package_directory/compat/upstream-runtime-tools.json"
 
 required_files=(
   "$runtime_binary"
@@ -58,6 +84,7 @@ required_files=(
   "$package_directory/docs/checkpoint-contract.md"
   "$package_directory/docs/containerd-runtime-v2.md"
   "$package_directory/compat/containerd-runtime-v2.json"
+  "$runtime_tools_lock"
 )
 for candidate in "${required_files[@]}"; do
   if [[ ! -f "$candidate" || -L "$candidate" ]]; then
@@ -66,6 +93,21 @@ for candidate in "${required_files[@]}"; do
     exit 1
   fi
 done
+repository_runtime_tools_lock="$(realpath -e -- compat/upstream-runtime-tools.json)"
+if [[ "$(sha256sum "$runtime_tools_lock" | cut -d ' ' -f 1)" != \
+  "$(sha256sum "$repository_runtime_tools_lock" | cut -d ' ' -f 1)" ]]; then
+  printf '%s\n' \
+    'Packaged Runtime Tools lock differs from the qualification source lock' >&2
+  exit 1
+fi
+expected_runtime_tools_commit="$(jq --raw-output '.commit' "$runtime_tools_lock")"
+expected_runtime_tools_version="$(jq --raw-output '.version' "$runtime_tools_lock")"
+expected_runtime_tools_spec_version="$(
+  jq --raw-output '.runtime_spec.version' "$runtime_tools_lock"
+)"
+expected_runtime_tools_go_version="$(
+  jq --raw-output '.build.go_version' "$runtime_tools_lock"
+)"
 for executable in "$runtime_binary" "$agent_binary" "$shim_binary"; do
   if [[ ! -x "$executable" ]]; then
     printf 'Native Linux package executable is not executable: %s\n' \
@@ -132,6 +174,7 @@ kvm_absence_report="$qualification_directory/native-linux-kvm-absence.json"
 checkpoint_report="$qualification_directory/native-linux-checkpoint.json"
 checkpoint_pidns_report="$qualification_directory/native-linux-checkpoint-pidns.json"
 checkpoint_netns_report="$qualification_directory/native-linux-checkpoint-netns.json"
+upstream_bundle_report="$qualification_directory/upstream-oci-bundles.json"
 package_report="$qualification_directory/native-linux-package.json"
 
 "$runtime_binary" features >"$features_report"
@@ -146,6 +189,37 @@ jq --exit-status \
      and (.isolation_classes | index("shared-host-kernel")) != null
    )' \
   "$features_report" >/dev/null
+
+bash .github/scripts/upstream-oci-bundle-validation.sh \
+  "$runtime_tools_binary" \
+  "$runtime_tools_manifest" \
+  "$runtime_binary" \
+  "$agent_binary" \
+  "$shim_binary" \
+  "$source_commit" \
+  "$upstream_bundle_report" \
+  native-linux=fixtures/native-linux/config.json \
+  utility-vm=fixtures/utility-vm/config.json
+jq --exit-status \
+  --arg source_commit "$source_commit" \
+  --arg runtime_sha256 "$runtime_sha256" \
+  --arg agent_sha256 "$agent_sha256" \
+  --arg shim_sha256 "$shim_sha256" \
+  --arg upstream_commit "$expected_runtime_tools_commit" \
+  --arg runtime_spec_version "$expected_runtime_tools_spec_version" \
+  '.schema_version == "a3s.oci.upstream-bundle-validation.v1"
+   and .status == "available"
+   and .source_commit == $source_commit
+   and .upstream.commit == $upstream_commit
+   and .upstream.runtime_spec_version == $runtime_spec_version
+   and .package_executables.runtime.sha256 == $runtime_sha256
+   and .package_executables.agent.sha256 == $agent_sha256
+   and .package_executables.containerd_shim.sha256 == $shim_sha256
+   and (.validation.bundles | length) == 2
+   and all(.validation.bundles[]; .result == "passed")
+   and .validation.negative_escape_rejected
+   and .lifecycle_cli_adapter_qualified == false' \
+  "$upstream_bundle_report" >/dev/null
 
 A3S_OCI_NATIVE_RUNTIME_BINARY="$runtime_binary" \
 A3S_OCI_NATIVE_AGENT_BINARY="$agent_binary" \
@@ -299,7 +373,8 @@ for evidence in \
   "$kvm_absence_report" \
   "$checkpoint_report" \
   "$checkpoint_pidns_report" \
-  "$checkpoint_netns_report"; do
+  "$checkpoint_netns_report" \
+  "$upstream_bundle_report"; do
   evidence_schema="$(
     jq --raw-output --exit-status \
       '(.schema_version // .schemaVersion)
@@ -320,8 +395,15 @@ for evidence in \
 done
 
 workflow_run_id="${GITHUB_RUN_ID:-}"
+runtime_tools_commit="$(jq --raw-output '.upstream.commit' "$upstream_bundle_report")"
+runtime_tools_version="$(jq --raw-output '.upstream.version' "$upstream_bundle_report")"
+runtime_tools_spec_version="$(jq --raw-output '.upstream.runtime_spec_version' "$upstream_bundle_report")"
+runtime_tools_go_version="$(jq --raw-output '.upstream.go_version' "$upstream_bundle_report")"
+runtime_tools_sha256="$(jq --raw-output '.upstream.tool_sha256' "$upstream_bundle_report")"
+runtime_tools_size="$(jq --raw-output '.upstream.tool_size' "$upstream_bundle_report")"
+runtime_tools_manifest_sha256="$(jq --raw-output '.upstream.build_manifest_sha256' "$upstream_bundle_report")"
 jq --null-input \
-  --arg schema_version 'a3s.oci.native-linux-package-qualification.v4' \
+  --arg schema_version 'a3s.oci.native-linux-package-qualification.v5' \
   --arg status 'available' \
   --arg source_commit "$source_commit" \
   --arg workflow_run_id "$workflow_run_id" \
@@ -330,7 +412,7 @@ jq --null-input \
   --arg kernel_release "$(uname -r)" \
   --arg driver 'native-linux' \
   --arg isolation_class 'shared-host-kernel' \
-  --arg profile 'full-sdk-oar01-oar02-oar03-without-kvm-v4' \
+  --arg profile 'full-sdk-oar01-oar02-oar03-upstream-bundles-without-kvm-v5' \
   --arg package_name "$package_name" \
   --arg runtime_version "$runtime_version" \
   --arg runtime_sha256 "$runtime_sha256" \
@@ -343,6 +425,13 @@ jq --null-input \
   --arg criu_git_id "$criu_git_id" \
   --arg criu_sha256 "$criu_sha256" \
   --argjson criu_size "$criu_size" \
+  --arg runtime_tools_commit "$runtime_tools_commit" \
+  --arg runtime_tools_version "$runtime_tools_version" \
+  --arg runtime_tools_spec_version "$runtime_tools_spec_version" \
+  --arg runtime_tools_go_version "$runtime_tools_go_version" \
+  --arg runtime_tools_sha256 "$runtime_tools_sha256" \
+  --argjson runtime_tools_size "$runtime_tools_size" \
+  --arg runtime_tools_manifest_sha256 "$runtime_tools_manifest_sha256" \
   --arg checkpoint_driver_build_digest "$checkpoint_driver_build_digest" \
   --slurpfile evidence "$evidence_manifest" \
   '{
@@ -370,6 +459,16 @@ jq --null-input \
         git_id: $criu_git_id,
         sha256: $criu_sha256,
         size: $criu_size
+      },
+      oci_runtime_tools: {
+        packaged: false,
+        commit: $runtime_tools_commit,
+        version: $runtime_tools_version,
+        runtime_spec_version: $runtime_tools_spec_version,
+        go_version: $runtime_tools_go_version,
+        sha256: $runtime_tools_sha256,
+        size: $runtime_tools_size,
+        build_manifest_sha256: $runtime_tools_manifest_sha256
       }
     },
     checkpoint_driver_build_digest: $checkpoint_driver_build_digest,
@@ -380,6 +479,7 @@ jq --null-input \
     full_sdk_matrix_completed: true,
     oar02_pause_resume_verified: true,
     oar03_checkpoint_restore_verified: true,
+    upstream_bundle_validation_verified: true,
     evidence: $evidence
   }' >"$package_report.tmp"
 chmod 0644 "$package_report.tmp"
@@ -387,8 +487,12 @@ mv "$package_report.tmp" "$package_report"
 rm "$evidence_manifest"
 
 jq --exit-status \
+  --arg runtime_tools_commit "$expected_runtime_tools_commit" \
+  --arg runtime_tools_version "$expected_runtime_tools_version" \
+  --arg runtime_tools_spec_version "$expected_runtime_tools_spec_version" \
+  --arg runtime_tools_go_version "$expected_runtime_tools_go_version" \
   'select(
-     .schema_version == "a3s.oci.native-linux-package-qualification.v4"
+     .schema_version == "a3s.oci.native-linux-package-qualification.v5"
      and .status == "available"
      and .package_layout_verified
      and .static_elf_verified
@@ -397,12 +501,21 @@ jq --exit-status \
      and .full_sdk_matrix_completed
      and .oar02_pause_resume_verified
      and .oar03_checkpoint_restore_verified
+     and .upstream_bundle_validation_verified
      and .external_tools.criu.packaged == false
      and .external_tools.criu.version == "4.2.1"
      and .external_tools.criu.git_id == "v4.2.1"
      and (.external_tools.criu.sha256 | test("^[0-9a-f]{64}$"))
      and (.external_tools.criu.size > 0)
+     and .external_tools.oci_runtime_tools.packaged == false
+     and .external_tools.oci_runtime_tools.commit == $runtime_tools_commit
+     and .external_tools.oci_runtime_tools.version == $runtime_tools_version
+     and .external_tools.oci_runtime_tools.runtime_spec_version == $runtime_tools_spec_version
+     and .external_tools.oci_runtime_tools.go_version == $runtime_tools_go_version
+     and (.external_tools.oci_runtime_tools.sha256 | test("^[0-9a-f]{64}$"))
+     and (.external_tools.oci_runtime_tools.size > 0)
+     and (.external_tools.oci_runtime_tools.build_manifest_sha256 | test("^[0-9a-f]{64}$"))
      and (.checkpoint_driver_build_digest | test("^sha256:[0-9a-f]{64}$"))
-     and (.evidence | length == 11)
+     and (.evidence | length == 12)
    )' \
   "$package_report"

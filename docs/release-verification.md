@@ -80,7 +80,7 @@ for the intended host and integration.
 
 Each Linux host archive contains
 `qualification/native-linux-package.json` with schema
-`a3s.oci.native-linux-package-qualification.v4`. The tag workflow creates this
+`a3s.oci.native-linux-package-qualification.v5`. The tag workflow creates this
 report before compression by running the staged musl CLI and Agent, not Cargo
 development binaries. The gate verifies the package layout and all three
 static ELF executables, removes `/dev/kvm` across the lifecycle portion, and
@@ -88,7 +88,12 @@ runs the complete Native Linux SDK, rootless, owner-death, Hook-recovery,
 OAR-01 network-enforcement, fault-cleanup, and OAR-02 pause/resume recovery
 soak matrix. It then runs the OAR-03 checkpoint/restore matrix with a
 host-provided CRIU built from upstream tag `v4.2.1` at commit
-`9539417f3e3cfa4eb84c319cd71f4d52f1f08645`.
+`9539417f3e3cfa4eb84c319cd71f4d52f1f08645`. Finally, it builds official OCI
+Runtime Tools 0.9.0 from exact commit
+`8a4db579f5c88af5a0d036fad34bddc9c1f703f3` with Go 1.24.0 and validates the
+staged Native Linux and utility-VM OCI 1.3.0 bundle configurations at MUST
+level without host-specific checks. A separate negative bundle must reject an
+escaping rootfs path.
 
 The report binds the source commit, workflow run, Linux architecture and
 kernel, `native-linux` driver, `shared-host-kernel` isolation class, exact test
@@ -96,38 +101,50 @@ profile, runtime version, and SHA-256 digest and size of the CLI, Agent, and
 containerd shim. Its `evidence` array binds the retained Features, soak,
 rootful recovery, Hook recovery, rootless recovery, rootless device-policy,
 OAR-01 network-enforcement, KVM-absence, positive checkpoint/restore,
-private-PID-namespace rejection, and configured-network-namespace rejection
-records. The `external_tools.criu` entry binds the exact version, Git ID,
-SHA-256 digest, and size while recording that CRIU is not packaged. Soak schema
-v2 retains every exact Pause and Resume operation ID, both post-reopen response
-replays, and the frozen and resumed workload counters for all 100 lifecycles.
+private-PID-namespace rejection, configured-network-namespace rejection, and
+official upstream bundle-validation records. The `external_tools.criu` entry
+binds the exact version, Git ID, SHA-256 digest, and size. The
+`external_tools.oci_runtime_tools` entry binds the exact upstream commit,
+version, Runtime Spec version, Go version, build-manifest digest, executable
+digest, and size. Both tools are explicitly recorded as not packaged. Soak
+schema v2 retains every exact Pause and Resume operation ID, both post-reopen
+response replays, and the frozen and resumed workload counters for all 100
+lifecycles.
 After verifying the outer archive provenance, inspect the package report with:
 
 ```bash
 jq --exit-status \
-  '.schema_version == "a3s.oci.native-linux-package-qualification.v4"
+  '.schema_version == "a3s.oci.native-linux-package-qualification.v5"
    and .status == "available"
    and .static_elf_verified
    and .kvm_absent_before_lifecycle
    and .full_sdk_matrix_completed
    and .oar02_pause_resume_verified
    and .oar03_checkpoint_restore_verified
+   and .upstream_bundle_validation_verified
    and .external_tools.criu.packaged == false
    and .external_tools.criu.version == "4.2.1"
    and (.external_tools.criu.sha256 | test("^[0-9a-f]{64}$"))
-   and (.evidence | length == 11)' \
+   and .external_tools.oci_runtime_tools.packaged == false
+   and .external_tools.oci_runtime_tools.commit == "8a4db579f5c88af5a0d036fad34bddc9c1f703f3"
+   and .external_tools.oci_runtime_tools.runtime_spec_version == "1.3.0"
+   and (.external_tools.oci_runtime_tools.sha256 | test("^[0-9a-f]{64}$"))
+   and (.evidence | length == 12)' \
   a3s-oci-runtime-vX.Y.Z-linux-*/qualification/native-linux-package.json
 ```
 
-This report qualifies the packaged Native mechanism only. It does not turn
-the `probe-only` driver into a supported capability or substitute the separate
-A3S Box consumer, upstream OCI, security, upgrade, rollback, and long-running
-release gates.
+This report qualifies the packaged Native mechanism and the two supported
+bundle configurations against the official validator only. Runtime Tools'
+lifecycle suite requires the OCI Runtime Command Line Interface; the SDK-only
+lifecycle adapter and every-platform exact-package lifecycle runs remain open.
+The report does not turn the `probe-only` driver into a supported capability or
+substitute the separate A3S Box consumer, security, upgrade, rollback, and
+long-running release gates.
 
 ## Native Linux CRIU checkpoint qualification
 
 CRIU is host-provided and is not bundled into the Runtime archive. Package
-qualification v4 builds the pinned upstream source into
+qualification v5 builds the pinned upstream source into
 `/usr/local/lib/a3s-oci-tools/criu-4.2.1`, runs the rootful gate, and binds the
 exact CRIU, CLI, Agent, source commit, driver-build digest, and resulting
 immutable artifact. The same gate can be run independently with:
@@ -158,7 +175,7 @@ configured-network-namespace rejections. Default Features must still omit
 Checkpoint and Restore, while the explicit CRIU-qualified driver advertises
 both operations.
 
-Package qualification v4 retains these three reports as evidence entries,
+Package qualification v5 retains these three reports as evidence entries,
 requires their embedded `checkpoint_source_revision` to equal the outer
 `source_commit`, requires one exact driver-build digest across all three,
 separately binds the outer executable, and requires every CRIU digest to match

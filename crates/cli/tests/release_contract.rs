@@ -8,12 +8,18 @@ const NATIVE_LINUX_SMOKE: &str = include_str!("../../../.github/scripts/native-l
 const NATIVE_LINUX_CHECKPOINT: &str =
     include_str!("../../../.github/scripts/native-linux-checkpoint.sh");
 const BUILD_PINNED_CRIU: &str = include_str!("../../../.github/scripts/build-pinned-criu.sh");
+const BUILD_PINNED_RUNTIME_TOOLS: &str =
+    include_str!("../../../.github/scripts/build-pinned-runtime-tools.sh");
+const UPSTREAM_BUNDLE_VALIDATION: &str =
+    include_str!("../../../.github/scripts/upstream-oci-bundle-validation.sh");
+const UPSTREAM_RUNTIME_TOOLS_LOCK: &str =
+    include_str!("../../../compat/upstream-runtime-tools.json");
 
 const ATTEST_ACTION: &str = "actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1";
 const RELEASE_ACTION: &str =
     "softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2";
 const SIGNER_WORKFLOW: &str = "--signer-workflow A3S-Lab/OCI-Runtime/.github/workflows/release.yml";
-const PINNED_RELEASE_ACTIONS: [(&str, usize); 7] = [
+const PINNED_RELEASE_ACTIONS: [(&str, usize); 8] = [
     (
         "actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0",
         3,
@@ -25,6 +31,10 @@ const PINNED_RELEASE_ACTIONS: [(&str, usize); 7] = [
     (
         "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2",
         3,
+    ),
+    (
+        "actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0",
+        1,
     ),
     (
         "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
@@ -44,7 +54,7 @@ fn every_external_release_action_is_pinned_to_an_immutable_commit() {
         .lines()
         .filter(|line| line.contains("uses: "))
         .collect::<Vec<_>>();
-    assert_eq!(action_lines.len(), 14);
+    assert_eq!(action_lines.len(), 15);
 
     for line in &action_lines {
         let action = line
@@ -159,8 +169,8 @@ fn linux_release_archives_retain_exact_package_qualification() {
     assert!(qualification_position < archive_position);
 
     for required in [
-        "a3s.oci.native-linux-package-qualification.v4",
-        "full-sdk-oar01-oar02-oar03-without-kvm-v4",
+        "a3s.oci.native-linux-package-qualification.v5",
+        "full-sdk-oar01-oar02-oar03-upstream-bundles-without-kvm-v5",
         "A3S_OCI_NATIVE_RUNTIME_BINARY",
         "A3S_OCI_NATIVE_AGENT_BINARY",
         "A3S_OCI_NATIVE_NETWORK_ENFORCEMENT_REPORT",
@@ -170,6 +180,8 @@ fn linux_release_archives_retain_exact_package_qualification() {
         "checkpoint_source_revision",
         "verify-static-elf.sh",
         "containerd-shim-a3s-oci-v2",
+        "upstream_bundle_validation_verified",
+        "a3s.oci.upstream-bundle-validation.v1",
     ] {
         assert!(
             NATIVE_LINUX_PACKAGE_SMOKE.contains(required),
@@ -178,6 +190,15 @@ fn linux_release_archives_retain_exact_package_qualification() {
     }
     assert!(RELEASE_WORKFLOW.contains(
         "bash .github/scripts/build-pinned-criu.sh \\\n            /usr/local/lib/a3s-oci-tools/criu-4.2.1"
+    ));
+    assert!(RELEASE_WORKFLOW.contains(
+        "bash .github/scripts/build-pinned-runtime-tools.sh \\\n            /usr/local/lib/a3s-oci-tools/runtime-tools-8a4db579f5c88af5a0d036fad34bddc9c1f703f3"
+    ));
+    assert!(RELEASE_WORKFLOW.contains(
+        "A3S_OCI_UPSTREAM_RUNTIME_TOOL=/usr/local/lib/a3s-oci-tools/runtime-tools-8a4db579f5c88af5a0d036fad34bddc9c1f703f3/oci-runtime-tool"
+    ));
+    assert!(RELEASE_WORKFLOW.contains(
+        "A3S_OCI_UPSTREAM_RUNTIME_TOOL_MANIFEST=/usr/local/lib/a3s-oci-tools/runtime-tools-8a4db579f5c88af5a0d036fad34bddc9c1f703f3/build.json"
     ));
     assert!(
         RELEASE_WORKFLOW.contains("A3S_OCI_CRIU_BINARY=/usr/local/lib/a3s-oci-tools/criu-4.2.1")
@@ -200,7 +221,65 @@ fn native_package_qualification_retains_oar01_real_host_evidence() {
             "Native OAR-01 qualification lost {required}"
         );
     }
-    assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("and (.evidence | length == 11)"));
+    assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("and (.evidence | length == 12)"));
+}
+
+#[test]
+fn native_package_qualification_pins_upstream_oci_bundle_validation() {
+    for required in [
+        "https://github.com/opencontainers/runtime-tools.git",
+        "8a4db579f5c88af5a0d036fad34bddc9c1f703f3",
+        "\"version\": \"0.9.0\"",
+        "\"version\": \"1.3.0\"",
+        "\"go_version\": \"go1.24.0\"",
+        "\"buildvcs\": false",
+        "\"static_elf\": true",
+        "\"lifecycle_validation\": \"not-integrated\"",
+    ] {
+        assert!(
+            UPSTREAM_RUNTIME_TOOLS_LOCK.contains(required),
+            "Upstream Runtime Tools lock lost {required}"
+        );
+    }
+    for required in [
+        "CGO_ENABLED=0 GOFLAGS=-mod=readonly",
+        "-trimpath -buildvcs=false",
+        "git -C \"$source_directory\" diff --exit-code",
+        "a3s.oci.upstream-runtime-tools-build.v1",
+        "expected_destination=\"/usr/local/lib/a3s-oci-tools/runtime-tools-$upstream_commit\"",
+        "install -m 0755 -o root -g root",
+    ] {
+        assert!(
+            BUILD_PINNED_RUNTIME_TOOLS.contains(required),
+            "Pinned Runtime Tools builder lost {required}"
+        );
+    }
+    for required in [
+        "lock_file=\"$repository_root/compat/upstream-runtime-tools.json\"",
+        "--host-specific=false",
+        "--compliance-level MUST",
+        "native-linux=fixtures/native-linux/config.json",
+        "utility-vm=fixtures/utility-vm/config.json",
+        "negative_escape_rejected",
+        "lifecycle_cli_adapter_qualified: false",
+    ] {
+        assert!(
+            UPSTREAM_BUNDLE_VALIDATION.contains(required)
+                || NATIVE_LINUX_PACKAGE_SMOKE.contains(required),
+            "Upstream OCI bundle gate lost {required}"
+        );
+    }
+    assert_eq!(
+        UPSTREAM_BUNDLE_VALIDATION
+            .matches("Refusing to replace an upstream OCI bundle temporary report")
+            .count(),
+        2,
+        "Temporary report identity must be checked before and after canonicalization"
+    );
+    assert!(NATIVE_LINUX_PACKAGE_SMOKE
+        .contains("Packaged Runtime Tools lock differs from the qualification source lock"));
+    assert!(!UPSTREAM_BUNDLE_VALIDATION.contains("8a4db579f5c88af5a0d036fad34bddc9c1f703f3"));
+    assert!(!NATIVE_LINUX_PACKAGE_SMOKE.contains("8a4db579f5c88af5a0d036fad34bddc9c1f703f3"));
 }
 
 #[test]
@@ -293,6 +372,39 @@ fn pinned_criu_install_validates_the_destination_before_publication() {
             .count(),
         3,
         "Destination identity must be rechecked after each path-changing step"
+    );
+}
+
+#[test]
+fn pinned_runtime_tools_install_validates_the_locked_destination_before_publication() {
+    let destination_guard = BUILD_PINNED_RUNTIME_TOOLS
+        .find("if [[ -e \"$destination\" || -L \"$destination\" ]]; then")
+        .expect("Pinned Runtime Tools builder lost the pre-canonical destination guard");
+    let canonicalization = BUILD_PINNED_RUNTIME_TOOLS
+        .find("destination=\"$(realpath -m -- \"$destination\")\"")
+        .expect("Pinned Runtime Tools builder lost destination canonicalization");
+    let exact_destination = BUILD_PINNED_RUNTIME_TOOLS
+        .find(
+            "expected_destination=\"/usr/local/lib/a3s-oci-tools/runtime-tools-$upstream_commit\"",
+        )
+        .expect("Pinned Runtime Tools builder lost its exact locked destination");
+    let parent_identity = BUILD_PINNED_RUNTIME_TOOLS
+        .find("destination_parent_mode=\"$(stat --format '%a' -- \"$destination_parent\")\"")
+        .expect("Pinned Runtime Tools builder lost install-parent identity validation");
+    let publication = BUILD_PINNED_RUNTIME_TOOLS
+        .find("install -m 0755 -o root -g root --")
+        .expect("Pinned Runtime Tools builder lost root-owned publication");
+
+    assert!(destination_guard < canonicalization);
+    assert!(canonicalization < exact_destination);
+    assert!(exact_destination < parent_identity);
+    assert!(parent_identity < publication);
+    assert_eq!(
+        BUILD_PINNED_RUNTIME_TOOLS
+            .matches("if [[ -e \"$destination\" || -L \"$destination\" ]]; then")
+            .count(),
+        3,
+        "Runtime Tools destination identity must be rechecked after path changes"
     );
 }
 

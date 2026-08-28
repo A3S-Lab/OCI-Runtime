@@ -69,6 +69,11 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: release-${{ matrix.name }}
+      - uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+        if: runner.os == 'Linux'
+        with:
+          go-version: '1.24.0'
+          cache: false
       - name: Build Linux host runtime
         if: runner.os == 'Linux'
         run: >-
@@ -112,6 +117,12 @@ jobs:
             python3-protobuf
           bash .github/scripts/build-pinned-criu.sh \
             /usr/local/lib/a3s-oci-tools/criu-4.2.1
+      - name: Build pinned OCI Runtime Tools
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          bash .github/scripts/build-pinned-runtime-tools.sh \
+            /usr/local/lib/a3s-oci-tools/runtime-tools-8a4db579f5c88af5a0d036fad34bddc9c1f703f3
       - name: Build macOS or Windows host runtime
         if: runner.os != 'Linux'
         run: cargo build --release -p a3s-oci-cli -p a3s-oci-krun
@@ -142,8 +153,12 @@ jobs:
               mkdir -p "$package/compat"
               cp docs/checkpoint-contract.md "$package/docs/"
               cp docs/containerd-runtime-v2.md "$package/docs/"
-              cp compat/containerd-runtime-v2.json "$package/compat/"
+              cp compat/containerd-runtime-v2.json \
+                compat/upstream-runtime-tools.json \
+                "$package/compat/"
               A3S_OCI_CRIU_BINARY=/usr/local/lib/a3s-oci-tools/criu-4.2.1 \
+                A3S_OCI_UPSTREAM_RUNTIME_TOOL=/usr/local/lib/a3s-oci-tools/runtime-tools-8a4db579f5c88af5a0d036fad34bddc9c1f703f3/oci-runtime-tool \
+                A3S_OCI_UPSTREAM_RUNTIME_TOOL_MANIFEST=/usr/local/lib/a3s-oci-tools/runtime-tools-8a4db579f5c88af5a0d036fad34bddc9c1f703f3/build.json \
                 A3S_QUALIFICATION_SOURCE_COMMIT="$GITHUB_SHA" \
                 bash .github/scripts/native-linux-package-smoke.sh "$package"
               ;;

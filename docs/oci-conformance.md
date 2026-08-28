@@ -224,13 +224,17 @@ The conformance pipeline pins the OCI 1.3.0 release. It currently provides:
    plus a four-profile Host Service matrix covering the checked-in Native
    Linux, Linux KVM, macOS HVF, and Windows WHPX configurations, generated
    Features documents, and created/running/stopped State documents;
-4. strict typed round-trip tests for applicable upstream Linux, State, and
+4. an exact-source official OCI Runtime Tools 0.9.0 bundle gate at commit
+   `8a4db579f5c88af5a0d036fad34bddc9c1f703f3`, built statically with Go 1.24.0,
+   that validates the packaged Native Linux and utility-VM OCI 1.3.0
+   configurations at MUST level and rejects an escaping rootfs path;
+5. strict typed round-trip tests for applicable upstream Linux, State, and
    Features fixtures;
-5. positive and negative semantic fixtures with stable rule identifiers;
-6. request-validation tests, including an untrusted raw-wire rejection test;
-7. in-memory end-to-end transport tests plus real Windows named-pipe and Unix
+6. positive and negative semantic fixtures with stable rule identifiers;
+7. request-validation tests, including an untrusted raw-wire rejection test;
+8. in-memory end-to-end transport tests plus real Windows named-pipe and Unix
    socket connector tests;
-8. a versioned ten-case real-Guest path-isolation profile, wired into macOS
+9. a versioned ten-case real-Guest path-isolation profile, wired into macOS
    Apple Silicon CI and the Linux KVM 17-case lifecycle matrix, that requires
    exact typed rejection, unchanged canaries, absent container state, and
    complete fixture/runtime cleanup.
@@ -245,8 +249,9 @@ zero `conformant` items, so remaining release-conformance evidence includes:
    `startContainer` owner-death, and bounded complex-container churn reports;
 4. feature-report comparisons against actual driver behavior;
 5. crash-recovery and cleanup evidence;
-6. upstream OCI lifecycle validation and independent cross-runtime results for
-   shared behavior, without shipping a fallback runtime.
+6. the SDK-to-OCI-command-line adapter required by upstream Runtime Tools,
+   followed by exact-package lifecycle validation on every advertised platform
+   and architecture, without shipping a fallback runtime backend.
 
 CI must fail when a pinned schema property has no classification or when code
 advertises an operation without a passing implementation test. It also fails
