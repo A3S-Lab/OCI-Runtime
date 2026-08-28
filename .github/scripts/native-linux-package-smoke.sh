@@ -129,12 +129,22 @@ A3S_OCI_NATIVE_KVM_ABSENCE_EVIDENCE="$kvm_absence_report" \
   bash <(tr -d '\015' < .github/scripts/native-linux-smoke.sh)
 
 jq --exit-status \
-  '.schema_version == "a3s.oci.native-linux-soak.v1"
+  '.schema_version == "a3s.oci.native-linux-soak.v2"
    and .status == "available"
    and .configuration.iterations == 25
    and .configuration.concurrent_containers == 4
    and .completed_iterations == 25
-   and .completed_container_lifecycles == 100' \
+   and .completed_container_lifecycles == 100
+   and .durable_reopens == 50
+   and (.pause_resume_evidence | length) == 100
+   and all(
+     .pause_resume_evidence[];
+     .progress_after_pause_reopen == .progress_at_pause
+     and .progress_after_resume > .progress_after_pause_reopen
+     and .progress_after_resume_reopen > .progress_after_resume
+     and .pause_response_replayed_after_reopen
+     and .resume_response_replayed_after_reopen
+   )' \
   "$soak_report" >/dev/null
 jq --exit-status \
   '.schema_version == "a3s.oci.native-linux-recovery-smoke.v2"
@@ -200,7 +210,7 @@ agent_sha256="$(sha256sum "$agent_binary" | cut -d ' ' -f 1)"
 shim_sha256="$(sha256sum "$shim_binary" | cut -d ' ' -f 1)"
 workflow_run_id="${GITHUB_RUN_ID:-}"
 jq --null-input \
-  --arg schema_version 'a3s.oci.native-linux-package-qualification.v2' \
+  --arg schema_version 'a3s.oci.native-linux-package-qualification.v3' \
   --arg status 'available' \
   --arg source_commit "$source_commit" \
   --arg workflow_run_id "$workflow_run_id" \
@@ -209,7 +219,7 @@ jq --null-input \
   --arg kernel_release "$(uname -r)" \
   --arg driver 'native-linux' \
   --arg isolation_class 'shared-host-kernel' \
-  --arg profile 'full-sdk-oar01-without-kvm-v2' \
+  --arg profile 'full-sdk-oar01-oar02-without-kvm-v3' \
   --arg package_name "$package_name" \
   --arg runtime_version "$runtime_version" \
   --arg runtime_sha256 "$runtime_sha256" \
@@ -242,6 +252,7 @@ jq --null-input \
     features_verified: true,
     kvm_absent_before_lifecycle: true,
     full_sdk_matrix_completed: true,
+    oar02_pause_resume_verified: true,
     evidence: $evidence
   }' >"$package_report.tmp"
 chmod 0644 "$package_report.tmp"
@@ -250,13 +261,14 @@ rm "$evidence_manifest"
 
 jq --exit-status \
   'select(
-     .schema_version == "a3s.oci.native-linux-package-qualification.v2"
+     .schema_version == "a3s.oci.native-linux-package-qualification.v3"
      and .status == "available"
      and .package_layout_verified
      and .static_elf_verified
      and .features_verified
      and .kvm_absent_before_lifecycle
      and .full_sdk_matrix_completed
+     and .oar02_pause_resume_verified
      and (.evidence | length == 8)
    )' \
   "$package_report"

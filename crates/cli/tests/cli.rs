@@ -501,7 +501,7 @@ fn native_linux_soak_fails_closed_with_versioned_configuration() {
     assert_eq!(output.status.code(), Some(2));
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("soak output must be valid JSON");
-    assert_eq!(report["schema_version"], "a3s.oci.native-linux-soak.v1");
+    assert_eq!(report["schema_version"], "a3s.oci.native-linux-soak.v2");
     assert_eq!(report["configuration"]["iterations"], 3);
     assert_eq!(report["configuration"]["concurrent_containers"], 2);
     assert_eq!(report["configuration"]["operation_timeout_ms"], 1000);

@@ -6,11 +6,11 @@ use std::time::Duration;
 
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
-    ContainerId, ContainerOperationRequest, ContainerTarget, CreateAttachments, CreateRequest,
-    DeleteMode, DeleteRequest, Error, ErrorCode, ExecRequest, ExitStatus, IoMode, IsolationRequest,
-    KillRequest, ListRequest, OciBundle, OperationContext, OperationId, OutputStream, ProcessId,
-    ProcessIo, ProcessTarget, ProcessesRequest, ReadOutputRequest, RuntimeClient, Signal,
-    StartRequest, StateRequest, StatsRequest, WaitProcessRequest, WaitRequest,
+    ContainerId, ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest,
+    Error, ErrorCode, ExecRequest, ExitStatus, IoMode, IsolationRequest, KillRequest, ListRequest,
+    OciBundle, OperationContext, OperationId, OutputStream, ProcessId, ProcessIo, ProcessTarget,
+    ProcessesRequest, ReadOutputRequest, RuntimeClient, Signal, StartRequest, StateRequest,
+    StatsRequest, WaitProcessRequest, WaitRequest,
 };
 use tokio::sync::Barrier;
 use tokio::task::JoinSet;
@@ -27,12 +27,13 @@ pub(super) struct WaveContext<'a> {
     pub bundles: &'a [OciBundle],
     pub ids: &'a [ContainerId],
     pub markers: &'a [PathBuf],
+    pub progress_markers: &'a [PathBuf],
     pub nonce: &'a str,
     pub iteration: u32,
     pub timeout: Duration,
 }
 
-pub(super) async fn create_start_and_pause(
+pub(super) async fn create_start_and_exercise(
     client: &RuntimeClient,
     wave: &WaveContext<'_>,
     previous_targets: &[Option<ContainerTarget>],
@@ -265,109 +266,16 @@ pub(super) async fn create_start_and_pause(
         .map(|(_, read_calls)| *read_calls)
         .sum::<u64>();
 
-    let pause_inputs = targets
-        .iter()
-        .cloned()
-        .enumerate()
-        .map(|(slot, target)| {
-            operation(wave.nonce, wave.iteration, slot, "pause")
-                .map(|context| (slot, ContainerOperationRequest { context, target }))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let client_for_pause = client.clone();
-    let paused = run_concurrently(
-        pause_inputs,
-        "concurrent pause wave",
-        move |(slot, request)| {
-            let client = client_for_pause.clone();
-            async move {
-                let record = soak_call(
-                    timeout_duration,
-                    format!("pause soak container {slot}"),
-                    client.pause(request),
-                )
-                .await?;
-                require(
-                    *record.state.status() == ContainerState::Running && record.is_paused(),
-                    format!("soak container {slot} did not expose a paused state"),
-                )?;
-                Ok(slot)
-            }
-        },
-    )
-    .await?;
-    report.operation_counts.pause += paused.len() as u64;
     Ok(targets)
 }
 
-pub(super) async fn recover_resume_and_delete(
+pub(super) async fn terminate_and_delete(
     client: &RuntimeClient,
     wave: &WaveContext<'_>,
     targets: &[ContainerTarget],
     report: &mut NativeLinuxSoakReport,
 ) -> Result<(), String> {
     let timeout_duration = wave.timeout;
-    verify_live_list(client, targets, true, timeout_duration).await?;
-    report.operation_counts.list += 1;
-
-    let recovery_inputs = targets.iter().cloned().enumerate().collect::<Vec<_>>();
-    let client_for_recovery = client.clone();
-    let recovered = run_concurrently(
-        recovery_inputs,
-        "durable paused-state recovery wave",
-        move |(slot, target)| {
-            let client = client_for_recovery.clone();
-            async move {
-                let record = soak_call(
-                    timeout_duration,
-                    format!("recover paused soak container {slot}"),
-                    client.state(StateRequest { target }),
-                )
-                .await?;
-                require(
-                    *record.state.status() == ContainerState::Running && record.is_paused(),
-                    format!("reopened service lost paused state for soak container {slot}"),
-                )?;
-                Ok(slot)
-            }
-        },
-    )
-    .await?;
-    report.operation_counts.state += recovered.len() as u64;
-
-    let resume_inputs = targets
-        .iter()
-        .cloned()
-        .enumerate()
-        .map(|(slot, target)| {
-            operation(wave.nonce, wave.iteration, slot, "resume")
-                .map(|context| (slot, ContainerOperationRequest { context, target }))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let client_for_resume = client.clone();
-    let resumed = run_concurrently(
-        resume_inputs,
-        "concurrent resume wave",
-        move |(slot, request)| {
-            let client = client_for_resume.clone();
-            async move {
-                let record = soak_call(
-                    timeout_duration,
-                    format!("resume soak container {slot}"),
-                    client.resume(request),
-                )
-                .await?;
-                require(
-                    *record.state.status() == ContainerState::Running && !record.is_paused(),
-                    format!("soak container {slot} did not resume"),
-                )?;
-                Ok(slot)
-            }
-        },
-    )
-    .await?;
-    report.operation_counts.resume += resumed.len() as u64;
-
     let kill_inputs = targets
         .iter()
         .cloned()
@@ -542,7 +450,7 @@ pub(super) async fn best_effort_delete(
     }
 }
 
-async fn verify_live_list(
+pub(super) async fn verify_live_list(
     client: &RuntimeClient,
     targets: &[ContainerTarget],
     paused: bool,
@@ -757,7 +665,7 @@ fn create_request(
     })
 }
 
-fn operation(
+pub(super) fn operation(
     nonce: &str,
     iteration: u32,
     slot: usize,
@@ -770,7 +678,7 @@ fn operation(
     .map_err(|error| format!("failed to construct soak {operation} operation ID: {error}"))
 }
 
-async fn soak_call<T>(
+pub(super) async fn soak_call<T>(
     timeout_duration: Duration,
     operation: impl AsRef<str>,
     future: impl Future<Output = a3s_oci_sdk::Result<T>>,
@@ -782,7 +690,7 @@ async fn soak_call<T>(
     }
 }
 
-async fn run_concurrently<I, T, F, Fut>(
+pub(super) async fn run_concurrently<I, T, F, Fut>(
     inputs: Vec<I>,
     description: &str,
     operation: F,
@@ -835,7 +743,7 @@ where
         .collect()
 }
 
-fn duration_millis(duration: Duration) -> u64 {
+pub(super) fn duration_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
@@ -846,7 +754,7 @@ fn call_error(operation: &str, error: &Error) -> String {
     )
 }
 
-fn require(condition: bool, message: impl Into<String>) -> Result<(), String> {
+pub(super) fn require(condition: bool, message: impl Into<String>) -> Result<(), String> {
     if condition {
         Ok(())
     } else {

@@ -150,8 +150,8 @@ fn linux_release_archives_retain_exact_package_qualification() {
     assert!(qualification_position < archive_position);
 
     for required in [
-        "a3s.oci.native-linux-package-qualification.v2",
-        "full-sdk-oar01-without-kvm-v2",
+        "a3s.oci.native-linux-package-qualification.v3",
+        "full-sdk-oar01-oar02-without-kvm-v3",
         "A3S_OCI_NATIVE_RUNTIME_BINARY",
         "A3S_OCI_NATIVE_AGENT_BINARY",
         "A3S_OCI_NATIVE_NETWORK_ENFORCEMENT_REPORT",
@@ -183,6 +183,24 @@ fn native_package_qualification_retains_oar01_real_host_evidence() {
         );
     }
     assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("and (.evidence | length == 8)"));
+}
+
+#[test]
+fn native_package_qualification_retains_oar02_real_host_evidence() {
+    for required in [
+        "a3s.oci.native-linux-soak.v2",
+        "pause_resume_evidence",
+        "progress_after_pause_reopen",
+        "progress_after_resume_reopen",
+        "pause_response_replayed_after_reopen",
+        "resume_response_replayed_after_reopen",
+        "oar02_pause_resume_verified",
+    ] {
+        assert!(
+            NATIVE_LINUX_PACKAGE_SMOKE.contains(required) || NATIVE_LINUX_SMOKE.contains(required),
+            "Native OAR-02 qualification lost {required}"
+        );
+    }
 }
 
 #[test]

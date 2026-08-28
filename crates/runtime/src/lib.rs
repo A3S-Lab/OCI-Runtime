@@ -305,9 +305,9 @@ pub use report::{
 };
 pub use service::HostRuntimeService;
 pub use soak_report::{
-    NativeLinuxSoakConfig, NativeLinuxSoakOperationCounts, NativeLinuxSoakReport,
-    MAX_SOAK_CONCURRENT_CONTAINERS, MAX_SOAK_ITERATIONS, MAX_SOAK_OPERATION_TIMEOUT_MS,
-    MIN_SOAK_CONCURRENT_CONTAINERS, MIN_SOAK_OPERATION_TIMEOUT_MS,
+    NativeLinuxSoakConfig, NativeLinuxSoakOperationCounts, NativeLinuxSoakPauseResumeEvidence,
+    NativeLinuxSoakReport, MAX_SOAK_CONCURRENT_CONTAINERS, MAX_SOAK_ITERATIONS,
+    MAX_SOAK_OPERATION_TIMEOUT_MS, MIN_SOAK_CONCURRENT_CONTAINERS, MIN_SOAK_OPERATION_TIMEOUT_MS,
     NATIVE_LINUX_SOAK_SCHEMA_VERSION,
 };
 pub use transport_cleanup_report::{

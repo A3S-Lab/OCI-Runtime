@@ -1,9 +1,11 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
-use a3s_oci_sdk::RuntimeOperation;
+use a3s_oci_sdk::{ContainerTarget, Generation, OperationId, RuntimeOperation};
 use serde::{Deserialize, Serialize};
 
 /// Schema emitted by the native Linux complex-container soak diagnostic.
-pub const NATIVE_LINUX_SOAK_SCHEMA_VERSION: &str = "a3s.oci.native-linux-soak.v1";
+pub const NATIVE_LINUX_SOAK_SCHEMA_VERSION: &str = "a3s.oci.native-linux-soak.v2";
 
 /// Lower bound for a multi-container soak run.
 pub const MIN_SOAK_CONCURRENT_CONTAINERS: u32 = 2;
@@ -132,21 +134,66 @@ impl NativeLinuxSoakOperationCounts {
     fn covers(&self, config: NativeLinuxSoakConfig, stale_rejections: u64) -> bool {
         let lifecycles = config.expected_lifecycles();
         let iterations = u64::from(config.iterations);
-        self.features > iterations
+        self.features == iterations * 2 + 1
             && self.create == lifecycles
-            && self.state >= lifecycles * 3 + stale_rejections
+            && self.state >= lifecycles * 4 + stale_rejections
             && self.start == lifecycles
-            && self.list >= iterations * 3
-            && self.exec == lifecycles
+            && self.list >= iterations * 4
+            && self.exec == lifecycles * 2
             && self.wait_process == lifecycles
             && self.processes == lifecycles
             && self.stats == lifecycles
-            && self.pause == lifecycles
-            && self.resume == lifecycles
+            && self.pause == lifecycles * 2
+            && self.resume == lifecycles * 2
             && self.kill == lifecycles
             && self.wait == lifecycles
             && self.delete == lifecycles
             && self.read_output >= lifecycles
+    }
+}
+
+/// Exact per-generation pause/resume replay and progress evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeLinuxSoakPauseResumeEvidence {
+    /// Zero-based soak iteration that owned this generation.
+    pub iteration: u32,
+    /// Zero-based concurrent slot within the iteration.
+    pub slot: u32,
+    /// Exact generation fenced by both mutations.
+    pub target: ContainerTarget,
+    /// Caller-selected identity reused for Pause after Host Service reopen.
+    pub pause_operation_id: OperationId,
+    /// Caller-selected identity reused for Resume after Host Service reopen.
+    pub resume_operation_id: OperationId,
+    /// Last atomic workload counter observed before Pause was dispatched.
+    pub progress_before_pause: u64,
+    /// Frozen counter observed after Pause committed.
+    pub progress_at_pause: u64,
+    /// Counter observed after Host Service reopen and exact Pause replay.
+    pub progress_after_pause_reopen: u64,
+    /// Counter observed after the first Resume response.
+    pub progress_after_resume: u64,
+    /// Counter observed after a second Host Service reopen and exact Resume replay.
+    pub progress_after_resume_reopen: u64,
+    /// Whether the reopened Host returned the byte-equivalent committed Pause response.
+    pub pause_response_replayed_after_reopen: bool,
+    /// Whether the second reopened Host returned the byte-equivalent committed Resume response.
+    pub resume_response_replayed_after_reopen: bool,
+}
+
+impl NativeLinuxSoakPauseResumeEvidence {
+    fn is_valid(&self, configuration: NativeLinuxSoakConfig) -> bool {
+        self.iteration < configuration.iterations
+            && self.slot < configuration.concurrent_containers
+            && self.target.generation == Some(Generation(u64::from(self.iteration) + 1))
+            && self.pause_operation_id != self.resume_operation_id
+            && self.progress_before_pause > 0
+            && self.progress_at_pause >= self.progress_before_pause
+            && self.progress_after_pause_reopen == self.progress_at_pause
+            && self.progress_after_resume > self.progress_after_pause_reopen
+            && self.progress_after_resume_reopen > self.progress_after_resume
+            && self.pause_response_replayed_after_reopen
+            && self.resume_response_replayed_after_reopen
     }
 }
 
@@ -187,9 +234,11 @@ pub struct NativeLinuxSoakReport {
     pub exec_output_verified: bool,
     /// Whether every live container crossed pause and resume durably.
     pub pause_resume_verified: bool,
+    /// Exact operation identities, replay outcomes, and workload counters for every lifecycle.
+    pub pause_resume_evidence: Vec<NativeLinuxSoakPauseResumeEvidence>,
     /// Number of times the durable host service was dropped and reopened while live.
     pub durable_reopens: u32,
-    /// Whether each reopened service recovered the exact paused live set.
+    /// Whether each reopened service recovered the exact paused or resumed live set.
     pub durable_recovery_verified: bool,
     /// Whether list returned no containers after every wave.
     pub runtime_empty_after_each_iteration: bool,
@@ -242,6 +291,7 @@ impl NativeLinuxSoakReport {
             stale_generation_rejections: 0,
             exec_output_verified: true,
             pause_resume_verified: true,
+            pause_resume_evidence: Vec::new(),
             durable_reopens: 0,
             durable_recovery_verified: true,
             runtime_empty_after_each_iteration: true,
@@ -296,7 +346,8 @@ impl NativeLinuxSoakReport {
             && self.stale_generation_rejections == expected_stale
             && self.exec_output_verified
             && self.pause_resume_verified
-            && self.durable_reopens == self.configuration.iterations
+            && pause_resume_evidence_covers(self.configuration, &self.pause_resume_evidence)
+            && self.durable_reopens == self.configuration.iterations.saturating_mul(2)
             && self.durable_recovery_verified
             && self.runtime_empty_after_each_iteration
             && self.executor_empty_after_each_iteration
@@ -312,13 +363,50 @@ impl NativeLinuxSoakReport {
     }
 }
 
+fn pause_resume_evidence_covers(
+    configuration: NativeLinuxSoakConfig,
+    evidence: &[NativeLinuxSoakPauseResumeEvidence],
+) -> bool {
+    let Ok(expected) = usize::try_from(configuration.expected_lifecycles()) else {
+        return false;
+    };
+    if evidence.len() != expected {
+        return false;
+    }
+
+    let mut slots = BTreeSet::new();
+    let mut targets = BTreeSet::new();
+    let mut slot_ids = BTreeMap::new();
+    let mut operations = BTreeSet::new();
+    for entry in evidence {
+        let slot_id = slot_ids
+            .entry(entry.slot)
+            .or_insert_with(|| entry.target.id.clone());
+        if !entry.is_valid(configuration)
+            || !slots.insert((entry.iteration, entry.slot))
+            || slot_id != &entry.target.id
+            || !targets.insert((entry.target.id.clone(), entry.target.generation))
+            || !operations.insert(entry.pause_operation_id.clone())
+            || !operations.insert(entry.resume_operation_id.clone())
+        {
+            return false;
+        }
+    }
+    slots.len() == expected
+        && targets.len() == expected
+        && slot_ids.len()
+            == usize::try_from(configuration.concurrent_containers).unwrap_or(usize::MAX)
+        && operations.len() == expected.saturating_mul(2)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        NativeLinuxSoakConfig, NativeLinuxSoakReport, MAX_SOAK_CONCURRENT_CONTAINERS,
-        MAX_SOAK_ITERATIONS,
+        NativeLinuxSoakConfig, NativeLinuxSoakPauseResumeEvidence, NativeLinuxSoakReport,
+        MAX_SOAK_CONCURRENT_CONTAINERS, MAX_SOAK_ITERATIONS,
     };
     use a3s_oci_core::{CapabilityStatus, HostPlatform};
+    use a3s_oci_sdk::{ContainerId, ContainerTarget, Generation, OperationId};
 
     #[test]
     fn configuration_rejects_unbounded_or_non_concurrent_runs() {
@@ -358,24 +446,49 @@ mod tests {
             .push(a3s_oci_sdk::RuntimeOperation::Create);
         report.completed_iterations = 3;
         report.completed_container_lifecycles = expected;
-        report.operation_counts.features = 4;
+        report.operation_counts.features = 7;
         report.operation_counts.create = expected;
-        report.operation_counts.state = expected * 3 + stale;
+        report.operation_counts.state = expected * 4 + stale;
         report.operation_counts.start = expected;
-        report.operation_counts.list = 9;
-        report.operation_counts.exec = expected;
+        report.operation_counts.list = 12;
+        report.operation_counts.exec = expected * 2;
         report.operation_counts.wait_process = expected;
         report.operation_counts.processes = expected;
         report.operation_counts.stats = expected;
-        report.operation_counts.pause = expected;
-        report.operation_counts.resume = expected;
+        report.operation_counts.pause = expected * 2;
+        report.operation_counts.resume = expected * 2;
         report.operation_counts.kill = expected;
         report.operation_counts.wait = expected;
         report.operation_counts.delete = expected;
         report.operation_counts.read_output = expected;
         report.max_live_containers = 4;
         report.stale_generation_rejections = stale;
-        report.durable_reopens = 3;
+        for iteration in 0..configuration.iterations {
+            for slot in 0..configuration.concurrent_containers {
+                report
+                    .pause_resume_evidence
+                    .push(NativeLinuxSoakPauseResumeEvidence {
+                        iteration,
+                        slot,
+                        target: ContainerTarget::exact(
+                            ContainerId::new(format!("soak-{slot}")).expect("container ID"),
+                            Generation(u64::from(iteration) + 1),
+                        ),
+                        pause_operation_id: OperationId::new(format!("pause-{iteration}-{slot}"))
+                            .expect("pause operation ID"),
+                        resume_operation_id: OperationId::new(format!("resume-{iteration}-{slot}"))
+                            .expect("resume operation ID"),
+                        progress_before_pause: 1,
+                        progress_at_pause: 2,
+                        progress_after_pause_reopen: 2,
+                        progress_after_resume: 3,
+                        progress_after_resume_reopen: 4,
+                        pause_response_replayed_after_reopen: true,
+                        resume_response_replayed_after_reopen: true,
+                    });
+            }
+        }
+        report.durable_reopens = 6;
         report.steady_open_descriptors = Some(8);
         report.final_open_descriptors = Some(8);
         report.baseline_child_processes = Some(0);
@@ -384,6 +497,20 @@ mod tests {
         report.session_root_clean = true;
         assert!(report.is_success());
 
+        let valid = report.clone();
+        report.pause_resume_evidence[0].pause_response_replayed_after_reopen = false;
+        assert!(!report.is_success());
+
+        report = valid.clone();
+        report.pause_resume_evidence[0].progress_after_pause_reopen += 1;
+        assert!(!report.is_success());
+
+        report = valid.clone();
+        report.pause_resume_evidence[1].pause_operation_id =
+            report.pause_resume_evidence[0].pause_operation_id.clone();
+        assert!(!report.is_success());
+
+        report = valid;
         report.stale_generation_rejections -= 1;
         assert!(!report.is_success());
     }

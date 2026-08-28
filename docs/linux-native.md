@@ -967,18 +967,26 @@ One iteration has these ordered phases:
 3. require the exact live list, unique positive PIDs, exact running state, a
    live init process, valid cgroup statistics, a zero-exit captured exec, and
    exact stdout for every slot;
-4. pause every slot, drop the last handle to the single-writer durable store,
-   reopen that store around the still-live driver, and recover the exact
-   paused live set;
-5. resume, SIGKILL, wait for the exact signal-9 result, stopped-only delete,
-   require exact-target `NotFound`, and require an empty service list;
-6. remove every marker and require an empty executor root, the original direct
+4. start a separate atomic progress counter in every slot, pause all slots,
+   prove every counter is frozen, drop the last handle to the single-writer
+   durable store, reopen it around the still-live driver, recover the exact
+   paused set, and replay each unchanged Pause operation ID to the exact
+   committed response;
+5. resume all slots, prove every counter advances, reopen the Host Service a
+   second time, recover the exact unpaused set, replay each unchanged Resume
+   operation ID to the exact committed response, and prove progress continues;
+6. SIGKILL, wait for the exact signal-9 result, stopped-only delete, require
+   exact-target `NotFound`, and require an empty service list;
+7. remove every marker and require an empty executor root, the original direct
    child-process count, and the first clean-wave open-descriptor count.
 
-The final `a3s.oci.native-linux-soak.v1` report succeeds only after all
+The final `a3s.oci.native-linux-soak.v2` report succeeds only after all
 configured waves complete and driver shutdown removes the executor root and
-complete durable session. `NativeLinuxSoakOperationCounts` makes partial
-coverage visible rather than reducing the run to one success boolean.
+complete durable session. Its per-generation `pause_resume_evidence` retains
+the exact target, Pause and Resume operation IDs, pre-pause and frozen counters,
+both post-reopen counters, and exact-response replay outcomes.
+`NativeLinuxSoakOperationCounts` makes partial coverage visible rather than
+reducing the run to one success boolean.
 
 The accepted bounds are 1–10,000 iterations, 2–32 concurrent containers, and
 100–300,000 ms per SDK operation. `.github/scripts/native-linux-smoke.sh`
@@ -1131,15 +1139,17 @@ continue to build and use `target/debug`; supplying only one path, a symbolic
 link, a non-file, or a non-executable fails before host mutation.
 
 The gate removes `/dev/kvm` before the lifecycle dispatch and retains
-`a3s.oci.native-linux-package-qualification.v2` in
+`a3s.oci.native-linux-package-qualification.v3` in
 `qualification/native-linux-package.json`. That report binds the source
 commit, workflow run, host architecture and kernel, driver, isolation class,
 profile, runtime version, and exact SHA-256/size identity of all three package
 executables. It also SHA-256-binds eight subordinate reports covering Features,
 the bounded soak, rootful and rootless recovery, Hook owner-death recovery,
 rootless device policy, OAR-01 network enforcement, and the KVM-absence
-boundary. The reports are archived and later covered by the release checksum
-and signed provenance.
+boundary. Its soak evidence additionally closes the OAR-02 mechanism gate for
+exact operation identity, frozen/resumed progress, and Pause/Resume replay
+across two Host Service reopens per wave. The reports are archived and later
+covered by the release checksum and signed provenance.
 
 This closes the reproducible package-to-Native-matrix wiring. Actual tag
 artifacts still need retained runs, and A3S Box product startup and its

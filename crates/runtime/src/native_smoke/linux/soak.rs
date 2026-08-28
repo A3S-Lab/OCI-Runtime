@@ -4,23 +4,28 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
-use a3s_oci_sdk::{ContainerId, OciBundle, RuntimeClient};
+use a3s_oci_sdk::{ContainerId, OciBundle, RuntimeClient, RuntimeOperation};
 use tokio::time::timeout;
 
 use super::filesystem::{
-    canonical_directory, create_private_directory, fixed_rootfs, path_exists, remove_marker,
-    unique_nonce, MARKER_NAME,
+    canonical_directory, create_private_directory, fixed_rootfs, path_exists, unique_nonce,
+    MARKER_NAME,
 };
 use crate::{
     HostRuntimeService, NativeLinuxDriver, NativeLinuxSoakConfig, NativeLinuxSoakReport,
     RuntimeDriver,
 };
 
+mod cleanup;
+mod pause_resume;
 mod wave;
 
-use wave::{best_effort_delete, create_start_and_pause, recover_resume_and_delete, WaveContext};
-
-const EXECUTOR_OWNER_RECORD_NAME: &str = "owner.json";
+use cleanup::{
+    append_reason, clean_wave_artifacts, cleanup_driver, cleanup_session,
+    direct_child_process_count, verify_descriptor_inventory, verify_process_inventory,
+};
+use pause_resume::{pause, progress_artifacts, replay_pause_and_resume, replay_resume};
+use wave::{best_effort_delete, create_start_and_exercise, terminate_and_delete, WaveContext};
 
 pub(super) async fn run(
     init_executable: &Path,
@@ -61,6 +66,8 @@ pub(super) async fn run(
     let mut cgroup_paths = BTreeSet::new();
     let mut bundles = Vec::with_capacity(concurrent);
     let mut markers = Vec::with_capacity(concurrent);
+    let mut progress_markers = Vec::with_capacity(concurrent);
+    let mut cleanup_markers = Vec::with_capacity(concurrent.saturating_mul(3));
     for (slot, path) in bundle_paths.iter().take(concurrent).enumerate() {
         let directory = match canonical_directory(path, &format!("soak bundle {slot}")).await {
             Ok(path) => path,
@@ -122,8 +129,27 @@ pub(super) async fn run(
             }
             Err(reason) => return failed(report, reason),
         }
+        let progress_artifacts = progress_artifacts(&rootfs);
+        for artifact in &progress_artifacts {
+            match path_exists(artifact).await {
+                Ok(false) => {}
+                Ok(true) => {
+                    return failed(
+                        report,
+                        format!(
+                            "refusing to overwrite an existing soak progress artifact: {}",
+                            artifact.display()
+                        ),
+                    );
+                }
+                Err(reason) => return failed(report, reason),
+            }
+        }
         bundles.push(bundle);
-        markers.push(marker);
+        markers.push(marker.clone());
+        progress_markers.push(progress_artifacts[0].clone());
+        cleanup_markers.push(marker);
+        cleanup_markers.extend(progress_artifacts);
     }
     report.bundles_loaded = u32::try_from(bundles.len()).unwrap_or(u32::MAX);
     report.distinct_bundles_and_rootfs = bundle_directories.len() == concurrent
@@ -175,7 +201,7 @@ pub(super) async fn run(
             cleanup_driver(
                 &driver,
                 &executor_root,
-                &markers,
+                &cleanup_markers,
                 &session_root,
                 &mut report,
             )
@@ -193,7 +219,7 @@ pub(super) async fn run(
                 cleanup_driver(
                     &driver,
                     &executor_root,
-                    &markers,
+                    &cleanup_markers,
                     &session_root,
                     &mut report,
                 )
@@ -211,7 +237,7 @@ pub(super) async fn run(
             cleanup_driver(
                 &driver,
                 &executor_root,
-                &markers,
+                &cleanup_markers,
                 &session_root,
                 &mut report,
             )
@@ -230,6 +256,7 @@ pub(super) async fn run(
             bundles: &bundles,
             ids: &ids,
             markers: &markers,
+            progress_markers: &progress_markers,
             nonce: &nonce,
             iteration,
             timeout: timeout_duration,
@@ -238,16 +265,20 @@ pub(super) async fn run(
             failure = Some("native soak client was unavailable before a wave".into());
             break;
         };
-        let targets = match create_start_and_pause(
-            active_client,
-            &wave,
-            &previous_targets,
-            &mut report,
-        )
-        .await
-        {
-            Ok(targets) => targets,
+        let targets =
+            match create_start_and_exercise(active_client, &wave, &previous_targets, &mut report)
+                .await
+            {
+                Ok(targets) => targets,
+                Err(reason) => {
+                    failure = Some(reason);
+                    break;
+                }
+            };
+        let paused = match pause(active_client, &wave, &targets, &mut report).await {
+            Ok(paused) => paused,
             Err(reason) => {
+                report.pause_resume_verified = false;
                 failure = Some(reason);
                 break;
             }
@@ -255,39 +286,25 @@ pub(super) async fn run(
 
         drop(client.take());
         drop(service.take());
-        let reopened = match HostRuntimeService::open(&state_root, runtime_driver.clone()).await {
-            Ok(service) => service,
-            Err(error) => {
-                failure = Some(format!(
-                    "failed to reopen durable soak service during iteration {iteration}: {error}"
-                ));
-                break;
-            }
-        };
-        let reopened_client = RuntimeClient::new(reopened.clone());
-        let reopened_features = match runtime_call(
+        let (reopened, reopened_client) = match reopen_runtime(
+            &state_root,
+            runtime_driver.clone(),
             timeout_duration,
-            "reopened soak features",
-            reopened_client.features(),
+            &report.service_operations,
+            iteration,
+            "after Pause",
         )
         .await
         {
-            Ok(features) => features,
+            Ok(reopened) => reopened,
             Err(reason) => {
-                service = Some(reopened);
-                client = Some(reopened_client);
+                report.durable_recovery_verified = false;
+                report.pause_resume_verified = false;
                 failure = Some(reason);
                 break;
             }
         };
         report.operation_counts.features += 1;
-        if reopened_features.operations != report.service_operations {
-            report.durable_recovery_verified = false;
-            service = Some(reopened);
-            client = Some(reopened_client);
-            failure = Some("reopened soak service changed its operation inventory".into());
-            break;
-        }
         report.durable_reopens += 1;
         service = Some(reopened);
         client = Some(reopened_client);
@@ -296,16 +313,63 @@ pub(super) async fn run(
             failure = Some("reopened native soak client was unavailable".into());
             break;
         };
-        if let Err(reason) =
-            recover_resume_and_delete(active_client, &wave, &targets, &mut report).await
+        let resumed = match replay_pause_and_resume(active_client, &wave, paused, &mut report).await
         {
-            report.durable_recovery_verified = false;
+            Ok(resumed) => resumed,
+            Err(reason) => {
+                report.durable_recovery_verified = false;
+                report.pause_resume_verified = false;
+                failure = Some(reason);
+                break;
+            }
+        };
+
+        drop(client.take());
+        drop(service.take());
+        let (reopened, reopened_client) = match reopen_runtime(
+            &state_root,
+            runtime_driver.clone(),
+            timeout_duration,
+            &report.service_operations,
+            iteration,
+            "after Resume",
+        )
+        .await
+        {
+            Ok(reopened) => reopened,
+            Err(reason) => {
+                report.durable_recovery_verified = false;
+                report.pause_resume_verified = false;
+                failure = Some(reason);
+                break;
+            }
+        };
+        report.operation_counts.features += 1;
+        report.durable_reopens += 1;
+        service = Some(reopened);
+        client = Some(reopened_client);
+
+        let Some(active_client) = client.as_ref() else {
+            failure = Some("second reopened native soak client was unavailable".into());
+            break;
+        };
+        let targets = match replay_resume(active_client, &wave, resumed, &mut report).await {
+            Ok(targets) => targets,
+            Err(reason) => {
+                report.durable_recovery_verified = false;
+                report.pause_resume_verified = false;
+                failure = Some(reason);
+                break;
+            }
+        };
+        if let Err(reason) = terminate_and_delete(active_client, &wave, &targets, &mut report).await
+        {
             failure = Some(reason);
             break;
         }
 
         if let Err(reason) =
-            clean_wave_artifacts(&executor_root, &markers, &mut report, iteration).await
+            clean_wave_artifacts(&executor_root, &cleanup_markers, &mut report, iteration).await
         {
             failure = Some(reason);
             break;
@@ -333,7 +397,7 @@ pub(super) async fn run(
     cleanup_driver(
         &driver,
         &executor_root,
-        &markers,
+        &cleanup_markers,
         &session_root,
         &mut report,
     )
@@ -346,198 +410,30 @@ pub(super) async fn run(
     report
 }
 
-async fn clean_wave_artifacts(
-    executor_root: &Path,
-    markers: &[PathBuf],
-    report: &mut NativeLinuxSoakReport,
+async fn reopen_runtime(
+    state_root: &Path,
+    runtime_driver: Arc<dyn RuntimeDriver>,
+    timeout_duration: Duration,
+    expected_operations: &[RuntimeOperation],
     iteration: u32,
-) -> Result<(), String> {
-    for marker in markers {
-        if let Err(reason) = remove_marker(marker).await {
-            report.markers_removed_after_each_iteration = false;
-            return Err(reason);
-        }
-        if path_exists(marker).await? {
-            report.markers_removed_after_each_iteration = false;
-            return Err(format!(
-                "soak marker remained after iteration {iteration}: {}",
-                marker.display()
-            ));
-        }
-    }
-    if !executor_has_only_owner_record(executor_root).await? {
-        report.executor_empty_after_each_iteration = false;
-        return Err(format!(
-            "native executor root retained generation transients after soak iteration {iteration}"
-        ));
-    }
-    Ok(())
-}
-
-async fn verify_process_inventory(report: &mut NativeLinuxSoakReport) -> Result<(), String> {
-    let count = direct_child_process_count().await?;
-    report.final_child_processes = Some(count);
-    if Some(count) != report.baseline_child_processes {
-        report.child_process_inventory_stable = false;
-        return Err(format!(
-            "direct child process inventory did not return to baseline: baseline={:?}, current={count}",
-            report.baseline_child_processes
-        ));
-    }
-    Ok(())
-}
-
-async fn verify_descriptor_inventory(report: &mut NativeLinuxSoakReport) -> Result<(), String> {
-    let count = open_descriptor_count().await?;
-    match report.steady_open_descriptors {
-        None => report.steady_open_descriptors = Some(count),
-        Some(steady) if steady == count => {}
-        Some(steady) => {
-            report.descriptor_inventory_stable = false;
-            report.final_open_descriptors = Some(count);
-            return Err(format!(
-                "open descriptor inventory grew across clean soak waves: steady={steady}, current={count}"
-            ));
-        }
-    }
-    report.final_open_descriptors = Some(count);
-    Ok(())
-}
-
-async fn cleanup_driver(
-    driver: &NativeLinuxDriver,
-    executor_root: &Path,
-    markers: &[PathBuf],
-    session_root: &Path,
-    report: &mut NativeLinuxSoakReport,
-) {
-    if let Err(error) = driver.shutdown().await {
-        append_reason(
-            report,
-            format!("native soak executor shutdown failed: {error}"),
-        );
-    }
-    match path_exists(executor_root).await {
-        Ok(exists) => report.executor_runtime_clean = !exists,
-        Err(reason) => append_reason(report, reason),
-    }
-    for marker in markers {
-        if let Err(reason) = remove_marker(marker).await {
-            append_reason(report, reason);
-        }
-    }
-    match tokio::fs::remove_dir_all(session_root).await {
-        Ok(()) => match path_exists(session_root).await {
-            Ok(exists) => report.session_root_clean = !exists,
-            Err(reason) => append_reason(report, reason),
-        },
-        Err(error) => append_reason(
-            report,
+    boundary: &str,
+) -> Result<(HostRuntimeService, RuntimeClient), String> {
+    let service = HostRuntimeService::open(state_root, runtime_driver)
+        .await
+        .map_err(|error| {
             format!(
-                "failed to remove native soak session {}: {error}",
-                session_root.display()
-            ),
-        ),
-    }
-}
-
-async fn cleanup_session(
-    mut report: NativeLinuxSoakReport,
-    session_root: &Path,
-    reason: impl Into<String>,
-) -> NativeLinuxSoakReport {
-    append_reason(&mut report, reason);
-    match tokio::fs::remove_dir_all(session_root).await {
-        Ok(()) => report.session_root_clean = true,
-        Err(error) => append_reason(
-            &mut report,
-            format!(
-                "failed to remove native soak session {}: {error}",
-                session_root.display()
-            ),
-        ),
-    }
-    report
-}
-
-async fn executor_has_only_owner_record(path: &Path) -> Result<bool, String> {
-    let mut entries = tokio::fs::read_dir(path).await.map_err(|error| {
-        format!(
-            "failed to inspect native soak executor root {}: {error}",
-            path.display()
-        )
+                "failed to reopen durable soak service {boundary} during iteration {iteration}: {error}"
+            )
     })?;
-    let mut owner_record_found = false;
-    while let Some(entry) = entries.next_entry().await.map_err(|error| {
-        format!(
-            "failed to enumerate native soak executor root {}: {error}",
-            path.display()
-        )
-    })? {
-        if owner_record_found || entry.file_name() != EXECUTOR_OWNER_RECORD_NAME {
-            return Ok(false);
-        }
-        let metadata = tokio::fs::symlink_metadata(entry.path())
-            .await
-            .map_err(|error| {
-                format!(
-                    "failed to inspect native soak executor owner record {}: {error}",
-                    entry.path().display()
-                )
-            })?;
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Ok(false);
-        }
-        owner_record_found = true;
+    let client = RuntimeClient::new(service.clone());
+    let features_operation = format!("reopened soak features {boundary}");
+    let features = runtime_call(timeout_duration, &features_operation, client.features()).await?;
+    if features.operations != expected_operations {
+        return Err(format!(
+            "reopened soak service changed its operation inventory {boundary} during iteration {iteration}"
+        ));
     }
-    Ok(owner_record_found)
-}
-
-async fn open_descriptor_count() -> Result<u64, String> {
-    let mut entries = tokio::fs::read_dir("/proc/self/fd")
-        .await
-        .map_err(|error| format!("failed to open /proc/self/fd: {error}"))?;
-    let mut count = 0_u64;
-    while entries
-        .next_entry()
-        .await
-        .map_err(|error| format!("failed to count /proc/self/fd: {error}"))?
-        .is_some()
-    {
-        count += 1;
-    }
-    Ok(count)
-}
-
-async fn direct_child_process_count() -> Result<u64, String> {
-    let mut tasks = tokio::fs::read_dir("/proc/self/task")
-        .await
-        .map_err(|error| format!("failed to open /proc/self/task: {error}"))?;
-    let mut children = BTreeSet::new();
-    while let Some(task) = tasks
-        .next_entry()
-        .await
-        .map_err(|error| format!("failed to enumerate /proc/self/task: {error}"))?
-    {
-        let path = task.path().join("children");
-        let contents = match tokio::fs::read_to_string(&path).await {
-            Ok(contents) => contents,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(format!(
-                    "failed to read child process inventory {}: {error}",
-                    path.display()
-                ));
-            }
-        };
-        for pid in contents.split_whitespace() {
-            let pid = pid.parse::<u32>().map_err(|error| {
-                format!("invalid child PID {pid:?} in {}: {error}", path.display())
-            })?;
-            children.insert(pid);
-        }
-    }
-    Ok(children.len() as u64)
+    Ok((service, client))
 }
 
 async fn runtime_call<T>(
@@ -550,15 +446,6 @@ async fn runtime_call<T>(
         Ok(Err(error)) => Err(format!("{operation} failed: {error}")),
         Err(_) => Err(format!("{operation} timed out")),
     }
-}
-
-fn append_reason(report: &mut NativeLinuxSoakReport, reason: impl Into<String>) {
-    let reason = reason.into();
-    report.reason = Some(match report.reason.take() {
-        Some(existing) if existing != reason => format!("{existing}; {reason}"),
-        Some(existing) => existing,
-        None => reason,
-    });
 }
 
 fn failed(mut report: NativeLinuxSoakReport, reason: impl Into<String>) -> NativeLinuxSoakReport {

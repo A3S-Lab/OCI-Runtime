@@ -46,9 +46,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
   network-device authority. A real caller-owned namespace fixture proves exact
   interface attachment, redirect and rejection behavior, live Host reopen with
   generation/PID/opaque-evidence replay, and namespace/interface/mechanism
-  preservation after Delete. Package qualification v2 retains this as its
+  preservation after Delete. Package qualification v3 retains this as its
   eighth digest-bound evidence report; rootless Native and VM drivers remain
   unadvertised.
+- Qualified the policy-neutral OAR-02 pause/resume mechanism on rootful Native
+  Linux. Soak schema v2 retains every exact generation and caller operation ID,
+  proves atomic workload counters remain frozen across Pause and a Host Service
+  reopen, exactly replays the committed Pause response, then proves progress
+  resumes and exactly replays Resume after a second reopen. Package
+  qualification v3 binds all 100 per-generation records from the 25-by-4 soak
+  to the staged static runtime and Agent without assigning idle or wake policy
+  to OCI Runtime.
 - Added a canonical machine-readable containerd runtime-v2 compatibility
   record that is schema-checked against the code-owned support matrix and
   retains exact qualification environments, protocol ranges, digests,

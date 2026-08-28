@@ -1747,7 +1747,7 @@ run_soak() {
     --argjson operation_timeout_ms "$soak_operation_timeout_ms" \
     '($iterations * $concurrent) as $lifecycles
      | (($iterations - 1) * $concurrent) as $stale
-     | .schema_version == "a3s.oci.native-linux-soak.v1"
+     | .schema_version == "a3s.oci.native-linux-soak.v2"
      and .platform == "linux" and .status == "available"
      and .configuration.iterations == $iterations
      and .configuration.concurrent_containers == $concurrent
@@ -1762,17 +1762,17 @@ run_soak() {
              "signal-process", "wait-process", "file", "filesystem"]
      and .completed_iterations == $iterations
      and .completed_container_lifecycles == $lifecycles
-     and .operation_counts.features == ($iterations + 1)
+     and .operation_counts.features == (($iterations * 2) + 1)
      and .operation_counts.create == $lifecycles
-     and .operation_counts.state >= (($lifecycles * 3) + $stale)
+     and .operation_counts.state >= (($lifecycles * 4) + $stale)
      and .operation_counts.start == $lifecycles
-     and .operation_counts.list == ($iterations * 3)
-     and .operation_counts.exec == $lifecycles
+     and .operation_counts.list == ($iterations * 4)
+     and .operation_counts.exec == ($lifecycles * 2)
      and .operation_counts.wait_process == $lifecycles
      and .operation_counts.processes == $lifecycles
      and .operation_counts.stats == $lifecycles
-     and .operation_counts.pause == $lifecycles
-     and .operation_counts.resume == $lifecycles
+     and .operation_counts.pause == ($lifecycles * 2)
+     and .operation_counts.resume == ($lifecycles * 2)
      and .operation_counts.kill == $lifecycles
      and .operation_counts.wait == $lifecycles
      and .operation_counts.delete == $lifecycles
@@ -1783,7 +1783,26 @@ run_soak() {
      and .stale_generation_rejections == $stale
      and .exec_output_verified
      and .pause_resume_verified
-     and .durable_reopens == $iterations
+     and (.pause_resume_evidence | length) == $lifecycles
+     and all(
+       .pause_resume_evidence[];
+       .iteration >= 0 and .iteration < $iterations
+       and .slot >= 0 and .slot < $concurrent
+       and .target.generation == (.iteration + 1)
+       and .pause_operation_id != .resume_operation_id
+       and .progress_before_pause > 0
+       and .progress_at_pause >= .progress_before_pause
+       and .progress_after_pause_reopen == .progress_at_pause
+       and .progress_after_resume > .progress_after_pause_reopen
+       and .progress_after_resume_reopen > .progress_after_resume
+       and .pause_response_replayed_after_reopen
+       and .resume_response_replayed_after_reopen
+     )
+     and ([.pause_resume_evidence[] | "\(.iteration):\(.slot)"] | unique | length)
+         == $lifecycles
+     and ([.pause_resume_evidence[] | .pause_operation_id, .resume_operation_id]
+          | unique | length) == ($lifecycles * 2)
+     and .durable_reopens == ($iterations * 2)
      and .durable_recovery_verified
      and .runtime_empty_after_each_iteration
      and .executor_empty_after_each_iteration
@@ -1799,6 +1818,8 @@ run_soak() {
     <<<"$output" >/dev/null
   for candidate in "${soak_bundles[@]}"; do
     test ! -e "$candidate/rootfs/.a3s-oci-native-smoke"
+    test ! -e "$candidate/rootfs/.a3s-oci-native-soak-progress"
+    test ! -e "$candidate/rootfs/.a3s-oci-native-soak-progress.next"
   done
   test -z "$(find "$work_parent" -mindepth 1 -print -quit)"
 }
