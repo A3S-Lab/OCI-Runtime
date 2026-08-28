@@ -13,7 +13,11 @@ fn request(target: ContainerTarget, operation: &str, byte: u8) -> TeeAttestation
 async fn per_driver_tee_capability_routes_even_when_the_legacy_intersection_omits_it() {
     let temporary = tempfile::tempdir().expect("temporary state root");
     let tee_driver = Arc::new(RecordingDriver::with_attestation_operations());
-    let shared_driver = Arc::new(RecordingDriver::shared_guest_supported());
+    let mut shared_driver = RecordingDriver::shared_guest_supported();
+    if shared_driver.capability.driver == tee_driver.capability.driver {
+        shared_driver.capability.driver = DriverKind::LibkrunKvm;
+    }
+    let shared_driver = Arc::new(shared_driver);
     let drivers: Vec<Arc<dyn RuntimeDriver>> = vec![tee_driver.clone(), shared_driver];
     let service = HostRuntimeService::open_with_drivers(temporary.path().join("state"), drivers)
         .await
