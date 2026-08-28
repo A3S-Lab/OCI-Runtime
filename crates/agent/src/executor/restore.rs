@@ -115,6 +115,9 @@ impl LinuxRestoreSpawnRequest {
         // one write through a retained cgroup.procs descriptor.
         unsafe {
             command.pre_exec(move || {
+                if libc::setsid() < 0 {
+                    return Err(io::Error::last_os_error());
+                }
                 super::pid_supervisor::verify_and_arm_parent_death_signal(
                     expected_owner_pid,
                     "CRIU restore launcher",

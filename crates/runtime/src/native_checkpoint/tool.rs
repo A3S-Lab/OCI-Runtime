@@ -265,6 +265,18 @@ impl CriuTool {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // SAFETY: the callback runs in the freshly forked CRIU child before
+        // exec. Creating an independent session prevents a caller's
+        // controlling terminal from being mistaken for checkpoint state.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
         let mut child = command.spawn().map_err(|error| {
             io_error(
                 "spawn retained CRIU executable",

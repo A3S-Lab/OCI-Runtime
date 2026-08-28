@@ -357,6 +357,42 @@ pub(super) fn establish_process_group() -> Result<()> {
     }
 }
 
+pub(super) fn establish_process_session() -> Result<()> {
+    // SAFETY: getpid, getpgrp, and getsid with PID zero have no pointer
+    // arguments and inspect only the calling process.
+    let (pid, process_group, session) =
+        unsafe { (libc::getpid(), libc::getpgrp(), libc::getsid(0)) };
+    if pid <= 0 || process_group < 0 || session < 0 {
+        return Err(last_os_error("inspect configured workload session"));
+    }
+    if process_group == pid && session == pid {
+        return Ok(());
+    }
+    if process_group == pid {
+        return Err(supervisor_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "configured workload PID {pid} is already a process-group leader in external session {session}"
+            ),
+        ));
+    }
+    // SAFETY: the configured non-terminal payload is a freshly forked child
+    // that has not yet executed untrusted code. A new session also creates the
+    // PID-led process group used by exact descendant signaling and prevents a
+    // Host controlling terminal from entering a portable checkpoint image.
+    let created = unsafe { libc::setsid() };
+    if created == pid {
+        Ok(())
+    } else if created < 0 {
+        Err(last_os_error("create configured workload session"))
+    } else {
+        Err(supervisor_error(
+            ErrorCode::Internal,
+            format!("setsid returned unexpected session ID {created} for workload PID {pid}"),
+        ))
+    }
+}
+
 pub(super) fn signal_process_group(leader_pid: libc::pid_t, signal: i32) -> Result<()> {
     if leader_pid <= 0 {
         return Err(supervisor_error(
@@ -686,8 +722,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        decode_wait_status, peek_child_outcome, read_supervised_outcome, report_supervised_outcome,
-        terminate_pid, wait_for_child, ChildOutcome, EXITED_OUTCOME_BYTE,
+        decode_wait_status, establish_process_session, peek_child_outcome, read_supervised_outcome,
+        report_supervised_outcome, terminate_pid, wait_for_child, ChildOutcome,
+        EXITED_OUTCOME_BYTE,
     };
 
     #[test]
@@ -732,6 +769,32 @@ mod tests {
         assert_eq!(
             decode_wait_status(libc::SIGKILL).expect("signal status"),
             ChildOutcome::Signaled(libc::SIGKILL)
+        );
+    }
+
+    #[test]
+    fn non_terminal_workload_gets_an_idempotent_private_session() {
+        // SAFETY: the child performs only bounded libc identity calls before
+        // exiting; the parent retains and reaps the exact returned PID.
+        let pid = unsafe { libc::fork() };
+        assert!(
+            pid >= 0,
+            "fork session test child: {}",
+            std::io::Error::last_os_error()
+        );
+        if pid == 0 {
+            let valid = establish_process_session().is_ok()
+                && establish_process_session().is_ok()
+                // SAFETY: these identity syscalls have no preconditions.
+                && unsafe { libc::getsid(0) } == unsafe { libc::getpid() }
+                // SAFETY: these identity syscalls have no preconditions.
+                && unsafe { libc::getpgrp() } == unsafe { libc::getpid() };
+            // SAFETY: bypassing destructors is intentional in the fork child.
+            unsafe { libc::_exit(if valid { 0 } else { 101 }) }
+        }
+        assert_eq!(
+            wait_for_child(pid).expect("reap session test child"),
+            ChildOutcome::Exited(0)
         );
     }
 

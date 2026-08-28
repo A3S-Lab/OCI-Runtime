@@ -439,7 +439,11 @@ pub(super) fn complete_create_and_wait_for_start(
 }
 
 fn prepare_configured_process_group(terminal: bool) -> Result<()> {
-    pid_supervisor::establish_process_group()?;
+    if terminal {
+        pid_supervisor::establish_process_group()?;
+    } else {
+        pid_supervisor::establish_process_session()?;
+    }
     super::terminal::make_foreground_process_group(terminal).map_err(|error| {
         init_error(
             ErrorCode::Internal,
