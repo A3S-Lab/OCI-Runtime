@@ -545,7 +545,13 @@ struct Fixture {
 impl Fixture {
     async fn new() -> Self {
         let temporary = tempfile::tempdir().expect("temporary directory");
-        let state_root = temporary.path().join("state");
+        // macOS exposes /var through the system /private/var alias. The
+        // production adapter intentionally requires callers to provide the
+        // canonical state root, so the cross-platform fixture must do the
+        // same instead of weakening the journal's symlink boundary.
+        let state_root = fs::canonicalize(temporary.path())
+            .expect("canonical temporary directory")
+            .join("state");
         create_private_directory(&state_root);
         let bundle = write_bundle(temporary.path().join("bundle"), false, &["/bin/true"]).await;
         Self {
