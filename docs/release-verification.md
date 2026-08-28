@@ -109,7 +109,9 @@ version, Runtime Spec version, Go version, build-manifest digest, executable
 digest, and size. Both tools are explicitly recorded as not packaged. Soak
 schema v2 retains every exact Pause and Resume operation ID, both post-reopen
 response replays, and the frozen and resumed workload counters for all 100
-lifecycles.
+lifecycles. Before binding their sizes and digests, the package gate rejects
+links and non-regular evidence entries and normalizes all twelve retained
+records to mode `0644`, so an unprivileged archive consumer can verify them.
 After verifying the outer archive provenance, inspect the package report with:
 
 ```bash

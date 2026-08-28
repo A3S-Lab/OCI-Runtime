@@ -1193,8 +1193,9 @@ dynamic dependencies. Before either Linux directory is archived, its exact
 CLI and Agent run the complete Native Linux SDK, rootless, owner-death,
 Hook-recovery, OAR-01 network-enforcement, fault-cleanup, and bounded-soak
 matrix with `/dev/kvm` removed. The archive retains
-`qualification/native-linux-package.json` schema v5 plus twelve digest-bound
-subordinate reports. Three of those reports run the OAR-03 CRIU
+`qualification/native-linux-package.json` schema v5 plus twelve digest-bound,
+regular, nonsymlink subordinate reports normalized to mode `0644`. Three of
+those reports run the OAR-03 CRIU
 checkpoint/restore, replacement-process recovery, and PID/network namespace
 rejection gates with the staged binaries. A fourth runs official OCI Runtime
 Tools 0.9.0 at exact commit

@@ -368,6 +368,21 @@ fn native_package_qualification_retains_oar03_real_host_evidence() {
 }
 
 #[test]
+fn native_package_qualification_normalizes_retained_evidence_permissions() {
+    let permission_normalization = NATIVE_LINUX_PACKAGE_SMOKE
+        .find("chmod 0644 -- \"$evidence\"")
+        .expect("Native package qualification must make retained evidence readable");
+    let evidence_hash = NATIVE_LINUX_PACKAGE_SMOKE
+        .find("--arg sha256 \"$(sha256sum \"$evidence\" | cut -d ' ' -f 1)\"")
+        .expect("Native package qualification lost evidence hashing");
+
+    assert!(
+        permission_normalization < evidence_hash,
+        "Evidence permissions must be normalized before the package report binds its digest"
+    );
+}
+
+#[test]
 fn pinned_criu_install_validates_the_destination_before_publication() {
     let destination_guard = BUILD_PINNED_CRIU
         .find("if [[ -e \"$destination\" || -L \"$destination\" ]]; then")

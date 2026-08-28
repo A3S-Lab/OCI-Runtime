@@ -375,6 +375,17 @@ for evidence in \
   "$checkpoint_pidns_report" \
   "$checkpoint_netns_report" \
   "$upstream_bundle_report"; do
+  if [[ ! -f "$evidence" || -L "$evidence" ]]; then
+    printf 'Native Linux package evidence must be a regular nonsymlink file: %s\n' \
+      "$evidence" >&2
+    exit 1
+  fi
+  chmod 0644 -- "$evidence"
+  if [[ "$(stat --format '%a' -- "$evidence")" != 644 ]]; then
+    printf 'Native Linux package evidence mode normalization failed: %s\n' \
+      "$evidence" >&2
+    exit 1
+  fi
   evidence_schema="$(
     jq --raw-output --exit-status \
       '(.schema_version // .schemaVersion)
