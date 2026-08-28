@@ -6,6 +6,8 @@ use a3s_oci_sdk::oci_spec::runtime::{LinuxDeviceCgroup, LinuxDeviceType};
 use a3s_oci_sdk::{ErrorCode, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::OCI_LINUX_DEFAULT_DEVICE_NODES;
+
 use super::{device_error, invalid, unsupported};
 
 mod kernel;
@@ -144,11 +146,44 @@ impl DeviceAccessBoundary {
         ));
         if let Some(policy) = &self.policy {
             append_ordered_rules(&mut program, &policy.rules)?;
+            // OCI requires the runtime-supplied default devices to remain
+            // available. Keep caller rules ordered for every explicit device,
+            // then restore only the fixed default and dynamic PTY identities;
+            // the immutable inventory mask still prevents broader access.
+            append_normative_default_access(&mut program)?;
         }
         program.push(alu32_reg(BPF_AND, BPF_REG_0, BPF_REG_6));
         finish_device_program(&mut program)?;
         Ok(program)
     }
+}
+
+fn append_normative_default_access(program: &mut Vec<BpfInsn>) -> Result<()> {
+    for device in OCI_LINUX_DEFAULT_DEVICE_NODES {
+        append_inventory_identity(
+            program,
+            DeviceAccessIdentity {
+                kind: DeviceAccessKind::Character,
+                major: device.major,
+                minor: Some(device.minor),
+            },
+        )?;
+    }
+    for identity in [
+        DeviceAccessIdentity {
+            kind: DeviceAccessKind::Character,
+            major: OCI_PTMX_MAJOR,
+            minor: Some(OCI_PTMX_MINOR),
+        },
+        DeviceAccessIdentity {
+            kind: DeviceAccessKind::Character,
+            major: UNIX98_PTY_SLAVE_MAJOR,
+            minor: None,
+        },
+    ] {
+        append_inventory_identity(program, identity)?;
+    }
+    Ok(())
 }
 
 impl DeviceAccessPolicy {

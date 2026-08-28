@@ -120,28 +120,66 @@ fn ordered_resource_rules_can_only_narrow_the_oci_inventory() {
     let access = policy(serde_json::json!({
         "devices": [
             {"allow": true, "type": "a", "access": "rwm"},
-            {"allow": false, "type": "c", "major": 1, "minor": 3, "access": "wm"}
+            {"allow": false, "type": "c", "major": 10, "minor": 229, "access": "wm"}
         ]
     }));
-    let boundary =
-        DeviceAccessBoundary::for_oci_nodes([(DeviceAccessKind::Character, 1, 3)], Some(access))
-            .expect("bounded OCI device policy");
+    let boundary = DeviceAccessBoundary::for_oci_nodes(
+        [
+            (DeviceAccessKind::Character, 1, 3),
+            (DeviceAccessKind::Character, 10, 229),
+        ],
+        Some(access),
+    )
+    .expect("bounded OCI device policy");
 
     assert!(evaluate_boundary(
         &boundary,
-        request(DeviceAccessKind::Character, 1, 3, "r"),
-    ));
-    assert!(!evaluate_boundary(
-        &boundary,
-        request(DeviceAccessKind::Character, 1, 3, "w"),
-    ));
-    assert!(!evaluate_boundary(
-        &boundary,
-        request(DeviceAccessKind::Character, 1, 3, "m"),
-    ));
-    assert!(!evaluate_boundary(
-        &boundary,
         request(DeviceAccessKind::Character, 10, 229, "r"),
+    ));
+    assert!(!evaluate_boundary(
+        &boundary,
+        request(DeviceAccessKind::Character, 10, 229, "w"),
+    ));
+    assert!(!evaluate_boundary(
+        &boundary,
+        request(DeviceAccessKind::Character, 10, 229, "m"),
+    ));
+    assert!(!evaluate_boundary(
+        &boundary,
+        request(DeviceAccessKind::Character, 10, 230, "r"),
+    ));
+}
+
+#[test]
+fn ordered_resource_rules_cannot_remove_normative_default_device_access() {
+    let access = policy(serde_json::json!({
+        "devices": [{"allow": false, "type": "a", "access": "rwm"}]
+    }));
+    let boundary = DeviceAccessBoundary::for_oci_nodes(
+        crate::OCI_LINUX_DEFAULT_DEVICE_NODES
+            .map(|device| (DeviceAccessKind::Character, device.major, device.minor)),
+        Some(access),
+    )
+    .expect("bounded OCI default-device policy");
+
+    for device in crate::OCI_LINUX_DEFAULT_DEVICE_NODES {
+        assert!(evaluate_boundary(
+            &boundary,
+            request(
+                DeviceAccessKind::Character,
+                device.major,
+                device.minor,
+                "rwm",
+            ),
+        ));
+    }
+    assert!(evaluate_boundary(
+        &boundary,
+        request(DeviceAccessKind::Character, 5, 2, "rwm"),
+    ));
+    assert!(evaluate_boundary(
+        &boundary,
+        request(DeviceAccessKind::Character, 136, 42, "rw"),
     ));
 }
 

@@ -50,13 +50,7 @@ pub(super) async fn retain_original_rootfs(
             )
         })?;
         let rootfs = bundle
-            .open_relative(
-                relative,
-                libc::O_PATH,
-                true,
-                "container rootfs",
-                "run-container-init",
-            )?
+            .open_rootfs(relative, "run-container-init")?
             .ok_or_else(|| {
                 process_error(
                     ErrorCode::InvalidArgument,

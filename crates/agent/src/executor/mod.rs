@@ -36,6 +36,7 @@ mod plan;
 mod plan_tests;
 mod portable_rootfs_metadata;
 mod process;
+mod process_executable;
 mod process_group;
 #[cfg(test)]
 mod process_group_tests;

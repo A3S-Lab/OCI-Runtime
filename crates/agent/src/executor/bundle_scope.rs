@@ -258,6 +258,19 @@ impl PinnedBundleDirectory {
         Ok(descriptor)
     }
 
+    /// Open the configured rootfs below this bundle, or duplicate the pinned
+    /// bundle itself for the OCI-standard relative `root.path` value `.`.
+    pub(super) fn open_rootfs(
+        &self,
+        relative: &Path,
+        operation: &'static str,
+    ) -> Result<Option<File>> {
+        if relative.as_os_str().is_empty() {
+            return protect_descriptor(&self.descriptor, "container rootfs", operation).map(Some);
+        }
+        self.open_relative(relative, libc::O_PATH, true, "container rootfs", operation)
+    }
+
     #[cfg(test)]
     fn descriptor(&self) -> RawFd {
         self.descriptor.as_raw_fd()
@@ -554,6 +567,36 @@ mod tests {
                 .expect_err("reserved path must fail closed");
             assert_eq!(error.code, ErrorCode::PermissionDenied);
         }
+    }
+
+    #[tokio::test]
+    async fn pinned_bundle_can_be_the_oci_rootfs_for_dot_path() {
+        use std::os::unix::fs::MetadataExt;
+
+        let temporary = tempdir().expect("temporary share");
+        let share = temporary.path().join("share");
+        let state = share.join("run");
+        let bundle = share.join("bundle");
+        fs::create_dir_all(&state).expect("runtime state");
+        fs::create_dir(&bundle).expect("bundle");
+        let (_, scope) = BundleDirectoryScope::utility_vm(&state)
+            .await
+            .expect("utility VM scope");
+        let pinned = scope
+            .pin(&GuestPath::new(bundle.to_string_lossy()).expect("guest bundle"))
+            .expect("pin bundle")
+            .expect("utility VM pin");
+
+        let rootfs = pinned
+            .open_rootfs(std::path::Path::new(""), "run-container-init")
+            .expect("duplicate pinned bundle as rootfs")
+            .expect("pinned rootfs");
+
+        assert_eq!(
+            rootfs.metadata().expect("rootfs metadata").ino(),
+            fs::metadata(&bundle).expect("bundle metadata").ino()
+        );
+        assert_ne!(rootfs.as_raw_fd(), pinned.descriptor());
     }
 
     #[cfg(unix)]

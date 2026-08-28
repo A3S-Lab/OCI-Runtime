@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use a3s_oci_core::{LifecycleEvent, LifecycleState};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerTarget, ErrorCode, OciSchemaValidator, OciSemanticPhase, OperationId, Result,
-    RuntimeEventKind, StartRequest, ValidateRequest,
+    ContainerTarget, ErrorCode, OciSchemaValidator, OperationId, Result, RuntimeEventKind,
+    StartRequest, ValidateRequest,
 };
 use serde::Serialize;
 
@@ -159,10 +159,6 @@ impl DurableStateStore {
                 "prepare-start",
             ));
         }
-        self.load_bundle(&stored)
-            .await?
-            .validate_for_phase(OciSemanticPhase::Start)?;
-
         let operation = StoredOperation {
             schema_version: OPERATION_SCHEMA_VERSION.to_string(),
             operation_id: request.context.operation_id.clone(),

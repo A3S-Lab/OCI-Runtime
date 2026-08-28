@@ -191,7 +191,7 @@ fn linux_release_archives_retain_exact_package_qualification() {
 
     for required in [
         "a3s.oci.native-linux-package-qualification.v6",
-        "full-sdk-oar01-oar02-oar03-upstream-lifecycle-preflight-without-kvm-v6",
+        "full-sdk-oar01-oar02-oar03-upstream-lifecycle-qualified-without-kvm-v6",
         "A3S_OCI_NATIVE_RUNTIME_BINARY",
         "A3S_OCI_NATIVE_AGENT_BINARY",
         "A3S_OCI_NATIVE_NETWORK_ENFORCEMENT_REPORT",
@@ -257,10 +257,11 @@ fn native_package_qualification_pins_upstream_oci_bundle_validation() {
         "\"go_version\": \"go1.24.0\"",
         "\"buildvcs\": false",
         "\"static_elf\": true",
-        "\"lifecycle_validation\": \"native-linux-core-preflight-v1\"",
+        "\"lifecycle_validation\": \"native-linux-core-qualified-v1\"",
         "\"validated_architectures\":",
         "\"preflight_architectures\":",
-        "\"unsupported-upstream-seccomp-compat-architectures\"",
+        "\"runtime-tools-start-process-unset-inverted-assertion\"",
+        "\"runtime-tools-pidfile-true-kill-race\"",
         "\"missing-upstream-aarch64-rootfs\"",
         "\"stdio-descriptor-transport\"",
         "\"terminal-console-socket\"",
@@ -317,7 +318,7 @@ fn native_package_qualification_pins_upstream_oci_bundle_validation() {
 }
 
 #[test]
-fn native_package_qualification_retains_the_pinned_upstream_lifecycle_preflight() {
+fn native_package_qualification_retains_the_pinned_upstream_lifecycle_qualification() {
     for required in [
         "a3s.oci.upstream-lifecycle-validation.v1",
         "native-linux-core-v1",
@@ -326,13 +327,14 @@ fn native_package_qualification_retains_the_pinned_upstream_lifecycle_preflight(
         "A3S_OCI_CLI_STATE_ROOT=\"$adapter_root\"",
         "A3S_OCI_CLI_ISOLATION=shared-host-kernel",
         "TAP version 13",
-        "unsupported-upstream-seccomp-compat-architectures",
-        "seccomp architecture ScmpArchX86 is not advertised",
-        "result: \"blocked\"",
+        "runtime-tools-start-process-unset-inverted-assertion",
+        "runtime-tools-pidfile-true-kill-race",
+        "result: \"conformant-with-upstream-harness-defect\"",
         "all_selected_passed: false",
+        "all_selected_conformant: true",
         "all_lifecycles_retired: true",
         "service_shutdown_clean: true",
-        "core_lifecycle_qualified: false",
+        "core_lifecycle_qualified: true",
         "full_lifecycle_qualified: false",
         "the pinned upstream source has no aarch64 lifecycle rootfs",
     ] {
@@ -359,9 +361,10 @@ fn native_package_qualification_retains_the_pinned_upstream_lifecycle_preflight(
     }
     assert!(NATIVE_LINUX_PACKAGE_SMOKE
         .contains("bash .github/scripts/upstream-oci-lifecycle-validation.sh"));
+    assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("upstream_lifecycle_status=available"));
+    assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("upstream_core_lifecycle_verified=true"));
     assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("upstream_lifecycle_status=unavailable"));
     assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("upstream_core_lifecycle_verified=false"));
-    assert!(!NATIVE_LINUX_PACKAGE_SMOKE.contains("upstream_core_lifecycle_verified=true"));
     assert!(!UPSTREAM_LIFECYCLE_VALIDATION.contains("8a4db579f5c88af5a0d036fad34bddc9c1f703f3"));
 }
 

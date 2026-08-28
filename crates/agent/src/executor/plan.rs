@@ -70,18 +70,34 @@ impl ProcessPlan {
         Self::build(process, io, true)
     }
 
+    fn without_init_process(io: &ProcessIo) -> Result<Self> {
+        validate_process_io(io, false)?;
+        Ok(Self {
+            args: Vec::new(),
+            environment: Vec::new(),
+            cwd: "/".to_string(),
+            uid: 0,
+            gid: 0,
+            additional_gids: Vec::new(),
+            umask: None,
+            oom_score_adj: None,
+            io_priority: None,
+            scheduler: None,
+            exec_cpu_affinity: None,
+            no_new_privileges: false,
+            terminal: false,
+            rlimits: RlimitPlan::default(),
+            capabilities: CapabilityPlan::default(),
+            seccomp: SeccompPlan::default(),
+        })
+    }
+
     fn build(process: &Process, io: &ProcessIo, include_exec_affinity: bool) -> Result<Self> {
         linux_support::shared()?.validate_process(process, "plan-guest-init")?;
         let terminal = process.terminal().unwrap_or(false);
         let resolved_io = io.resolve_for_process(process)?;
         validate_process_io(&resolved_io, terminal)?;
         validate_process_profile(process)?;
-        if process.no_new_privileges() != Some(true) {
-            return Err(unsupported(
-                "process.noNewPrivileges",
-                "the bootstrap executor requires noNewPrivileges=true",
-            ));
-        }
 
         let args = process
             .args()
@@ -90,7 +106,9 @@ impl ProcessPlan {
             .ok_or_else(|| invalid("process.args must contain an executable"))?
             .clone();
         validate_string_vector("process.args", &args, MAX_ARGUMENTS)?;
-        linux_path(Path::new(&args[0]), "process.args[0]", true)?;
+        if args[0].is_empty() {
+            return Err(invalid("process.args[0] must not be empty"));
+        }
 
         let environment = process.env().as_ref().cloned().unwrap_or_default();
         validate_environment(&environment)?;
@@ -131,7 +149,7 @@ impl ProcessPlan {
             io_priority,
             scheduler,
             exec_cpu_affinity,
-            no_new_privileges: true,
+            no_new_privileges: process.no_new_privileges().unwrap_or(false),
             terminal,
             rlimits,
             capabilities,
@@ -149,6 +167,7 @@ pub(super) struct InitPlan {
     pub(super) oci_version: String,
     pub(super) bundle_directory: PathBuf,
     pub(super) rootfs: PathBuf,
+    pub(super) has_process: bool,
     pub(super) args: Vec<String>,
     pub(super) environment: Vec<String>,
     pub(super) cwd: String,
@@ -204,11 +223,10 @@ impl InitPlan {
         let root_path = resolve_rootfs_path(bundle.directory(), root.path())?;
         let root_readonly = root.readonly().unwrap_or(false);
 
-        let process = spec
-            .process()
-            .as_ref()
-            .ok_or_else(|| invalid("OCI bootstrap executor requires process for create/start"))?;
-        let mut process_plan = ProcessPlan::from_init_process(process, io)?;
+        let (has_process, mut process_plan) = match spec.process().as_ref() {
+            Some(process) => (true, ProcessPlan::from_init_process(process, io)?),
+            None => (false, ProcessPlan::without_init_process(io)?),
+        };
         let annotations = plan_annotations(spec.annotations().as_ref())?;
         let namespaces = NamespacePlan::from_linux(
             spec.linux().as_ref(),
@@ -336,6 +354,7 @@ impl InitPlan {
             oci_version: spec.version().clone(),
             bundle_directory: bundle.directory().to_path_buf(),
             rootfs: root_path,
+            has_process,
             args: process_plan.args,
             environment: process_plan.environment,
             cwd: process_plan.cwd,
@@ -474,24 +493,22 @@ fn validate_profile(raw: &Value) -> Result<()> {
     )?;
     reject_unimplemented_keys(root_config, "root", &["path", "readonly"])?;
 
-    let process = object(
-        root.get("process")
-            .ok_or_else(|| invalid("config.process is required"))?,
-        "process",
-    )?;
-    validate_supported_process_fields(process)?;
+    if let Some(process) = root.get("process") {
+        let process = object(process, "process")?;
+        validate_supported_process_fields(process)?;
 
-    let user = object(
-        process
-            .get("user")
-            .ok_or_else(|| invalid("process.user is required"))?,
-        "process.user",
-    )?;
-    reject_unimplemented_keys(
-        user,
-        "process.user",
-        &["uid", "gid", "umask", "additionalGids", "username"],
-    )?;
+        let user = object(
+            process
+                .get("user")
+                .ok_or_else(|| invalid("process.user is required"))?,
+            "process.user",
+        )?;
+        reject_unimplemented_keys(
+            user,
+            "process.user",
+            &["uid", "gid", "umask", "additionalGids", "username"],
+        )?;
+    }
 
     let Some(linux) = root.get("linux") else {
         return Ok(());
@@ -602,6 +619,9 @@ fn validate_supported_process_fields(process: &Map<String, Value>) -> Result<()>
 }
 
 fn resolve_rootfs_path(bundle_directory: &Path, path: &Path) -> Result<PathBuf> {
+    if path == Path::new(".") {
+        return Ok(bundle_directory.to_path_buf());
+    }
     let path = linux_path(path, "root.path", path.is_absolute())?;
     if path.starts_with('/') {
         Ok(PathBuf::from(path))

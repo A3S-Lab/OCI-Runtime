@@ -405,29 +405,17 @@ fn apply_exec_credentials(plan: &ProcessPlan, control: &mut StdUnixStream) -> Re
 fn execute_process(plan: &ProcessPlan) -> Result<()> {
     let args = cstring_vector(&plan.args, "process.args")?;
     let environment = cstring_vector(&plan.environment, "process.env")?;
-    let executable = args.first().ok_or_else(|| {
-        exec_error(
+    if args.is_empty() {
+        return Err(exec_error(
             ErrorCode::InvalidArgument,
             "process.args must contain an executable",
-        )
-    })?;
-    let mut arg_pointers = args.iter().map(|value| value.as_ptr()).collect::<Vec<_>>();
-    arg_pointers.push(std::ptr::null());
-    let mut environment_pointers = environment
-        .iter()
-        .map(|value| value.as_ptr())
-        .collect::<Vec<_>>();
-    environment_pointers.push(std::ptr::null());
-    // SAFETY: every pointer references a live NUL-terminated buffer and this
-    // dedicated child immediately replaces itself.
-    unsafe {
-        libc::execve(
-            executable.as_ptr(),
-            arg_pointers.as_ptr(),
-            environment_pointers.as_ptr(),
-        );
+        ));
     }
-    Err(last_exec_os_error("execute configured exec process"))
+    let error = crate::executor::process_executable::execute(&args, &environment);
+    Err(exec_error(
+        ErrorCode::Internal,
+        format!("execute configured exec process failed: {error}"),
+    ))
 }
 
 fn restore_close_on_exec(

@@ -79,6 +79,76 @@ fn accepts_the_exact_bootstrap_profile() {
 }
 
 #[test]
+fn preserves_disabled_or_omitted_no_new_privileges_for_init_and_exec() {
+    for requested in [Some(false), None] {
+        let mut config: serde_json::Value =
+            serde_json::from_str(FIXED_CONFIG).expect("decode fixed process configuration");
+        let process = config["process"]
+            .as_object_mut()
+            .expect("process configuration object");
+        match requested {
+            Some(value) => {
+                process.insert("noNewPrivileges".to_string(), serde_json::json!(value));
+            }
+            None => {
+                process.remove("noNewPrivileges");
+            }
+        }
+
+        let encoded = serde_json::to_string(&config).expect("encode process configuration");
+        let init = InitPlan::from_bundle(&bundle(&encoded), &null_io())
+            .expect("plan init with no_new_privileges disabled");
+        assert!(!init.no_new_privileges);
+
+        let process: Process = serde_json::from_value(config["process"].clone())
+            .expect("decode configured exec process");
+        let exec = ProcessPlan::from_exec_process(&process, &null_io())
+            .expect("plan exec with no_new_privileges disabled");
+        assert!(!exec.no_new_privileges);
+    }
+}
+
+#[test]
+fn accepts_execvp_file_semantics_for_init_and_exec() {
+    for executable in ["runtimetest", "./runtimetest", "../bin/runtimetest"] {
+        let mut config: serde_json::Value =
+            serde_json::from_str(FIXED_CONFIG).expect("decode fixed process configuration");
+        config["process"]["args"][0] = serde_json::json!(executable);
+        let encoded = serde_json::to_string(&config).expect("encode process configuration");
+
+        let init = InitPlan::from_bundle(&bundle(&encoded), &null_io())
+            .expect("plan init with execvp file semantics");
+        assert_eq!(init.args[0], executable);
+
+        let process: Process = serde_json::from_value(config["process"].clone())
+            .expect("decode configured exec process");
+        let exec = ProcessPlan::from_exec_process(&process, &null_io())
+            .expect("plan exec with execvp file semantics");
+        assert_eq!(exec.args[0], executable);
+    }
+}
+
+#[test]
+fn plans_a_processless_bundle_for_create_without_making_it_startable() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed process configuration");
+    config
+        .as_object_mut()
+        .expect("configuration object")
+        .remove("process");
+    let encoded = serde_json::to_string(&config).expect("encode processless configuration");
+
+    let plan =
+        InitPlan::from_bundle(&bundle(&encoded), &null_io()).expect("plan processless OCI create");
+    assert!(!plan.has_process);
+    assert!(plan.args.is_empty());
+    assert_eq!(plan.cwd, "/");
+    assert_eq!((plan.uid, plan.gid), (0, 0));
+    assert!(!plan.terminal);
+    assert!(!plan.no_new_privileges);
+}
+
+#[test]
 fn plans_exact_common_process_fields_for_init_and_exec() {
     let mut config: serde_json::Value =
         serde_json::from_str(FIXED_CONFIG).expect("decode fixed process configuration");
@@ -298,7 +368,23 @@ fn plans_the_exact_a3s_box_compiler_output() {
     assert_eq!(plan.annotations.len(), 4);
     assert_eq!(plan.devices.len(), 6);
     assert!(plan.seccomp.is_enabled());
-    assert_eq!(plan.seccomp.filter_count(), 2);
+    assert_eq!(
+        plan.seccomp.filter_count(),
+        1 + (2 * plan.seccomp.architecture_count())
+    );
+}
+
+#[test]
+fn resolves_current_directory_rootfs_to_the_bundle() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed configuration");
+    config["root"]["path"] = serde_json::json!(".");
+    let bundle = bundle(&serde_json::to_string(&config).expect("encode current-directory rootfs"));
+
+    let plan = InitPlan::from_bundle(&bundle, &null_io())
+        .expect("OCI root.path current directory must resolve to the bundle");
+
+    assert_eq!(plan.rootfs, bundle.directory());
 }
 
 #[test]

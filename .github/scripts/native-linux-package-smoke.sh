@@ -117,8 +117,8 @@ expected_lifecycle_preflight_architectures="$(
 expected_lifecycle_validated_architectures="$(
   jq --compact-output '.lifecycle.validated_architectures' "$runtime_tools_lock"
 )"
-expected_x86_64_lifecycle_blocker="$(
-  jq --raw-output '.lifecycle.blockers.x86_64' "$runtime_tools_lock"
+expected_lifecycle_upstream_harness_defects="$(
+  jq --compact-output '.lifecycle.upstream_harness_defects' "$runtime_tools_lock"
 )"
 expected_aarch64_lifecycle_blocker="$(
   jq --raw-output '.lifecycle.blockers.aarch64' "$runtime_tools_lock"
@@ -246,20 +246,20 @@ bash .github/scripts/upstream-oci-lifecycle-validation.sh \
   "$source_commit" \
   "$upstream_lifecycle_report"
 if [[ "$package_architecture" == x86_64 ]]; then
-  upstream_lifecycle_status=unavailable
-  upstream_lifecycle_blocker="$expected_x86_64_lifecycle_blocker"
-  upstream_core_lifecycle_verified=false
+  upstream_lifecycle_status=available
+  upstream_lifecycle_blocker_json=null
+  upstream_core_lifecycle_verified=true
   jq --exit-status \
     --arg source_commit "$source_commit" \
     --arg runtime_sha256 "$runtime_sha256" \
     --arg agent_sha256 "$agent_sha256" \
     --arg upstream_commit "$expected_runtime_tools_commit" \
     --arg runtime_spec_version "$expected_runtime_tools_spec_version" \
-    --arg blocker "$upstream_lifecycle_blocker" \
+    --argjson upstream_harness_defects "$expected_lifecycle_upstream_harness_defects" \
     '.schema_version == "a3s.oci.upstream-lifecycle-validation.v1"
-     and .status == "unavailable"
-     and (.reason | type == "string" and length > 0)
-     and .blocker == $blocker
+     and .status == "available"
+     and .reason == null
+     and .blocker == null
      and .source_commit == $source_commit
      and .architecture == "x86_64"
      and .upstream.commit == $upstream_commit
@@ -267,20 +267,47 @@ if [[ "$package_architecture" == x86_64 ]]; then
      and .package_executables.runtime.sha256 == $runtime_sha256
      and .package_executables.agent.sha256 == $agent_sha256
      and (.validation.selected_tests | length) == 9
-     and (.validation.results | length) == 1
-     and .validation.results[0].name == "create"
-     and .validation.results[0].result == "blocked"
-     and .validation.results[0].blocker == $blocker
-     and .validation.results[0].tap_failures == 1
+     and [.validation.results[].name] == .validation.selected_tests
+     and ([.validation.results[] | select(.result == "passed")] | length) == 7
+     and ([
+       .validation.results[]
+       | select(.result == "conformant-with-upstream-harness-defect")
+     ] | length) == 2
+     and all(
+       .validation.results[];
+       .result == "passed"
+       or (
+         .result == "conformant-with-upstream-harness-defect"
+         and (
+           (
+             .name == "start"
+             and .upstream_harness_defect ==
+               "runtime-tools-start-process-unset-inverted-assertion"
+           )
+           or (
+             .name == "pidfile"
+             and .upstream_harness_defect ==
+               "runtime-tools-pidfile-true-kill-race"
+           )
+         )
+         and .tap_failures == 1
+       )
+     )
+     and .validation.upstream_harness_defects == $upstream_harness_defects
      and .validation.all_selected_passed == false
+     and .validation.all_selected_conformant
      and .validation.all_lifecycles_retired
      and .validation.service_shutdown_clean
-     and .core_lifecycle_qualified == false
+     and .core_lifecycle_qualified
      and .full_lifecycle_qualified == false' \
     "$upstream_lifecycle_report" >/dev/null
 else
   upstream_lifecycle_status=unavailable
   upstream_lifecycle_blocker="$expected_aarch64_lifecycle_blocker"
+  upstream_lifecycle_blocker_json="$(
+    jq --compact-output --null-input \
+      --arg blocker "$upstream_lifecycle_blocker" '$blocker'
+  )"
   upstream_core_lifecycle_verified=false
   jq --exit-status \
     --arg source_commit "$source_commit" \
@@ -511,7 +538,7 @@ jq --null-input \
   --arg kernel_release "$(uname -r)" \
   --arg driver 'native-linux' \
   --arg isolation_class 'shared-host-kernel' \
-  --arg profile 'full-sdk-oar01-oar02-oar03-upstream-lifecycle-preflight-without-kvm-v6' \
+  --arg profile 'full-sdk-oar01-oar02-oar03-upstream-lifecycle-qualified-without-kvm-v6' \
   --arg package_name "$package_name" \
   --arg runtime_version "$runtime_version" \
   --arg runtime_sha256 "$runtime_sha256" \
@@ -534,8 +561,9 @@ jq --null-input \
   --arg runtime_tools_lifecycle_profile "$expected_runtime_tools_lifecycle_profile" \
   --argjson lifecycle_preflight_architectures "$expected_lifecycle_preflight_architectures" \
   --argjson lifecycle_validated_architectures "$expected_lifecycle_validated_architectures" \
+  --argjson lifecycle_upstream_harness_defects "$expected_lifecycle_upstream_harness_defects" \
   --arg upstream_lifecycle_status "$upstream_lifecycle_status" \
-  --arg upstream_lifecycle_blocker "$upstream_lifecycle_blocker" \
+  --argjson upstream_lifecycle_blocker "$upstream_lifecycle_blocker_json" \
   --argjson upstream_core_lifecycle_verified "$upstream_core_lifecycle_verified" \
   --arg checkpoint_driver_build_digest "$checkpoint_driver_build_digest" \
   --slurpfile evidence "$evidence_manifest" \
@@ -576,7 +604,8 @@ jq --null-input \
         build_manifest_sha256: $runtime_tools_manifest_sha256,
         lifecycle_profile: $runtime_tools_lifecycle_profile,
         lifecycle_preflight_architectures: $lifecycle_preflight_architectures,
-        lifecycle_validated_architectures: $lifecycle_validated_architectures
+        lifecycle_validated_architectures: $lifecycle_validated_architectures,
+        lifecycle_upstream_harness_defects: $lifecycle_upstream_harness_defects
       }
     },
     checkpoint_driver_build_digest: $checkpoint_driver_build_digest,
@@ -606,8 +635,9 @@ jq --exit-status \
   --arg runtime_tools_lifecycle_profile "$expected_runtime_tools_lifecycle_profile" \
   --argjson lifecycle_preflight_architectures "$expected_lifecycle_preflight_architectures" \
   --argjson lifecycle_validated_architectures "$expected_lifecycle_validated_architectures" \
+  --argjson lifecycle_upstream_harness_defects "$expected_lifecycle_upstream_harness_defects" \
   --arg upstream_lifecycle_status "$upstream_lifecycle_status" \
-  --arg upstream_lifecycle_blocker "$upstream_lifecycle_blocker" \
+  --argjson upstream_lifecycle_blocker "$upstream_lifecycle_blocker_json" \
   --argjson upstream_core_lifecycle_verified "$upstream_core_lifecycle_verified" \
   'select(
      .schema_version == "a3s.oci.native-linux-package-qualification.v6"
@@ -640,6 +670,7 @@ jq --exit-status \
      and .external_tools.oci_runtime_tools.lifecycle_profile == $runtime_tools_lifecycle_profile
      and .external_tools.oci_runtime_tools.lifecycle_preflight_architectures == $lifecycle_preflight_architectures
      and .external_tools.oci_runtime_tools.lifecycle_validated_architectures == $lifecycle_validated_architectures
+     and .external_tools.oci_runtime_tools.lifecycle_upstream_harness_defects == $lifecycle_upstream_harness_defects
      and (.checkpoint_driver_build_digest | test("^sha256:[0-9a-f]{64}$"))
      and (.evidence | length == 13)
    )' \

@@ -172,7 +172,7 @@ impl CgroupHandle {
             plan.rdma().preflight_create(&current)?;
             plan.unified().preflight_create(&current)?;
             let (device_filter, delegated_device_filter) =
-                install_device_filter(devices, &current, manager)?;
+                prepare_device_filter(&current, manager)?;
             let Some(headroom) = plan.control_headroom() else {
                 let mut settings = plan.settings();
                 settings.extend(huge_tlb_settings);
@@ -293,6 +293,27 @@ impl CgroupHandle {
         apply_settings(&workload, &settings)?;
         plan.block_io().apply_create(&workload)?;
         plan.rdma().apply_create(&workload)
+    }
+
+    pub(super) fn activate_device_filter(&mut self) -> Result<()> {
+        if !self.devices.has_device_filter() {
+            return Ok(());
+        }
+        if let Some(filter) = self.delegated_device_filter.as_mut() {
+            if !filter.active {
+                filter
+                    .authority
+                    .install(&filter.key, &filter.relative_cgroup, &self.devices)?;
+                filter.active = true;
+            }
+            return Ok(());
+        }
+        if self.device_filter.is_none() {
+            self.device_filter = self
+                .devices
+                .install_cgroup_device_filter(&self.device_filter_path)?;
+        }
+        Ok(())
     }
 
     pub(super) fn init_procs_descriptor(&self) -> RawFd {
@@ -682,32 +703,22 @@ impl Drop for CgroupHandle {
     }
 }
 
-fn install_device_filter(
-    devices: &DevicePlan,
+fn prepare_device_filter(
     cgroup: &Path,
     manager: &CgroupManager,
 ) -> Result<(Option<OwnedFd>, Option<DelegatedDeviceFilter>)> {
     let Some(authority) = manager.device_policy_authority() else {
-        if !devices.has_device_filter() {
-            return Ok((None, None));
-        }
-        return devices
-            .install_cgroup_device_filter(cgroup)
-            .map(|filter| (filter, None));
+        return Ok((None, None));
     };
     let relative = manager.relative_to_authority(cgroup)?;
     let key = relative.to_string_lossy().into_owned();
-    let active = devices.has_device_filter();
-    if active {
-        authority.install(&key, &relative, devices)?;
-    }
     Ok((
         None,
         Some(DelegatedDeviceFilter {
             authority: authority.clone(),
             key,
             relative_cgroup: relative,
-            active,
+            active: false,
         }),
     ))
 }

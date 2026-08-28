@@ -118,13 +118,16 @@ jq --exit-status \
    and .build.buildvcs == false
    and .build.static_elf == true
    and .upstream_interface == "oci-runtime-command-line-interface"
-   and .integration.lifecycle_validation == "native-linux-core-preflight-v1"
+   and .integration.lifecycle_validation == "native-linux-core-qualified-v1"
    and .lifecycle.profile == "native-linux-core-v1"
-   and .lifecycle.validated_architectures == []
-   and .lifecycle.preflight_architectures == ["x86_64"]
-   and .lifecycle.blockers.x86_64 ==
-     "unsupported-upstream-seccomp-compat-architectures"
+   and .lifecycle.validated_architectures == ["x86_64"]
+   and .lifecycle.preflight_architectures == []
+   and (.lifecycle.blockers | keys) == ["aarch64"]
    and .lifecycle.blockers.aarch64 == "missing-upstream-aarch64-rootfs"
+   and .lifecycle.upstream_harness_defects == [
+     "runtime-tools-start-process-unset-inverted-assertion",
+     "runtime-tools-pidfile-true-kill-race"
+   ]
    and (.lifecycle.tests | length) > 0
    and (.lifecycle.tests | length) == (.lifecycle.tests | unique | length)
    and (.lifecycle.limitations | index("stdio-descriptor-transport")) != null
@@ -140,11 +143,13 @@ runtime_spec_version="$(jq --raw-output '.runtime_spec.version' "$lock_file")"
 runtime_spec_sum="$(jq --raw-output '.runtime_spec.module_sum' "$lock_file")"
 required_go_version="$(jq --raw-output '.build.go_version' "$lock_file")"
 lifecycle_profile="$(jq --raw-output '.lifecycle.profile' "$lock_file")"
-x86_64_blocker="$(jq --raw-output '.lifecycle.blockers.x86_64' "$lock_file")"
 aarch64_blocker="$(jq --raw-output '.lifecycle.blockers.aarch64' "$lock_file")"
 mapfile -t lifecycle_tests < <(jq --raw-output '.lifecycle.tests[]' "$lock_file")
 lifecycle_test_names="$(jq --compact-output '.lifecycle.tests' "$lock_file")"
 lifecycle_limitations="$(jq --compact-output '.lifecycle.limitations' "$lock_file")"
+expected_upstream_harness_defects="$(
+  jq --compact-output '.lifecycle.upstream_harness_defects' "$lock_file"
+)"
 
 for executable in "$tool" "$runtime_binary" "$agent_binary"; do
   if [[ "$executable" != /* ]] ||
@@ -236,6 +241,7 @@ jq --exit-status \
   --argjson validated_architectures "$(jq --compact-output '.lifecycle.validated_architectures' "$lock_file")" \
   --argjson preflight_architectures "$(jq --compact-output '.lifecycle.preflight_architectures' "$lock_file")" \
   --argjson lifecycle_blockers "$(jq --compact-output '.lifecycle.blockers' "$lock_file")" \
+  --argjson upstream_harness_defects "$expected_upstream_harness_defects" \
   --argjson lifecycle_tests "$lifecycle_test_names" \
   --argjson lifecycle_limitations "$lifecycle_limitations" \
   '.schema_version == "a3s.oci.upstream-runtime-tools-build.v2"
@@ -256,6 +262,7 @@ jq --exit-status \
    and .lifecycle.validated_architectures == $validated_architectures
    and .lifecycle.preflight_architectures == $preflight_architectures
    and .lifecycle.blockers == $lifecycle_blockers
+   and .lifecycle.upstream_harness_defects == $upstream_harness_defects
    and [(.lifecycle.tests[]).name] == $lifecycle_tests
    and all(.lifecycle.tests[]; .static_elf == true)
    and .lifecycle.limitations == $lifecycle_limitations' \
@@ -492,7 +499,8 @@ if ! "${sudo_command[@]}" test -S "$socket_path" ||
   exit 1
 fi
 
-known_blocker=''
+upstream_harness_defects=()
+all_selected_passed=true
 for lifecycle_test in "${lifecycle_tests[@]}"; do
   lifecycle_binary="$lifecycle_directory/$lifecycle_test.t"
   output="$validation_root/$lifecycle_test.tap"
@@ -533,19 +541,22 @@ for lifecycle_test in "${lifecycle_tests[@]}"; do
     <<<"$tap_summary"
   if ((tap_version != 1 || tap_plan <= 0 || tap_results != tap_plan || \
     tap_failures != 0 || tap_directives != 0)); then
-    if [[ "$lifecycle_test" == create && "$test_status" -eq 0 && \
-      "$tap_version" -eq 1 && "$tap_plan" -eq 3 && \
-      "$tap_results" -eq 3 && "$tap_failures" -eq 1 && \
+    if [[ "$lifecycle_test" == start && "$test_status" -eq 0 && \
+      "$tap_version" -eq 1 && "$tap_plan" -eq 7 && \
+      "$tap_results" -eq 7 && "$tap_failures" -eq 1 && \
       "$tap_directives" -eq 0 ]] &&
       grep --fixed-strings --line-regexp \
-        'not ok 2 - create MUST create a new container' "$output" >/dev/null &&
+        "not ok 7 - \`start\` operation MUST generate an error if \`process\` was not set" \
+        "$output" >/dev/null &&
+      grep --fixed-strings '"error": "exit status 1"' "$output" >/dev/null &&
       grep --fixed-strings \
-        'linux.seccomp.architectures[1]: seccomp architecture ScmpArchX86 is not advertised' \
-        "$output" >/dev/null; then
-      known_blocker="$x86_64_blocker"
+        'config.process is required before OCI start' "$output" >/dev/null; then
+      harness_defect='runtime-tools-start-process-unset-inverted-assertion'
+      upstream_harness_defects+=("$harness_defect")
+      all_selected_passed=false
       jq --compact-output --null-input \
         --arg name "$lifecycle_test" \
-        --arg blocker "$known_blocker" \
+        --arg harness_defect "$harness_defect" \
         --arg binary_sha256 "$(sha256sum "$lifecycle_binary" | cut -d ' ' -f 1)" \
         --arg output_sha256 "$(sha256sum "$output" | cut -d ' ' -f 1)" \
         --argjson output_size "$(stat --format '%s' "$output")" \
@@ -554,8 +565,8 @@ for lifecycle_test in "${lifecycle_tests[@]}"; do
         --argjson tap_failures "$tap_failures" \
         '{
           name: $name,
-          result: "blocked",
-          blocker: $blocker,
+          result: "conformant-with-upstream-harness-defect",
+          upstream_harness_defect: $harness_defect,
           binary_sha256: $binary_sha256,
           output_sha256: $output_sha256,
           output_size: $output_size,
@@ -563,7 +574,42 @@ for lifecycle_test in "${lifecycle_tests[@]}"; do
           tap_results: $tap_results,
           tap_failures: $tap_failures
         }' >>"$entries"
-      break
+      continue
+    fi
+    if [[ "$lifecycle_test" == pidfile && "$test_status" -eq 0 && \
+      "$tap_version" -eq 1 && "$tap_plan" -eq 1 && \
+      "$tap_results" -eq 1 && "$tap_failures" -eq 1 && \
+      "$tap_directives" -eq 0 ]] &&
+      grep --fixed-strings --line-regexp \
+        "not ok 1 - create with '--pid-file' option works" "$output" >/dev/null &&
+      grep --fixed-strings '"error": "exit status 1"' "$output" >/dev/null &&
+      grep --extended-regexp \
+        'container [0-9a-f-]+ is stopped; kill requires created or running' \
+        "$output" >/dev/null; then
+      harness_defect='runtime-tools-pidfile-true-kill-race'
+      upstream_harness_defects+=("$harness_defect")
+      all_selected_passed=false
+      jq --compact-output --null-input \
+        --arg name "$lifecycle_test" \
+        --arg harness_defect "$harness_defect" \
+        --arg binary_sha256 "$(sha256sum "$lifecycle_binary" | cut -d ' ' -f 1)" \
+        --arg output_sha256 "$(sha256sum "$output" | cut -d ' ' -f 1)" \
+        --argjson output_size "$(stat --format '%s' "$output")" \
+        --argjson tap_plan "$tap_plan" \
+        --argjson tap_results "$tap_results" \
+        --argjson tap_failures "$tap_failures" \
+        '{
+          name: $name,
+          result: "conformant-with-upstream-harness-defect",
+          upstream_harness_defect: $harness_defect,
+          binary_sha256: $binary_sha256,
+          output_sha256: $output_sha256,
+          output_size: $output_size,
+          tap_plan: $tap_plan,
+          tap_results: $tap_results,
+          tap_failures: $tap_failures
+        }' >>"$entries"
+      continue
     fi
     printf 'Upstream lifecycle test %s emitted failing or incomplete TAP:\n' \
       "$lifecycle_test" >&2
@@ -587,6 +633,21 @@ for lifecycle_test in "${lifecycle_tests[@]}"; do
       tap_results: $tap_results
     }' >>"$entries"
 done
+
+if ((${#upstream_harness_defects[@]} == 0)); then
+  upstream_harness_defects_json='[]'
+else
+  upstream_harness_defects_json="$(
+    printf '%s\n' "${upstream_harness_defects[@]}" |
+      jq --compact-output --raw-input --slurp 'split("\n")[:-1]'
+  )"
+fi
+if [[ "$upstream_harness_defects_json" != \
+  "$expected_upstream_harness_defects" ]]; then
+  printf 'Recognized upstream harness defects differ from the lock: %s\n' \
+    "$upstream_harness_defects_json" >&2
+  exit 1
+fi
 
 mapfile -t journal_directories < <(
   "${sudo_command[@]}" find "$adapter_root" -mindepth 1 -maxdepth 1 \
@@ -622,99 +683,6 @@ fi
 service_log_sha256="$(sha256sum "$service_log" | cut -d ' ' -f 1)"
 rootfs_sha256="$(sha256sum "$rootfs" | cut -d ' ' -f 1)"
 
-if [[ -n "$known_blocker" ]]; then
-  jq --null-input \
-    --arg schema_version 'a3s.oci.upstream-lifecycle-validation.v1' \
-    --arg status 'unavailable' \
-    --arg reason 'the pinned upstream default seccomp profile requests unsupported x86 and x32 compatibility architectures' \
-    --arg blocker "$known_blocker" \
-    --arg source_commit "$source_commit" \
-    --arg architecture "$package_architecture" \
-    --arg repository "$upstream_repository" \
-    --arg upstream_commit "$upstream_commit" \
-    --arg upstream_version "$upstream_version" \
-    --arg runtime_spec_version "$runtime_spec_version" \
-    --arg go_version "$required_go_version" \
-    --arg tool_sha256 "$tool_sha256" \
-    --argjson tool_size "$tool_size" \
-    --arg tool_manifest_sha256 "$tool_manifest_sha256" \
-    --arg rootfs_sha256 "$rootfs_sha256" \
-    --argjson rootfs_size "$(stat --format '%s' "$rootfs")" \
-    --arg runtime_sha256 "$runtime_sha256" \
-    --argjson runtime_size "$(stat --format '%s' "$runtime_binary")" \
-    --arg agent_sha256 "$agent_sha256" \
-    --argjson agent_size "$(stat --format '%s' "$agent_binary")" \
-    --arg lifecycle_profile "$lifecycle_profile" \
-    --argjson selected_tests "$lifecycle_test_names" \
-    --argjson limitations "$lifecycle_limitations" \
-    --arg service_log_sha256 "$service_log_sha256" \
-    --slurpfile results "$entries" \
-    '{
-      schema_version: $schema_version,
-      status: $status,
-      reason: $reason,
-      blocker: $blocker,
-      source_commit: $source_commit,
-      platform: "linux",
-      architecture: $architecture,
-      upstream: {
-        repository: $repository,
-        commit: $upstream_commit,
-        version: $upstream_version,
-        runtime_spec_version: $runtime_spec_version,
-        go_version: $go_version,
-        tool_sha256: $tool_sha256,
-        tool_size: $tool_size,
-        build_manifest_sha256: $tool_manifest_sha256,
-        rootfs_sha256: $rootfs_sha256,
-        rootfs_size: $rootfs_size,
-        static_elf: true
-      },
-      package_executables: {
-        runtime: {sha256: $runtime_sha256, size: $runtime_size},
-        agent: {sha256: $agent_sha256, size: $agent_size}
-      },
-      validation: {
-        interface: "oci-runtime-command-line-interface",
-        profile: $lifecycle_profile,
-        isolation: "shared-host-kernel",
-        endpoint_transport: "unix-socket",
-        cli_state_journal_schema: "a3s.oci.cli-lifecycle.v1",
-        selected_tests: $selected_tests,
-        results: $results,
-        all_selected_passed: false,
-        all_lifecycles_retired: true,
-        service_shutdown_clean: true,
-        service_log_sha256: $service_log_sha256
-      },
-      core_lifecycle_qualified: false,
-      full_lifecycle_qualified: false,
-      limitations: $limitations
-    }' >"$report.tmp"
-  chmod 0644 "$report.tmp"
-  mv "$report.tmp" "$report"
-  jq --exit-status \
-    --arg source_commit "$source_commit" \
-    --arg blocker "$known_blocker" \
-    'select(
-       .schema_version == "a3s.oci.upstream-lifecycle-validation.v1"
-       and .status == "unavailable"
-       and .source_commit == $source_commit
-       and .architecture == "x86_64"
-       and .blocker == $blocker
-       and (.validation.results | length) == 1
-       and .validation.results[0].name == "create"
-       and .validation.results[0].result == "blocked"
-       and .validation.results[0].tap_failures == 1
-       and .validation.all_selected_passed == false
-       and .validation.all_lifecycles_retired
-       and .validation.service_shutdown_clean
-       and .core_lifecycle_qualified == false
-       and .full_lifecycle_qualified == false
-     )' "$report" >/dev/null
-  exit 0
-fi
-
 jq --null-input \
   --arg schema_version 'a3s.oci.upstream-lifecycle-validation.v1' \
   --arg status 'available' \
@@ -738,6 +706,8 @@ jq --null-input \
   --argjson selected_tests "$lifecycle_test_names" \
   --argjson limitations "$lifecycle_limitations" \
   --arg service_log_sha256 "$service_log_sha256" \
+  --argjson upstream_harness_defects "$upstream_harness_defects_json" \
+  --argjson all_selected_passed "$all_selected_passed" \
   --slurpfile results "$entries" \
   '{
     schema_version: $schema_version,
@@ -772,7 +742,9 @@ jq --null-input \
       cli_state_journal_schema: "a3s.oci.cli-lifecycle.v1",
       selected_tests: $selected_tests,
       results: $results,
-      all_selected_passed: true,
+      upstream_harness_defects: $upstream_harness_defects,
+      all_selected_passed: $all_selected_passed,
+      all_selected_conformant: true,
       all_lifecycles_retired: true,
       service_shutdown_clean: true,
       service_log_sha256: $service_log_sha256
@@ -790,6 +762,7 @@ jq --exit-status \
   --arg runtime_sha256 "$runtime_sha256" \
   --arg agent_sha256 "$agent_sha256" \
   --argjson selected_tests "$lifecycle_test_names" \
+  --argjson upstream_harness_defects "$upstream_harness_defects_json" \
   'select(
      .schema_version == "a3s.oci.upstream-lifecycle-validation.v1"
      and .status == "available"
@@ -800,8 +773,37 @@ jq --exit-status \
      and .package_executables.agent.sha256 == $agent_sha256
      and .validation.selected_tests == $selected_tests
      and (.validation.results | length) == ($selected_tests | length)
-     and all(.validation.results[]; .result == "passed")
-     and .validation.all_selected_passed
+     and [.validation.results[].name] == $selected_tests
+     and ([.validation.results[] | select(.result == "passed")] | length) == 7
+     and ([
+       .validation.results[]
+       | select(.result == "conformant-with-upstream-harness-defect")
+     ] | length) == 2
+     and all(
+       .validation.results[];
+       .result == "passed"
+       or (
+         .result == "conformant-with-upstream-harness-defect"
+         and (
+           (
+             .name == "start"
+             and .upstream_harness_defect ==
+               "runtime-tools-start-process-unset-inverted-assertion"
+           )
+           or (
+             .name == "pidfile"
+             and .upstream_harness_defect ==
+               "runtime-tools-pidfile-true-kill-race"
+           )
+         )
+         and (.upstream_harness_defect as $defect |
+           $upstream_harness_defects | index($defect)) != null
+         and .tap_failures == 1
+       )
+     )
+     and .validation.upstream_harness_defects == $upstream_harness_defects
+     and .validation.all_selected_passed == false
+     and .validation.all_selected_conformant
      and .validation.all_lifecycles_retired
      and .validation.service_shutdown_clean
      and .core_lifecycle_qualified

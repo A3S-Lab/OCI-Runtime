@@ -10,6 +10,43 @@ fn assert_preflight_rejection(fixture: &Fixture, error: &Error, code: ErrorCode)
 }
 
 #[tokio::test]
+async fn current_directory_rootfs_is_a_portable_bundle_root() {
+    let fixture = Fixture::new();
+    let mut request = fixture.handoff_request("dot-rootfs");
+    let directory = request.bundle.directory().to_path_buf();
+    let config_path = directory.join("config.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config_path).expect("read handoff config"))
+            .expect("decode handoff config");
+    config["root"]["path"] = serde_json::json!(".");
+    let encoded = serde_json::to_string_pretty(&config).expect("encode dot-rootfs config");
+    std::fs::write(&config_path, encoded.as_bytes()).expect("write dot-rootfs config");
+    request.bundle = OciBundle::from_json(directory, encoded).expect("dot-rootfs bundle");
+    request.attachment_contract =
+        CreateAttachments::from_bundle(&request.bundle, ProcessIo::default())
+            .expect("base dot-rootfs attachments")
+            .with_runtime_bundle_handoff(&request.bundle)
+            .expect("dot-rootfs handoff attachment");
+
+    let staged = fixture
+        .driver
+        .prepare_create_bundle(&request)
+        .await
+        .expect("stage current-directory rootfs");
+
+    assert_eq!(
+        staged
+            .spec()
+            .root()
+            .as_ref()
+            .expect("root configuration")
+            .path(),
+        Path::new(".")
+    );
+    assert!(staged.directory().is_dir());
+}
+
+#[tokio::test]
 async fn create_requires_dedicated_vm_and_an_exact_generation_before_handoff() {
     let fixture = Fixture::new();
     let shared_host = fixture.handoff_request_for(

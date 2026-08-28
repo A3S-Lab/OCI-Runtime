@@ -94,11 +94,13 @@ Runtime Tools 0.9.0 from exact commit
 staged Native Linux and utility-VM OCI 1.3.0 bundle configurations at MUST
 level without host-specific checks. A separate negative bundle must reject an
 escaping rootfs path. On x86_64, the exact staged runtime and Agent then start
-the nine-test pinned command-line lifecycle profile. The first `create` test
-currently retains the exact expected failing TAP signature because Runtime
-Tools' default bundle requests unsupported X86 and X32 seccomp compatibility
-architectures. The preflight must still retire its durable CLI journals and
-stop the Host Service cleanly; the other eight tests are not run or qualified.
+the nine-test pinned command-line lifecycle profile. All nine execute: seven
+pass their original TAP assertions, while `start` and `pidfile` retain two
+exact, source-audited Runtime Tools harness defects. Qualification requires the
+runtime's spec-correct state, error, cleanup, and PID-file evidence to match the
+locked signatures, all durable CLI journals to retire, and the Host Service to
+stop cleanly. Both raw TAP failures and both defect identifiers remain visible
+in the report.
 The pinned revision has no AArch64 rootfs archive, so AArch64 retains a separate
 explicit `unavailable` lifecycle report.
 
@@ -132,12 +134,13 @@ jq --exit-status \
    and .oar02_pause_resume_verified
    and .oar03_checkpoint_restore_verified
    and .upstream_bundle_validation_verified
-   and .upstream_lifecycle_validation_status == "unavailable"
+   and .upstream_lifecycle_validation_status ==
+     (if .architecture == "x86_64" then "available" else "unavailable" end)
    and .upstream_lifecycle_blocker ==
      (if .architecture == "x86_64"
-      then "unsupported-upstream-seccomp-compat-architectures"
+      then null
       else "missing-upstream-aarch64-rootfs" end)
-   and .upstream_core_lifecycle_verified == false
+   and .upstream_core_lifecycle_verified == (.architecture == "x86_64")
    and .upstream_full_lifecycle_verified == false
    and .external_tools.criu.packaged == false
    and .external_tools.criu.version == "4.2.1"
@@ -146,16 +149,18 @@ jq --exit-status \
    and .external_tools.oci_runtime_tools.commit == "8a4db579f5c88af5a0d036fad34bddc9c1f703f3"
    and .external_tools.oci_runtime_tools.runtime_spec_version == "1.3.0"
    and (.external_tools.oci_runtime_tools.sha256 | test("^[0-9a-f]{64}$"))
-   and .external_tools.oci_runtime_tools.lifecycle_preflight_architectures == ["x86_64"]
-   and .external_tools.oci_runtime_tools.lifecycle_validated_architectures == []
+   and .external_tools.oci_runtime_tools.lifecycle_preflight_architectures == []
+   and .external_tools.oci_runtime_tools.lifecycle_validated_architectures == ["x86_64"]
+   and .external_tools.oci_runtime_tools.lifecycle_upstream_harness_defects ==
+     ["runtime-tools-start-process-unset-inverted-assertion",
+      "runtime-tools-pidfile-true-kill-race"]
    and (.evidence | length == 13)' \
   a3s-oci-runtime-vX.Y.Z-linux-*/qualification/native-linux-package.json
 ```
 
 This report qualifies the packaged Native mechanism and the two supported
-bundle configurations against the official validator. Its x86_64 lifecycle
-record is a reproducible blocked preflight, not core-profile qualification. It
-does not qualify multi-architecture seccomp, inherited stdio descriptor
+bundle configurations against the official validator and the pinned x86_64
+core lifecycle profile. It does not qualify inherited stdio descriptor
 transport, terminal console sockets, `LISTEN_FDS`, the broader upstream
 lifecycle suites, AArch64 lifecycle execution, or any non-Linux platform. The
 report does not turn the `probe-only` driver into a

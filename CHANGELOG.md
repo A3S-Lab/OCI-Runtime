@@ -59,11 +59,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
   exact commit `8a4db579f5c88af5a0d036fad34bddc9c1f703f3` with Go 1.24.0 and validates
   the staged Native Linux and utility-VM OCI 1.3.0 bundles, including a
   fail-closed escaping-rootfs negative. On x86_64 it also starts the pinned
-  lifecycle profile through the staged CLI and Host Service. The exact
-  `create` preflight retains the expected failing TAP signature for Runtime
-  Tools' X86/X32 seccomp compatibility architectures, retired CLI journals,
-  and clean service shutdown; the core profile remains unqualified. AArch64
-  records the separate upstream rootfs limitation as unavailable. The report
+  lifecycle profile through the staged CLI and Host Service. All nine selected
+  tests execute: seven pass their original TAP assertions, while `start` and
+  `pidfile` are transparently retained as conformant with two exact,
+  source-audited Runtime Tools harness defects. The report requires those exact
+  defect identifiers, retired CLI journals, clean service shutdown, and a
+  qualified x86_64 core profile. AArch64 records the separate upstream rootfs
+  limitation as unavailable. The report
   binds the source commit,
   platform, driver/isolation profile, all three packaged executable digests,
   both external tool identities, and thirteen subordinate evidence records.
@@ -71,6 +73,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
   package gate does not promote Native Linux beyond `probe-only` or replace
   the remaining A3S Box, descriptor-preserving/full upstream lifecycle,
   security, or release-host gates.
+- Completed the OCI Runtime Tools x86_64 execution-compatibility slice. The
+  shared Linux executor now accepts the X86 and X32 compatibility ABIs beside
+  native x86_64, compiles ABI-scoped pure-Rust seccomp BPF with fail-closed
+  architecture dispatch, resolves legacy x86 multiplexers and x32 syscall
+  numbers, and implements OCI `MASKED_EQ` operand semantics. Relative
+  `root.path`, omitted `process`, false or omitted `noNewPrivileges`, exact
+  `execvp` argv/PATH behavior, ENOEXEC shell fallback, and the six normative
+  default devices are covered without weakening the immutable device
+  inventory or caller resource narrowing.
 - Qualified the policy-neutral OAR-01 network-enforcement boundary on rootful
   Native Linux. The driver advertises `dev.a3s.network.enforcement@1` only with
   network-device authority. A real caller-owned namespace fixture proves exact

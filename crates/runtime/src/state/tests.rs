@@ -1340,7 +1340,7 @@ async fn created_container_can_be_killed_before_start_and_force_deleted() {
 }
 
 #[tokio::test]
-async fn start_revalidates_durable_process_before_journaling() {
+async fn start_without_a_process_reaches_the_driver_before_failing() {
     const NO_PROCESS: &str = "{\"ociVersion\":\"1.3.0\",\"root\":{\"path\":\"rootfs\"}}";
 
     let temporary = tempfile::tempdir().expect("temporary directory");
@@ -1357,12 +1357,12 @@ async fn start_revalidates_durable_process_before_journaling() {
         target: ContainerTarget::exact(create.id, Generation(1)),
     };
 
-    let error = store
+    let prepared = store
         .prepare_start(&start)
         .await
-        .expect_err("start requires a durable process");
-    assert_eq!(error.code, ErrorCode::InvalidArgument);
-    assert!(!store
+        .expect("processless start must reach the execution boundary");
+    assert!(matches!(prepared, RecordOperationPreparation::Prepared(_)));
+    assert!(store
         .root()
         .join("operations")
         .join("start-without-process.json")

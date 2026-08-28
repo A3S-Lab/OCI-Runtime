@@ -571,13 +571,7 @@ fn prepare_container_init(
             )
         })?;
         let current = bundle
-            .open_relative(
-                relative,
-                libc::O_PATH,
-                true,
-                "container rootfs",
-                "run-container-init",
-            )?
+            .open_rootfs(relative, "run-container-init")?
             .ok_or_else(|| {
                 init_error(
                     ErrorCode::PermissionDenied,
@@ -641,11 +635,9 @@ fn prepare_container_init(
         ));
     }
     if pinned_bundle.is_none() {
-        let rootfs_is_in_bundle =
-            rootfs != canonical_bundle && rootfs.starts_with(&canonical_bundle);
-        if rootfs == canonical_bundle
-            || (!rootfs_is_in_bundle
-                && (rootfs_scope == RootfsScope::BundleOnly || !root_path_is_absolute))
+        let rootfs_is_in_bundle = rootfs.starts_with(&canonical_bundle);
+        if !rootfs_is_in_bundle
+            && (rootfs_scope == RootfsScope::BundleOnly || !root_path_is_absolute)
         {
             return Err(init_error(
                 ErrorCode::PermissionDenied,
@@ -913,19 +905,12 @@ fn exec_configured_process(
     })?;
     let args = cstring_vector(&plan.args, "process.args")?;
     let environment = cstring_vector(&plan.environment, "process.env")?;
-    let executable = args.first().ok_or_else(|| {
-        init_error(
+    if args.is_empty() {
+        return Err(init_error(
             ErrorCode::InvalidArgument,
             "process.args must contain an executable",
-        )
-    })?;
-    let mut arg_pointers = args.iter().map(|value| value.as_ptr()).collect::<Vec<_>>();
-    arg_pointers.push(std::ptr::null());
-    let mut environment_pointers = environment
-        .iter()
-        .map(|value| value.as_ptr())
-        .collect::<Vec<_>>();
-    environment_pointers.push(std::ptr::null());
+        ));
+    }
 
     super::scheduler::apply(plan.scheduler.as_ref())?;
     super::io_priority::apply(plan.io_priority.as_ref())?;
@@ -959,15 +944,11 @@ fn exec_configured_process(
     capabilities.apply_after_credentials(plan.uid)?;
     super::no_new_privileges::apply(plan.no_new_privileges)?;
     plan.seccomp.install()?;
-    // SAFETY: every pointer below references a live, NUL-terminated buffer.
-    unsafe {
-        libc::execve(
-            executable.as_ptr(),
-            arg_pointers.as_ptr(),
-            environment_pointers.as_ptr(),
-        );
-    }
-    Err(last_os_error("execute configured init process"))
+    let error = super::process_executable::execute(&args, &environment);
+    Err(init_error(
+        ErrorCode::Internal,
+        format!("execute configured init process failed: {error}"),
+    ))
 }
 
 fn ensure_close_on_exec(control: &UnixStream) -> Result<()> {

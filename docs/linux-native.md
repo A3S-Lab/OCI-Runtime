@@ -1212,12 +1212,14 @@ commit `8a4db579f5c88af5a0d036fad34bddc9c1f703f3` with Go 1.24.0. The root-owned
 static host tool validates the staged Native Linux and utility-VM OCI 1.3.0
 bundle configurations at MUST level and must reject an escaping rootfs path.
 On x86_64, the same exact source also supplies its `rootfs-amd64.tar.gz`,
-`runtimetest`, and nine selected lifecycle executables. The exact `create`
-preflight drives the staged CLI through its durable Host Service adapter and
-currently retains the expected failing TAP signature because the upstream
-default bundle requests unsupported X86 and X32 seccomp compatibility
-architectures. It must still retire every CLI lifecycle journal and stop the
-Host Service cleanly. The other eight tests are not run or qualified. The
+`runtimetest`, and nine selected lifecycle executables. All nine drive the
+staged CLI through its durable Host Service adapter. Seven pass their original
+TAP assertions. `start` and `pidfile` each expose one exact, source-audited
+Runtime Tools harness defect; the gate accepts them only when the runtime's
+spec-correct state transition, error, cleanup, and journal evidence matches the
+locked signatures. The result remains transparent: both raw TAP failures and
+both defect identifiers are retained, every CLI journal is retired, and the
+Host Service stops cleanly. The
 upstream revision has no AArch64 rootfs, so that package records a separate
 unavailable blocker. The compatibility lock and exact
 tool/build-manifest identities are retained; the tool and fixtures are never
@@ -1238,10 +1240,10 @@ closes the OAR-02 mechanism gate for exact operation identity, frozen/resumed
 progress, and Pause/Resume replay across two Host Service reopens per wave.
 The OAR-03 evidence proves replacement-process replay at both Restore fault
 boundaries and deterministic PID/network namespace rejection. The x86_64
-lifecycle preflight does not qualify the core profile, inherited stdio
-descriptors, terminal console sockets, `LISTEN_FDS`, broader upstream suites,
-AArch64, or other platforms. The reports are archived and later covered by the release
-checksum and signed provenance.
+report qualifies the pinned core lifecycle profile; it does not qualify
+inherited stdio descriptors, terminal console sockets, `LISTEN_FDS`, broader
+upstream suites, AArch64, or other platforms. The reports are archived and
+later covered by the release checksum and signed provenance.
 
 This closes the reproducible package-to-Native-matrix wiring. Actual tag
 artifacts still need retained runs, and A3S Box product startup and its

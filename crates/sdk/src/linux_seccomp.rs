@@ -19,7 +19,12 @@ pub const OCI_LINUX_SECCOMP_ACTIONS: &[LinuxSeccompAction] = &[
 /// An omitted architecture still selects the native architecture. The OCI
 /// configuration schema does not allow `SCMP_ARCH_NATIVE` as an explicit
 /// value, so it is not part of this advertised registry.
-pub const OCI_LINUX_SECCOMP_ARCHITECTURES: &[Arch] = &[Arch::ScmpArchAarch64, Arch::ScmpArchX86_64];
+pub const OCI_LINUX_SECCOMP_ARCHITECTURES: &[Arch] = &[
+    Arch::ScmpArchAarch64,
+    Arch::ScmpArchX86,
+    Arch::ScmpArchX86_64,
+    Arch::ScmpArchX32,
+];
 
 /// Seccomp comparison operators accepted and enforced by the shared executor.
 pub const OCI_LINUX_SECCOMP_OPERATORS: &[LinuxSeccompOperator] = &[
@@ -71,7 +76,12 @@ mod tests {
         );
         assert_registry(
             OCI_LINUX_SECCOMP_ARCHITECTURES,
-            &["SCMP_ARCH_AARCH64", "SCMP_ARCH_X86_64"],
+            &[
+                "SCMP_ARCH_AARCH64",
+                "SCMP_ARCH_X86",
+                "SCMP_ARCH_X86_64",
+                "SCMP_ARCH_X32",
+            ],
         );
         assert_registry(
             OCI_LINUX_SECCOMP_OPERATORS,

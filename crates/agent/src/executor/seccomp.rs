@@ -1,15 +1,23 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::str::FromStr;
 
 use a3s_oci_sdk::oci_spec::runtime::{
-    Arch, Linux, LinuxSeccomp, LinuxSeccompAction, LinuxSeccompArg, LinuxSeccompOperator,
+    Linux, LinuxSeccomp, LinuxSeccompAction, LinuxSeccompArg, LinuxSeccompOperator,
 };
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 use seccompiler::{
     BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
-    SeccompRule, TargetArch,
+    SeccompRule,
 };
 use serde::{Deserialize, Serialize};
+
+mod architecture;
+mod syscall;
+
+use architecture::{
+    compile_architecture_gate, installation_order, plan_architectures, scope_compiled_filter,
+    SeccompArchitecture,
+};
+use syscall::resolve as resolve_syscall;
 
 const MAX_FILTERS: usize = 32;
 const MAX_TOTAL_BPF_INSTRUCTIONS: usize = 32_768;
@@ -21,6 +29,8 @@ const MAX_SYSCALL_ARGUMENT_INDEX: usize = 5;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct SeccompPlan {
     architecture: Option<SeccompArchitecture>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    architectures: Vec<SeccompArchitecture>,
     filters: Vec<SeccompFilterPlan>,
 }
 
@@ -30,16 +40,20 @@ impl SeccompPlan {
             return Ok(Self::default());
         };
         validate_unsupported_properties(seccomp)?;
-        let architecture = plan_architecture(seccomp.architectures().as_deref())?;
+        let (architecture, architectures) = plan_architectures(seccomp.architectures().as_deref())?;
         let default_action = plan_action(
             seccomp.default_action(),
             seccomp.default_errno_ret(),
             "linux.seccomp.defaultAction",
         )?;
-        let rules = plan_rules(seccomp, architecture, &default_action)?;
-        let filters = plan_filters(default_action, &rules, architecture)?;
+        let mut filters = Vec::new();
+        for selected in installation_order(&architectures, architecture) {
+            let rules = plan_rules(seccomp, selected, &default_action)?;
+            filters.extend(plan_filters(default_action.clone(), &rules, selected)?);
+        }
         let plan = Self {
             architecture: Some(architecture),
+            architectures,
             filters,
         };
         plan.compile_filters()?;
@@ -80,16 +94,31 @@ impl SeccompPlan {
 
     #[cfg(test)]
     pub(super) fn filter_count(&self) -> usize {
-        self.filters.len()
+        usize::from(self.architecture.is_some()) + self.filters.len()
+    }
+
+    #[cfg(test)]
+    pub(super) fn architecture_count(&self) -> usize {
+        self.architecture
+            .and_then(|native| self.selected_architectures(native).ok())
+            .map_or(0, |architectures| architectures.len())
     }
 
     fn compile_filters(&self) -> Result<Vec<BpfProgram>> {
-        if self.filters.len() > MAX_FILTERS {
+        let program_count = usize::from(self.architecture.is_some())
+            .checked_add(self.filters.len())
+            .ok_or_else(|| {
+                seccomp_error(
+                    ErrorCode::ResourceExhausted,
+                    "seccomp stacked-filter count overflow",
+                )
+            })?;
+        if program_count > MAX_FILTERS {
             return Err(seccomp_error(
                 ErrorCode::ResourceExhausted,
                 format!(
                     "seccomp policy requires {} stacked filters; maximum is {MAX_FILTERS}",
-                    self.filters.len()
+                    program_count
                 ),
             ));
         }
@@ -102,83 +131,74 @@ impl SeccompPlan {
                 "disabled seccomp plan unexpectedly contains filters",
             ));
         };
+        let architectures = self.selected_architectures(architecture)?;
         let mut total_instructions = 0_usize;
-        let mut compiled = Vec::with_capacity(self.filters.len());
+        let mut compiled = Vec::with_capacity(program_count);
+        let gate = compile_architecture_gate(&architectures);
+        add_instruction_budget(&mut total_instructions, gate.len())?;
+        compiled.push(gate);
         for (index, filter) in self.filters.iter().enumerate() {
-            let program = filter.compile(architecture).map_err(|error| {
+            let filter_architecture = filter.architecture.unwrap_or(architecture);
+            if !architectures.contains(&filter_architecture) {
+                return Err(seccomp_error(
+                    ErrorCode::Internal,
+                    format!(
+                        "seccomp filter {index} targets unselected architecture {}",
+                        filter_architecture.name()
+                    ),
+                ));
+            }
+            let program = filter.compile(filter_architecture).map_err(|error| {
                 Error::new(
                     error.code,
                     format!("failed to compile seccomp filter {index}: {error}"),
                 )
                 .for_operation("plan-seccomp")
             })?;
-            total_instructions = total_instructions
-                .checked_add(program.len())
-                .and_then(|total| total.checked_add(FILTER_PATH_PENALTY))
-                .ok_or_else(|| {
-                    seccomp_error(
-                        ErrorCode::ResourceExhausted,
-                        "seccomp BPF instruction count overflow",
-                    )
-                })?;
-            if total_instructions > MAX_TOTAL_BPF_INSTRUCTIONS {
-                return Err(seccomp_error(
-                    ErrorCode::ResourceExhausted,
-                    format!(
-                        "seccomp policy requires {total_instructions} effective BPF instructions; \
-                         maximum is {MAX_TOTAL_BPF_INSTRUCTIONS}"
-                    ),
-                ));
-            }
+            add_instruction_budget(&mut total_instructions, program.len())?;
             compiled.push(program);
         }
         Ok(compiled)
     }
+
+    fn selected_architectures(
+        &self,
+        native: SeccompArchitecture,
+    ) -> Result<Vec<SeccompArchitecture>> {
+        if self.architectures.is_empty() {
+            return Ok(vec![native]);
+        }
+        let architectures = self.architectures.iter().copied().collect::<BTreeSet<_>>();
+        if !architectures.contains(&native) {
+            return Err(seccomp_error(
+                ErrorCode::Internal,
+                "seccomp architecture set omits its retained native architecture",
+            ));
+        }
+        Ok(architectures.into_iter().collect())
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum SeccompArchitecture {
-    Aarch64,
-    X86_64,
-}
-
-impl SeccompArchitecture {
-    fn native() -> Result<Self> {
-        match std::env::consts::ARCH {
-            "aarch64" => Ok(Self::Aarch64),
-            "x86_64" => Ok(Self::X86_64),
-            architecture => Err(unsupported(
-                "linux.seccomp.architectures",
-                format!("seccomp is not implemented for architecture `{architecture}`"),
-            )),
-        }
+fn add_instruction_budget(total: &mut usize, program_length: usize) -> Result<()> {
+    *total = total
+        .checked_add(program_length)
+        .and_then(|value| value.checked_add(FILTER_PATH_PENALTY))
+        .ok_or_else(|| {
+            seccomp_error(
+                ErrorCode::ResourceExhausted,
+                "seccomp BPF instruction count overflow",
+            )
+        })?;
+    if *total > MAX_TOTAL_BPF_INSTRUCTIONS {
+        return Err(seccomp_error(
+            ErrorCode::ResourceExhausted,
+            format!(
+                "seccomp policy requires {total} effective BPF instructions; maximum is \
+                 {MAX_TOTAL_BPF_INSTRUCTIONS}"
+            ),
+        ));
     }
-
-    const fn compiler_target(self) -> TargetArch {
-        match self {
-            Self::Aarch64 => TargetArch::aarch64,
-            Self::X86_64 => TargetArch::x86_64,
-        }
-    }
-
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Aarch64 => "aarch64",
-            Self::X86_64 => "x86_64",
-        }
-    }
-
-    fn syscall_number(self, name: &str) -> Option<i64> {
-        match self {
-            Self::Aarch64 => syscalls::aarch64::Sysno::from_str(name)
-                .ok()
-                .map(|syscall| i64::from(syscall.id())),
-            Self::X86_64 => syscalls::x86_64::Sysno::from_str(name)
-                .ok()
-                .map(|syscall| i64::from(syscall.id())),
-        }
-    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -275,6 +295,8 @@ impl SeccompOperatorPlan {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SeccompFilterPlan {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    architecture: Option<SeccompArchitecture>,
     mismatch_action: SeccompActionPlan,
     match_action: SeccompActionPlan,
     rules: Vec<SeccompRulePlan>,
@@ -326,12 +348,13 @@ impl SeccompFilterPlan {
                 format!("invalid seccomp filter: {error}"),
             )
         })?;
-        filter.try_into().map_err(|error| {
+        let compiled: BpfProgram = filter.try_into().map_err(|error| {
             seccomp_error(
                 ErrorCode::ResourceExhausted,
                 format!("failed to compile seccomp BPF program: {error}"),
             )
-        })
+        })?;
+        scope_compiled_filter(compiled, architecture)
     }
 }
 
@@ -353,28 +376,6 @@ fn validate_unsupported_properties(seccomp: &LinuxSeccomp) -> Result<()> {
         ));
     }
     Ok(())
-}
-
-fn plan_architecture(architectures: Option<&[Arch]>) -> Result<SeccompArchitecture> {
-    let Some(architectures) = architectures.filter(|architectures| !architectures.is_empty())
-    else {
-        return SeccompArchitecture::native();
-    };
-    if architectures.len() != 1 {
-        return Err(unsupported(
-            "linux.seccomp.architectures",
-            "the bootstrap executor currently requires exactly one seccomp architecture",
-        ));
-    }
-    match architectures[0] {
-        Arch::ScmpArchNative => SeccompArchitecture::native(),
-        Arch::ScmpArchAarch64 => Ok(SeccompArchitecture::Aarch64),
-        Arch::ScmpArchX86_64 => Ok(SeccompArchitecture::X86_64),
-        architecture => Err(unsupported(
-            "linux.seccomp.architectures[0]",
-            format!("seccomp architecture `{architecture:?}` is not implemented"),
-        )),
-    }
 }
 
 fn plan_action(
@@ -476,7 +477,8 @@ fn plan_rules(
                     "{field}.names[{name_index}] must be a non-empty syscall name without NUL bytes"
                 )));
             }
-            let Some(syscall_number) = architecture.syscall_number(name) else {
+            let targets = resolve_syscall(architecture, name);
+            if targets.is_empty() {
                 if action == SeccompActionPlan::Allow && default_action != &SeccompActionPlan::Allow
                 {
                     // libseccomp-style portable allowlists commonly contain
@@ -489,12 +491,36 @@ fn plan_rules(
                     &format!("{field}.names[{name_index}]"),
                     format!("syscall `{name}` is unavailable on {}", architecture.name()),
                 ));
-            };
-            planned.push(ActionedRule {
-                syscall_number,
-                action: action.clone(),
-                conditions: conditions.clone(),
-            });
+            }
+            if !conditions.is_empty()
+                && targets
+                    .iter()
+                    .any(|target| target.multiplexer_selector.is_some())
+            {
+                return Err(unsupported(
+                    &format!("{field}.names[{name_index}]"),
+                    format!(
+                        "conditional syscall `{name}` cannot be represented through the legacy \
+                         {} multiplexer",
+                        architecture.name()
+                    ),
+                ));
+            }
+            for target in targets {
+                let mut target_conditions = conditions.clone();
+                if let Some(selector) = target.multiplexer_selector {
+                    target_conditions.push(SeccompConditionPlan {
+                        argument_index: 0,
+                        operator: SeccompOperatorPlan::Equal,
+                        value: selector,
+                    });
+                }
+                planned.push(ActionedRule {
+                    syscall_number: target.number,
+                    action: action.clone(),
+                    conditions: target_conditions,
+                });
+            }
         }
     }
     Ok(planned)
@@ -514,55 +540,23 @@ fn plan_condition(argument: &LinuxSeccompArg, field: &str) -> Result<SeccompCond
             argument.index()
         ))
     })?;
-    let operator = match argument.op() {
-        LinuxSeccompOperator::ScmpCmpEq => {
-            reject_unused_value_two(argument.value_two(), field)?;
-            SeccompOperatorPlan::Equal
-        }
-        LinuxSeccompOperator::ScmpCmpGe => {
-            reject_unused_value_two(argument.value_two(), field)?;
-            SeccompOperatorPlan::GreaterEqual
-        }
-        LinuxSeccompOperator::ScmpCmpGt => {
-            reject_unused_value_two(argument.value_two(), field)?;
-            SeccompOperatorPlan::GreaterThan
-        }
-        LinuxSeccompOperator::ScmpCmpLe => {
-            reject_unused_value_two(argument.value_two(), field)?;
-            SeccompOperatorPlan::LessEqual
-        }
-        LinuxSeccompOperator::ScmpCmpLt => {
-            reject_unused_value_two(argument.value_two(), field)?;
-            SeccompOperatorPlan::LessThan
-        }
-        LinuxSeccompOperator::ScmpCmpMaskedEq => {
-            let mask = argument.value_two().ok_or_else(|| {
-                invalid(format!(
-                    "{field}.valueTwo is required for SCMP_CMP_MASKED_EQ"
-                ))
-            })?;
-            SeccompOperatorPlan::MaskedEqual(mask)
-        }
-        LinuxSeccompOperator::ScmpCmpNe => {
-            reject_unused_value_two(argument.value_two(), field)?;
-            SeccompOperatorPlan::NotEqual
-        }
+    let (operator, value) = match argument.op() {
+        LinuxSeccompOperator::ScmpCmpEq => (SeccompOperatorPlan::Equal, argument.value()),
+        LinuxSeccompOperator::ScmpCmpGe => (SeccompOperatorPlan::GreaterEqual, argument.value()),
+        LinuxSeccompOperator::ScmpCmpGt => (SeccompOperatorPlan::GreaterThan, argument.value()),
+        LinuxSeccompOperator::ScmpCmpLe => (SeccompOperatorPlan::LessEqual, argument.value()),
+        LinuxSeccompOperator::ScmpCmpLt => (SeccompOperatorPlan::LessThan, argument.value()),
+        LinuxSeccompOperator::ScmpCmpMaskedEq => (
+            SeccompOperatorPlan::MaskedEqual(argument.value()),
+            argument.value_two().unwrap_or(0),
+        ),
+        LinuxSeccompOperator::ScmpCmpNe => (SeccompOperatorPlan::NotEqual, argument.value()),
     };
     Ok(SeccompConditionPlan {
         argument_index,
         operator,
-        value: argument.value(),
+        value,
     })
-}
-
-fn reject_unused_value_two(value_two: Option<u64>, field: &str) -> Result<()> {
-    if value_two.is_some() {
-        Err(invalid(format!(
-            "{field}.valueTwo is valid only with SCMP_CMP_MASKED_EQ"
-        )))
-    } else {
-        Ok(())
-    }
 }
 
 fn plan_filters(
@@ -578,6 +572,7 @@ fn plan_filters(
         .collect::<BTreeSet<_>>();
     for action in actions {
         filters.push(SeccompFilterPlan {
+            architecture: Some(architecture),
             mismatch_action: SeccompActionPlan::Allow,
             match_action: action.clone(),
             rules: normalize_rules(rules.iter().filter(|rule| rule.action == action)),
@@ -585,6 +580,7 @@ fn plan_filters(
     }
     if default_action != SeccompActionPlan::Allow {
         filters.push(SeccompFilterPlan {
+            architecture: Some(architecture),
             mismatch_action: default_action.clone(),
             match_action: SeccompActionPlan::Allow,
             rules: normalize_rules(rules.iter().filter(|rule| rule.action != default_action)),
@@ -628,7 +624,8 @@ fn validate_install_order(
     }
     let bootstrap_syscalls = ["prctl", "seccomp"]
         .into_iter()
-        .filter_map(|name| architecture.syscall_number(name))
+        .flat_map(|name| resolve_syscall(architecture, name))
+        .map(|target| target.number)
         .collect::<BTreeSet<_>>();
     for (index, filter) in filters[..filters.len() - 1].iter().enumerate() {
         if filter.match_action != SeccompActionPlan::Allow

@@ -56,6 +56,7 @@ pub(super) struct PreparedProcess {
     namespace_init_pid: Option<i32>,
     pidfd: PidFd,
     process_group: ProcessGroupLease,
+    has_process: bool,
     execution_context: RetainedExecutionContext,
     capabilities: CapabilityPlan,
     seccomp: SeccompPlan,
@@ -395,6 +396,19 @@ impl PreparedProcess {
                         )
                         .await);
                     }
+                    let device_filter_activated = cgroup
+                        .as_mut()
+                        .map_or(Ok(()), CgroupHandle::activate_device_filter);
+                    if let Err(error) = device_filter_activated {
+                        return Err(cleanup_failed_create(
+                            &mut child,
+                            &mut cgroup,
+                            &plan.hooks,
+                            hook_state,
+                            error,
+                        )
+                        .await);
+                    }
                     if let Some(handle) = intel_rdt.as_mut() {
                         if let Err(error) = handle.assign(runtime_pid) {
                             return Err(cleanup_failed_create(
@@ -630,6 +644,7 @@ impl PreparedProcess {
             namespace_init_pid,
             pidfd,
             process_group,
+            has_process: plan.has_process,
             execution_context,
             capabilities: plan.capabilities,
             seccomp: plan.seccomp.clone(),
@@ -732,6 +747,27 @@ impl PreparedProcess {
     }
 
     pub(super) async fn release(&mut self) -> Result<()> {
+        if self.control.is_none() {
+            return Err(process_error(
+                ErrorCode::FailedPrecondition,
+                "container init has already crossed the start barrier",
+            ));
+        }
+        if !self.has_process {
+            drop(self.control.take());
+            let mut error = process_error(
+                ErrorCode::FailedPrecondition,
+                "config.process is required before OCI start",
+            );
+            if let Err(cleanup) = self.force_stop().await {
+                error.message = format!(
+                    "{}; failed to stop the processless created container: {cleanup}",
+                    error.message
+                );
+                error.retryable |= cleanup.retryable;
+            }
+            return Err(error);
+        }
         let control = self.control.as_mut().ok_or_else(|| {
             process_error(
                 ErrorCode::FailedPrecondition,

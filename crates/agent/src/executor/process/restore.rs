@@ -322,6 +322,20 @@ impl PreparedProcess {
                 cleanup_failed_restore(&mut child, &mut cgroup, &mut rootfs_mount, error).await,
             );
         }
+        let device_filter_activated = cgroup
+            .as_mut()
+            .ok_or_else(|| {
+                process_error(
+                    ErrorCode::Internal,
+                    "native restore lost its prepared cgroup",
+                )
+            })
+            .and_then(CgroupHandle::activate_device_filter);
+        if let Err(error) = device_filter_activated {
+            return Err(
+                cleanup_failed_restore(&mut child, &mut cgroup, &mut rootfs_mount, error).await,
+            );
+        }
         let execution_context =
             match RetainedExecutionContext::capture(&plan.namespaces, runtime_pid, original_rootfs)
                 .await
@@ -369,6 +383,7 @@ impl PreparedProcess {
             namespace_init_pid: None,
             pidfd,
             process_group,
+            has_process: plan.has_process,
             execution_context,
             capabilities: plan.capabilities,
             seccomp: plan.seccomp.clone(),

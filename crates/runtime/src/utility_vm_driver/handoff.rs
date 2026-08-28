@@ -464,9 +464,10 @@ async fn validate_portable_bundle(bundle: &OciBundle) -> Result<()> {
     })?;
     let root_path = root.path();
     if root_path.is_absolute()
-        || root_path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
+        || (root_path != Path::new(".")
+            && root_path
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_))))
     {
         return Err(handoff_error(
             ErrorCode::InvalidArgument,
@@ -481,7 +482,7 @@ async fn validate_portable_bundle(bundle: &OciBundle) -> Result<()> {
         "utility-VM portable bundle rootfs",
     )
     .await?;
-    if rootfs == bundle.directory() || !rootfs.starts_with(bundle.directory()) {
+    if !rootfs.starts_with(bundle.directory()) {
         return Err(handoff_error(
             ErrorCode::FailedPrecondition,
             format!(
