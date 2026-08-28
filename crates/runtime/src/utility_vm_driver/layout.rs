@@ -654,8 +654,11 @@ mod tests {
     #[tokio::test]
     async fn directory_enumeration_accepts_removal_after_identity_check() {
         let temporary = tempfile::tempdir().expect("temporary directory");
+        let temporary_root = tokio::fs::canonicalize(temporary.path())
+            .await
+            .expect("canonical temporary directory");
         let directory = ensure_private_directory(
-            temporary.path().join("concurrently-removed"),
+            temporary_root.join("concurrently-removed"),
             "concurrent cleanup fixture",
         )
         .await
