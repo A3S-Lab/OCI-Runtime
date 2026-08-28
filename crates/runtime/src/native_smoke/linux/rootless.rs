@@ -805,8 +805,11 @@ async fn exercise_cgroup_control(
         return Err("rootless cgroup update was not exact or replay-safe".into());
     }
     if device_policy {
-        let readonly_denied =
-            run_device_write_probe(client, target, nonce, "readonly", false).await?;
+        // The fixed rootless profile contains only OCI's normative default
+        // devices. A live resource rule may narrow caller-declared devices,
+        // but it must not remove write access from `/dev/null`.
+        let default_preserved_after_narrowing =
+            run_device_write_probe(client, target, nonce, "default-preserved", true).await?;
         let invalid: LinuxResources = serde_json::from_value(serde_json::json!({
             "devices": [
                 {"allow": false, "access": "rwm"},
@@ -824,8 +827,8 @@ async fn exercise_cgroup_control(
         )
         .await;
         let invalid_rejected = matches!(invalid_result, Ok(Err(_)));
-        let old_policy_retained =
-            run_device_write_probe(client, target, nonce, "rollback", false).await?;
+        let default_preserved_after_invalid =
+            run_device_write_probe(client, target, nonce, "invalid-rollback", true).await?;
 
         let cleared: LinuxResources = serde_json::from_value(serde_json::json!({"devices": []}))
             .map_err(|error| format!("failed to construct cleared device update: {error}"))?;
@@ -864,9 +867,9 @@ async fn exercise_cgroup_control(
         .await?;
         let restored_allows_write =
             run_device_write_probe(client, target, nonce, "restored", true).await?;
-        report.device_policy_updates_verified = readonly_denied
+        report.device_policy_updates_verified = default_preserved_after_narrowing
             && invalid_rejected
-            && old_policy_retained
+            && default_preserved_after_invalid
             && cleared_allows_declared_write
             && restored_allows_write;
         if !report.device_policy_updates_verified {
