@@ -573,23 +573,10 @@ pub(super) async fn remove_directory_if_empty(path: &Path) -> Result<()> {
             ),
         ));
     }
-    let mut entries = tokio::fs::read_dir(path).await.map_err(|error| {
-        path_error(
-            ErrorCode::Internal,
-            format!("failed to enumerate {}: {error}", path.display()),
-        )
-    })?;
-    if entries
-        .next_entry()
-        .await
-        .map_err(|error| {
-            path_error(
-                ErrorCode::Internal,
-                format!("failed to enumerate {}: {error}", path.display()),
-            )
-        })?
-        .is_none()
-    {
+    let Some(is_empty) = directory_is_empty_if_present(path).await? else {
+        return Ok(());
+    };
+    if is_empty {
         match tokio::fs::remove_dir(path).await {
             Ok(()) => {}
             Err(error)
@@ -609,6 +596,27 @@ pub(super) async fn remove_directory_if_empty(path: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+async fn directory_is_empty_if_present(path: &Path) -> Result<Option<bool>> {
+    let mut entries = match tokio::fs::read_dir(path).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(path_error(
+                ErrorCode::Internal,
+                format!("failed to enumerate {}: {error}", path.display()),
+            ));
+        }
+    };
+    match entries.next_entry().await {
+        Ok(entry) => Ok(Some(entry.is_none())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(path_error(
+            ErrorCode::Internal,
+            format!("failed to enumerate {}: {error}", path.display()),
+        )),
+    }
 }
 
 async fn sha256_path(path: &Path) -> Result<String> {
@@ -637,4 +645,34 @@ async fn sha256_path(path: &Path) -> Result<String> {
 
 fn path_error(code: ErrorCode, message: impl Into<String>) -> Error {
     Error::new(code, message).for_operation("open-utility-vm-runtime-driver")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn directory_enumeration_accepts_removal_after_identity_check() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let directory = ensure_private_directory(
+            temporary.path().join("concurrently-removed"),
+            "concurrent cleanup fixture",
+        )
+        .await
+        .expect("create private cleanup directory");
+        let metadata = path_metadata(&directory)
+            .await
+            .expect("inspect cleanup directory")
+            .expect("cleanup directory must exist before the race");
+        assert!(is_private_directory(&metadata));
+
+        tokio::fs::remove_dir(&directory)
+            .await
+            .expect("simulate concurrent parent cleanup");
+
+        assert!(directory_is_empty_if_present(&directory)
+            .await
+            .expect("concurrent removal is idempotent")
+            .is_none());
+    }
 }

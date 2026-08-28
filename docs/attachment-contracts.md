@@ -303,7 +303,9 @@ identical binding. A terminal member Create failure does not reap an occupied
 shared Guest. Driver shutdown deduplicates members to one owner close and
 leaves exact stopped tombstones for durable cleanup. Owner-death reports are
 named by session incarnation so every member can recover its own retained
-record without pretending the first container owns the VM.
+record without pretending the first container owns the VM. Distinct session
+deletes may proceed concurrently; removal of their shared private namespace is
+idempotent when another exact cleanup wins the final empty-directory race.
 
 No production utility-VM driver advertises v4 yet. The common mechanism and
 deterministic driver tests are present, while cumulative v2/v3 advertisement

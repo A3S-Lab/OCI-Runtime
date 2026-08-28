@@ -312,7 +312,8 @@ same-trust-domain retain mode. Protocol 7 and durable `ContainerRecord`
 evidence fence downgrade, restart, and operation-ID reuse. The shared HVF/KVM
 driver core implements session-scoped shares and ownership markers, serialized
 admission, capacity and generation fencing, both reset modes, member-local
-failure cleanup, session recovery reports, and one-owner shutdown. Production
+failure cleanup, race-safe parallel session reclamation, session recovery
+reports, and one-owner shutdown. Production
 HVF, KVM, and WHPX registrations continue to advertise only their qualified
 attachment profiles until the corresponding real-host restart, cleanup, and
 soak evidence is retained and their cumulative storage/network transports are
