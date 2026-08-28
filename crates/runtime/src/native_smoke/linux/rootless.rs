@@ -29,7 +29,7 @@ use config::{
     validate_rootfs_ownership, MappingPlan,
 };
 
-const CALL_TIMEOUT: Duration = Duration::from_secs(15);
+const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const MARKER_NAME: &str = ".a3s-oci-rootless-smoke";

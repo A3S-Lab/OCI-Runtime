@@ -48,9 +48,26 @@ const PINNED_RELEASE_ACTIONS: [(&str, usize); 8] = [
     (RELEASE_ACTION, 1),
 ];
 
+fn normalize_newlines(document: &str) -> String {
+    document.lines().collect::<Vec<_>>().join("\n")
+}
+
+fn normalized_release_workflow() -> String {
+    normalize_newlines(RELEASE_WORKFLOW)
+}
+
+#[test]
+fn release_contract_documents_are_newline_independent() {
+    assert_eq!(
+        normalize_newlines("jobs:\r\n  publish:\r\n"),
+        "jobs:\n  publish:"
+    );
+}
+
 #[test]
 fn every_external_release_action_is_pinned_to_an_immutable_commit() {
-    let action_lines = RELEASE_WORKFLOW
+    let release_workflow = normalized_release_workflow();
+    let action_lines = release_workflow
         .lines()
         .filter(|line| line.contains("uses: "))
         .collect::<Vec<_>>();
@@ -77,7 +94,7 @@ fn every_external_release_action_is_pinned_to_an_immutable_commit() {
 
     for (action, expected_count) in PINNED_RELEASE_ACTIONS {
         assert_eq!(
-            RELEASE_WORKFLOW.matches(action).count(),
+            release_workflow.matches(action).count(),
             expected_count,
             "unexpected release action revision for {action}"
         );
@@ -86,7 +103,8 @@ fn every_external_release_action_is_pinned_to_an_immutable_commit() {
 
 #[test]
 fn release_attests_every_checksum_bound_archive_before_publishing() {
-    let (workflow_header, publish_job) = RELEASE_WORKFLOW
+    let release_workflow = normalized_release_workflow();
+    let (workflow_header, publish_job) = release_workflow
         .split_once("\n  publish:\n")
         .expect("release workflow must retain one publish job");
 
@@ -94,10 +112,10 @@ fn release_attests_every_checksum_bound_archive_before_publishing() {
     assert!(publish_job.contains(
         "permissions:\n      contents: write\n      id-token: write\n      attestations: write\n      artifact-metadata: write"
     ));
-    assert_eq!(RELEASE_WORKFLOW.matches("id-token: write").count(), 1);
-    assert_eq!(RELEASE_WORKFLOW.matches("attestations: write").count(), 1);
+    assert_eq!(release_workflow.matches("id-token: write").count(), 1);
+    assert_eq!(release_workflow.matches("attestations: write").count(), 1);
     assert_eq!(
-        RELEASE_WORKFLOW.matches("artifact-metadata: write").count(),
+        release_workflow.matches("artifact-metadata: write").count(),
         1
     );
 
@@ -125,13 +143,13 @@ fn release_attests_every_checksum_bound_archive_before_publishing() {
     assert!(bundle_position < release_position);
 
     assert_eq!(
-        RELEASE_WORKFLOW
+        release_workflow
             .matches("cp docs/release-verification.md \"$package/docs/\"")
             .count(),
         2
     );
     assert_eq!(
-        RELEASE_WORKFLOW
+        release_workflow
             .matches("cp docs/checkpoint-contract.md \"$package/docs/\"")
             .count(),
         1
@@ -158,12 +176,13 @@ fn packaged_verification_guide_enforces_identity_without_promoting_capability() 
 
 #[test]
 fn linux_release_archives_retain_exact_package_qualification() {
+    let release_workflow = normalized_release_workflow();
     let qualification = "bash .github/scripts/native-linux-package-smoke.sh \"$package\"";
-    assert_eq!(RELEASE_WORKFLOW.matches(qualification).count(), 1);
-    let qualification_position = RELEASE_WORKFLOW
+    assert_eq!(release_workflow.matches(qualification).count(), 1);
+    let qualification_position = release_workflow
         .find(qualification)
         .expect("Linux package qualification must be present");
-    let archive_position = RELEASE_WORKFLOW
+    let archive_position = release_workflow
         .find("tar -czf \"${package}.tar.gz\" \"$package\"")
         .expect("host package archive must be created");
     assert!(qualification_position < archive_position);
@@ -188,22 +207,22 @@ fn linux_release_archives_retain_exact_package_qualification() {
             "Native package qualification lost {required}"
         );
     }
-    assert!(RELEASE_WORKFLOW.contains(
+    assert!(release_workflow.contains(
         "bash .github/scripts/build-pinned-criu.sh \\\n            /usr/local/lib/a3s-oci-tools/criu-4.2.1"
     ));
-    assert!(RELEASE_WORKFLOW.contains(
+    assert!(release_workflow.contains(
         "bash .github/scripts/build-pinned-runtime-tools.sh \\\n            /usr/local/lib/a3s-oci-tools/runtime-tools-8a4db579f5c88af5a0d036fad34bddc9c1f703f3"
     ));
-    assert!(RELEASE_WORKFLOW.contains(
+    assert!(release_workflow.contains(
         "A3S_OCI_UPSTREAM_RUNTIME_TOOL=/usr/local/lib/a3s-oci-tools/runtime-tools-8a4db579f5c88af5a0d036fad34bddc9c1f703f3/oci-runtime-tool"
     ));
-    assert!(RELEASE_WORKFLOW.contains(
+    assert!(release_workflow.contains(
         "A3S_OCI_UPSTREAM_RUNTIME_TOOL_MANIFEST=/usr/local/lib/a3s-oci-tools/runtime-tools-8a4db579f5c88af5a0d036fad34bddc9c1f703f3/build.json"
     ));
     assert!(
-        RELEASE_WORKFLOW.contains("A3S_OCI_CRIU_BINARY=/usr/local/lib/a3s-oci-tools/criu-4.2.1")
+        release_workflow.contains("A3S_OCI_CRIU_BINARY=/usr/local/lib/a3s-oci-tools/criu-4.2.1")
     );
-    assert!(RELEASE_WORKFLOW.contains("A3S_OCI_GIT_REVISION=\"$GITHUB_SHA\""));
+    assert!(release_workflow.contains("A3S_OCI_GIT_REVISION=\"$GITHUB_SHA\""));
 }
 
 #[test]
