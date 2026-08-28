@@ -395,7 +395,7 @@ reopen the same durable roots in both cases, recreate a live paused process,
 return the exact replayed response, and leave no restore journal, staging,
 executor, or session residue. Companion reports prove that private PID and
 configured network namespaces are rejected deterministically without residue.
-This is a constrained mechanism gate. Package qualification v5 runs it with
+This is a constrained mechanism gate. Package qualification v6 runs it with
 the staged release CLI and Agent and binds all three reports to the exact
 runtime and host-provided CRIU digests. Broader profiles, cross-driver and
 retained tagged multi-architecture runs, and production qualification remain
@@ -1211,26 +1211,37 @@ The workflow separately builds official OCI Runtime Tools 0.9.0 at exact
 commit `8a4db579f5c88af5a0d036fad34bddc9c1f703f3` with Go 1.24.0. The root-owned,
 static host tool validates the staged Native Linux and utility-VM OCI 1.3.0
 bundle configurations at MUST level and must reject an escaping rootfs path.
-The compatibility lock and exact tool/build-manifest identities are retained;
-the tool itself is never copied into the archive.
+On x86_64, the same exact source also supplies its `rootfs-amd64.tar.gz`,
+`runtimetest`, and nine selected lifecycle executables. The exact `create`
+preflight drives the staged CLI through its durable Host Service adapter and
+currently retains the expected failing TAP signature because the upstream
+default bundle requests unsupported X86 and X32 seccomp compatibility
+architectures. It must still retire every CLI lifecycle journal and stop the
+Host Service cleanly. The other eight tests are not run or qualified. The
+upstream revision has no AArch64 rootfs, so that package records a separate
+unavailable blocker. The compatibility lock and exact
+tool/build-manifest identities are retained; the tool and fixtures are never
+copied into the archive.
 
 The gate removes `/dev/kvm` before the lifecycle dispatch and retains
-`a3s.oci.native-linux-package-qualification.v5` in
+`a3s.oci.native-linux-package-qualification.v6` in
 `qualification/native-linux-package.json`. That report binds the source
 commit, workflow run, host architecture and kernel, driver, isolation class,
 profile, runtime version, and exact SHA-256/size identity of all three package
-executables. It also SHA-256-binds twelve subordinate reports covering
+executables. It also SHA-256-binds thirteen subordinate reports covering
 Features, the bounded soak, rootful and rootless recovery, Hook owner-death
 recovery, rootless device policy, OAR-01 network enforcement, the KVM-absence
-boundary, the three OAR-03 checkpoint/restore results, and official upstream
-bundle validation. Its soak evidence
+boundary, the three OAR-03 checkpoint/restore results, official upstream
+bundle validation, and the architecture-specific upstream lifecycle result.
+Its soak evidence
 closes the OAR-02 mechanism gate for exact operation identity, frozen/resumed
 progress, and Pause/Resume replay across two Host Service reopens per wave.
 The OAR-03 evidence proves replacement-process replay at both Restore fault
-boundaries and deterministic PID/network namespace rejection. Bundle
-validation does not qualify the still-open OCI command-line lifecycle adapter
-or every-platform exact-package lifecycle suite. The reports are archived and
-later covered by the release checksum and signed provenance.
+boundaries and deterministic PID/network namespace rejection. The x86_64
+lifecycle preflight does not qualify the core profile, inherited stdio
+descriptors, terminal console sockets, `LISTEN_FDS`, broader upstream suites,
+AArch64, or other platforms. The reports are archived and later covered by the release
+checksum and signed provenance.
 
 This closes the reproducible package-to-Native-matrix wiring. Actual tag
 artifacts still need retained runs, and A3S Box product startup and its

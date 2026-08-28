@@ -80,7 +80,7 @@ for the intended host and integration.
 
 Each Linux host archive contains
 `qualification/native-linux-package.json` with schema
-`a3s.oci.native-linux-package-qualification.v5`. The tag workflow creates this
+`a3s.oci.native-linux-package-qualification.v6`. The tag workflow creates this
 report before compression by running the staged musl CLI and Agent, not Cargo
 development binaries. The gate verifies the package layout and all three
 static ELF executables, removes `/dev/kvm` across the lifecycle portion, and
@@ -93,7 +93,14 @@ Runtime Tools 0.9.0 from exact commit
 `8a4db579f5c88af5a0d036fad34bddc9c1f703f3` with Go 1.24.0 and validates the
 staged Native Linux and utility-VM OCI 1.3.0 bundle configurations at MUST
 level without host-specific checks. A separate negative bundle must reject an
-escaping rootfs path.
+escaping rootfs path. On x86_64, the exact staged runtime and Agent then start
+the nine-test pinned command-line lifecycle profile. The first `create` test
+currently retains the exact expected failing TAP signature because Runtime
+Tools' default bundle requests unsupported X86 and X32 seccomp compatibility
+architectures. The preflight must still retire its durable CLI journals and
+stop the Host Service cleanly; the other eight tests are not run or qualified.
+The pinned revision has no AArch64 rootfs archive, so AArch64 retains a separate
+explicit `unavailable` lifecycle report.
 
 The report binds the source commit, workflow run, Linux architecture and
 kernel, `native-linux` driver, `shared-host-kernel` isolation class, exact test
@@ -101,8 +108,9 @@ profile, runtime version, and SHA-256 digest and size of the CLI, Agent, and
 containerd shim. Its `evidence` array binds the retained Features, soak,
 rootful recovery, Hook recovery, rootless recovery, rootless device-policy,
 OAR-01 network-enforcement, KVM-absence, positive checkpoint/restore,
-private-PID-namespace rejection, configured-network-namespace rejection, and
-official upstream bundle-validation records. The `external_tools.criu` entry
+private-PID-namespace rejection, configured-network-namespace rejection,
+official upstream bundle-validation, and upstream lifecycle records. The
+`external_tools.criu` entry
 binds the exact version, Git ID, SHA-256 digest, and size. The
 `external_tools.oci_runtime_tools` entry binds the exact upstream commit,
 version, Runtime Spec version, Go version, build-manifest digest, executable
@@ -110,13 +118,13 @@ digest, and size. Both tools are explicitly recorded as not packaged. Soak
 schema v2 retains every exact Pause and Resume operation ID, both post-reopen
 response replays, and the frozen and resumed workload counters for all 100
 lifecycles. Before binding their sizes and digests, the package gate rejects
-links and non-regular evidence entries and normalizes all twelve retained
+links and non-regular evidence entries and normalizes all thirteen retained
 records to mode `0644`, so an unprivileged archive consumer can verify them.
 After verifying the outer archive provenance, inspect the package report with:
 
 ```bash
 jq --exit-status \
-  '.schema_version == "a3s.oci.native-linux-package-qualification.v5"
+  '.schema_version == "a3s.oci.native-linux-package-qualification.v6"
    and .status == "available"
    and .static_elf_verified
    and .kvm_absent_before_lifecycle
@@ -124,6 +132,13 @@ jq --exit-status \
    and .oar02_pause_resume_verified
    and .oar03_checkpoint_restore_verified
    and .upstream_bundle_validation_verified
+   and .upstream_lifecycle_validation_status == "unavailable"
+   and .upstream_lifecycle_blocker ==
+     (if .architecture == "x86_64"
+      then "unsupported-upstream-seccomp-compat-architectures"
+      else "missing-upstream-aarch64-rootfs" end)
+   and .upstream_core_lifecycle_verified == false
+   and .upstream_full_lifecycle_verified == false
    and .external_tools.criu.packaged == false
    and .external_tools.criu.version == "4.2.1"
    and (.external_tools.criu.sha256 | test("^[0-9a-f]{64}$"))
@@ -131,22 +146,26 @@ jq --exit-status \
    and .external_tools.oci_runtime_tools.commit == "8a4db579f5c88af5a0d036fad34bddc9c1f703f3"
    and .external_tools.oci_runtime_tools.runtime_spec_version == "1.3.0"
    and (.external_tools.oci_runtime_tools.sha256 | test("^[0-9a-f]{64}$"))
-   and (.evidence | length == 12)' \
+   and .external_tools.oci_runtime_tools.lifecycle_preflight_architectures == ["x86_64"]
+   and .external_tools.oci_runtime_tools.lifecycle_validated_architectures == []
+   and (.evidence | length == 13)' \
   a3s-oci-runtime-vX.Y.Z-linux-*/qualification/native-linux-package.json
 ```
 
 This report qualifies the packaged Native mechanism and the two supported
-bundle configurations against the official validator only. Runtime Tools'
-lifecycle suite requires the OCI Runtime Command Line Interface; the SDK-only
-lifecycle adapter and every-platform exact-package lifecycle runs remain open.
-The report does not turn the `probe-only` driver into a supported capability or
-substitute the separate A3S Box consumer, security, upgrade, rollback, and
-long-running release gates.
+bundle configurations against the official validator. Its x86_64 lifecycle
+record is a reproducible blocked preflight, not core-profile qualification. It
+does not qualify multi-architecture seccomp, inherited stdio descriptor
+transport, terminal console sockets, `LISTEN_FDS`, the broader upstream
+lifecycle suites, AArch64 lifecycle execution, or any non-Linux platform. The
+report does not turn the `probe-only` driver into a
+supported capability or substitute the separate A3S Box consumer, security,
+upgrade, rollback, and long-running release gates.
 
 ## Native Linux CRIU checkpoint qualification
 
 CRIU is host-provided and is not bundled into the Runtime archive. Package
-qualification v5 builds the pinned upstream source into
+qualification v6 builds the pinned upstream source into
 `/usr/local/lib/a3s-oci-tools/criu-4.2.1`, runs the rootful gate, and binds the
 exact CRIU, CLI, Agent, source commit, driver-build digest, and resulting
 immutable artifact. The same gate can be run independently with:
@@ -177,7 +196,7 @@ configured-network-namespace rejections. Default Features must still omit
 Checkpoint and Restore, while the explicit CRIU-qualified driver advertises
 both operations.
 
-Package qualification v5 retains these three reports as evidence entries,
+Package qualification v6 retains these three reports as evidence entries,
 requires their embedded `checkpoint_source_revision` to equal the outer
 `source_commit`, requires one exact driver-build digest across all three,
 separately binds the outer executable, and requires every CRIU digest to match

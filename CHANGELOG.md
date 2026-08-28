@@ -52,33 +52,39 @@ All notable changes to A3S OCI Runtime are documented in this file.
   OCI, security, upgrade, rollback, and soak qualification.
 - Added exact staged-package qualification for tagged Linux x86_64 and arm64
   archives. The static musl CLI and Agent run the complete Native Linux matrix
-  with `/dev/kvm` removed before compression. Package schema v5 additionally
+  with `/dev/kvm` removed before compression. Package schema v6 additionally
   builds CRIU v4.2.1 from pinned upstream commit
   `9539417f3e3cfa4eb84c319cd71f4d52f1f08645` and requires the three-report
   OAR-03 checkpoint/restore matrix. It also builds OCI Runtime Tools 0.9.0 from
   exact commit `8a4db579f5c88af5a0d036fad34bddc9c1f703f3` with Go 1.24.0 and validates
   the staged Native Linux and utility-VM OCI 1.3.0 bundles, including a
-  fail-closed escaping-rootfs negative. The report binds the source commit,
+  fail-closed escaping-rootfs negative. On x86_64 it also starts the pinned
+  lifecycle profile through the staged CLI and Host Service. The exact
+  `create` preflight retains the expected failing TAP signature for Runtime
+  Tools' X86/X32 seccomp compatibility architectures, retired CLI journals,
+  and clean service shutdown; the core profile remains unqualified. AArch64
+  records the separate upstream rootfs limitation as unavailable. The report
+  binds the source commit,
   platform, driver/isolation profile, all three packaged executable digests,
-  both external tool identities, and twelve subordinate evidence records.
+  both external tool identities, and thirteen subordinate evidence records.
   CRIU and Runtime Tools remain host-provided and outside the archive. The
   package gate does not promote Native Linux beyond `probe-only` or replace
-  the remaining A3S Box, upstream lifecycle CLI, security, or release-host
-  gates.
+  the remaining A3S Box, descriptor-preserving/full upstream lifecycle,
+  security, or release-host gates.
 - Qualified the policy-neutral OAR-01 network-enforcement boundary on rootful
   Native Linux. The driver advertises `dev.a3s.network.enforcement@1` only with
   network-device authority. A real caller-owned namespace fixture proves exact
   interface attachment, redirect and rejection behavior, live Host reopen with
   generation/PID/opaque-evidence replay, and namespace/interface/mechanism
-  preservation after Delete. Package qualification v5 retains this among its
-  twelve digest-bound evidence reports; rootless Native and VM drivers remain
+  preservation after Delete. Package qualification v6 retains this among its
+  thirteen digest-bound evidence reports; rootless Native and VM drivers remain
   unadvertised.
 - Qualified the policy-neutral OAR-02 pause/resume mechanism on rootful Native
   Linux. Soak schema v2 retains every exact generation and caller operation ID,
   proves atomic workload counters remain frozen across Pause and a Host Service
   reopen, exactly replays the committed Pause response, then proves progress
   resumes and exactly replays Resume after a second reopen. Package
-  qualification v5 binds all 100 per-generation records from the 25-by-4 soak
+  qualification v6 binds all 100 per-generation records from the 25-by-4 soak
   to the staged static runtime and Agent without assigning idle or wake policy
   to OCI Runtime.
 - Added a canonical machine-readable containerd runtime-v2 compatibility

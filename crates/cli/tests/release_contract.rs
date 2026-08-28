@@ -12,6 +12,8 @@ const BUILD_PINNED_RUNTIME_TOOLS: &str =
     include_str!("../../../.github/scripts/build-pinned-runtime-tools.sh");
 const UPSTREAM_BUNDLE_VALIDATION: &str =
     include_str!("../../../.github/scripts/upstream-oci-bundle-validation.sh");
+const UPSTREAM_LIFECYCLE_VALIDATION: &str =
+    include_str!("../../../.github/scripts/upstream-oci-lifecycle-validation.sh");
 const UPSTREAM_RUNTIME_TOOLS_LOCK: &str =
     include_str!("../../../compat/upstream-runtime-tools.json");
 
@@ -188,8 +190,8 @@ fn linux_release_archives_retain_exact_package_qualification() {
     assert!(qualification_position < archive_position);
 
     for required in [
-        "a3s.oci.native-linux-package-qualification.v5",
-        "full-sdk-oar01-oar02-oar03-upstream-bundles-without-kvm-v5",
+        "a3s.oci.native-linux-package-qualification.v6",
+        "full-sdk-oar01-oar02-oar03-upstream-lifecycle-preflight-without-kvm-v6",
         "A3S_OCI_NATIVE_RUNTIME_BINARY",
         "A3S_OCI_NATIVE_AGENT_BINARY",
         "A3S_OCI_NATIVE_NETWORK_ENFORCEMENT_REPORT",
@@ -201,6 +203,8 @@ fn linux_release_archives_retain_exact_package_qualification() {
         "containerd-shim-a3s-oci-v2",
         "upstream_bundle_validation_verified",
         "a3s.oci.upstream-bundle-validation.v1",
+        "upstream_core_lifecycle_verified",
+        "a3s.oci.upstream-lifecycle-validation.v1",
     ] {
         assert!(
             NATIVE_LINUX_PACKAGE_SMOKE.contains(required),
@@ -240,7 +244,7 @@ fn native_package_qualification_retains_oar01_real_host_evidence() {
             "Native OAR-01 qualification lost {required}"
         );
     }
-    assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("and (.evidence | length == 12)"));
+    assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("and (.evidence | length == 13)"));
 }
 
 #[test]
@@ -253,7 +257,15 @@ fn native_package_qualification_pins_upstream_oci_bundle_validation() {
         "\"go_version\": \"go1.24.0\"",
         "\"buildvcs\": false",
         "\"static_elf\": true",
-        "\"lifecycle_validation\": \"not-integrated\"",
+        "\"lifecycle_validation\": \"native-linux-core-preflight-v1\"",
+        "\"validated_architectures\":",
+        "\"preflight_architectures\":",
+        "\"unsupported-upstream-seccomp-compat-architectures\"",
+        "\"missing-upstream-aarch64-rootfs\"",
+        "\"stdio-descriptor-transport\"",
+        "\"terminal-console-socket\"",
+        "\"listen-fds\"",
+        "\"aarch64-upstream-rootfs\"",
     ] {
         assert!(
             UPSTREAM_RUNTIME_TOOLS_LOCK.contains(required),
@@ -264,7 +276,9 @@ fn native_package_qualification_pins_upstream_oci_bundle_validation() {
         "CGO_ENABLED=0 GOFLAGS=-mod=readonly",
         "-trimpath -buildvcs=false",
         "git -C \"$source_directory\" diff --exit-code",
-        "a3s.oci.upstream-runtime-tools-build.v1",
+        "a3s.oci.upstream-runtime-tools-build.v2",
+        "tool runtimetest \"${validation_targets[@]}\"",
+        "rootfs-amd64.tar.gz",
         "expected_destination=\"/usr/local/lib/a3s-oci-tools/runtime-tools-$upstream_commit\"",
         "install -m 0755 -o root -g root",
     ] {
@@ -280,6 +294,7 @@ fn native_package_qualification_pins_upstream_oci_bundle_validation() {
         "native-linux=fixtures/native-linux/config.json",
         "utility-vm=fixtures/utility-vm/config.json",
         "negative_escape_rejected",
+        "lifecycle_cli_adapter_integrated: true",
         "lifecycle_cli_adapter_qualified: false",
     ] {
         assert!(
@@ -299,6 +314,55 @@ fn native_package_qualification_pins_upstream_oci_bundle_validation() {
         .contains("Packaged Runtime Tools lock differs from the qualification source lock"));
     assert!(!UPSTREAM_BUNDLE_VALIDATION.contains("8a4db579f5c88af5a0d036fad34bddc9c1f703f3"));
     assert!(!NATIVE_LINUX_PACKAGE_SMOKE.contains("8a4db579f5c88af5a0d036fad34bddc9c1f703f3"));
+}
+
+#[test]
+fn native_package_qualification_retains_the_pinned_upstream_lifecycle_preflight() {
+    for required in [
+        "a3s.oci.upstream-lifecycle-validation.v1",
+        "native-linux-core-v1",
+        "RUNTIME=\"$runtime_binary\"",
+        "A3S_OCI_RUNTIME_ENDPOINT=\"$socket_path\"",
+        "A3S_OCI_CLI_STATE_ROOT=\"$adapter_root\"",
+        "A3S_OCI_CLI_ISOLATION=shared-host-kernel",
+        "TAP version 13",
+        "unsupported-upstream-seccomp-compat-architectures",
+        "seccomp architecture ScmpArchX86 is not advertised",
+        "result: \"blocked\"",
+        "all_selected_passed: false",
+        "all_lifecycles_retired: true",
+        "service_shutdown_clean: true",
+        "core_lifecycle_qualified: false",
+        "full_lifecycle_qualified: false",
+        "the pinned upstream source has no aarch64 lifecycle rootfs",
+    ] {
+        assert!(
+            UPSTREAM_LIFECYCLE_VALIDATION.contains(required),
+            "Upstream lifecycle gate lost {required}"
+        );
+    }
+    for test in [
+        "create",
+        "state",
+        "start",
+        "kill",
+        "killsig",
+        "kill_no_effect",
+        "delete",
+        "pidfile",
+        "config_updates_without_affect",
+    ] {
+        assert!(
+            UPSTREAM_RUNTIME_TOOLS_LOCK.contains(&format!("\"{test}\"")),
+            "Upstream core lifecycle lock lost {test}"
+        );
+    }
+    assert!(NATIVE_LINUX_PACKAGE_SMOKE
+        .contains("bash .github/scripts/upstream-oci-lifecycle-validation.sh"));
+    assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("upstream_lifecycle_status=unavailable"));
+    assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("upstream_core_lifecycle_verified=false"));
+    assert!(!NATIVE_LINUX_PACKAGE_SMOKE.contains("upstream_core_lifecycle_verified=true"));
+    assert!(!UPSTREAM_LIFECYCLE_VALIDATION.contains("8a4db579f5c88af5a0d036fad34bddc9c1f703f3"));
 }
 
 #[test]

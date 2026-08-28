@@ -17,6 +17,34 @@
   "upstream_interface": "oci-runtime-command-line-interface",
   "integration": {
     "bundle_validation": "native-linux-package",
-    "lifecycle_validation": "not-integrated"
+    "lifecycle_validation": "native-linux-core-preflight-v1"
+  },
+  "lifecycle": {
+    "profile": "native-linux-core-v1",
+    "validated_architectures": [],
+    "preflight_architectures": [
+      "x86_64"
+    ],
+    "blockers": {
+      "x86_64": "unsupported-upstream-seccomp-compat-architectures",
+      "aarch64": "missing-upstream-aarch64-rootfs"
+    },
+    "tests": [
+      "create",
+      "state",
+      "start",
+      "kill",
+      "killsig",
+      "kill_no_effect",
+      "delete",
+      "pidfile",
+      "config_updates_without_affect"
+    ],
+    "limitations": [
+      "stdio-descriptor-transport",
+      "terminal-console-socket",
+      "listen-fds",
+      "aarch64-upstream-rootfs"
+    ]
   }
 }

@@ -15,6 +15,7 @@ use crate::linux_kvm_service;
 use crate::macos_hvf_service;
 #[cfg(target_os = "linux")]
 use crate::native_service;
+use crate::oci_cli;
 use crate::reopen_replacement;
 use crate::{write_json, Cli, CliError, Command};
 
@@ -57,6 +58,40 @@ fn dispatch(
             let client = RuntimeClient::new(a3s_oci_runtime::HostRuntimeService::new());
             let info = Box::pin(client.features()).await?;
             write_json(&info.drivers)?;
+            Ok(ExitCode::SUCCESS)
+        }),
+        Command::Create {
+            bundle,
+            pid_file,
+            console_socket,
+            id,
+        } => command_future!({
+            oci_cli::create(id, bundle, pid_file, console_socket).await?;
+            Ok(ExitCode::SUCCESS)
+        }),
+        Command::State { id } => command_future!({
+            let state = oci_cli::state(id).await?;
+            write_json(&state)?;
+            Ok(ExitCode::SUCCESS)
+        }),
+        Command::Start { id } => command_future!({
+            oci_cli::start(id).await?;
+            Ok(ExitCode::SUCCESS)
+        }),
+        Command::Kill {
+            id,
+            positional_signal,
+            signal_option,
+            all,
+        } => command_future!({
+            let signal = signal_option
+                .or(positional_signal)
+                .unwrap_or_else(|| "TERM".to_string());
+            oci_cli::kill(id, signal, all).await?;
+            Ok(ExitCode::SUCCESS)
+        }),
+        Command::Delete { force, id } => command_future!({
+            oci_cli::delete(id, force).await?;
             Ok(ExitCode::SUCCESS)
         }),
         Command::WhpxSmoke => command_future!({

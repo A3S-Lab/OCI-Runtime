@@ -108,6 +108,21 @@ expected_runtime_tools_spec_version="$(
 expected_runtime_tools_go_version="$(
   jq --raw-output '.build.go_version' "$runtime_tools_lock"
 )"
+expected_runtime_tools_lifecycle_profile="$(
+  jq --raw-output '.lifecycle.profile' "$runtime_tools_lock"
+)"
+expected_lifecycle_preflight_architectures="$(
+  jq --compact-output '.lifecycle.preflight_architectures' "$runtime_tools_lock"
+)"
+expected_lifecycle_validated_architectures="$(
+  jq --compact-output '.lifecycle.validated_architectures' "$runtime_tools_lock"
+)"
+expected_x86_64_lifecycle_blocker="$(
+  jq --raw-output '.lifecycle.blockers.x86_64' "$runtime_tools_lock"
+)"
+expected_aarch64_lifecycle_blocker="$(
+  jq --raw-output '.lifecycle.blockers.aarch64' "$runtime_tools_lock"
+)"
 for executable in "$runtime_binary" "$agent_binary" "$shim_binary"; do
   if [[ ! -x "$executable" ]]; then
     printf 'Native Linux package executable is not executable: %s\n' \
@@ -175,6 +190,7 @@ checkpoint_report="$qualification_directory/native-linux-checkpoint.json"
 checkpoint_pidns_report="$qualification_directory/native-linux-checkpoint-pidns.json"
 checkpoint_netns_report="$qualification_directory/native-linux-checkpoint-netns.json"
 upstream_bundle_report="$qualification_directory/upstream-oci-bundles.json"
+upstream_lifecycle_report="$qualification_directory/upstream-oci-lifecycle.json"
 package_report="$qualification_directory/native-linux-package.json"
 
 "$runtime_binary" features >"$features_report"
@@ -218,8 +234,79 @@ jq --exit-status \
    and (.validation.bundles | length) == 2
    and all(.validation.bundles[]; .result == "passed")
    and .validation.negative_escape_rejected
+   and .lifecycle_cli_adapter_integrated
    and .lifecycle_cli_adapter_qualified == false' \
   "$upstream_bundle_report" >/dev/null
+
+bash .github/scripts/upstream-oci-lifecycle-validation.sh \
+  "$runtime_tools_binary" \
+  "$runtime_tools_manifest" \
+  "$runtime_binary" \
+  "$agent_binary" \
+  "$source_commit" \
+  "$upstream_lifecycle_report"
+if [[ "$package_architecture" == x86_64 ]]; then
+  upstream_lifecycle_status=unavailable
+  upstream_lifecycle_blocker="$expected_x86_64_lifecycle_blocker"
+  upstream_core_lifecycle_verified=false
+  jq --exit-status \
+    --arg source_commit "$source_commit" \
+    --arg runtime_sha256 "$runtime_sha256" \
+    --arg agent_sha256 "$agent_sha256" \
+    --arg upstream_commit "$expected_runtime_tools_commit" \
+    --arg runtime_spec_version "$expected_runtime_tools_spec_version" \
+    --arg blocker "$upstream_lifecycle_blocker" \
+    '.schema_version == "a3s.oci.upstream-lifecycle-validation.v1"
+     and .status == "unavailable"
+     and (.reason | type == "string" and length > 0)
+     and .blocker == $blocker
+     and .source_commit == $source_commit
+     and .architecture == "x86_64"
+     and .upstream.commit == $upstream_commit
+     and .upstream.runtime_spec_version == $runtime_spec_version
+     and .package_executables.runtime.sha256 == $runtime_sha256
+     and .package_executables.agent.sha256 == $agent_sha256
+     and (.validation.selected_tests | length) == 9
+     and (.validation.results | length) == 1
+     and .validation.results[0].name == "create"
+     and .validation.results[0].result == "blocked"
+     and .validation.results[0].blocker == $blocker
+     and .validation.results[0].tap_failures == 1
+     and .validation.all_selected_passed == false
+     and .validation.all_lifecycles_retired
+     and .validation.service_shutdown_clean
+     and .core_lifecycle_qualified == false
+     and .full_lifecycle_qualified == false' \
+    "$upstream_lifecycle_report" >/dev/null
+else
+  upstream_lifecycle_status=unavailable
+  upstream_lifecycle_blocker="$expected_aarch64_lifecycle_blocker"
+  upstream_core_lifecycle_verified=false
+  jq --exit-status \
+    --arg source_commit "$source_commit" \
+    --arg runtime_sha256 "$runtime_sha256" \
+    --arg agent_sha256 "$agent_sha256" \
+    --arg upstream_commit "$expected_runtime_tools_commit" \
+    --arg blocker "$upstream_lifecycle_blocker" \
+    '.schema_version == "a3s.oci.upstream-lifecycle-validation.v1"
+     and .status == "unavailable"
+     and (.reason | type == "string" and length > 0)
+     and .blocker == $blocker
+     and .source_commit == $source_commit
+     and .architecture == "aarch64"
+     and .upstream.commit == $upstream_commit
+     and .package_executables.runtime.sha256 == $runtime_sha256
+     and .package_executables.agent.sha256 == $agent_sha256
+     and (.validation.selected_tests | length) == 9
+     and (.validation.results | length) == 0
+     and .validation.all_selected_passed == false
+     and .validation.all_lifecycles_retired == false
+     and .validation.service_shutdown_clean == false
+     and .core_lifecycle_qualified == false
+     and .full_lifecycle_qualified == false
+     and (.limitations | index("aarch64-upstream-rootfs")) != null' \
+    "$upstream_lifecycle_report" >/dev/null
+fi
 
 A3S_OCI_NATIVE_RUNTIME_BINARY="$runtime_binary" \
 A3S_OCI_NATIVE_AGENT_BINARY="$agent_binary" \
@@ -374,7 +461,8 @@ for evidence in \
   "$checkpoint_report" \
   "$checkpoint_pidns_report" \
   "$checkpoint_netns_report" \
-  "$upstream_bundle_report"; do
+  "$upstream_bundle_report" \
+  "$upstream_lifecycle_report"; do
   if [[ ! -f "$evidence" || -L "$evidence" ]]; then
     printf 'Native Linux package evidence must be a regular nonsymlink file: %s\n' \
       "$evidence" >&2
@@ -414,7 +502,7 @@ runtime_tools_sha256="$(jq --raw-output '.upstream.tool_sha256' "$upstream_bundl
 runtime_tools_size="$(jq --raw-output '.upstream.tool_size' "$upstream_bundle_report")"
 runtime_tools_manifest_sha256="$(jq --raw-output '.upstream.build_manifest_sha256' "$upstream_bundle_report")"
 jq --null-input \
-  --arg schema_version 'a3s.oci.native-linux-package-qualification.v5' \
+  --arg schema_version 'a3s.oci.native-linux-package-qualification.v6' \
   --arg status 'available' \
   --arg source_commit "$source_commit" \
   --arg workflow_run_id "$workflow_run_id" \
@@ -423,7 +511,7 @@ jq --null-input \
   --arg kernel_release "$(uname -r)" \
   --arg driver 'native-linux' \
   --arg isolation_class 'shared-host-kernel' \
-  --arg profile 'full-sdk-oar01-oar02-oar03-upstream-bundles-without-kvm-v5' \
+  --arg profile 'full-sdk-oar01-oar02-oar03-upstream-lifecycle-preflight-without-kvm-v6' \
   --arg package_name "$package_name" \
   --arg runtime_version "$runtime_version" \
   --arg runtime_sha256 "$runtime_sha256" \
@@ -443,6 +531,12 @@ jq --null-input \
   --arg runtime_tools_sha256 "$runtime_tools_sha256" \
   --argjson runtime_tools_size "$runtime_tools_size" \
   --arg runtime_tools_manifest_sha256 "$runtime_tools_manifest_sha256" \
+  --arg runtime_tools_lifecycle_profile "$expected_runtime_tools_lifecycle_profile" \
+  --argjson lifecycle_preflight_architectures "$expected_lifecycle_preflight_architectures" \
+  --argjson lifecycle_validated_architectures "$expected_lifecycle_validated_architectures" \
+  --arg upstream_lifecycle_status "$upstream_lifecycle_status" \
+  --arg upstream_lifecycle_blocker "$upstream_lifecycle_blocker" \
+  --argjson upstream_core_lifecycle_verified "$upstream_core_lifecycle_verified" \
   --arg checkpoint_driver_build_digest "$checkpoint_driver_build_digest" \
   --slurpfile evidence "$evidence_manifest" \
   '{
@@ -479,7 +573,10 @@ jq --null-input \
         go_version: $runtime_tools_go_version,
         sha256: $runtime_tools_sha256,
         size: $runtime_tools_size,
-        build_manifest_sha256: $runtime_tools_manifest_sha256
+        build_manifest_sha256: $runtime_tools_manifest_sha256,
+        lifecycle_profile: $runtime_tools_lifecycle_profile,
+        lifecycle_preflight_architectures: $lifecycle_preflight_architectures,
+        lifecycle_validated_architectures: $lifecycle_validated_architectures
       }
     },
     checkpoint_driver_build_digest: $checkpoint_driver_build_digest,
@@ -491,6 +588,10 @@ jq --null-input \
     oar02_pause_resume_verified: true,
     oar03_checkpoint_restore_verified: true,
     upstream_bundle_validation_verified: true,
+    upstream_lifecycle_validation_status: $upstream_lifecycle_status,
+    upstream_lifecycle_blocker: $upstream_lifecycle_blocker,
+    upstream_core_lifecycle_verified: $upstream_core_lifecycle_verified,
+    upstream_full_lifecycle_verified: false,
     evidence: $evidence
   }' >"$package_report.tmp"
 chmod 0644 "$package_report.tmp"
@@ -502,8 +603,14 @@ jq --exit-status \
   --arg runtime_tools_version "$expected_runtime_tools_version" \
   --arg runtime_tools_spec_version "$expected_runtime_tools_spec_version" \
   --arg runtime_tools_go_version "$expected_runtime_tools_go_version" \
+  --arg runtime_tools_lifecycle_profile "$expected_runtime_tools_lifecycle_profile" \
+  --argjson lifecycle_preflight_architectures "$expected_lifecycle_preflight_architectures" \
+  --argjson lifecycle_validated_architectures "$expected_lifecycle_validated_architectures" \
+  --arg upstream_lifecycle_status "$upstream_lifecycle_status" \
+  --arg upstream_lifecycle_blocker "$upstream_lifecycle_blocker" \
+  --argjson upstream_core_lifecycle_verified "$upstream_core_lifecycle_verified" \
   'select(
-     .schema_version == "a3s.oci.native-linux-package-qualification.v5"
+     .schema_version == "a3s.oci.native-linux-package-qualification.v6"
      and .status == "available"
      and .package_layout_verified
      and .static_elf_verified
@@ -513,6 +620,10 @@ jq --exit-status \
      and .oar02_pause_resume_verified
      and .oar03_checkpoint_restore_verified
      and .upstream_bundle_validation_verified
+     and .upstream_lifecycle_validation_status == $upstream_lifecycle_status
+     and .upstream_lifecycle_blocker == $upstream_lifecycle_blocker
+     and .upstream_core_lifecycle_verified == $upstream_core_lifecycle_verified
+     and .upstream_full_lifecycle_verified == false
      and .external_tools.criu.packaged == false
      and .external_tools.criu.version == "4.2.1"
      and .external_tools.criu.git_id == "v4.2.1"
@@ -526,7 +637,10 @@ jq --exit-status \
      and (.external_tools.oci_runtime_tools.sha256 | test("^[0-9a-f]{64}$"))
      and (.external_tools.oci_runtime_tools.size > 0)
      and (.external_tools.oci_runtime_tools.build_manifest_sha256 | test("^[0-9a-f]{64}$"))
+     and .external_tools.oci_runtime_tools.lifecycle_profile == $runtime_tools_lifecycle_profile
+     and .external_tools.oci_runtime_tools.lifecycle_preflight_architectures == $lifecycle_preflight_architectures
+     and .external_tools.oci_runtime_tools.lifecycle_validated_architectures == $lifecycle_validated_architectures
      and (.checkpoint_driver_build_digest | test("^sha256:[0-9a-f]{64}$"))
-     and (.evidence | length == 12)
+     and (.evidence | length == 13)
    )' \
   "$package_report"

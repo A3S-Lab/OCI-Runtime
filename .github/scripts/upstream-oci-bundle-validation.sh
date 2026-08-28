@@ -77,7 +77,14 @@ jq --exit-status \
    and .build.static_elf == true
    and .upstream_interface == "oci-runtime-command-line-interface"
    and .integration.bundle_validation == "native-linux-package"
-   and .integration.lifecycle_validation == "not-integrated"' \
+   and .integration.lifecycle_validation == "native-linux-core-preflight-v1"
+   and .lifecycle.profile == "native-linux-core-v1"
+   and .lifecycle.validated_architectures == []
+   and .lifecycle.preflight_architectures == ["x86_64"]
+   and .lifecycle.blockers.x86_64 ==
+     "unsupported-upstream-seccomp-compat-architectures"
+   and .lifecycle.blockers.aarch64 == "missing-upstream-aarch64-rootfs"
+   and (.lifecycle.tests | length) > 0' \
   "$lock_file" >/dev/null
 
 upstream_repository="$(jq --raw-output '.repository' "$lock_file")"
@@ -86,6 +93,8 @@ upstream_version="$(jq --raw-output '.version' "$lock_file")"
 runtime_spec_version="$(jq --raw-output '.runtime_spec.version' "$lock_file")"
 runtime_spec_sum="$(jq --raw-output '.runtime_spec.module_sum' "$lock_file")"
 required_go_version="$(jq --raw-output '.build.go_version' "$lock_file")"
+lifecycle_profile="$(jq --raw-output '.lifecycle.profile' "$lock_file")"
+lifecycle_test_count="$(jq --raw-output '.lifecycle.tests | length' "$lock_file")"
 
 for executable in "$tool" "$runtime_binary" "$agent_binary" "$shim_binary"; do
   if [[ "$executable" != /* ]] ||
@@ -159,7 +168,12 @@ jq --exit-status \
   --arg runtime_spec_version "$runtime_spec_version" \
   --arg runtime_spec_sum "$runtime_spec_sum" \
   --arg go_version "$required_go_version" \
-  '.schema_version == "a3s.oci.upstream-runtime-tools-build.v1"
+  --arg lifecycle_profile "$lifecycle_profile" \
+  --argjson validated_architectures "$(jq --compact-output '.lifecycle.validated_architectures' "$lock_file")" \
+  --argjson preflight_architectures "$(jq --compact-output '.lifecycle.preflight_architectures' "$lock_file")" \
+  --argjson lifecycle_blockers "$(jq --compact-output '.lifecycle.blockers' "$lock_file")" \
+  --argjson lifecycle_test_count "$lifecycle_test_count" \
+  '.schema_version == "a3s.oci.upstream-runtime-tools-build.v2"
    and .repository == $repository
    and .commit == $commit
    and .version == $version
@@ -171,7 +185,13 @@ jq --exit-status \
    and .build.buildvcs == false
    and .binary.sha256 == $sha256
    and .binary.size == $size
-   and .binary.static_elf == true' \
+   and .binary.static_elf == true
+   and .lifecycle.profile == $lifecycle_profile
+   and .lifecycle.validated_architectures == $validated_architectures
+   and .lifecycle.preflight_architectures == $preflight_architectures
+   and .lifecycle.blockers == $lifecycle_blockers
+   and (.lifecycle.tests | length) == $lifecycle_test_count
+   and all(.lifecycle.tests[]; .static_elf == true)' \
   "$tool_manifest" >/dev/null
 expected_version_output="oci-runtime-tool version ${upstream_version}, commit: ${upstream_commit}"
 if [[ "$("$tool" --version)" != "$expected_version_output" ]]; then
@@ -331,6 +351,7 @@ jq --null-input \
       negative_exit_code: $negative_exit_code,
       negative_output_sha256: $negative_output_sha256
     },
+    lifecycle_cli_adapter_integrated: true,
     lifecycle_cli_adapter_qualified: false
   }' >"$report.tmp"
 chmod 0644 "$report.tmp"
@@ -359,5 +380,6 @@ jq --exit-status \
      and all(.validation.bundles[]; .result == "passed")
      and .validation.negative_escape_rejected
      and .validation.negative_exit_code > 0
+     and .lifecycle_cli_adapter_integrated
      and .lifecycle_cli_adapter_qualified == false
    )' "$report" >/dev/null

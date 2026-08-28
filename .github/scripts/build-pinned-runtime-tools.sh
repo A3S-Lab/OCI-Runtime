@@ -86,7 +86,26 @@ jq --exit-status \
    and .build.cgo_enabled == false
    and .build.trimpath == true
    and .build.buildvcs == false
-   and .build.static_elf == true' \
+   and .build.static_elf == true
+   and .upstream_interface == "oci-runtime-command-line-interface"
+   and .integration.bundle_validation == "native-linux-package"
+   and .integration.lifecycle_validation == "native-linux-core-preflight-v1"
+   and .lifecycle.profile == "native-linux-core-v1"
+   and .lifecycle.validated_architectures == []
+   and .lifecycle.preflight_architectures == ["x86_64"]
+   and .lifecycle.blockers.x86_64 ==
+     "unsupported-upstream-seccomp-compat-architectures"
+   and .lifecycle.blockers.aarch64 == "missing-upstream-aarch64-rootfs"
+   and (.lifecycle.tests | length) > 0
+   and all(
+     .lifecycle.tests[];
+     type == "string" and test("^[a-z0-9][a-z0-9_]{0,63}$")
+   )
+   and (.lifecycle.tests | length) == (.lifecycle.tests | unique | length)
+   and (.lifecycle.limitations | index("stdio-descriptor-transport")) != null
+   and (.lifecycle.limitations | index("terminal-console-socket")) != null
+   and (.lifecycle.limitations | index("listen-fds")) != null
+   and (.lifecycle.limitations | index("aarch64-upstream-rootfs")) != null' \
   "$lock_file" >/dev/null
 
 upstream_repository="$(jq --raw-output '.repository' "$lock_file")"
@@ -95,6 +114,14 @@ upstream_version="$(jq --raw-output '.version' "$lock_file")"
 runtime_spec_version="$(jq --raw-output '.runtime_spec.version' "$lock_file")"
 runtime_spec_sum="$(jq --raw-output '.runtime_spec.module_sum' "$lock_file")"
 required_go_version="$(jq --raw-output '.build.go_version' "$lock_file")"
+lifecycle_profile="$(jq --raw-output '.lifecycle.profile' "$lock_file")"
+mapfile -t lifecycle_tests < <(jq --raw-output '.lifecycle.tests[]' "$lock_file")
+go_architecture="$(go env GOARCH)"
+if [[ "$go_architecture" != amd64 && "$go_architecture" != arm64 ]]; then
+  printf 'Pinned Runtime Tools lifecycle fixtures do not support GOARCH=%s\n' \
+    "$go_architecture" >&2
+  exit 2
+fi
 actual_go_version="$(go env GOVERSION)"
 if [[ "$actual_go_version" != "$required_go_version" ]]; then
   printf 'Pinned Runtime Tools requires %s, found %s\n' \
@@ -156,7 +183,19 @@ if [[ "$(<"$source_directory/VERSION")" != "$upstream_version" ]]; then
   exit 1
 fi
 
-CGO_ENABLED=0 GOFLAGS=-mod=readonly make -C "$source_directory" tool \
+validation_targets=()
+for lifecycle_test in "${lifecycle_tests[@]}"; do
+  validation_source="$source_directory/validation/$lifecycle_test/$lifecycle_test.go"
+  if [[ ! -f "$validation_source" || -L "$validation_source" ]]; then
+    printf 'Locked lifecycle validation source is missing: %s\n' \
+      "$validation_source" >&2
+    exit 1
+  fi
+  validation_targets+=("validation/$lifecycle_test/$lifecycle_test.t")
+done
+
+CGO_ENABLED=0 GOFLAGS=-mod=readonly make -C "$source_directory" \
+  tool runtimetest "${validation_targets[@]}" \
   COMMIT="$upstream_commit" \
   EXTRA_FLAGS='-trimpath -buildvcs=false'
 built_binary="$source_directory/oci-runtime-tool"
@@ -175,14 +214,67 @@ if readelf --program-headers "$built_binary" | grep --quiet 'INTERP'; then
   exit 1
 fi
 file "$built_binary" | grep --fixed-strings 'statically linked' >/dev/null
+built_runtimetest="$source_directory/runtimetest"
+if [[ ! -f "$built_runtimetest" || -L "$built_runtimetest" || \
+  ! -x "$built_runtimetest" ]]; then
+  printf 'Pinned Runtime Tools build did not produce runtimetest: %s\n' \
+    "$built_runtimetest" >&2
+  exit 1
+fi
+if readelf --program-headers "$built_runtimetest" | grep --quiet 'INTERP'; then
+  printf '%s\n' 'Pinned runtimetest unexpectedly has an ELF interpreter' >&2
+  exit 1
+fi
+file "$built_runtimetest" | grep --fixed-strings 'statically linked' >/dev/null
 git -C "$source_directory" diff --exit-code --check
 git -C "$source_directory" diff --exit-code
 
 built_sha256="$(sha256sum "$built_binary" | cut -d ' ' -f 1)"
 built_size="$(stat --format '%s' "$built_binary")"
+built_runtimetest_sha256="$(sha256sum "$built_runtimetest" | cut -d ' ' -f 1)"
+built_runtimetest_size="$(stat --format '%s' "$built_runtimetest")"
+lifecycle_entries="$build_root/lifecycle-tests.jsonl"
+for lifecycle_test in "${lifecycle_tests[@]}"; do
+  lifecycle_binary="$source_directory/validation/$lifecycle_test/$lifecycle_test.t"
+  if [[ ! -f "$lifecycle_binary" || -L "$lifecycle_binary" || \
+    ! -x "$lifecycle_binary" ]]; then
+    printf 'Pinned lifecycle build did not produce %s\n' "$lifecycle_binary" >&2
+    exit 1
+  fi
+  if readelf --program-headers "$lifecycle_binary" | grep --quiet 'INTERP'; then
+    printf 'Pinned lifecycle executable unexpectedly has an ELF interpreter: %s\n' \
+      "$lifecycle_binary" >&2
+    exit 1
+  fi
+  file "$lifecycle_binary" | grep --fixed-strings 'statically linked' >/dev/null
+  jq --compact-output --null-input \
+    --arg name "$lifecycle_test" \
+    --arg path "lifecycle/$lifecycle_test.t" \
+    --arg sha256 "$(sha256sum "$lifecycle_binary" | cut -d ' ' -f 1)" \
+    --argjson size "$(stat --format '%s' "$lifecycle_binary")" \
+    '{name: $name, path: $path, sha256: $sha256, size: $size, static_elf: true}' \
+    >>"$lifecycle_entries"
+done
+
+rootfs_available=false
+rootfs_name=''
+rootfs_sha256=''
+rootfs_size=0
+if [[ "$go_architecture" == amd64 ]]; then
+  rootfs_name='rootfs-amd64.tar.gz'
+  rootfs_source="$source_directory/$rootfs_name"
+  if [[ ! -f "$rootfs_source" || -L "$rootfs_source" ]]; then
+    printf 'Pinned Runtime Tools source lacks %s\n' "$rootfs_name" >&2
+    exit 1
+  fi
+  rootfs_available=true
+  rootfs_sha256="$(sha256sum "$rootfs_source" | cut -d ' ' -f 1)"
+  rootfs_size="$(stat --format '%s' "$rootfs_source")"
+fi
+
 manifest="$build_root/upstream-runtime-tools-build.json"
 jq --null-input \
-  --arg schema_version 'a3s.oci.upstream-runtime-tools-build.v1' \
+  --arg schema_version 'a3s.oci.upstream-runtime-tools-build.v2' \
   --arg repository "$upstream_repository" \
   --arg commit "$upstream_commit" \
   --arg version "$upstream_version" \
@@ -191,6 +283,19 @@ jq --null-input \
   --arg go_version "$actual_go_version" \
   --arg sha256 "$built_sha256" \
   --argjson size "$built_size" \
+  --arg lifecycle_profile "$lifecycle_profile" \
+  --arg architecture "$go_architecture" \
+  --argjson validated_architectures "$(jq --compact-output '.lifecycle.validated_architectures' "$lock_file")" \
+  --argjson preflight_architectures "$(jq --compact-output '.lifecycle.preflight_architectures' "$lock_file")" \
+  --argjson lifecycle_blockers "$(jq --compact-output '.lifecycle.blockers' "$lock_file")" \
+  --arg runtimetest_sha256 "$built_runtimetest_sha256" \
+  --argjson runtimetest_size "$built_runtimetest_size" \
+  --argjson lifecycle_tests "$(jq --slurp '.' "$lifecycle_entries")" \
+  --argjson lifecycle_limitations "$(jq --compact-output '.lifecycle.limitations' "$lock_file")" \
+  --argjson rootfs_available "$rootfs_available" \
+  --arg rootfs_name "$rootfs_name" \
+  --arg rootfs_sha256 "$rootfs_sha256" \
+  --argjson rootfs_size "$rootfs_size" \
   '{
     schema_version: $schema_version,
     repository: $repository,
@@ -211,6 +316,29 @@ jq --null-input \
       sha256: $sha256,
       size: $size,
       static_elf: true
+    },
+    lifecycle: {
+      profile: $lifecycle_profile,
+      architecture: $architecture,
+      validated_architectures: $validated_architectures,
+      preflight_architectures: $preflight_architectures,
+      blockers: $lifecycle_blockers,
+      qualified_input_available: $rootfs_available,
+      runtimetest: {
+        path: "lifecycle/runtimetest",
+        sha256: $runtimetest_sha256,
+        size: $runtimetest_size,
+        static_elf: true
+      },
+      tests: $lifecycle_tests,
+      rootfs: (
+        if $rootfs_available then {
+          path: ("lifecycle/" + $rootfs_name),
+          sha256: $rootfs_sha256,
+          size: $rootfs_size
+        } else null end
+      ),
+      limitations: $lifecycle_limitations
     }
   }' >"$manifest"
 chmod 0644 "$manifest"
@@ -242,8 +370,21 @@ fi
 
 "${sudo_command[@]}" install -d -m 0755 -o root -g root -- "$destination"
 destination_created=true
+"${sudo_command[@]}" install -d -m 0755 -o root -g root -- \
+  "$destination/lifecycle"
 "${sudo_command[@]}" install -m 0755 -o root -g root -- \
   "$built_binary" "$destination/oci-runtime-tool"
+"${sudo_command[@]}" install -m 0755 -o root -g root -- \
+  "$built_runtimetest" "$destination/lifecycle/runtimetest"
+for lifecycle_test in "${lifecycle_tests[@]}"; do
+  "${sudo_command[@]}" install -m 0755 -o root -g root -- \
+    "$source_directory/validation/$lifecycle_test/$lifecycle_test.t" \
+    "$destination/lifecycle/$lifecycle_test.t"
+done
+if [[ "$rootfs_available" == true ]]; then
+  "${sudo_command[@]}" install -m 0644 -o root -g root -- \
+    "$rootfs_source" "$destination/lifecycle/$rootfs_name"
+fi
 "${sudo_command[@]}" install -m 0644 -o root -g root -- \
   "$manifest" "$destination/build.json"
 
@@ -262,15 +403,67 @@ if [[ "$(stat --format '%a' -- "$installed_binary")" != '755' ]] ||
   printf '%s\n' 'Installed Runtime Tools modes do not match the lock' >&2
   exit 1
 fi
+if [[ ! -d "$destination/lifecycle" || -L "$destination/lifecycle" ]] ||
+  [[ "$(stat --format '%u:%g:%a' -- "$destination/lifecycle")" != \
+    '0:0:755' ]]; then
+  printf '%s\n' 'Installed Runtime Tools lifecycle directory has invalid identity' >&2
+  exit 1
+fi
 if [[ "$(sha256sum "$installed_binary" | cut -d ' ' -f 1)" != "$built_sha256" ]] ||
   [[ "$("$installed_binary" --version)" != "$expected_version_output" ]]; then
   printf '%s\n' 'Installed Runtime Tools binary differs from the verified build' >&2
   exit 1
 fi
+installed_runtimetest="$destination/lifecycle/runtimetest"
+if [[ ! -f "$installed_runtimetest" || -L "$installed_runtimetest" || \
+  ! -x "$installed_runtimetest" ]] ||
+  [[ "$(stat --format '%u:%g' -- "$installed_runtimetest")" != '0:0' ]] ||
+  [[ "$(stat --format '%a' -- "$installed_runtimetest")" != '755' ]] ||
+  [[ "$(sha256sum "$installed_runtimetest" | cut -d ' ' -f 1)" != \
+    "$built_runtimetest_sha256" ]]; then
+  printf '%s\n' 'Installed runtimetest differs from the verified build' >&2
+  exit 1
+fi
+for lifecycle_test in "${lifecycle_tests[@]}"; do
+  installed_test="$destination/lifecycle/$lifecycle_test.t"
+  expected_test_sha256="$(
+    jq --raw-output --arg name "$lifecycle_test" \
+      '.lifecycle.tests[] | select(.name == $name) | .sha256' "$manifest"
+  )"
+  if [[ ! -f "$installed_test" || -L "$installed_test" || ! -x "$installed_test" ]] ||
+    [[ "$(stat --format '%u:%g' -- "$installed_test")" != '0:0' ]] ||
+    [[ "$(stat --format '%a' -- "$installed_test")" != '755' ]] ||
+    [[ "$(sha256sum "$installed_test" | cut -d ' ' -f 1)" != \
+      "$expected_test_sha256" ]]; then
+    printf 'Installed lifecycle test differs from the verified build: %s\n' \
+      "$installed_test" >&2
+    exit 1
+  fi
+done
+if [[ "$rootfs_available" == true ]]; then
+  installed_rootfs="$destination/lifecycle/$rootfs_name"
+  if [[ ! -f "$installed_rootfs" || -L "$installed_rootfs" ]] ||
+    [[ "$(stat --format '%u:%g' -- "$installed_rootfs")" != '0:0' ]] ||
+    [[ "$(stat --format '%a' -- "$installed_rootfs")" != '644' ]] ||
+    [[ "$(sha256sum "$installed_rootfs" | cut -d ' ' -f 1)" != \
+      "$rootfs_sha256" ]]; then
+    printf '%s\n' 'Installed lifecycle rootfs differs from the verified source' >&2
+    exit 1
+  fi
+fi
 jq --exit-status \
   --arg sha256 "$built_sha256" \
   --argjson size "$built_size" \
-  '.binary.sha256 == $sha256 and .binary.size == $size' \
+  --arg lifecycle_profile "$lifecycle_profile" \
+  --arg architecture "$go_architecture" \
+  --argjson test_count "${#lifecycle_tests[@]}" \
+  '.schema_version == "a3s.oci.upstream-runtime-tools-build.v2"
+   and .binary.sha256 == $sha256
+   and .binary.size == $size
+   and .lifecycle.profile == $lifecycle_profile
+   and .lifecycle.architecture == $architecture
+   and (.lifecycle.tests | length) == $test_count
+   and all(.lifecycle.tests[]; .static_elf)' \
   "$installed_manifest" >/dev/null
 
 printf 'Installed OCI Runtime Tools %s from %s at %s (sha256:%s)\n' \

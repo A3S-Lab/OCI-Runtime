@@ -131,7 +131,7 @@ cross-driver, and release conformance remain separate gates.
 | VM hypervisor, kernel, initrd, image, and parameters | Yes | Complete pinned schema shapes, all five image formats, four absolute runtime paths, NUL-free executable paths and parameters, and no invented hardware minima; an exact gate freezes 26 schema items and 24 normative requirements | Current drivers reject caller-provided VM launch configuration before durable reservation or platform mutation; runtime-owned, digest-pinned launch assets remain authoritative | No |
 | OCI `State` | Yes | Official schema, exact four-value domain, required fields, typed transitions, and generation fences | Durable `creating`/`created`/`running`/`stopped` records retain exact bundle metadata, enforce host-unique live IDs and Linux PID shape, preserve optional annotations, omit nonstandard properties, and produce State values verified against the pinned schema | Optional nonstandard State values and properties are not defined |
 | OCI `Features` | Yes | Official schema, version and operation separation; the generated runtime document is validated against the pinned 1.3.0 schema | Every driver publishes one validated Linux support profile when the Host Service opens. Multi-driver services require exact equality; the frozen value generates Features and gates pre-durable Create, Exec, and Update, while the Linux Agent consumes the same shared profile during planning. Linux reports the 60 implemented OCI mount options plus `rnodev` in sorted order, excludes optional `tmpcopyup`, and reports eight namespace types, all 41 recognized capability names, all seven memory-policy modes plus three flags, `netDevices.enabled=true`, cgroup v2 with RDMA support, bounded x86_64/AArch64 seccomp support, and ID-mapped mounts while unsupported controls remain empty or disabled | No |
-| `create/state/start/kill/delete` plus init `wait` | SDK contract | Required wire arguments, exact Host-to-driver process/signal/delete requests, protocol-v1/v2 compatibility tests, protocol-v3 process-message tests, protocol-v4 control-message tests, protocol-v5 resource-message tests, protocol-v6 process-I/O tests, protocol-v7 terminal-resize tests, protocol-v8 durable process-I/O context tests, durable lifecycle tests, native/utility-VM lifecycle gates, and a versioned native four-container churn/leak soak on x86_64 and aarch64 | Driver-independent core orchestration; Native Linux keeps the configured process behind the created barrier, executes exact argv at start, retains exact signal exit, deletes runtime-owned state and resources, preserves caller-owned bind storage, and permits generation-fenced ID reuse after delete | No |
+| `create/state/start/kill/delete` plus init `wait` | SDK contract and core OCI CLI adapter | Required wire arguments, exact Host-to-driver process/signal/delete requests, protocol-v1/v2 compatibility tests, protocol-v3 process-message tests, protocol-v4 control-message tests, protocol-v5 resource-message tests, protocol-v6 process-I/O tests, protocol-v7 terminal-resize tests, protocol-v8 durable process-I/O context tests, durable lifecycle tests, native/utility-VM lifecycle gates, a versioned native four-container churn/leak soak on x86_64 and aarch64, and an exact-package pinned upstream Runtime Tools `create` preflight | Driver-independent core orchestration; Native Linux keeps the configured process behind the created barrier, executes exact argv at start, retains exact signal exit, deletes runtime-owned state and resources, preserves caller-owned bind storage, and permits generation-fenced ID reuse after delete. The short-process OCI CLI adapter journals exact bundle, isolation, generation, operation identity, PID-file, and acknowledgement state before mutation so response-loss retries cannot create a second lifecycle. The x86_64 preflight retains the exact blocker for upstream X86/X32 seccomp compatibility architectures | No; the upstream core lifecycle profile, inherited stdio descriptors, terminal console sockets, `LISTEN_FDS`, AArch64 upstream rootfs input, broader lifecycle suites, and every advertised platform remain open |
 | Ordered runtime events | SDK contract | Bounded request validation, exact-generation filters, exclusive cursor pagination, long-poll wake and timeout tests, host-service reopen replay, corruption checks, exhaustive durable commit recovery, and native Linux lifecycle evidence | The configured host persists ordered lifecycle and process events independently of driver and guest capability advertisement | No |
 | Hooks and rollback ordering | SDK contract | Native Linux retains the six-phase order and exact `creating`/`created`/`running`/`stopped` state trace; real-driver prestart, createRuntime, createContainer, startContainer, and poststart failures each prove typed failure, stopped cleanup, and empty runtime state; prestart timeout proves termination of a signal-resistant background descendant with the Hook process group; a versioned real `startContainer` owner-death gate binds exact process incarnations and nests stopped-only Native recovery; poststop failure remains warning-only; focused planning and control-barrier tests cover the shared executor | The complete ordered phase, failure policy, and one owner-crash boundary are enforced; additional crash points, process-group escape security negatives, and adversarial hook-soak suites remain pending | No |
 | Exec, I/O, PTY, per-process wait, pause/resume, processes, update, stats | SDK contract | Typed requests; protocol-v3 exact process target/correlation tests; protocol-v4 exact freezer and inventory tests; protocol-v5 live-update and typed-stats tests; protocol-v6 byte-cursor output, EOF, piped-stdin, close, target, and payload-bound tests; protocol-v7 exact-target resize, positive-size, capability-filtering, and forged-request tests; protocol-v8 mutation-context compatibility and exact replay tests; exhaustive durable process/freezer/update/process-I/O recovery and driver-boundary matrices; real piped, inherited, and terminal I/O, update/stats, frozen/resumed workload, and A3S Box FD 3/4/5 listener/log evidence | Native Linux exposes durable exact-target exec, pidfd-backed process signal, stable process wait, inherited launcher stdio, exactly replayed piped stdin, bounded captured stdout/stderr, controlling PTYs, terminal resize and `VEOF`, init-exit supervision, pause/resume, live process inventory, partial live cgroup resource updates, normalized stats, and cleanup through `RuntimeClient`; its process-local create path enforces the fixed A3S Box exec-listener, PTY-listener, and init-log descriptor contract, while utility-VM host-console projection remains a separate integration concern | No |
@@ -210,6 +210,36 @@ implementation-specific:
 
 These additions do not replace or reinterpret OCI configuration fields.
 
+## OCI command-line adapter
+
+On Unix, `a3s-oci` exposes the standard short-process core commands `create`,
+`state`, `start`, `kill`, and `delete`. Each invocation connects to an
+already-running Host Service through `A3S_OCI_RUNTIME_ENDPOINT`. It also requires
+`A3S_OCI_CLI_STATE_ROOT` to name an existing canonical private directory;
+the directory and its per-container children must be owned by the invoking
+identity and deny group/world access. `create` additionally requires
+`A3S_OCI_CLI_ISOLATION` to be `shared-host-kernel`, `dedicated-vm`, or
+`shared-guest-kernel`; the last form also requires
+`A3S_OCI_CLI_TRUST_DOMAIN`.
+
+The adapter stores an append-only, locked, generation-fenced journal before
+each mutating request. It binds the canonical bundle, configuration and
+attachment digests, isolation request, PID-file path, exact Host generation,
+operation sequence, and acknowledgement state. An ambiguous invocation must
+be retried with the same arguments and operation identity; acknowledged
+duplicate Create or Start commands fail, while a completed Delete retires the
+incarnation and permits safe container-ID reuse. Corrupt, linked, incorrectly
+owned, or overly permissive state fails closed. Non-Unix hosts currently reject
+the adapter before journal mutation because equivalent private ACL validation
+has not been integrated.
+
+The current adapter intentionally rejects terminal bundles and
+`--console-socket`, and rejects nonzero `LISTEN_FDS`. Inherited standard-I/O
+descriptor lifetime cannot yet cross the short-lived CLI process and durable
+SDK Host Service boundary. Those descriptor transports, the multi-architecture
+seccomp profile, broader upstream Runtime Tools suites, and every exact-package
+lifecycle gate remain outside a qualified core profile.
+
 ## Automated Evidence
 
 The conformance pipeline pins the OCI 1.3.0 release. It currently provides:
@@ -228,13 +258,20 @@ The conformance pipeline pins the OCI 1.3.0 release. It currently provides:
    `8a4db579f5c88af5a0d036fad34bddc9c1f703f3`, built statically with Go 1.24.0,
    that validates the packaged Native Linux and utility-VM OCI 1.3.0
    configurations at MUST level and rejects an escaping rootfs path;
-5. strict typed round-trip tests for applicable upstream Linux, State, and
+5. an exact-package x86_64 OCI command-line lifecycle preflight using the same
+   pinned Runtime Tools source and `rootfs-amd64.tar.gz`. Its `create` test
+   retains the exact failing TAP signature for the unsupported upstream X86/X32
+   seccomp compatibility architectures, retired durable CLI journals, and clean
+   Host Service shutdown. The remaining eight selected tests stay unexecuted;
+   AArch64 retains a separate unavailable record because that revision has no
+   AArch64 rootfs fixture;
+6. strict typed round-trip tests for applicable upstream Linux, State, and
    Features fixtures;
-6. positive and negative semantic fixtures with stable rule identifiers;
-7. request-validation tests, including an untrusted raw-wire rejection test;
-8. in-memory end-to-end transport tests plus real Windows named-pipe and Unix
+7. positive and negative semantic fixtures with stable rule identifiers;
+8. request-validation tests, including an untrusted raw-wire rejection test;
+9. in-memory end-to-end transport tests plus real Windows named-pipe and Unix
    socket connector tests;
-9. a versioned ten-case real-Guest path-isolation profile, wired into macOS
+10. a versioned ten-case real-Guest path-isolation profile, wired into macOS
    Apple Silicon CI and the Linux KVM 17-case lifecycle matrix, that requires
    exact typed rejection, unchanged canaries, absent container state, and
    complete fixture/runtime cleanup.
@@ -249,9 +286,12 @@ zero `conformant` items, so remaining release-conformance evidence includes:
    `startContainer` owner-death, and bounded complex-container churn reports;
 4. feature-report comparisons against actual driver behavior;
 5. crash-recovery and cleanup evidence;
-6. the SDK-to-OCI-command-line adapter required by upstream Runtime Tools,
-   followed by exact-package lifecycle validation on every advertised platform
-   and architecture, without shipping a fallback runtime backend.
+6. X86/X32 seccomp compatibility for the pinned upstream default bundle, then
+   descriptor-preserving inherited stdio, terminal console-socket, and
+   `LISTEN_FDS` support in the OCI command-line adapter, followed by the core
+   and broader pinned upstream lifecycle suites and exact-package validation on
+   every advertised platform and architecture, without shipping a fallback
+   runtime backend.
 
 CI must fail when a pinned schema property has no classification or when code
 advertises an operation without a passing implementation test. It also fails

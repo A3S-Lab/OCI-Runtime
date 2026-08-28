@@ -16,6 +16,7 @@ mod linux_kvm_service;
 mod macos_hvf_service;
 #[cfg(target_os = "linux")]
 mod native_service;
+mod oci_cli;
 mod reopen_replacement;
 
 #[derive(Debug, Parser)]
@@ -50,6 +51,57 @@ impl From<NativeLinuxCheckpointRestoreCrashPointArg>
 enum Command {
     /// Print machine-readable runtime driver capabilities.
     Features,
+    /// Create an OCI container through the configured long-lived Host Service.
+    Create {
+        /// OCI bundle containing config.json and rootfs (defaults to the current directory).
+        #[arg(long, value_name = "DIR", default_value = ".")]
+        bundle: PathBuf,
+        /// File that receives the created container's init PID.
+        #[arg(long, value_name = "PATH")]
+        pid_file: Option<PathBuf>,
+        /// OCI terminal handoff socket. Terminal handoff is not yet supported.
+        #[arg(long, value_name = "PATH")]
+        console_socket: Option<PathBuf>,
+        /// Unique OCI container ID.
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+    /// Print the standard OCI state for one container.
+    State {
+        /// OCI container ID.
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+    /// Start the configured init process for one created container.
+    Start {
+        /// OCI container ID.
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+    /// Send a Linux signal to one created or running container.
+    Kill {
+        /// OCI container ID.
+        #[arg(value_name = "ID")]
+        id: String,
+        /// Runc-compatible positional signal accepted by upstream Runtime Tools.
+        #[arg(value_name = "SIGNAL", conflicts_with = "signal_option")]
+        positional_signal: Option<String>,
+        /// Signal name or positive number (defaults to TERM).
+        #[arg(long = "signal", value_name = "SIGNAL")]
+        signal_option: Option<String>,
+        /// Deliver the signal to every process in the container.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Delete one stopped container, or force its cleanup.
+    Delete {
+        /// Stop remaining processes before cleanup.
+        #[arg(long)]
+        force: bool,
+        /// OCI container ID.
+        #[arg(value_name = "ID")]
+        id: String,
+    },
     /// Query WHPX and create then delete one partition object.
     WhpxSmoke,
     /// Create then destroy one real Hypervisor.framework VM object.
