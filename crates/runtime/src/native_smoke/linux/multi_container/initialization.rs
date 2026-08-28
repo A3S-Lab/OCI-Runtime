@@ -9,13 +9,13 @@ use a3s_oci_sdk::{
 use serde_json::{json, Map, Value};
 use tokio::time::timeout;
 
+use super::super::QUALIFICATION_CALL_TIMEOUT as CALL_TIMEOUT;
 use super::lifecycle::{
     container_id, create_request, native_call, operation, require, require_created,
     state_is_missing, wait_request, wait_until_stopped,
 };
 use crate::NativeLinuxMultiContainerSmokeReport;
 
-const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const EXTERNAL_SCRIPT_EVIDENCE: &[u8] = b"a3s-oci-external-init-v1\n";
 const INLINE_EVIDENCE: &[u8] = b"a3s-oci-inline-init-v1\n";
 const HOOK_DESCENDANT_STARTED: &str = "hook-timeout-descendant-started";

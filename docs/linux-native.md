@@ -707,6 +707,11 @@ Run the same gate on a supported Ubuntu host:
 bash .github/scripts/native-linux-smoke.sh
 ```
 
+Every Native Linux real-driver qualification command uses the same 30-second
+outer SDK-operation deadline. This includes the one-time embedded OCI schema
+compilation on a cold AArch64 process; workload observation and lifecycle
+polling retain their separate tighter bounds.
+
 The script installs `busybox-static`, `iproute2`, `iptables`, `jq`, `uidmap`,
 and `util-linux`, builds
 the matching `a3s-oci-agent` and CLI binaries, constructs the checked-in

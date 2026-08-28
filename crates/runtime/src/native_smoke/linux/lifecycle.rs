@@ -15,12 +15,12 @@ use tokio::time::{sleep, timeout, Instant};
 use super::control_descriptors::ControlDescriptorFixture;
 use super::filesystem::{path_exists, read_marker, MARKER_CONTENTS};
 use super::process;
+use super::QUALIFICATION_CALL_TIMEOUT as CALL_TIMEOUT;
 use crate::marker::{exact_marker_state, ExactMarkerState};
 use crate::{
     FaultInjectionEvidence, HostRuntimeService, LifecycleFaultPoint, NativeLinuxSmokeReport,
 };
 
-const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const FREEZER_OBSERVATION_DELAY: Duration = Duration::from_millis(1_250);

@@ -8,6 +8,7 @@ use a3s_oci_sdk::{
 use tokio::time::timeout;
 
 use super::super::filesystem::remove_marker;
+use super::super::QUALIFICATION_CALL_TIMEOUT as CALL_TIMEOUT;
 use super::lifecycle::{
     container_id, create_request, kill_request, native_call, operation, require, require_created,
     require_kill_state, require_running, state_equals, state_is_missing, wait_request,
@@ -19,8 +20,6 @@ use crate::NativeLinuxMultiContainerSmokeReport;
 mod device_fixture;
 
 use device_fixture::JoinedMountDeviceFixture;
-
-const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(super) async fn exercise(
     client: &RuntimeClient,

@@ -22,6 +22,7 @@ use super::filesystem::{
     canonical_directory, create_private_directory, fixed_rootfs, path_exists, remove_marker,
     unique_nonce, MARKER_NAME,
 };
+use super::QUALIFICATION_CALL_TIMEOUT as CALL_TIMEOUT;
 use crate::fault::{DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint};
 use crate::{
     HostRuntimeService, NativeLinuxCheckpointRestoreCrashPoint, NativeLinuxCheckpointSmokeReport,
@@ -29,7 +30,6 @@ use crate::{
 };
 use cross_process::CrossProcessRestoreSeed;
 
-const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(5 * 60 + 15);
 const MARKER_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);

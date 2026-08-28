@@ -13,6 +13,7 @@ use a3s_oci_sdk::{
 };
 use tokio::time::{sleep, timeout, Instant};
 
+use super::super::QUALIFICATION_CALL_TIMEOUT as CALL_TIMEOUT;
 use super::probe::{interface_exists, probe_mechanism, same_namespace, NamespaceIdentity};
 use super::profile::NetworkProfile;
 use crate::{
@@ -20,7 +21,6 @@ use crate::{
     NativeLinuxNetworkEnforcementSmokeReport, RuntimeDriver,
 };
 
-const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const REDIRECT_MARKER_CONTENTS: &[u8] = b"redirect-v1\n";
 const REJECTION_MARKER_CONTENTS: &[u8] = b"rejection-v1\n";

@@ -31,6 +31,9 @@ use filesystem::{
 use lifecycle::{best_effort_delete, exercise, exercise_bound_service, HOOK_TRACE_NAME};
 
 const SERVICE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
+// A cold AArch64 qualification process can spend more than 15 seconds compiling
+// the embedded OCI schemas before its first SDK response.
+const QUALIFICATION_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) async fn run_checkpoint(
     init_executable: &Path,
@@ -610,5 +613,10 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    #[test]
+    fn qualification_call_timeout_covers_cold_arm64_schema_compilation() {
+        assert_eq!(QUALIFICATION_CALL_TIMEOUT, Duration::from_secs(30));
     }
 }

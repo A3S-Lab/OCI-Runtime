@@ -19,6 +19,7 @@ use super::filesystem::{
     canonical_directory, create_private_directory, fixed_rootfs, path_exists, read_marker,
     remove_marker, unique_nonce,
 };
+use super::QUALIFICATION_CALL_TIMEOUT as CALL_TIMEOUT;
 use crate::marker::{exact_marker_state, ExactMarkerState};
 use crate::{HostRuntimeService, NativeLinuxDriver, NativeLinuxRootlessSmokeReport, RuntimeDriver};
 
@@ -29,7 +30,6 @@ use config::{
     validate_rootfs_ownership, MappingPlan,
 };
 
-const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const MARKER_NAME: &str = ".a3s-oci-rootless-smoke";

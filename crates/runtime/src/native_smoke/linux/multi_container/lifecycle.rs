@@ -12,10 +12,10 @@ use a3s_oci_sdk::{
 use tokio::time::{sleep, timeout, Instant};
 
 use super::super::filesystem::{path_exists, read_marker, remove_marker, MARKER_CONTENTS};
+use super::super::QUALIFICATION_CALL_TIMEOUT as CALL_TIMEOUT;
 use crate::marker::{exact_marker_state, ExactMarkerState};
 use crate::NativeLinuxMultiContainerSmokeReport;
 
-const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
