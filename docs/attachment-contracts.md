@@ -234,11 +234,13 @@ requires that field, the durable manifest, annotation, configuration snapshot,
 and attachment digest to agree exactly. Reusing an operation ID with a changed
 generation or digest fails closed.
 
-No production driver advertises `dev.a3s.network.enforcement@1` yet. The public
-contract and deterministic Host gates are available for consumer integration,
-but a caller must treat missing per-driver extension support as unavailable.
-Advertisement requires a driver-specific namespace attachment implementation
-plus retained real-host restart, cleanup, redirect, and enforcement evidence.
+Rootful Native Linux advertises `dev.a3s.network.enforcement@1` when its executor
+has network-device authority. Its real-host qualification joins the exact
+caller namespace, moves one authorized interface, exercises an opaque redirect
+and rejection mechanism, reopens the Host service around the live generation,
+and proves that Delete preserves the namespace, interface, and both mechanisms.
+Rootless Native Linux and the VM drivers omit the extension; callers must treat
+missing per-driver extension support as unavailable.
 
 ## Reusable guest-session identity
 

@@ -284,8 +284,10 @@ node-local redirect identity to one exact joined caller namespace. Its closed
 schema cannot carry hostname/IP rules, routes, endpoints, credentials, tenant
 metadata, or policy decisions. The Host negotiates it independently, passes it
 unchanged to the driver, and revalidates exact `ContainerRecord` evidence after
-restart. No production driver advertises the extension until its real-host
-namespace attachment, cleanup, redirect, and enforcement gates pass.
+restart. Rootful Native Linux now advertises version 1 only when it has network
+device authority; its real-host gate retains namespace/interface identity,
+redirect/rejection behavior, Host reopen replay, and caller-owned mechanism
+preservation. Rootless Native Linux and the VM drivers do not advertise it.
 
 Pause and resume remain separately negotiated runtime operations with stable
 `OperationContext` identities, exact-generation fencing, durable replay, and
@@ -958,9 +960,10 @@ caller-owned namespace, using only positive generations and lowercase SHA-256
 digests. Runtime neither receives policy contents nor gains mechanism cleanup
 authority. The exact decoded binding is retained in
 `ContainerRecord::network_enforcement` and checked against the durable manifest
-and configuration snapshot after reopen. The SDK/Host contract is implemented;
-production drivers continue to omit this capability pending driver-specific
-real-host qualification.
+and configuration snapshot after reopen. The SDK/Host contract and rootful
+Native Linux implementation are qualified; the rootless Native and VM drivers
+continue to omit this capability pending their own authority model and
+driver-specific real-host qualification.
 
 `a3s.oci.attachments.v4` binds a SharedGuestKernel request to one reusable
 guest-session ID and positive incarnation, the request's immutable trust
@@ -1164,10 +1167,11 @@ Linux x86_64 and arm64 archives carry statically linked musl CLI, agent, and
 containerd shim executables whose release gate rejects ELF interpreters and
 dynamic dependencies. Before either Linux directory is archived, its exact
 CLI and Agent run the complete Native Linux SDK, rootless, owner-death,
-Hook-recovery, fault-cleanup, and bounded-soak matrix with `/dev/kvm` removed.
-The archive retains `qualification/native-linux-package.json` plus the seven
-digest-bound subordinate reports. Package availability never overrides the
-readiness reported by the exact binary's `features` result.
+Hook-recovery, OAR-01 network-enforcement, fault-cleanup, and bounded-soak
+matrix with `/dev/kvm` removed. The archive retains
+`qualification/native-linux-package.json` plus the eight digest-bound
+subordinate reports. Package availability never overrides the readiness
+reported by the exact binary's `features` result.
 
 ## License
 

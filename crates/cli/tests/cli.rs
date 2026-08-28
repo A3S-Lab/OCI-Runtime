@@ -123,6 +123,41 @@ fn native_linux_smoke_fails_closed_with_versioned_output() {
 }
 
 #[test]
+fn native_linux_network_enforcement_smoke_fails_closed_with_versioned_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "native-linux-network-enforcement-smoke",
+            "--agent",
+            "missing-a3s-oci-agent",
+            "--bundle",
+            "missing-a3s-oci-bundle",
+            "--work-parent",
+            "missing-a3s-oci-work-parent",
+            "--source-interface",
+            "oar01-source",
+            "--interface-id",
+            "oar01-interface",
+            "--cleanup-id",
+            "oar01-cleanup",
+            "--redirect-port",
+            "18080",
+            "--rejected-port",
+            "18082",
+        ])
+        .output()
+        .expect("native Linux network-enforcement command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("network-enforcement output must be valid JSON");
+    assert_eq!(
+        report["schema_version"],
+        "a3s.oci.native-linux-network-enforcement-smoke.v1"
+    );
+    assert_ne!(report["status"], "available");
+}
+
+#[test]
 fn native_linux_rootless_smoke_fails_closed_with_versioned_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
         .args([

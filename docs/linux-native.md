@@ -587,8 +587,9 @@ A3S_OCI_NATIVE_FOCUS=rootless-device-boundary \
 
 The accepted focus values are `terminal-init`, `device-boundary`,
 `cgroup-ownership`, `control-workload`, `multi-container`, `owner-death`,
-`hook-owner-death`, and `rootless-device-boundary`; any other nonempty value is
-rejected. The default remains the complete Native Linux matrix.
+`hook-owner-death`, `rootless-device-boundary`, and `network-enforcement`; any
+other nonempty value is rejected. The default remains the complete Native Linux
+matrix.
 
 The qualification wrapper also runs four OCI 1.3 `linux.netDevices` profiles.
 For the positive profile it creates a down dummy interface with MTU 1450, a
@@ -604,6 +605,23 @@ rolls every source back with its original name and attributes, and a rootless
 request fails before touching a host dummy interface. The exit trap tracks all
 test-created interfaces and deletes any source still present after a failed or
 interrupted run.
+
+The separate `network-enforcement` profile qualifies the policy-neutral OAR-01
+boundary through `a3s.oci.native-linux-network-enforcement-smoke.v1`. The shell
+creates one caller-owned network namespace, dummy interface, local redirect,
+and rejection rule. It hashes canonical `iptables-save` rule content after
+removing timestamps and packet counters, then carries only those opaque digests
+and typed incarnations in `dev.a3s.network.enforcement@1`; policy rules and
+endpoints never enter the Runtime attachment.
+
+The CLI requires exact Create replay, namespace inode and target-interface
+identity, redirect and rejection observations from the workload, and a Host
+service reopen that retains the same generation, PID, attachment, Create, and
+Start result. After signal-9 Wait and replayed Delete, both the CLI and shell
+independently prove that the caller namespace, renamed interface, mechanisms,
+and canonical digests remain unchanged. Only then does the shell delete its own
+fixture. Rootful Native advertises the extension because this gate uses its
+network-device authority; rootless Native does not.
 
 The smoke uses `SIGKILL` to prove exact signal-status propagation through the
 namespace PID 1 and outer launcher. The runtime never resolves the numeric PID
@@ -631,8 +649,8 @@ Run the same gate on a supported Ubuntu host:
 bash .github/scripts/native-linux-smoke.sh
 ```
 
-The script installs `busybox-static`, `iproute2`, `jq`, `uidmap`, and
-`util-linux`, builds
+The script installs `busybox-static`, `iproute2`, `iptables`, `jq`, `uidmap`,
+and `util-linux`, builds
 the matching `a3s-oci-agent` and CLI binaries, constructs the checked-in
 rootful fixture with a 100000:200000-owned searchable rootfs, `/proc` mount
 target, and writable hook trace, injects one hook for every OCI phase, checks
@@ -1113,14 +1131,15 @@ continue to build and use `target/debug`; supplying only one path, a symbolic
 link, a non-file, or a non-executable fails before host mutation.
 
 The gate removes `/dev/kvm` before the lifecycle dispatch and retains
-`a3s.oci.native-linux-package-qualification.v1` in
+`a3s.oci.native-linux-package-qualification.v2` in
 `qualification/native-linux-package.json`. That report binds the source
 commit, workflow run, host architecture and kernel, driver, isolation class,
 profile, runtime version, and exact SHA-256/size identity of all three package
-executables. It also SHA-256-binds seven subordinate reports covering Features,
+executables. It also SHA-256-binds eight subordinate reports covering Features,
 the bounded soak, rootful and rootless recovery, Hook owner-death recovery,
-rootless device policy, and the KVM-absence boundary. The reports are archived
-and later covered by the release checksum and signed provenance.
+rootless device policy, OAR-01 network enforcement, and the KVM-absence
+boundary. The reports are archived and later covered by the release checksum
+and signed provenance.
 
 This closes the reproducible package-to-Native-matrix wiring. Actual tag
 artifacts still need retained runs, and A3S Box product startup and its

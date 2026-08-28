@@ -150,10 +150,12 @@ fn linux_release_archives_retain_exact_package_qualification() {
     assert!(qualification_position < archive_position);
 
     for required in [
-        "a3s.oci.native-linux-package-qualification.v1",
-        "full-sdk-without-kvm-v1",
+        "a3s.oci.native-linux-package-qualification.v2",
+        "full-sdk-oar01-without-kvm-v2",
         "A3S_OCI_NATIVE_RUNTIME_BINARY",
         "A3S_OCI_NATIVE_AGENT_BINARY",
+        "A3S_OCI_NATIVE_NETWORK_ENFORCEMENT_REPORT",
+        "a3s.oci.native-linux-network-enforcement-smoke.v1",
         "A3S_OCI_NATIVE_KVM_ABSENCE_EVIDENCE",
         "verify-static-elf.sh",
         "containerd-shim-a3s-oci-v2",
@@ -163,6 +165,24 @@ fn linux_release_archives_retain_exact_package_qualification() {
             "Native package qualification lost {required}"
         );
     }
+}
+
+#[test]
+fn native_package_qualification_retains_oar01_real_host_evidence() {
+    for required in [
+        "native-linux-network-enforcement-smoke",
+        "dev.a3s.network.enforcement",
+        "network_enforcement_table_digest",
+        "namespace_preserved_after_delete",
+        "mechanism_preserved_after_delete",
+        "A3S_OCI_NATIVE_NETWORK_ENFORCEMENT_REPORT",
+    ] {
+        assert!(
+            NATIVE_LINUX_SMOKE.contains(required),
+            "Native OAR-01 qualification lost {required}"
+        );
+    }
+    assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("and (.evidence | length == 8)"));
 }
 
 #[test]

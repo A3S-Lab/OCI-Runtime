@@ -80,29 +80,29 @@ for the intended host and integration.
 
 Each Linux host archive contains
 `qualification/native-linux-package.json` with schema
-`a3s.oci.native-linux-package-qualification.v1`. The tag workflow creates this
+`a3s.oci.native-linux-package-qualification.v2`. The tag workflow creates this
 report before compression by running the staged musl CLI and Agent, not Cargo
 development binaries. The gate verifies the package layout and all three
 static ELF executables, removes `/dev/kvm` across the lifecycle portion, and
 runs the complete Native Linux SDK, rootless, owner-death, Hook-recovery,
-fault-cleanup, and bounded-soak matrix.
+OAR-01 network-enforcement, fault-cleanup, and bounded-soak matrix.
 
 The report binds the source commit, workflow run, Linux architecture and
 kernel, `native-linux` driver, `shared-host-kernel` isolation class, exact test
 profile, runtime version, and SHA-256 digest and size of the CLI, Agent, and
 containerd shim. Its `evidence` array binds the retained Features, soak,
 rootful recovery, Hook recovery, rootless recovery, rootless device-policy,
-and KVM-absence records. After verifying the outer archive provenance, inspect
-the package report with:
+OAR-01 network-enforcement, and KVM-absence records. After verifying the outer
+archive provenance, inspect the package report with:
 
 ```bash
 jq --exit-status \
-  '.schema_version == "a3s.oci.native-linux-package-qualification.v1"
+  '.schema_version == "a3s.oci.native-linux-package-qualification.v2"
    and .status == "available"
    and .static_elf_verified
    and .kvm_absent_before_lifecycle
    and .full_sdk_matrix_completed
-   and (.evidence | length == 7)' \
+   and (.evidence | length == 8)' \
   a3s-oci-runtime-vX.Y.Z-linux-*/qualification/native-linux-package.json
 ```
 

@@ -78,6 +78,7 @@ mod native_control;
 mod native_hook_recovery_smoke;
 #[cfg(target_os = "linux")]
 mod native_linux_driver;
+mod native_network_enforcement_report;
 #[cfg(target_os = "linux")]
 mod native_recovery_smoke;
 #[cfg(target_os = "linux")]
@@ -231,6 +232,10 @@ pub use native_hook_recovery_smoke::{
 };
 #[cfg(target_os = "linux")]
 pub use native_linux_driver::NativeLinuxDriver;
+pub use native_network_enforcement_report::{
+    NativeLinuxNetworkEnforcementSmokeConfig, NativeLinuxNetworkEnforcementSmokeReport,
+    NATIVE_LINUX_NETWORK_ENFORCEMENT_SMOKE_SCHEMA_VERSION,
+};
 #[cfg(target_os = "linux")]
 pub use native_recovery_smoke::{
     native_linux_hook_owner_death_owner, native_linux_recovery_owner,
@@ -248,8 +253,8 @@ pub use native_service::{
 };
 pub use native_smoke::{
     native_linux_fault_cleanup, native_linux_multi_container_smoke,
-    native_linux_rootless_device_policy_smoke, native_linux_rootless_smoke,
-    native_linux_rootless_smoke_with_cgroup_delegation,
+    native_linux_network_enforcement_smoke, native_linux_rootless_device_policy_smoke,
+    native_linux_rootless_smoke, native_linux_rootless_smoke_with_cgroup_delegation,
     native_linux_rootless_smoke_with_cgroup_delegation_barrier,
     native_linux_rootless_smoke_with_device_bootstrap_barrier, native_linux_service_smoke,
     native_linux_smoke, native_linux_soak,

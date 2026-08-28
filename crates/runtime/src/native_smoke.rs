@@ -5,6 +5,7 @@ use a3s_oci_core::HostPlatform;
 
 use crate::{
     LifecycleFaultPoint, NativeLinuxFaultCleanupReport, NativeLinuxMultiContainerSmokeReport,
+    NativeLinuxNetworkEnforcementSmokeConfig, NativeLinuxNetworkEnforcementSmokeReport,
     NativeLinuxRootlessSmokeReport, NativeLinuxSmokeReport, NativeLinuxSoakConfig,
     NativeLinuxSoakReport,
 };
@@ -218,6 +219,29 @@ pub async fn native_linux_multi_container_smoke(
     {
         let _ = (init_executable, bundle_a, bundle_b, work_parent);
         NativeLinuxMultiContainerSmokeReport::unsupported(HostPlatform::current())
+    }
+}
+
+/// Qualify one opaque caller-owned network enforcement and redirect mechanism.
+///
+/// The diagnostic binds only incarnation identities and mechanism digests to
+/// the public attachment contract. The caller prepares the joined namespace,
+/// interface, and mechanism; Runtime never receives policy or endpoint data.
+pub async fn native_linux_network_enforcement_smoke(
+    init_executable: &Path,
+    bundle: &Path,
+    work_parent: &Path,
+    configuration: NativeLinuxNetworkEnforcementSmokeConfig,
+) -> NativeLinuxNetworkEnforcementSmokeReport {
+    #[cfg(target_os = "linux")]
+    {
+        linux::run_network_enforcement(init_executable, bundle, work_parent, configuration).await
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (init_executable, bundle, work_parent, configuration);
+        NativeLinuxNetworkEnforcementSmokeReport::unsupported(HostPlatform::current())
     }
 }
 

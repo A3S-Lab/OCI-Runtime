@@ -45,6 +45,33 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         work_parent: PathBuf,
     },
+    /// Qualify one opaque caller-owned network enforcement and redirect mechanism.
+    NativeLinuxNetworkEnforcementSmoke {
+        /// Matching a3s-oci-agent executable used for the prepared init mode.
+        #[arg(long, value_name = "FILE")]
+        agent: PathBuf,
+        /// OCI bundle bound to one joined namespace and exact interface.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// Existing directory beneath which isolated smoke state is created.
+        #[arg(long, value_name = "DIR")]
+        work_parent: PathBuf,
+        /// Exact host interface selected by linux.netDevices.
+        #[arg(long)]
+        source_interface: String,
+        /// Opaque caller-issued interface allocation incarnation.
+        #[arg(long)]
+        interface_id: String,
+        /// Opaque caller-issued cleanup obligation incarnation.
+        #[arg(long)]
+        cleanup_id: String,
+        /// Qualification-only port whose traffic is locally redirected.
+        #[arg(long)]
+        redirect_port: u16,
+        /// Qualification-only port rejected by the caller-owned mechanism.
+        #[arg(long)]
+        rejected_port: u16,
+    },
     /// Prove helper-backed native Linux execution as an unprivileged user.
     NativeLinuxRootlessSmoke {
         /// Matching a3s-oci-agent executable used for the prepared init mode.

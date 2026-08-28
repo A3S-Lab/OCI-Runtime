@@ -45,6 +45,23 @@ network_device_conflict_source="a3snc$$"
 network_device_rollback_first="a3snr0$$"
 network_device_rollback_second="a3snr1$$"
 network_device_rootless_source="a3snl$$"
+network_enforcement_namespace="a3soar$$"
+network_enforcement_namespace_path="/var/run/netns/$network_enforcement_namespace"
+network_enforcement_namespace_created=false
+network_enforcement_source="a3so$$"
+network_enforcement_target="a3soar0"
+network_enforcement_interface_id="native-oar01-interface-$$"
+network_enforcement_cleanup_id="native-oar01-cleanup-$$"
+network_enforcement_identity="native-oar01-policy-$$"
+network_enforcement_namespace_id="native-oar01-namespace-$$"
+network_enforcement_redirect_id="native-oar01-redirect-$$"
+network_enforcement_redirect_port=18080
+network_enforcement_redirect_target_port=18081
+network_enforcement_rejected_port=18082
+network_enforcement_redirect_pid=""
+network_enforcement_control_pid=""
+network_enforcement_filter_digest=""
+network_enforcement_redirect_digest=""
 hugetlb_page_size=""
 hugetlb_reservation_control=false
 rdma_device=""
@@ -142,6 +159,36 @@ detect_unified_io_device() {
   printf '%s' "$selected"
 }
 
+remove_network_enforcement_fixture() {
+  local cleanup_status=0
+  local namespace_pid
+  local server_pid
+
+  for server_pid in \
+    "$network_enforcement_redirect_pid" \
+    "$network_enforcement_control_pid"; do
+    if [[ -n "$server_pid" ]] && sudo kill -0 "$server_pid" 2>/dev/null; then
+      sudo kill -KILL "$server_pid" || cleanup_status=$?
+    fi
+    if [[ -n "$server_pid" ]]; then
+      wait "$server_pid" 2>/dev/null || true
+    fi
+  done
+  network_enforcement_redirect_pid=""
+  network_enforcement_control_pid=""
+
+  if [[ "$network_enforcement_namespace_created" == true ]]; then
+    while IFS= read -r namespace_pid; do
+      if [[ -n "$namespace_pid" ]]; then
+        sudo kill -KILL "$namespace_pid" 2>/dev/null || true
+      fi
+    done < <(sudo ip netns pids "$network_enforcement_namespace" 2>/dev/null || true)
+    sudo ip netns delete "$network_enforcement_namespace" || cleanup_status=$?
+    network_enforcement_namespace_created=false
+  fi
+  return "$cleanup_status"
+}
+
 restore_host() {
   local command_status=$?
   local cleanup_status=0
@@ -161,6 +208,12 @@ restore_host() {
   if [[ -n "$hook_recovery_group_pid" ]]; then
     sudo kill -KILL -- "-$hook_recovery_group_pid" 2>/dev/null || true
     hook_recovery_group_pid=""
+  fi
+
+  remove_network_enforcement_fixture
+  status=$?
+  if ((status != 0)); then
+    cleanup_status=$status
   fi
 
   for network_device in "${network_device_sources[@]}"; do
@@ -322,7 +375,7 @@ else
 fi
 
 sudo apt-get update
-sudo apt-get install --yes busybox-static iproute2 jq uidmap util-linux
+sudo apt-get install --yes busybox-static iproute2 iptables jq uidmap util-linux
 if [[ "$use_development_binaries" == true ]]; then
   cargo build -p a3s-oci-agent -p a3s-oci-cli
   native_runtime_binary="$PWD/target/debug/a3s-oci"
@@ -388,6 +441,7 @@ network_device_bundle="$qualification_root/network-device-bundle"
 network_device_conflict_bundle="$qualification_root/network-device-conflict-bundle"
 network_device_rollback_bundle="$qualification_root/network-device-rollback-bundle"
 network_device_rootless_bundle="$qualification_root/network-device-rootless-bundle"
+network_enforcement_bundle="$qualification_root/network-enforcement-bundle"
 rootless_bin="$qualification_root/rootless-bin"
 work_parent="$qualification_root/work"
 rootless_work_parent="$qualification_root/rootless-work"
@@ -1190,6 +1244,241 @@ create_dummy_network_device() {
     sudo ip address add "$address" dev "$name"
   fi
   sudo ip link set dev "$name" down
+}
+
+network_enforcement_table_digest() {
+  local table="$1"
+  local digest
+
+  digest="$({
+    sudo ip netns exec "$network_enforcement_namespace" \
+      iptables-save -t "$table"
+  } | sed -E '/^#/d; s/ \[[0-9]+:[0-9]+\]$/ [0:0]/' \
+    | sha256sum | cut -d ' ' -f 1)"
+  printf 'sha256:%s' "$digest"
+}
+
+verify_network_enforcement_mechanism() {
+  local control
+  local redirect
+
+  redirect="$(
+    sudo ip netns exec "$network_enforcement_namespace" \
+      busybox wget -Y off -T 2 -qO- \
+      "http://127.0.0.1:$network_enforcement_redirect_port/"
+  )"
+  test "$redirect" = 'a3s-oar01-redirect-v1'
+  control="$(
+    sudo ip netns exec "$network_enforcement_namespace" \
+      busybox wget -Y off -T 2 -qO- \
+      "http://127.0.0.2:$network_enforcement_rejected_port/"
+  )"
+  test "$control" = 'a3s-oar01-block-control-v1'
+  if sudo ip netns exec "$network_enforcement_namespace" \
+    busybox wget -Y off -T 2 -qO- \
+    "http://127.0.0.1:$network_enforcement_rejected_port/" \
+    >/dev/null 2>&1; then
+    printf '%s\n' \
+      'Caller-owned OAR-01 rejection mechanism accepted the blocked endpoint' >&2
+    return 1
+  fi
+}
+
+prepare_network_enforcement_fixture() {
+  local attachment
+  local control_root="$qualification_root/oar01-control-http"
+  local redirect_root="$qualification_root/oar01-redirect-http"
+  local workload
+
+  mkdir "$network_enforcement_bundle"
+  cp -a --no-preserve=ownership "$bundle/." "$network_enforcement_bundle/"
+  mkdir "$control_root" "$redirect_root"
+  printf 'a3s-oar01-redirect-v1\n' >"$redirect_root/index.html"
+  printf 'a3s-oar01-block-control-v1\n' >"$control_root/index.html"
+
+  sudo ip netns add "$network_enforcement_namespace"
+  network_enforcement_namespace_created=true
+  sudo ip -n "$network_enforcement_namespace" link set dev lo up
+  create_dummy_network_device \
+    "$network_enforcement_source" 1450 02:00:00:00:00:40 198.51.100.40/24
+
+  sudo ip netns exec "$network_enforcement_namespace" \
+    iptables -t nat -A OUTPUT \
+    -p tcp -d 127.0.0.1 --dport "$network_enforcement_redirect_port" \
+    -j REDIRECT --to-ports "$network_enforcement_redirect_target_port"
+  sudo ip netns exec "$network_enforcement_namespace" \
+    iptables -A OUTPUT \
+    -p tcp -d 127.0.0.1 --dport "$network_enforcement_rejected_port" \
+    -j REJECT --reject-with tcp-reset
+
+  network_enforcement_filter_digest="$(network_enforcement_table_digest filter)"
+  network_enforcement_redirect_digest="$(network_enforcement_table_digest nat)"
+
+  sudo ip netns exec "$network_enforcement_namespace" \
+    busybox httpd -f \
+    -p "127.0.0.1:$network_enforcement_redirect_target_port" \
+    -h "$redirect_root" &
+  network_enforcement_redirect_pid=$!
+  sudo ip netns exec "$network_enforcement_namespace" \
+    busybox httpd -f \
+    -p "127.0.0.2:$network_enforcement_rejected_port" \
+    -h "$control_root" &
+  network_enforcement_control_pid=$!
+  for _ in $(seq 1 100); do
+    if verify_network_enforcement_mechanism 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  verify_network_enforcement_mechanism
+
+  attachment="$(jq --compact-output --null-input \
+    --arg identity "$network_enforcement_identity" \
+    --arg compiled_policy_digest "$network_enforcement_filter_digest" \
+    --arg namespace "$network_enforcement_namespace_id" \
+    --arg redirect_identity "$network_enforcement_redirect_id" \
+    --arg redirect_digest "$network_enforcement_redirect_digest" \
+    '{
+      schemaVersion: "a3s.oci.network-enforcement.v1",
+      identity: $identity,
+      generation: 1,
+      compiledPolicyDigest: $compiled_policy_digest,
+      namespace: $namespace,
+      ownership: "caller",
+      cleanup: "preserve-caller-mechanism",
+      localRedirect: {
+        identity: $redirect_identity,
+        generation: 1,
+        mechanismDigest: $redirect_digest,
+        ownership: "caller",
+        cleanup: "preserve-caller-mechanism"
+      }
+    }')"
+  # shellcheck disable=SC2016 # Expanded inside the OAR-01 workload.
+  workload='redirect=$(/bin/busybox wget -Y off -T 2 -qO- http://127.0.0.1:18080/); test "$redirect" = a3s-oar01-redirect-v1; printf "redirect-v1\n" > /.a3s-oci-oar01-redirect; control=$(/bin/busybox wget -Y off -T 2 -qO- http://127.0.0.2:18082/); test "$control" = a3s-oar01-block-control-v1; if /bin/busybox wget -Y off -T 2 -qO- http://127.0.0.1:18082/ >/dev/null 2>&1; then exit 41; fi; printf "rejection-v1\n" > /.a3s-oci-oar01-rejection; exec /bin/busybox sleep 600'
+  jq \
+    --arg namespace_path "$network_enforcement_namespace_path" \
+    --arg source "$network_enforcement_source" \
+    --arg target "$network_enforcement_target" \
+    --arg attachment "$attachment" \
+    --arg workload "$workload" \
+    '
+      .linux.namespaces |= map(
+        if .type == "network" then . + {path: $namespace_path} else . end
+      )
+      | del(.linux.sysctl)
+      | .linux.netDevices = {($source): {name: $target}}
+      | .annotations["dev.a3s.network.enforcement"] = $attachment
+      | .process.args[2] = $workload
+    ' \
+    "$network_enforcement_bundle/config.json" \
+    >"$network_enforcement_bundle/config.json.tmp"
+  mv \
+    "$network_enforcement_bundle/config.json.tmp" \
+    "$network_enforcement_bundle/config.json"
+  sudo chown -R 100000:200000 "$network_enforcement_bundle/rootfs"
+}
+
+run_network_enforcement_smoke() {
+  local output
+  local report_path="${A3S_OCI_NATIVE_NETWORK_ENFORCEMENT_REPORT:-}"
+  local status
+
+  if output="$(sudo "$native_runtime_binary" \
+      native-linux-network-enforcement-smoke \
+      --agent "$native_agent_binary" \
+      --bundle "$network_enforcement_bundle" \
+      --work-parent "$work_parent" \
+      --source-interface "$network_enforcement_source" \
+      --interface-id "$network_enforcement_interface_id" \
+      --cleanup-id "$network_enforcement_cleanup_id" \
+      --redirect-port "$network_enforcement_redirect_port" \
+      --rejected-port "$network_enforcement_rejected_port")"; then
+    status=0
+  else
+    status=$?
+  fi
+  printf '%s\n' "$output"
+  if ((status != 0)); then
+    report_native_failure "$network_enforcement_bundle/rootfs"
+    return "$status"
+  fi
+  jq --exit-status \
+    --arg identity "$network_enforcement_identity" \
+    --arg compiled_policy_digest "$network_enforcement_filter_digest" \
+    --arg namespace "$network_enforcement_namespace_id" \
+    --arg redirect_identity "$network_enforcement_redirect_id" \
+    --arg redirect_digest "$network_enforcement_redirect_digest" \
+    '.schema_version == "a3s.oci.native-linux-network-enforcement-smoke.v1"
+     and .platform == "linux"
+     and .status == "available"
+     and .bundle_loaded
+     and .extension_advertised
+     and .mechanism_verified_before_create
+     and .create_returned_created
+     and .create_replayed
+     and (.created_pid > 0)
+     and .container_namespace_verified
+     and .interface_binding_verified
+     and .local_redirect_verified
+     and .enforcement_rejection_verified
+     and .host_service_reopened
+     and .generation_reused_after_reopen
+     and .pid_reused_after_reopen
+     and .attachment_replayed_after_reopen
+     and .start_replayed_after_reopen
+     and .wait_exit_status == {signal: 9, oom_killed: false}
+     and .delete_replayed
+     and .durable_state_removed
+     and .namespace_preserved_after_delete
+     and .interface_preserved_after_delete
+     and .mechanism_preserved_after_delete
+     and .markers_removed
+     and .executor_runtime_clean
+     and .session_root_clean
+     and (.reason == null)
+     and .attachment.identity == $identity
+     and .attachment.generation == 1
+     and .attachment.compiledPolicyDigest == $compiled_policy_digest
+     and .attachment.namespace == $namespace
+     and .attachment.ownership == "caller"
+     and .attachment.cleanup == "preserve-caller-mechanism"
+     and .attachment.localRedirect.identity == $redirect_identity
+     and .attachment.localRedirect.generation == 1
+     and .attachment.localRedirect.mechanismDigest == $redirect_digest' \
+    <<<"$output" >/dev/null
+
+  test -e "$network_enforcement_namespace_path"
+  sudo ip -n "$network_enforcement_namespace" \
+    link show dev "$network_enforcement_target" >/dev/null
+  verify_host_network_device_absent "$network_enforcement_source"
+  verify_network_enforcement_mechanism
+  if [[ "$(network_enforcement_table_digest filter)" != \
+      "$network_enforcement_filter_digest" ]]; then
+    printf '%s\n' 'Caller-owned OAR-01 enforcement digest changed during lifecycle' >&2
+    return 1
+  fi
+  if [[ "$(network_enforcement_table_digest nat)" != \
+      "$network_enforcement_redirect_digest" ]]; then
+    printf '%s\n' 'Caller-owned OAR-01 redirect digest changed during lifecycle' >&2
+    return 1
+  fi
+
+  if [[ -n "$report_path" ]]; then
+    if [[ -e "$report_path" || -L "$report_path" ]]; then
+      printf 'Refusing to replace Native network-enforcement evidence: %s\n' \
+        "$report_path" >&2
+      return 2
+    fi
+    mkdir -p "$(dirname "$report_path")"
+    printf '%s\n' "$output" >"$report_path.tmp"
+    chmod 0644 "$report_path.tmp"
+    mv "$report_path.tmp" "$report_path"
+  fi
+
+  remove_network_enforcement_fixture
+  test ! -e "$network_enforcement_namespace_path"
+  verify_host_network_device_absent "$network_enforcement_source"
 }
 
 verify_host_network_device() {
@@ -2473,6 +2762,10 @@ elif [[ "$native_focus" == rootless-device-boundary ]]; then
   run_rootless_smoke
   run_rootless_device_policy_smoke
   exit 0
+elif [[ "$native_focus" == network-enforcement ]]; then
+  prepare_network_enforcement_fixture
+  run_network_enforcement_smoke
+  exit 0
 elif [[ -n "$native_focus" ]]; then
   printf 'unsupported A3S_OCI_NATIVE_FOCUS value: %s\n' "$native_focus" >&2
   exit 2
@@ -2604,6 +2897,9 @@ run_smoke \
   "$network_device_bundle" \
   "$network_device_bundle/rootfs/.a3s-oci-hook-trace"
 verify_host_network_device_absent "$network_device_success_source"
+
+prepare_network_enforcement_fixture
+run_network_enforcement_smoke
 
 run_smoke false
 run_smoke false "$device_boundary_bundle" "$device_boundary_hook_trace"

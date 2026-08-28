@@ -16,6 +16,7 @@ mod fault_cleanup;
 mod filesystem;
 mod lifecycle;
 mod multi_container;
+mod network_enforcement;
 mod rootless;
 mod soak;
 
@@ -46,6 +47,15 @@ pub(super) async fn run_multi_container(
     work_parent: &Path,
 ) -> crate::NativeLinuxMultiContainerSmokeReport {
     multi_container::run(init_executable, bundle_a, bundle_b, work_parent).await
+}
+
+pub(super) async fn run_network_enforcement(
+    init_executable: &Path,
+    bundle: &Path,
+    work_parent: &Path,
+    configuration: crate::NativeLinuxNetworkEnforcementSmokeConfig,
+) -> crate::NativeLinuxNetworkEnforcementSmokeReport {
+    network_enforcement::run(init_executable, bundle, work_parent, configuration).await
 }
 
 pub(super) async fn run_rootless(

@@ -11,6 +11,7 @@ use a3s_oci_sdk::{
     async_trait, AttachmentCapabilities, ContainerId, ContainerRecord, ContainerStats,
     ContainerTarget, Error, ErrorCode, ExitStatus, FileRequest, FileResponse, FilesystemRequest,
     FilesystemResponse, OperationId, OutputChunk, ProcessRecord, Result, RuntimeOperation,
+    NETWORK_ENFORCEMENT_EXTENSION, NETWORK_ENFORCEMENT_EXTENSION_VERSION,
 };
 use tokio::sync::Mutex;
 
@@ -76,7 +77,7 @@ impl NativeLinuxDriver {
                 .await?,
         );
         let attachment_capabilities =
-            native_attachment_capabilities(executor.has_network_device_authority());
+            native_attachment_capabilities(executor.has_network_device_authority())?;
         let service: Arc<dyn GuestAgentService> = executor.clone();
         Ok(Self {
             capability,
@@ -127,7 +128,7 @@ impl NativeLinuxDriver {
             .await?,
         );
         let attachment_capabilities =
-            native_attachment_capabilities(executor.has_network_device_authority());
+            native_attachment_capabilities(executor.has_network_device_authority())?;
         let service: Arc<dyn GuestAgentService> = executor.clone();
         Ok(Self {
             capability,
@@ -187,7 +188,7 @@ impl NativeLinuxDriver {
             .await?,
         );
         let attachment_capabilities =
-            native_attachment_capabilities(executor.has_network_device_authority());
+            native_attachment_capabilities(executor.has_network_device_authority())?;
         let service: Arc<dyn GuestAgentService> = executor.clone();
         Ok(Self {
             capability,
@@ -527,11 +528,16 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 }
 
-fn native_attachment_capabilities(has_network_device_authority: bool) -> AttachmentCapabilities {
+fn native_attachment_capabilities(
+    has_network_device_authority: bool,
+) -> Result<AttachmentCapabilities> {
     if has_network_device_authority {
-        AttachmentCapabilities::base_v3()
+        AttachmentCapabilities::base_v3().with_extension(
+            NETWORK_ENFORCEMENT_EXTENSION,
+            vec![NETWORK_ENFORCEMENT_EXTENSION_VERSION],
+        )
     } else {
-        AttachmentCapabilities::base_v2()
+        Ok(AttachmentCapabilities::base_v2())
     }
 }
 
@@ -585,20 +591,29 @@ async fn guest_path(bundle: &Path) -> Result<GuestPath> {
 mod tests {
     use a3s_oci_sdk::{
         AMD_SEV_SNP_LAUNCH_EXTENSION, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3,
-        INTEL_TDX_LAUNCH_EXTENSION, TEE_LAUNCH_EXTENSION_VERSION,
+        INTEL_TDX_LAUNCH_EXTENSION, NETWORK_ENFORCEMENT_EXTENSION,
+        NETWORK_ENFORCEMENT_EXTENSION_VERSION, TEE_LAUNCH_EXTENSION_VERSION,
     };
 
     use super::native_attachment_capabilities;
 
     #[test]
     fn network_attachment_capability_requires_rootful_device_authority() {
-        let rootful = native_attachment_capabilities(true);
+        let rootful = native_attachment_capabilities(true).expect("rootful capabilities");
         assert!(rootful.supports_schema(ATTACHMENT_SCHEMA_V2));
         assert!(rootful.supports_schema(ATTACHMENT_SCHEMA_V3));
+        assert!(rootful.supports_extension(
+            NETWORK_ENFORCEMENT_EXTENSION,
+            NETWORK_ENFORCEMENT_EXTENSION_VERSION,
+        ));
 
-        let rootless = native_attachment_capabilities(false);
+        let rootless = native_attachment_capabilities(false).expect("rootless capabilities");
         assert!(rootless.supports_schema(ATTACHMENT_SCHEMA_V2));
         assert!(!rootless.supports_schema(ATTACHMENT_SCHEMA_V3));
+        assert!(!rootless.supports_extension(
+            NETWORK_ENFORCEMENT_EXTENSION,
+            NETWORK_ENFORCEMENT_EXTENSION_VERSION,
+        ));
         for capabilities in [rootful, rootless] {
             assert!(!capabilities
                 .supports_extension(AMD_SEV_SNP_LAUNCH_EXTENSION, TEE_LAUNCH_EXTENSION_VERSION,));

@@ -91,6 +91,38 @@ fn dispatch(
                 ExitCode::from(2)
             })
         }),
+        Command::NativeLinuxNetworkEnforcementSmoke {
+            agent,
+            bundle,
+            work_parent,
+            source_interface,
+            interface_id,
+            cleanup_id,
+            redirect_port,
+            rejected_port,
+        } => command_future!({
+            let configuration = a3s_oci_runtime::NativeLinuxNetworkEnforcementSmokeConfig::new(
+                source_interface,
+                a3s_oci_sdk::NetworkInterfaceId::new(interface_id)?,
+                a3s_oci_sdk::NetworkCleanupId::new(cleanup_id)?,
+                redirect_port,
+                rejected_port,
+            )?;
+            let report = a3s_oci_runtime::native_linux_network_enforcement_smoke(
+                &agent,
+                &bundle,
+                &work_parent,
+                configuration,
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }),
         Command::NativeLinuxRootlessSmoke {
             agent,
             bundle,

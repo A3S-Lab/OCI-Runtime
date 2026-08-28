@@ -99,6 +99,7 @@ recovery_report="$qualification_directory/native-linux-recovery.json"
 hook_recovery_report="$qualification_directory/native-linux-hook-recovery.json"
 rootless_recovery_report="$qualification_directory/native-linux-rootless-recovery.json"
 rootless_device_report="$qualification_directory/native-linux-rootless-device-policy.json"
+network_enforcement_report="$qualification_directory/native-linux-network-enforcement.json"
 kvm_absence_report="$qualification_directory/native-linux-kvm-absence.json"
 package_report="$qualification_directory/native-linux-package.json"
 
@@ -123,6 +124,7 @@ A3S_OCI_NATIVE_RECOVERY_REPORT="$recovery_report" \
 A3S_OCI_NATIVE_HOOK_RECOVERY_REPORT="$hook_recovery_report" \
 A3S_OCI_NATIVE_ROOTLESS_RECOVERY_REPORT="$rootless_recovery_report" \
 A3S_OCI_NATIVE_ROOTLESS_DEVICE_POLICY_REPORT="$rootless_device_report" \
+A3S_OCI_NATIVE_NETWORK_ENFORCEMENT_REPORT="$network_enforcement_report" \
 A3S_OCI_NATIVE_KVM_ABSENCE_EVIDENCE="$kvm_absence_report" \
   bash <(tr -d '\015' < .github/scripts/native-linux-smoke.sh)
 
@@ -152,6 +154,17 @@ jq --exit-status \
   '.schema_version == "a3s.oci.native-linux-rootless-smoke.v4"
    and .status == "available"' \
   "$rootless_device_report" >/dev/null
+jq --exit-status \
+  '.schema_version == "a3s.oci.native-linux-network-enforcement-smoke.v1"
+   and .status == "available"
+   and .extension_advertised
+   and .mechanism_verified_before_create
+   and .host_service_reopened
+   and .attachment_replayed_after_reopen
+   and .namespace_preserved_after_delete
+   and .interface_preserved_after_delete
+   and .mechanism_preserved_after_delete' \
+  "$network_enforcement_report" >/dev/null
 jq --exit-status --arg architecture "$architecture" \
   '.schema_version == "a3s.oci.native-linux-kvm-absence.v1"
    and .platform == "linux"
@@ -167,6 +180,7 @@ for evidence in \
   "$hook_recovery_report" \
   "$rootless_recovery_report" \
   "$rootless_device_report" \
+  "$network_enforcement_report" \
   "$kvm_absence_report"; do
   jq --compact-output --null-input \
     --arg name "$(basename "$evidence")" \
@@ -186,7 +200,7 @@ agent_sha256="$(sha256sum "$agent_binary" | cut -d ' ' -f 1)"
 shim_sha256="$(sha256sum "$shim_binary" | cut -d ' ' -f 1)"
 workflow_run_id="${GITHUB_RUN_ID:-}"
 jq --null-input \
-  --arg schema_version 'a3s.oci.native-linux-package-qualification.v1' \
+  --arg schema_version 'a3s.oci.native-linux-package-qualification.v2' \
   --arg status 'available' \
   --arg source_commit "$source_commit" \
   --arg workflow_run_id "$workflow_run_id" \
@@ -195,7 +209,7 @@ jq --null-input \
   --arg kernel_release "$(uname -r)" \
   --arg driver 'native-linux' \
   --arg isolation_class 'shared-host-kernel' \
-  --arg profile 'full-sdk-without-kvm-v1' \
+  --arg profile 'full-sdk-oar01-without-kvm-v2' \
   --arg package_name "$package_name" \
   --arg runtime_version "$runtime_version" \
   --arg runtime_sha256 "$runtime_sha256" \
@@ -236,13 +250,13 @@ rm "$evidence_manifest"
 
 jq --exit-status \
   'select(
-     .schema_version == "a3s.oci.native-linux-package-qualification.v1"
+     .schema_version == "a3s.oci.native-linux-package-qualification.v2"
      and .status == "available"
      and .package_layout_verified
      and .static_elf_verified
      and .features_verified
      and .kvm_absent_before_lifecycle
      and .full_sdk_matrix_completed
-     and (.evidence | length == 7)
+     and (.evidence | length == 8)
    )' \
   "$package_report"

@@ -38,9 +38,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
   archives. The static musl CLI and Agent now run the complete Native Linux
   matrix with `/dev/kvm` removed before compression, while a versioned package
   report binds the source commit, platform, driver/isolation profile, all three
-  executable digests, and seven retained subordinate evidence records. The
+  executable digests, and eight retained subordinate evidence records. The
   package gate does not promote Native Linux beyond `probe-only` or replace the
   remaining A3S Box, upstream OCI, security, or release-host gates.
+- Qualified the policy-neutral OAR-01 network-enforcement boundary on rootful
+  Native Linux. The driver advertises `dev.a3s.network.enforcement@1` only with
+  network-device authority. A real caller-owned namespace fixture proves exact
+  interface attachment, redirect and rejection behavior, live Host reopen with
+  generation/PID/opaque-evidence replay, and namespace/interface/mechanism
+  preservation after Delete. Package qualification v2 retains this as its
+  eighth digest-bound evidence report; rootless Native and VM drivers remain
+  unadvertised.
 - Added a canonical machine-readable containerd runtime-v2 compatibility
   record that is schema-checked against the code-owned support matrix and
   retains exact qualification environments, protocol ranges, digests,
