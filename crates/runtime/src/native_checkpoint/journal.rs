@@ -15,6 +15,10 @@ use super::artifact::encode_token;
 use super::{checkpoint_error, io_error};
 use crate::DriverCheckpointResult;
 
+mod restore;
+
+pub(super) use restore::RestoreJournalRecord;
+
 const STATE_DIRECTORY: &str = ".a3s-oci-native-checkpoint-v1";
 const STATE_SCHEMA_V1: &str = "a3s.oci.native-checkpoint-state.v1";
 const JOURNAL_SCHEMA_V1: &str = "a3s.oci.native-checkpoint-operation.v1";
@@ -22,6 +26,8 @@ const MARKER_FILE: &str = "schema.json";
 const LOCK_FILE: &str = "lock";
 const JOURNALS_DIRECTORY: &str = "operations";
 const STAGING_DIRECTORY: &str = "staging";
+const RESTORE_JOURNALS_DIRECTORY: &str = "restore-operations";
+const RESTORE_STAGING_DIRECTORY: &str = "restore-staging";
 const MAX_JOURNAL_BYTES: u64 = 256 * 1024;
 const MAX_JOURNALS: usize = 4_096;
 
@@ -29,6 +35,8 @@ const MAX_JOURNALS: usize = 4_096;
 pub(super) struct CheckpointJournalStore {
     operations: PathBuf,
     staging: PathBuf,
+    restore_operations: PathBuf,
+    restore_staging: PathBuf,
     _lock: File,
 }
 
@@ -227,7 +235,9 @@ impl CheckpointJournalStore {
 
         let operations = root.join(JOURNALS_DIRECTORY);
         let staging = root.join(STAGING_DIRECTORY);
-        for directory in [&operations, &staging] {
+        let restore_operations = root.join(RESTORE_JOURNALS_DIRECTORY);
+        let restore_staging = root.join(RESTORE_STAGING_DIRECTORY);
+        for directory in [&operations, &staging, &restore_operations, &restore_staging] {
             match create_private_directory(directory) {
                 Ok(()) => {}
                 Err(error) if error.code == ErrorCode::AlreadyExists => {
@@ -237,9 +247,12 @@ impl CheckpointJournalStore {
             }
         }
         cleanup_all_stages(&staging)?;
+        restore::reconcile_stages(&restore_operations, &restore_staging)?;
         Ok(Self {
             operations,
             staging,
+            restore_operations,
+            restore_staging,
             _lock: lock,
         })
     }

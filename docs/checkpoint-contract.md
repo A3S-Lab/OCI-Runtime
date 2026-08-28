@@ -90,9 +90,22 @@ acknowledgement removes the operation journal, staging directory, and any
 owned pending link; it never removes the published artifact.
 
 The Host operation journal and live executor provide exact restore replay for
-response loss in the qualified process. A driver-local restore stage journal
-and cross-process adoption/recreation gate remain required before this
-experimental profile can be promoted or included in a published package.
+response loss in one process. A separate driver-local restore journal durably
+retains the allocated request, validated manifest, extracted image stage, and
+completed paused Agent state. On replacement-process startup, a `creating`
+Host record cleans the dead executor generation and retries from those retained
+images, while a committed paused `running` Host record recreates the exact
+generation before the Host rebinds its completed response. Host acknowledgement
+then removes the restore journal and retained stage without mutating the
+caller-owned checkpoint artifact.
+
+The real-kernel v3 gate terminates the original runtime owner after the Restore
+driver call and again after the Host's completed-operation parent-directory
+sync. In both cases a distinct owner opens the same Host and driver roots,
+recreates a live paused generation, replays the exact response, preserves the
+artifact bytes, and removes all journal, staging, executor, and session state
+after resume, kill, wait, and delete. Published-package, broader-profile,
+cross-driver, multi-architecture, and production qualification remain open.
 
 ## Artifact And Reference
 

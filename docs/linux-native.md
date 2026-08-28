@@ -384,16 +384,20 @@ path is a canonical, nonsymlink, root-owned executable without group/world
 write access. Driver startup additionally SHA-256-binds the retained CRIU
 descriptor and requires bounded `--version` and `criu check` probes.
 
-The positive `a3s.oci.native-linux-checkpoint-smoke.v2` report proves exact
+The positive `a3s.oci.native-linux-checkpoint-smoke.v3` report proves exact
 artifact digest and size, no-replace destination handling, checkpoint and
 restore response-loss replay into Host commit, exact Host replay, paused-source
 preservation and resume, a newer exact paused restored generation, restored
-resume and exit, caller-artifact immutability and survival across both deletes,
-and complete journal/staging/executor/session cleanup. Companion reports prove
-that private PID and configured network namespaces are rejected
-deterministically without residue. This is a constrained mechanism gate, not
-published-package, broad-profile, cross-process restore-journal, or production
-qualification. The immutable format and replay contract are documented in
+resume and exit, and caller-artifact immutability and survival across both
+deletes. It also replaces the runtime owner after the Restore driver call and
+after the completed Host-operation directory sync. A fresh service and driver
+reopen the same durable roots in both cases, recreate a live paused process,
+return the exact replayed response, and leave no restore journal, staging,
+executor, or session residue. Companion reports prove that private PID and
+configured network namespaces are rejected deterministically without residue.
+This is a constrained mechanism gate, not published-package, broad-profile,
+cross-driver, multi-architecture, or production qualification. The immutable
+format and replay contract are documented in
 [the checkpoint contract](checkpoint-contract.md).
 
 ## Experimental lifecycle gate
@@ -1230,8 +1234,8 @@ following pass:
   path handling,
   transport-level fault injection, and adversarial cleanup beyond the bounded
   native lifecycle churn gate;
-- Native Linux CRIU driver-local cross-process restore replay, wider checkpoint
-  namespace and descriptor profiles, published-package execution,
+- Native Linux CRIU wider checkpoint namespace and descriptor profiles,
+  published-package execution, cross-driver compatibility,
   multi-architecture real-host qualification, upgrade compatibility, and
   release soak;
 - the complete A3S Box Rust, Python, and TypeScript Sandbox SDK suites on

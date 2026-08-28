@@ -25,7 +25,7 @@ use crate::driver::{
     DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
     OciHookPhase, RuntimeDriver,
 };
-use crate::native_checkpoint::NativeCriuCheckpoint;
+use crate::native_checkpoint::{NativeCriuCheckpoint, NativeRestoreRecovery};
 
 /// Explicitly opted-in native Linux runtime driver.
 ///
@@ -340,6 +340,20 @@ impl RuntimeDriver for NativeLinuxDriver {
     async fn recover(&self, record: &ContainerRecord) -> Result<crate::DriverRecovery> {
         let target =
             ContainerTarget::exact(ContainerId::new(record.state.id())?, record.generation);
+        if let Some(checkpoint) = &self.checkpoint {
+            match checkpoint.recover_restore(&self.executor, record).await? {
+                Some(NativeRestoreRecovery::Pending) => {
+                    return Ok(crate::DriverRecovery::none());
+                }
+                Some(NativeRestoreRecovery::Recreated(state)) => {
+                    let observed =
+                        self.client
+                            .map_state(&target, Some(&record.config_digest), state)?;
+                    return crate::DriverRecovery::recreated_paused_running(observed);
+                }
+                None => {}
+            }
+        }
         let can_commit_stopped =
             *record.state.status() != a3s_oci_sdk::oci_spec::runtime::ContainerState::Creating;
         match self

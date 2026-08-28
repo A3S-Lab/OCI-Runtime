@@ -5,7 +5,15 @@ use serde::{Deserialize, Serialize};
 
 /// Schema emitted by the real native Linux CRIU checkpoint qualification.
 pub const NATIVE_LINUX_CHECKPOINT_SMOKE_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-checkpoint-smoke.v2";
+    "a3s.oci.native-linux-checkpoint-smoke.v3";
+
+/// Exact restore boundary at which a qualification owner terminates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NativeLinuxCheckpointRestoreCrashPoint {
+    AfterDriverCall,
+    AfterHostCommit,
+}
 
 /// Bounded evidence for immutable native Linux checkpoint and restore replay.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +53,15 @@ pub struct NativeLinuxCheckpointSmokeReport {
     pub restored_exit_status_exact: bool,
     pub artifact_bytes_unchanged_across_restore: bool,
     pub artifact_survived_restored_delete: bool,
+    pub restore_after_call_owner_replaced: bool,
+    pub restore_after_call_service_reopened: bool,
+    pub restore_after_call_replay_exact: bool,
+    pub restore_after_commit_owner_replaced: bool,
+    pub restore_after_commit_service_reopened: bool,
+    pub restore_after_commit_replay_exact: bool,
+    pub cross_process_restored_pids_live: bool,
+    pub cross_process_artifact_unchanged: bool,
+    pub cross_process_restore_cleanup_exact: bool,
     pub driver_journal_acknowledged: bool,
     pub unpublished_partials_absent: bool,
     pub executor_runtime_clean: bool,
@@ -88,6 +105,15 @@ impl NativeLinuxCheckpointSmokeReport {
             restored_exit_status_exact: false,
             artifact_bytes_unchanged_across_restore: false,
             artifact_survived_restored_delete: false,
+            restore_after_call_owner_replaced: false,
+            restore_after_call_service_reopened: false,
+            restore_after_call_replay_exact: false,
+            restore_after_commit_owner_replaced: false,
+            restore_after_commit_service_reopened: false,
+            restore_after_commit_replay_exact: false,
+            cross_process_restored_pids_live: false,
+            cross_process_artifact_unchanged: false,
+            cross_process_restore_cleanup_exact: false,
             driver_journal_acknowledged: false,
             unpublished_partials_absent: false,
             executor_runtime_clean: false,
@@ -142,6 +168,15 @@ impl NativeLinuxCheckpointSmokeReport {
             && self.restored_exit_status_exact
             && self.artifact_bytes_unchanged_across_restore
             && self.artifact_survived_restored_delete
+            && self.restore_after_call_owner_replaced
+            && self.restore_after_call_service_reopened
+            && self.restore_after_call_replay_exact
+            && self.restore_after_commit_owner_replaced
+            && self.restore_after_commit_service_reopened
+            && self.restore_after_commit_replay_exact
+            && self.cross_process_restored_pids_live
+            && self.cross_process_artifact_unchanged
+            && self.cross_process_restore_cleanup_exact
             && self.driver_journal_acknowledged
             && self.unpublished_partials_absent
             && self.executor_runtime_clean

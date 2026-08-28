@@ -4,7 +4,9 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
-use a3s_oci_sdk::{ContainerTarget, Error, ErrorCode, Result};
+use a3s_oci_sdk::{
+    ContainerTarget, Error, ErrorCode, Result, CONTROL_CGROUP_NAME, WORKLOAD_CGROUP_NAME,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::time::{sleep, Instant};
@@ -25,6 +27,9 @@ const CONTAINER_SCHEMA_VERSION_V1: &str = "a3s.oci.native-linux-recovery.v1";
 const MAX_RECORD_BYTES: u64 = 64 * 1024;
 const TERMINATION_TIMEOUT: Duration = Duration::from_secs(10);
 const TERMINATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const CGROUP_EVENTS: &str = "cgroup.events";
+const CGROUP_FREEZE: &str = "cgroup.freeze";
+const CGROUP_KILL: &str = "cgroup.kill";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -397,7 +402,7 @@ pub(super) async fn delete_stale_generation(tombstone: &LinuxExecutorTombstone) 
         cleanup_intel_rdt(intel_rdt, record.target.id.as_str())?;
     }
     if let Some(cgroup) = &record.cgroup {
-        cleanup_cgroup(cgroup)?;
+        cleanup_cgroup(cgroup).await?;
     }
     ensure_private_directory(&tombstone.runtime_root, 0o700)?;
     ensure_private_directory(&tombstone.runtime_directory, 0o700)?;
@@ -829,9 +834,10 @@ fn validate_cgroup_record(cgroup: &RecoveryCgroupRecord) -> Result<()> {
     Ok(())
 }
 
-fn cleanup_cgroup(cgroup: &RecoveryCgroupRecord) -> Result<()> {
+async fn cleanup_cgroup(cgroup: &RecoveryCgroupRecord) -> Result<()> {
     validate_cgroup_record(cgroup)?;
-    let freeze = cgroup.leaf.join("cgroup.freeze");
+    let termination_root = recovery_cgroup_termination_root(cgroup)?;
+    let freeze = cgroup.leaf.join(CGROUP_FREEZE);
     match std::fs::write(&freeze, b"0") {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -845,6 +851,7 @@ fn cleanup_cgroup(cgroup: &RecoveryCgroupRecord) -> Result<()> {
             ));
         }
     }
+    drain_recovered_cgroup(termination_root).await?;
     for path in cgroup.created.iter().rev() {
         match std::fs::remove_dir(path) {
             Ok(()) => {}
@@ -885,6 +892,103 @@ fn cleanup_cgroup(cgroup: &RecoveryCgroupRecord) -> Result<()> {
             error,
         )),
     }
+}
+
+fn recovery_cgroup_termination_root(cgroup: &RecoveryCgroupRecord) -> Result<&Path> {
+    let Some(parent) = cgroup.leaf.parent() else {
+        return Err(recovery_error(
+            ErrorCode::PermissionDenied,
+            "recovered native cgroup leaf has no parent",
+        ));
+    };
+    let control = parent.join(CONTROL_CGROUP_NAME);
+    let is_control_workload = cgroup
+        .leaf
+        .file_name()
+        .is_some_and(|name| name == std::ffi::OsStr::new(WORKLOAD_CGROUP_NAME))
+        && cgroup.created.iter().any(|path| path == parent)
+        && cgroup.created.iter().any(|path| path == &control);
+    if is_control_workload {
+        Ok(parent)
+    } else {
+        Ok(&cgroup.leaf)
+    }
+}
+
+async fn drain_recovered_cgroup(path: &Path) -> Result<()> {
+    let events = path.join(CGROUP_EVENTS);
+    match read_cgroup_populated(&events).await? {
+        None | Some(false) => return Ok(()),
+        Some(true) => {}
+    }
+
+    let kill = path.join(CGROUP_KILL);
+    tokio::fs::write(&kill, b"1").await.map_err(|error| {
+        recovery_io_error(
+            format!(
+                "failed to terminate recovered native cgroup {}: {error}",
+                path.display()
+            ),
+            error,
+        )
+    })?;
+
+    let deadline = Instant::now() + TERMINATION_TIMEOUT;
+    loop {
+        match read_cgroup_populated(&events).await? {
+            None | Some(false) => return Ok(()),
+            Some(true) => {}
+        }
+        if Instant::now() >= deadline {
+            return Err(recovery_error(
+                ErrorCode::DeadlineExceeded,
+                format!(
+                    "timed out waiting for recovered native cgroup {} to become empty",
+                    path.display()
+                ),
+            )
+            .retryable(true));
+        }
+        sleep(TERMINATION_POLL_INTERVAL).await;
+    }
+}
+
+async fn read_cgroup_populated(path: &Path) -> Result<Option<bool>> {
+    let encoded = match tokio::fs::read_to_string(path).await {
+        Ok(encoded) => encoded,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(recovery_io_error(
+                format!(
+                    "failed to inspect recovered native cgroup events {}: {error}",
+                    path.display()
+                ),
+                error,
+            ));
+        }
+    };
+    parse_cgroup_populated(&encoded).map(Some)
+}
+
+fn parse_cgroup_populated(events: &str) -> Result<bool> {
+    for line in events.lines() {
+        let mut fields = line.split_ascii_whitespace();
+        if fields.next() != Some("populated") {
+            continue;
+        }
+        return match (fields.next(), fields.next()) {
+            (Some("0"), None) => Ok(false),
+            (Some("1"), None) => Ok(true),
+            _ => Err(recovery_error(
+                ErrorCode::FailedPrecondition,
+                "recovered native cgroup has an invalid populated event",
+            )),
+        };
+    }
+    Err(recovery_error(
+        ErrorCode::FailedPrecondition,
+        "recovered native cgroup events omit the populated state",
+    ))
 }
 
 fn cleanup_empty_runtime_root(runtime_root: &Path) -> Result<()> {
@@ -1415,6 +1519,49 @@ mod tests {
         let mut duplicate = absolute;
         duplicate.created.push(duplicate.leaf.clone());
         assert!(validate_cgroup_record(&duplicate).is_err());
+    }
+
+    #[test]
+    fn recovered_cgroup_termination_root_is_generation_scoped() {
+        let authority = PathBuf::from("/sys/fs/cgroup");
+        let manager = authority.join("a3s-oci-1-test");
+        let management = manager.join("tenant");
+        let control = management.join(CONTROL_CGROUP_NAME);
+        let workload = management.join(WORKLOAD_CGROUP_NAME);
+        let control_workload = RecoveryCgroupRecord {
+            authority_root: authority.clone(),
+            manager_root: manager.clone(),
+            leaf: workload.clone(),
+            created: vec![management.clone(), control, workload],
+        };
+        validate_cgroup_record(&control_workload).expect("control/workload recovery record");
+        assert_eq!(
+            recovery_cgroup_termination_root(&control_workload)
+                .expect("control/workload termination root"),
+            management
+        );
+
+        let leaf = manager.join("plain");
+        let plain = RecoveryCgroupRecord {
+            authority_root: authority,
+            manager_root: manager,
+            leaf: leaf.clone(),
+            created: vec![leaf.clone()],
+        };
+        validate_cgroup_record(&plain).expect("plain recovery record");
+        assert_eq!(
+            recovery_cgroup_termination_root(&plain).expect("plain termination root"),
+            leaf
+        );
+    }
+
+    #[test]
+    fn recovered_cgroup_populated_event_is_strict() {
+        assert!(parse_cgroup_populated("frozen 1\npopulated 1\n").expect("populated cgroup"));
+        assert!(!parse_cgroup_populated("populated 0\nfrozen 0\n").expect("empty cgroup"));
+        assert!(parse_cgroup_populated("frozen 0\n").is_err());
+        assert!(parse_cgroup_populated("populated 2\n").is_err());
+        assert!(parse_cgroup_populated("populated 0 trailing\n").is_err());
     }
 
     #[test]

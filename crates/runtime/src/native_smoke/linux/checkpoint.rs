@@ -1,3 +1,5 @@
+mod cross_process;
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -8,8 +10,8 @@ use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     CheckpointArtifactPath, CheckpointRequest, ContainerId, ContainerOperationRequest,
     ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
-    ExitStatus, IoMode, IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId,
-    ProcessIo, RestoreRequest, Result, RuntimeClient, RuntimeOperation, Signal, StartRequest,
+    ExitStatus, Generation, IoMode, IsolationRequest, KillRequest, OciBundle, OperationContext,
+    OperationId, ProcessIo, Result, RuntimeClient, RuntimeOperation, Signal, StartRequest,
     StateRequest, WaitRequest,
 };
 use sha2::{Digest, Sha256};
@@ -22,8 +24,10 @@ use super::filesystem::{
 };
 use crate::fault::{DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint};
 use crate::{
-    HostRuntimeService, NativeLinuxCheckpointSmokeReport, NativeLinuxDriver, RuntimeDriver,
+    HostRuntimeService, NativeLinuxCheckpointRestoreCrashPoint, NativeLinuxCheckpointSmokeReport,
+    NativeLinuxDriver, RuntimeDriver,
 };
+use cross_process::CrossProcessRestoreSeed;
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(5 * 60 + 15);
@@ -31,6 +35,12 @@ const MARKER_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const PREEXISTING_CONTENT: &[u8] = b"caller-owned-checkpoint-destination\n";
 const CHECKPOINT_STATE_DIRECTORY: &str = ".a3s-oci-native-checkpoint-v1";
+
+struct CheckpointExercise {
+    restore_seed: CrossProcessRestoreSeed,
+    restored_generation: Generation,
+    artifact_identity: (String, u64),
+}
 
 #[derive(Debug)]
 struct LifecycleAfterCallFault {
@@ -187,13 +197,14 @@ pub(super) async fn run(
         }
     };
     let executor_root = driver.executor_root().to_path_buf();
+    let state_root = session_root.join("state");
     let runtime_driver: Arc<dyn RuntimeDriver> = driver.clone();
     let fault = Arc::new(LifecycleAfterCallFault::new(
         session_root.join("checkpoint.bin"),
     ));
     let fault_injector: Arc<dyn FaultInjector> = fault.clone();
     let service = match HostRuntimeService::open_with_fault_injector(
-        session_root.join("state"),
+        &state_root,
         runtime_driver,
         fault_injector,
     )
@@ -212,7 +223,6 @@ pub(super) async fn run(
         &client,
         &bundle,
         &session_root,
-        &executor_parent,
         &marker,
         &nonce,
         &fault,
@@ -234,13 +244,73 @@ pub(super) async fn run(
             format!("native checkpoint executor shutdown failed: {error}"),
         );
     }
+    drop(driver);
+    match exercise {
+        Ok(exercise) => {
+            if let Err(reason) = cross_process::qualify(
+                &init_executable,
+                &criu_executable,
+                &session_root,
+                &executor_parent,
+                &state_root,
+                &nonce,
+                &exercise.restore_seed,
+                exercise.restored_generation,
+                &exercise.artifact_identity,
+                &mut report,
+            )
+            .await
+            {
+                append_reason(&mut report, reason);
+            }
+        }
+        Err(reason) => append_reason(&mut report, reason),
+    }
+    let operations = executor_parent
+        .join(CHECKPOINT_STATE_DIRECTORY)
+        .join("operations");
+    let staging = executor_parent
+        .join(CHECKPOINT_STATE_DIRECTORY)
+        .join("staging");
+    let restore_operations = executor_parent
+        .join(CHECKPOINT_STATE_DIRECTORY)
+        .join("restore-operations");
+    let restore_staging = executor_parent
+        .join(CHECKPOINT_STATE_DIRECTORY)
+        .join("restore-staging");
+    match (
+        directory_is_empty(&operations).await,
+        directory_is_empty(&restore_operations).await,
+    ) {
+        (Ok(checkpoint_empty), Ok(restore_empty)) => {
+            report.driver_journal_acknowledged = checkpoint_empty && restore_empty;
+        }
+        (checkpoint, restore) => append_reason(
+            &mut report,
+            format!(
+                "failed to verify final checkpoint journals: checkpoint={checkpoint:?}, restore={restore:?}"
+            ),
+        ),
+    }
+    match (
+        directory_is_empty(&staging).await,
+        directory_is_empty(&restore_staging).await,
+        no_pending_entries(&session_root).await,
+    ) {
+        (Ok(checkpoint_empty), Ok(restore_empty), Ok(no_pending)) => {
+            report.unpublished_partials_absent =
+                checkpoint_empty && restore_empty && no_pending;
+        }
+        (checkpoint, restore, pending) => append_reason(
+            &mut report,
+            format!(
+                "failed to verify final checkpoint partials: checkpoint={checkpoint:?}, restore={restore:?}, pending={pending:?}"
+            ),
+        ),
+    }
     match path_exists(&executor_root).await {
         Ok(exists) => report.executor_runtime_clean = !exists,
         Err(reason) => append_reason(&mut report, reason),
-    }
-    drop(driver);
-    if let Err(reason) = exercise {
-        append_reason(&mut report, reason);
     }
     match remove_marker(&marker).await {
         Ok(()) => {}
@@ -267,17 +337,38 @@ pub(super) async fn run(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(super) async fn run_restore_owner(
+    init_executable: &Path,
+    criu_executable: &Path,
+    state_root: &Path,
+    executor_parent: &Path,
+    request_file: &Path,
+    ready_file: &Path,
+    crash_point: NativeLinuxCheckpointRestoreCrashPoint,
+) -> Result<()> {
+    cross_process::run_owner(
+        init_executable,
+        criu_executable,
+        state_root,
+        executor_parent,
+        request_file,
+        ready_file,
+        crash_point,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn exercise(
     client: &RuntimeClient,
     bundle: &OciBundle,
     session_root: &Path,
-    executor_parent: &Path,
     marker: &Path,
     nonce: &str,
     fault: &LifecycleAfterCallFault,
     cleanup_target: &mut Option<ContainerTarget>,
     report: &mut NativeLinuxCheckpointSmokeReport,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<CheckpointExercise, String> {
     let features = call("features", CALL_TIMEOUT, client.features()).await?;
     report.checkpoint_advertised = features.operations.contains(&RuntimeOperation::Checkpoint);
     report.restore_advertised = features.operations.contains(&RuntimeOperation::Restore);
@@ -468,17 +559,19 @@ async fn exercise(
     *cleanup_target = None;
     report.artifact_survived_source_delete = path_exists(&artifact_path).await?;
 
-    let restore_request = RestoreRequest::new(
-        operation(nonce, "restore")?,
+    let restore_artifact_path = CheckpointArtifactPath::new(artifact_path.clone())
+        .map_err(|error| format!("invalid restore artifact path: {error}"))?;
+    let restore_seed = CrossProcessRestoreSeed::new(
         id,
         bundle.clone(),
-        CheckpointArtifactPath::new(artifact_path.clone())
-            .map_err(|error| format!("invalid restore artifact path: {error}"))?,
+        restore_artifact_path,
         IsolationRequest::SharedHostKernel,
         attachments,
         reference,
-    )
-    .map_err(|error| format!("failed to construct restore request: {error}"))?;
+    );
+    let restore_request = restore_seed
+        .request(operation(nonce, "restore")?)
+        .map_err(|error| format!("failed to construct restore request: {error}"))?;
     fault.arm_restore();
     let first_restore_error =
         match timeout(CHECKPOINT_TIMEOUT, client.restore(restore_request.clone()))
@@ -582,21 +675,11 @@ async fn exercise(
     .await?;
     *cleanup_target = None;
     report.artifact_survived_restored_delete = path_exists(&artifact_path).await?;
-    let operations = executor_parent
-        .join(CHECKPOINT_STATE_DIRECTORY)
-        .join("operations");
-    let staging = executor_parent
-        .join(CHECKPOINT_STATE_DIRECTORY)
-        .join("staging");
-    report.driver_journal_acknowledged = directory_is_empty(&operations).await?;
-    report.unpublished_partials_absent =
-        directory_is_empty(&staging).await? && no_pending_entries(session_root).await?;
-    if !report.driver_journal_acknowledged || !report.unpublished_partials_absent {
-        return Err(
-            "checkpoint driver retained an acknowledged journal or unpublished partial".into(),
-        );
-    }
-    Ok(())
+    Ok(CheckpointExercise {
+        restore_seed,
+        restored_generation: restored.restored().generation,
+        artifact_identity: after_replay,
+    })
 }
 
 fn configured_init_io(bundle: &OciBundle) -> ProcessIo {

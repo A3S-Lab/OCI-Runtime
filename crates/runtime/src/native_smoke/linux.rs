@@ -49,6 +49,28 @@ pub(super) async fn run_checkpoint(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run_checkpoint_restore_owner(
+    init_executable: &Path,
+    criu_executable: &Path,
+    state_root: &Path,
+    executor_parent: &Path,
+    request_file: &Path,
+    ready_file: &Path,
+    crash_point: crate::NativeLinuxCheckpointRestoreCrashPoint,
+) -> a3s_oci_sdk::Result<()> {
+    checkpoint::run_restore_owner(
+        init_executable,
+        criu_executable,
+        state_root,
+        executor_parent,
+        request_file,
+        ready_file,
+        crash_point,
+    )
+    .await
+}
+
 pub(super) async fn run_fault_cleanup(
     init_executable: &Path,
     bundle_directory: &Path,

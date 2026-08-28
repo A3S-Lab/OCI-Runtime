@@ -223,7 +223,8 @@ pub use multi_container_report::{
     StorageVolumeEvidence, WindowsOciVmMultiContainerSmokeReport,
 };
 pub use native_checkpoint_report::{
-    NativeLinuxCheckpointSmokeReport, NATIVE_LINUX_CHECKPOINT_SMOKE_SCHEMA_VERSION,
+    NativeLinuxCheckpointRestoreCrashPoint, NativeLinuxCheckpointSmokeReport,
+    NATIVE_LINUX_CHECKPOINT_SMOKE_SCHEMA_VERSION,
 };
 #[cfg(target_os = "linux")]
 pub use native_control::{
@@ -257,6 +258,8 @@ pub use native_service::{
     NativeLinuxHostService, NativeLinuxHostServiceConfig, NativeLinuxService,
     NativeLinuxServiceConfig,
 };
+#[cfg(target_os = "linux")]
+pub use native_smoke::native_linux_checkpoint_restore_owner;
 pub use native_smoke::{
     native_linux_checkpoint_smoke, native_linux_fault_cleanup, native_linux_multi_container_smoke,
     native_linux_network_enforcement_smoke, native_linux_rootless_device_policy_smoke,

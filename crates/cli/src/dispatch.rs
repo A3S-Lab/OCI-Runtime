@@ -2,6 +2,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::process::ExitCode;
 
+mod native;
+
 use a3s_oci_sdk::RuntimeClient;
 
 #[cfg(all(
@@ -81,39 +83,32 @@ fn dispatch(
             agent,
             bundle,
             work_parent,
-        } => command_future!({
-            let report = a3s_oci_runtime::native_linux_smoke(&agent, &bundle, &work_parent).await;
-            let succeeded = report.is_success();
-            write_json(&report)?;
-            Ok(if succeeded {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(2)
-            })
-        }),
+        } => native::smoke(agent, bundle, work_parent),
         Command::NativeLinuxCheckpointSmoke {
             agent,
             criu,
             bundle,
             work_parent,
             source_revision,
-        } => command_future!({
-            let report = a3s_oci_runtime::native_linux_checkpoint_smoke(
-                &agent,
-                &criu,
-                &bundle,
-                &work_parent,
-                source_revision,
-            )
-            .await;
-            let succeeded = report.is_success();
-            write_json(&report)?;
-            Ok(if succeeded {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(2)
-            })
-        }),
+        } => native::checkpoint(agent, criu, bundle, work_parent, source_revision),
+        #[cfg(target_os = "linux")]
+        Command::NativeLinuxCheckpointRestoreOwner {
+            agent,
+            criu,
+            state_root,
+            executor_parent,
+            request_file,
+            ready_file,
+            crash_point,
+        } => native::checkpoint_restore_owner(
+            agent,
+            criu,
+            state_root,
+            executor_parent,
+            request_file,
+            ready_file,
+            crash_point,
+        ),
         Command::NativeLinuxNetworkEnforcementSmoke {
             agent,
             bundle,
@@ -123,29 +118,16 @@ fn dispatch(
             cleanup_id,
             redirect_port,
             rejected_port,
-        } => command_future!({
-            let configuration = a3s_oci_runtime::NativeLinuxNetworkEnforcementSmokeConfig::new(
-                source_interface,
-                a3s_oci_sdk::NetworkInterfaceId::new(interface_id)?,
-                a3s_oci_sdk::NetworkCleanupId::new(cleanup_id)?,
-                redirect_port,
-                rejected_port,
-            )?;
-            let report = a3s_oci_runtime::native_linux_network_enforcement_smoke(
-                &agent,
-                &bundle,
-                &work_parent,
-                configuration,
-            )
-            .await;
-            let succeeded = report.is_success();
-            write_json(&report)?;
-            Ok(if succeeded {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(2)
-            })
-        }),
+        } => native::network_enforcement(
+            agent,
+            bundle,
+            work_parent,
+            source_interface,
+            interface_id,
+            cleanup_id,
+            redirect_port,
+            rejected_port,
+        ),
         Command::NativeLinuxRootlessSmoke {
             agent,
             bundle,

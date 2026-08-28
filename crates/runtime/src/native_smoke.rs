@@ -249,6 +249,34 @@ pub async fn native_linux_checkpoint_smoke(
     }
 }
 
+/// Run one qualification-only Native restore owner until its exact crash point.
+///
+/// The hidden CLI worker exits without destructors after publishing durable
+/// readiness. It is not a product runtime entry point.
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub async fn native_linux_checkpoint_restore_owner(
+    init_executable: &Path,
+    criu_executable: &Path,
+    state_root: &Path,
+    executor_parent: &Path,
+    request_file: &Path,
+    ready_file: &Path,
+    crash_point: crate::NativeLinuxCheckpointRestoreCrashPoint,
+) -> a3s_oci_sdk::Result<()> {
+    linux::run_checkpoint_restore_owner(
+        init_executable,
+        criu_executable,
+        state_root,
+        executor_parent,
+        request_file,
+        ready_file,
+        crash_point,
+    )
+    .await
+}
+
 /// Qualify one opaque caller-owned network enforcement and redirect mechanism.
 ///
 /// The diagnostic binds only incarnation identities and mechanism digests to

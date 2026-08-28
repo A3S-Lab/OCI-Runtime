@@ -25,6 +25,27 @@ struct Cli {
     command: Command,
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum NativeLinuxCheckpointRestoreCrashPointArg {
+    #[value(name = "after-call")]
+    AfterDriverCall,
+    #[value(name = "after-commit")]
+    AfterHostCommit,
+}
+
+#[cfg(target_os = "linux")]
+impl From<NativeLinuxCheckpointRestoreCrashPointArg>
+    for a3s_oci_runtime::NativeLinuxCheckpointRestoreCrashPoint
+{
+    fn from(value: NativeLinuxCheckpointRestoreCrashPointArg) -> Self {
+        match value {
+            NativeLinuxCheckpointRestoreCrashPointArg::AfterDriverCall => Self::AfterDriverCall,
+            NativeLinuxCheckpointRestoreCrashPointArg::AfterHostCommit => Self::AfterHostCommit,
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Print machine-readable runtime driver capabilities.
@@ -62,6 +83,25 @@ enum Command {
         /// Exact source revision embedded in qualification evidence.
         #[arg(long, value_name = "REVISION")]
         source_revision: String,
+    },
+    /// Own one restore until a qualification-only process crash boundary.
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    NativeLinuxCheckpointRestoreOwner {
+        #[arg(long, value_name = "FILE")]
+        agent: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        criu: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        state_root: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        executor_parent: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        request_file: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        ready_file: PathBuf,
+        #[arg(long, value_enum)]
+        crash_point: NativeLinuxCheckpointRestoreCrashPointArg,
     },
     /// Qualify one opaque caller-owned network enforcement and redirect mechanism.
     NativeLinuxNetworkEnforcementSmoke {

@@ -239,7 +239,7 @@ jq --exit-status \
   --arg source "$source_commit" \
   --arg criu_digest "sha256:$(sha256sum "$criu_binary" | cut -d ' ' -f 1)" \
   '
-    .schemaVersion == "a3s.oci.native-linux-checkpoint-smoke.v2"
+    .schemaVersion == "a3s.oci.native-linux-checkpoint-smoke.v3"
     and .platform == "linux" and .status == "available"
     and .sourceRevision == $source
     and .checkpointAdvertised and .restoreAdvertised
@@ -259,6 +259,15 @@ jq --exit-status \
     and .restoredResumeSucceeded and .restoredExitStatusExact
     and .artifactBytesUnchangedAcrossRestore
     and .artifactSurvivedRestoredDelete
+    and .restoreAfterCallOwnerReplaced
+    and .restoreAfterCallServiceReopened
+    and .restoreAfterCallReplayExact
+    and .restoreAfterCommitOwnerReplaced
+    and .restoreAfterCommitServiceReopened
+    and .restoreAfterCommitReplayExact
+    and .crossProcessRestoredPidsLive
+    and .crossProcessArtifactUnchanged
+    and .crossProcessRestoreCleanupExact
     and .driverJournalAcknowledged and .unpublishedPartialsAbsent
     and .executorRuntimeClean and .sessionRootClean
     and .driverEvidence.checkpoint_backend == "criu"
@@ -286,7 +295,7 @@ if ((pidns_status == 0)); then
 fi
 jq --exit-status \
   '
-    .schemaVersion == "a3s.oci.native-linux-checkpoint-smoke.v2"
+    .schemaVersion == "a3s.oci.native-linux-checkpoint-smoke.v3"
     and .status == "unavailable"
     and .checkpointAdvertised and .restoreAdvertised
     and .pausedSourceObserved
@@ -311,7 +320,7 @@ if ((network_status == 0)); then
 fi
 jq --exit-status \
   '
-    .schemaVersion == "a3s.oci.native-linux-checkpoint-smoke.v2"
+    .schemaVersion == "a3s.oci.native-linux-checkpoint-smoke.v3"
     and .status == "unavailable"
     and .checkpointAdvertised and .restoreAdvertised
     and .pausedSourceObserved

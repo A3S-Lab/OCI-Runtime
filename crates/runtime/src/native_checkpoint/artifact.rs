@@ -120,6 +120,21 @@ impl CheckpointArtifactManifest {
         &self.external_mounts
     }
 
+    pub(super) fn validate_retained_images(&self, directory: &Path) -> Result<()> {
+        let publication_token = decode_token(&self.publication_token)?;
+        self.validate(&publication_token)?;
+        let observed = inspect_images(directory)?
+            .into_iter()
+            .map(|source| source.manifest)
+            .collect::<Vec<_>>();
+        if observed != self.images {
+            return Err(invalid_artifact(
+                "retained restore images differ from their checkpoint manifest",
+            ));
+        }
+        Ok(())
+    }
+
     fn validate(&self, expected_token: &[u8; 32]) -> Result<()> {
         if self.schema_version != ARTIFACT_SCHEMA_V2
             || self.publication_token != encode_token(expected_token)
@@ -815,6 +830,83 @@ fn validate_image_name(name: &str) -> Result<()> {
 
 pub(super) fn encode_token(token: &[u8; 32]) -> String {
     token.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn decode_token(encoded: &str) -> Result<[u8; 32]> {
+    if encoded.len() != 64
+        || !encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(invalid_artifact(
+            "checkpoint publication token is not 32-byte lowercase hexadecimal",
+        ));
+    }
+    let mut token = [0_u8; 32];
+    for (index, pair) in encoded.as_bytes().chunks_exact(2).enumerate() {
+        let text = std::str::from_utf8(pair)
+            .map_err(|_| invalid_artifact("checkpoint publication token is not UTF-8"))?;
+        token[index] = u8::from_str_radix(text, 16)
+            .map_err(|_| invalid_artifact("checkpoint publication token is invalid hexadecimal"))?;
+    }
+    Ok(token)
+}
+
+#[cfg(test)]
+pub(super) fn retained_manifest_fixture() -> (CheckpointArtifactManifest, Vec<u8>) {
+    let token = [7_u8; 32];
+    let image = b"retained CRIU inventory".to_vec();
+    let digest = |symbol: char| {
+        CheckpointDigest::new(format!("sha256:{}", symbol.to_string().repeat(64))).unwrap()
+    };
+    let manifest = CheckpointArtifactManifest {
+        schema_version: ARTIFACT_SCHEMA_V2.to_string(),
+        publication_token: encode_token(&token),
+        source: ContainerTarget::exact(
+            a3s_oci_sdk::ContainerId::new("restore-journal-source").unwrap(),
+            a3s_oci_sdk::Generation(1),
+        ),
+        source_config_digest: digest('1'),
+        source_attachments_digest: digest('2'),
+        compatibility: CheckpointCompatibility::new(
+            a3s_oci_core::DriverKind::NativeLinux,
+            a3s_oci_core::IsolationClass::SharedHostKernel,
+            a3s_oci_core::HostPlatform::Linux,
+            std::env::consts::ARCH,
+            a3s_oci_sdk::RuntimeArtifact::new(
+                "a3s-oci-runtime",
+                "0.2.0",
+                digest('3').to_string(),
+                None,
+            )
+            .unwrap(),
+            digest('4'),
+            a3s_oci_sdk::CheckpointFormat::new("native-linux-criu", 1).unwrap(),
+        )
+        .unwrap(),
+        quiesce: "paused".to_string(),
+        launcher_pid: 4_241,
+        checkpoint_root_pid: 4_242,
+        init_pid: 4_242,
+        cgroup_path: "/a3s/restore/a3s-workload".to_string(),
+        criu: CriuIdentity {
+            executable_digest: digest('5'),
+            version: "4.2.1".to_string(),
+            git_id: None,
+        },
+        dump_options: vec!["--shell-job".to_string()],
+        external_mounts: vec![ExternalMountManifestEntry {
+            name: "a3s-oci-device-0000".to_string(),
+            mountpoint: PathBuf::from("/dev/null"),
+        }],
+        images: vec![ImageManifestEntry {
+            name: INVENTORY_IMAGE.to_string(),
+            size_bytes: image.len() as u64,
+            digest: CheckpointDigest::new(format!("sha256:{:x}", Sha256::digest(&image))).unwrap(),
+        }],
+    };
+    manifest.validate(&token).unwrap();
+    (manifest, image)
 }
 
 fn image_io(

@@ -134,19 +134,23 @@ A3S_OCI_NATIVE_RUNTIME_BINARY=/absolute/path/to/a3s-oci \
 ```
 
 The positive report schema is
-`a3s.oci.native-linux-checkpoint-smoke.v2`. It proves atomic no-replace
+`a3s.oci.native-linux-checkpoint-smoke.v3`. It proves atomic no-replace
 publication, checkpoint and restore replay after response-loss faults, exact
 artifact digest and size, paused-source preservation and resume, exact newer
 paused-generation restore, restored resume and exit, caller-artifact
-immutability and survival, and scoped cleanup. Companion unavailable reports
-prove the version-1 private-PID-namespace and configured-network-namespace
-rejections. Default Features must still omit Checkpoint and Restore, while the
-explicit CRIU-qualified driver advertises both operations.
+immutability and survival, and scoped cleanup. It additionally terminates the
+runtime owner after the Restore driver call and after the completed Host
+operation is directory-synced. Distinct replacement processes must reopen the
+same Host and driver roots, recreate live paused processes, replay the exact
+responses, preserve artifact bytes, and remove all retained restore state.
+Companion unavailable reports prove the version-1 private-PID-namespace and
+configured-network-namespace rejections. Default Features must still omit
+Checkpoint and Restore, while the explicit CRIU-qualified driver advertises
+both operations.
 
 These three reports are not yet members of
 `a3s.oci.native-linux-package-qualification.v3` and are not covered merely by
 verifying a release archive's provenance. Retain them beside the exact host
 and CRIU identity when evaluating the experimental checkpoint profile.
-Driver-local cross-process restore replay, broader source profiles,
-multi-architecture package qualification, security, upgrade, rollback, and
-release soak remain open.
+Broader source profiles, cross-driver and multi-architecture package
+qualification, security, upgrade, rollback, and release soak remain open.
