@@ -5,6 +5,9 @@ const CONTAINERD_GUIDE: &str = include_str!("../../../docs/containerd-runtime-v2
 const NATIVE_LINUX_PACKAGE_SMOKE: &str =
     include_str!("../../../.github/scripts/native-linux-package-smoke.sh");
 const NATIVE_LINUX_SMOKE: &str = include_str!("../../../.github/scripts/native-linux-smoke.sh");
+const NATIVE_LINUX_CHECKPOINT: &str =
+    include_str!("../../../.github/scripts/native-linux-checkpoint.sh");
+const BUILD_PINNED_CRIU: &str = include_str!("../../../.github/scripts/build-pinned-criu.sh");
 
 const ATTEST_ACTION: &str = "actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1";
 const RELEASE_ACTION: &str =
@@ -117,6 +120,12 @@ fn release_attests_every_checksum_bound_archive_before_publishing() {
             .count(),
         2
     );
+    assert_eq!(
+        RELEASE_WORKFLOW
+            .matches("cp docs/checkpoint-contract.md \"$package/docs/\"")
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -150,13 +159,15 @@ fn linux_release_archives_retain_exact_package_qualification() {
     assert!(qualification_position < archive_position);
 
     for required in [
-        "a3s.oci.native-linux-package-qualification.v3",
-        "full-sdk-oar01-oar02-without-kvm-v3",
+        "a3s.oci.native-linux-package-qualification.v4",
+        "full-sdk-oar01-oar02-oar03-without-kvm-v4",
         "A3S_OCI_NATIVE_RUNTIME_BINARY",
         "A3S_OCI_NATIVE_AGENT_BINARY",
         "A3S_OCI_NATIVE_NETWORK_ENFORCEMENT_REPORT",
         "a3s.oci.native-linux-network-enforcement-smoke.v1",
         "A3S_OCI_NATIVE_KVM_ABSENCE_EVIDENCE",
+        "checkpoint_driver_build_digest",
+        "checkpoint_source_revision",
         "verify-static-elf.sh",
         "containerd-shim-a3s-oci-v2",
     ] {
@@ -165,6 +176,13 @@ fn linux_release_archives_retain_exact_package_qualification() {
             "Native package qualification lost {required}"
         );
     }
+    assert!(RELEASE_WORKFLOW.contains(
+        "bash .github/scripts/build-pinned-criu.sh \\\n            /usr/local/lib/a3s-oci-tools/criu-4.2.1"
+    ));
+    assert!(
+        RELEASE_WORKFLOW.contains("A3S_OCI_CRIU_BINARY=/usr/local/lib/a3s-oci-tools/criu-4.2.1")
+    );
+    assert!(RELEASE_WORKFLOW.contains("A3S_OCI_GIT_REVISION=\"$GITHUB_SHA\""));
 }
 
 #[test]
@@ -182,7 +200,7 @@ fn native_package_qualification_retains_oar01_real_host_evidence() {
             "Native OAR-01 qualification lost {required}"
         );
     }
-    assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("and (.evidence | length == 8)"));
+    assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("and (.evidence | length == 11)"));
 }
 
 #[test]
@@ -201,6 +219,81 @@ fn native_package_qualification_retains_oar02_real_host_evidence() {
             "Native OAR-02 qualification lost {required}"
         );
     }
+}
+
+#[test]
+fn native_package_qualification_retains_oar03_real_host_evidence() {
+    for required in [
+        "A3S_OCI_CRIU_BINARY",
+        "A3S_OCI_NATIVE_CHECKPOINT_REPORT",
+        "A3S_OCI_NATIVE_CHECKPOINT_PIDNS_REPORT",
+        "A3S_OCI_NATIVE_CHECKPOINT_NETNS_REPORT",
+        "native-linux-checkpoint.json",
+        "native-linux-checkpoint-pidns.json",
+        "native-linux-checkpoint-netns.json",
+        "a3s.oci.native-linux-checkpoint-smoke.v3",
+        "checkpoint_driver_build_digest",
+        "checkpoint_criu_digest",
+        "oar03_checkpoint_restore_verified",
+        "external_tools",
+    ] {
+        assert!(
+            NATIVE_LINUX_PACKAGE_SMOKE.contains(required),
+            "Native OAR-03 package qualification lost {required}"
+        );
+    }
+
+    for required in [
+        "restoreAfterCallOwnerReplaced",
+        "restoreAfterCommitOwnerReplaced",
+        "crossProcessRestoredPidsLive",
+        "crossProcessRestoreCleanupExact",
+    ] {
+        assert!(
+            NATIVE_LINUX_CHECKPOINT.contains(required),
+            "Native checkpoint qualification lost {required}"
+        );
+    }
+
+    for required in [
+        "https://github.com/checkpoint-restore/criu.git",
+        "v4.2.1",
+        "9539417f3e3cfa4eb84c319cd71f4d52f1f08645",
+        "refs/tags/${criu_tag}:refs/tags/${criu_tag}",
+        "install -m 0755 -o root -g root",
+    ] {
+        assert!(
+            BUILD_PINNED_CRIU.contains(required),
+            "Pinned CRIU builder lost {required}"
+        );
+    }
+}
+
+#[test]
+fn pinned_criu_install_validates_the_destination_before_publication() {
+    let destination_guard = BUILD_PINNED_CRIU
+        .find("if [[ -e \"$destination\" || -L \"$destination\" ]]; then")
+        .expect("Pinned CRIU builder lost the pre-canonical destination guard");
+    let canonicalization = BUILD_PINNED_CRIU
+        .find("destination=\"$(realpath -m -- \"$destination\")\"")
+        .expect("Pinned CRIU builder lost destination canonicalization");
+    let parent_identity = BUILD_PINNED_CRIU
+        .find("destination_parent_mode=\"$(stat --format '%a' -- \"$destination_parent\")\"")
+        .expect("Pinned CRIU builder lost install-parent identity validation");
+    let publication = BUILD_PINNED_CRIU
+        .find("install -m 0755 -o root -g root --")
+        .expect("Pinned CRIU builder lost root-owned publication");
+
+    assert!(destination_guard < canonicalization);
+    assert!(canonicalization < parent_identity);
+    assert!(parent_identity < publication);
+    assert_eq!(
+        BUILD_PINNED_CRIU
+            .matches("if [[ -e \"$destination\" || -L \"$destination\" ]]; then")
+            .count(),
+        3,
+        "Destination identity must be rechecked after each path-changing step"
+    );
 }
 
 #[test]
@@ -223,4 +316,19 @@ fn packaged_native_binaries_are_validated_before_host_setup() {
         );
     }
     assert!(pre_setup.matches("validate_native_binaries").count() >= 2);
+}
+
+#[test]
+fn packaged_native_service_waits_for_the_protected_socket_publication() {
+    for required in [
+        "os.path.lexists(socket_path)",
+        "stat.S_ISSOCK(socket_metadata.st_mode)",
+        "socket_mode == 0o600",
+        "timed out waiting for protected native service socket",
+    ] {
+        assert!(
+            NATIVE_LINUX_SMOKE.contains(required),
+            "Native package gate lost protected socket readiness check: {required}"
+        );
+    }
 }

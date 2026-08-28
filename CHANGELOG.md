@@ -27,18 +27,22 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
-- Added the OAR-03 explicit rootful Native Linux CRIU checkpoint backend
-  without changing default capability advertisement. The opt-in constructor
-  binds one exact root-owned CRIU executable and advertises Checkpoint only;
-  Restore remains absent. Format `native-linux-criu` v1 requires a paused
-  `control-workload-v1` source with exact init membership, no private PID
-  namespace, and no live execs. It streams sorted CRIU images and a canonical
-  evidence manifest into one digest-bound artifact, publishes with no-replace
-  filesystem semantics, and durably replays allocated, prepared, and published
-  driver phases through Host acknowledgement. A real-kernel qualification
-  injects a fault after publication, proves driver and Host replay, source
-  pause/resume, caller-artifact survival, scoped cleanup, exact CRIU/build
-  evidence, and deterministic private-PID-namespace rejection.
+- Added the OAR-03 explicit rootful Native Linux CRIU checkpoint and restore
+  backend without changing default capability advertisement. The opt-in
+  constructor binds one exact root-owned CRIU executable and advertises both
+  operations. Format `native-linux-criu` v1 requires a paused
+  `control-workload-v1` source with exact init membership, no private PID,
+  user, or network namespace, and no live execs. It streams sorted CRIU images
+  and a canonical evidence manifest into one digest-bound artifact, publishes
+  with no-replace filesystem semantics, and restores a newer paused generation
+  from retained immutable images. Durable allocated, prepared, restored, and
+  Host-committed phases survive owner replacement. Real-kernel schema-v3
+  qualification replaces the runtime process after the Restore driver call
+  and after the completed-operation directory sync, reopens through a fresh
+  service and driver, verifies live restored PIDs and exact response replay,
+  preserves the caller artifact, and leaves no journal, staging, executor, or
+  session residue. Companion reports retain deterministic private-PID- and
+  configured-network-namespace rejection.
 - Added signed SLSA build provenance for all five full Runtime archives and
   `SHA256SUMS`. The tag workflow grants signing and artifact metadata access
   only to the publish job, pins every external release Action to an immutable
@@ -47,26 +51,30 @@ All notable changes to A3S OCI Runtime are documented in this file.
   archive. Provenance verification remains separate from driver, containerd,
   OCI, security, upgrade, rollback, and soak qualification.
 - Added exact staged-package qualification for tagged Linux x86_64 and arm64
-  archives. The static musl CLI and Agent now run the complete Native Linux
-  matrix with `/dev/kvm` removed before compression, while a versioned package
-  report binds the source commit, platform, driver/isolation profile, all three
-  executable digests, and eight retained subordinate evidence records. The
-  package gate does not promote Native Linux beyond `probe-only` or replace the
-  remaining A3S Box, upstream OCI, security, or release-host gates.
+  archives. The static musl CLI and Agent run the complete Native Linux matrix
+  with `/dev/kvm` removed before compression. Package schema v4 additionally
+  builds CRIU v4.2.1 from pinned upstream commit
+  `9539417f3e3cfa4eb84c319cd71f4d52f1f08645` and requires the three-report
+  OAR-03 checkpoint/restore matrix. The report binds the source commit,
+  platform, driver/isolation profile, all three packaged executable digests,
+  the external CRIU identity, and eleven subordinate evidence records. CRIU
+  remains host-provided and outside the archive. The package gate does not
+  promote Native Linux beyond `probe-only` or replace the remaining A3S Box,
+  upstream OCI, security, or release-host gates.
 - Qualified the policy-neutral OAR-01 network-enforcement boundary on rootful
   Native Linux. The driver advertises `dev.a3s.network.enforcement@1` only with
   network-device authority. A real caller-owned namespace fixture proves exact
   interface attachment, redirect and rejection behavior, live Host reopen with
   generation/PID/opaque-evidence replay, and namespace/interface/mechanism
-  preservation after Delete. Package qualification v3 retains this as its
-  eighth digest-bound evidence report; rootless Native and VM drivers remain
+  preservation after Delete. Package qualification v4 retains this among its
+  eleven digest-bound evidence reports; rootless Native and VM drivers remain
   unadvertised.
 - Qualified the policy-neutral OAR-02 pause/resume mechanism on rootful Native
   Linux. Soak schema v2 retains every exact generation and caller operation ID,
   proves atomic workload counters remain frozen across Pause and a Host Service
   reopen, exactly replays the committed Pause response, then proves progress
   resumes and exactly replays Resume after a second reopen. Package
-  qualification v3 binds all 100 per-generation records from the 25-by-4 soak
+  qualification v4 binds all 100 per-generation records from the 25-by-4 soak
   to the staged static runtime and Agent without assigning idle or wake policy
   to OCI Runtime.
 - Added a canonical machine-readable containerd runtime-v2 compatibility

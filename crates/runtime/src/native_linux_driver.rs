@@ -138,6 +138,12 @@ impl NativeLinuxDriver {
             checkpoint.driver_build_digest().to_string(),
         );
         driver.capability.evidence.insert(
+            "checkpoint_source_revision".to_string(),
+            option_env!("A3S_OCI_GIT_REVISION")
+                .unwrap_or("unavailable")
+                .to_string(),
+        );
+        driver.capability.evidence.insert(
             "checkpoint_opt_in".to_string(),
             "open-experimental-with-criu".to_string(),
         );

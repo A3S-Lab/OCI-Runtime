@@ -9,11 +9,33 @@ fi
 
 package_directory=$1
 source_commit="${A3S_QUALIFICATION_SOURCE_COMMIT:-}"
+criu_binary="${A3S_OCI_CRIU_BINARY:-}"
 if [[ ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
   printf '%s\n' \
     'A3S_QUALIFICATION_SOURCE_COMMIT must be one lowercase 40-character Git commit' >&2
   exit 2
 fi
+if [[ -z "$criu_binary" || "$criu_binary" != /* ]] ||
+  [[ ! -f "$criu_binary" || -L "$criu_binary" || ! -x "$criu_binary" ]]; then
+  printf '%s\n' \
+    'A3S_OCI_CRIU_BINARY must name one absolute regular nonsymlink executable' >&2
+  exit 2
+fi
+criu_binary="$(realpath -e -- "$criu_binary")"
+criu_mode="$(stat --format '%a' -- "$criu_binary")"
+if [[ "$(stat --format '%u:%g' -- "$criu_binary")" != '0:0' ]] ||
+  (((8#$criu_mode & 8#022) != 0)); then
+  printf '%s\n' \
+    'CRIU must be root-owned without group/world write access' >&2
+  exit 2
+fi
+criu_version_output="$("$criu_binary" --version)"
+grep --fixed-strings --line-regexp 'Version: 4.2.1' \
+  <<<"$criu_version_output" >/dev/null
+grep --fixed-strings --line-regexp 'GitID: v4.2.1' \
+  <<<"$criu_version_output" >/dev/null
+criu_version='4.2.1'
+criu_git_id='v4.2.1'
 if [[ ! -d "$package_directory" || -L "$package_directory" ]]; then
   printf 'Staged Native Linux package must be a nonsymlink directory: %s\n' \
     "$package_directory" >&2
@@ -33,6 +55,7 @@ required_files=(
   "$package_directory/CHANGELOG.md"
   "$package_directory/LICENSE"
   "$package_directory/docs/release-verification.md"
+  "$package_directory/docs/checkpoint-contract.md"
   "$package_directory/docs/containerd-runtime-v2.md"
   "$package_directory/compat/containerd-runtime-v2.json"
 )
@@ -63,6 +86,11 @@ if [[ ! "$runtime_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; 
     "$runtime_version_output" >&2
   exit 1
 fi
+runtime_sha256="$(sha256sum "$runtime_binary" | cut -d ' ' -f 1)"
+agent_sha256="$(sha256sum "$agent_binary" | cut -d ' ' -f 1)"
+shim_sha256="$(sha256sum "$shim_binary" | cut -d ' ' -f 1)"
+criu_sha256="$(sha256sum "$criu_binary" | cut -d ' ' -f 1)"
+criu_size="$(stat --format '%s' "$criu_binary")"
 
 architecture="$(uname -m)"
 case "$architecture" in
@@ -101,6 +129,9 @@ rootless_recovery_report="$qualification_directory/native-linux-rootless-recover
 rootless_device_report="$qualification_directory/native-linux-rootless-device-policy.json"
 network_enforcement_report="$qualification_directory/native-linux-network-enforcement.json"
 kvm_absence_report="$qualification_directory/native-linux-kvm-absence.json"
+checkpoint_report="$qualification_directory/native-linux-checkpoint.json"
+checkpoint_pidns_report="$qualification_directory/native-linux-checkpoint-pidns.json"
+checkpoint_netns_report="$qualification_directory/native-linux-checkpoint-netns.json"
 package_report="$qualification_directory/native-linux-package.json"
 
 "$runtime_binary" features >"$features_report"
@@ -182,6 +213,80 @@ jq --exit-status --arg architecture "$architecture" \
    and .device_absent_before_lifecycle' \
   "$kvm_absence_report" >/dev/null
 
+A3S_OCI_NATIVE_RUNTIME_BINARY="$runtime_binary" \
+A3S_OCI_NATIVE_AGENT_BINARY="$agent_binary" \
+A3S_OCI_CRIU_BINARY="$criu_binary" \
+A3S_QUALIFICATION_SOURCE_COMMIT="$source_commit" \
+A3S_OCI_NATIVE_CHECKPOINT_REPORT="$checkpoint_report" \
+A3S_OCI_NATIVE_CHECKPOINT_PIDNS_REPORT="$checkpoint_pidns_report" \
+A3S_OCI_NATIVE_CHECKPOINT_NETNS_REPORT="$checkpoint_netns_report" \
+  bash <(tr -d '\015' < .github/scripts/native-linux-checkpoint.sh)
+
+criu_digest="sha256:$criu_sha256"
+checkpoint_driver_build_digest="$(
+  jq --raw-output --exit-status \
+    '.driverEvidence.checkpoint_driver_build_digest
+     | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))' \
+    "$checkpoint_report"
+)"
+jq --exit-status \
+  --arg source_commit "$source_commit" \
+  --arg checkpoint_driver_build_digest "$checkpoint_driver_build_digest" \
+  --arg criu_digest "$criu_digest" \
+  --arg criu_version "$criu_version" \
+  '
+    .schemaVersion == "a3s.oci.native-linux-checkpoint-smoke.v3"
+    and .status == "available"
+    and .sourceRevision == $source_commit
+    and .checkpointAdvertised and .restoreAdvertised
+    and .restoreAfterCallOwnerReplaced
+    and .restoreAfterCallServiceReopened
+    and .restoreAfterCallReplayExact
+    and .restoreAfterCommitOwnerReplaced
+    and .restoreAfterCommitServiceReopened
+    and .restoreAfterCommitReplayExact
+    and .crossProcessRestoredPidsLive
+    and .crossProcessArtifactUnchanged
+    and .crossProcessRestoreCleanupExact
+    and .driverJournalAcknowledged
+    and .unpublishedPartialsAbsent
+    and .executorRuntimeClean
+    and .sessionRootClean
+    and .driverEvidence.checkpoint_driver_build_digest == $checkpoint_driver_build_digest
+    and .driverEvidence.checkpoint_source_revision == $source_commit
+    and .driverEvidence.checkpoint_criu_digest == $criu_digest
+    and .driverEvidence.checkpoint_criu_version == $criu_version
+  ' \
+  "$checkpoint_report" >/dev/null
+for checkpoint_negative_report in \
+  "$checkpoint_pidns_report" \
+  "$checkpoint_netns_report"; do
+  jq --exit-status \
+    --arg source_commit "$source_commit" \
+    --arg checkpoint_driver_build_digest "$checkpoint_driver_build_digest" \
+    --arg criu_digest "$criu_digest" \
+    --arg criu_version "$criu_version" \
+    '
+      .schemaVersion == "a3s.oci.native-linux-checkpoint-smoke.v3"
+      and .status == "unavailable"
+      and .sourceRevision == $source_commit
+      and .checkpointAdvertised and .restoreAdvertised
+      and .pausedSourceObserved
+      and .preexistingDestinationRejected
+      and .preexistingDestinationPreserved
+      and .driverJournalAcknowledged
+      and .unpublishedPartialsAbsent
+      and .executorRuntimeClean
+      and .sessionRootClean
+      and .driverEvidence.checkpoint_driver_build_digest == $checkpoint_driver_build_digest
+      and .driverEvidence.checkpoint_source_revision == $source_commit
+      and .driverEvidence.checkpoint_criu_digest == $criu_digest
+      and .driverEvidence.checkpoint_criu_version == $criu_version
+      and (.reason | type == "string" and length > 0)
+    ' \
+    "$checkpoint_negative_report" >/dev/null
+done
+
 evidence_manifest="$qualification_directory/.evidence.jsonl"
 for evidence in \
   "$features_report" \
@@ -191,10 +296,19 @@ for evidence in \
   "$rootless_recovery_report" \
   "$rootless_device_report" \
   "$network_enforcement_report" \
-  "$kvm_absence_report"; do
+  "$kvm_absence_report" \
+  "$checkpoint_report" \
+  "$checkpoint_pidns_report" \
+  "$checkpoint_netns_report"; do
+  evidence_schema="$(
+    jq --raw-output --exit-status \
+      '(.schema_version // .schemaVersion)
+       | select(type == "string" and length > 0)' \
+      "$evidence"
+  )"
   jq --compact-output --null-input \
     --arg name "$(basename "$evidence")" \
-    --arg schema_version "$(jq --raw-output '.schema_version' "$evidence")" \
+    --arg schema_version "$evidence_schema" \
     --arg sha256 "$(sha256sum "$evidence" | cut -d ' ' -f 1)" \
     --argjson size "$(stat --format '%s' "$evidence")" \
     '{
@@ -205,12 +319,9 @@ for evidence in \
     }' >>"$evidence_manifest"
 done
 
-runtime_sha256="$(sha256sum "$runtime_binary" | cut -d ' ' -f 1)"
-agent_sha256="$(sha256sum "$agent_binary" | cut -d ' ' -f 1)"
-shim_sha256="$(sha256sum "$shim_binary" | cut -d ' ' -f 1)"
 workflow_run_id="${GITHUB_RUN_ID:-}"
 jq --null-input \
-  --arg schema_version 'a3s.oci.native-linux-package-qualification.v3' \
+  --arg schema_version 'a3s.oci.native-linux-package-qualification.v4' \
   --arg status 'available' \
   --arg source_commit "$source_commit" \
   --arg workflow_run_id "$workflow_run_id" \
@@ -219,7 +330,7 @@ jq --null-input \
   --arg kernel_release "$(uname -r)" \
   --arg driver 'native-linux' \
   --arg isolation_class 'shared-host-kernel' \
-  --arg profile 'full-sdk-oar01-oar02-without-kvm-v3' \
+  --arg profile 'full-sdk-oar01-oar02-oar03-without-kvm-v4' \
   --arg package_name "$package_name" \
   --arg runtime_version "$runtime_version" \
   --arg runtime_sha256 "$runtime_sha256" \
@@ -228,6 +339,11 @@ jq --null-input \
   --argjson agent_size "$(stat --format '%s' "$agent_binary")" \
   --arg shim_sha256 "$shim_sha256" \
   --argjson shim_size "$(stat --format '%s' "$shim_binary")" \
+  --arg criu_version "$criu_version" \
+  --arg criu_git_id "$criu_git_id" \
+  --arg criu_sha256 "$criu_sha256" \
+  --argjson criu_size "$criu_size" \
+  --arg checkpoint_driver_build_digest "$checkpoint_driver_build_digest" \
   --slurpfile evidence "$evidence_manifest" \
   '{
     schema_version: $schema_version,
@@ -247,12 +363,23 @@ jq --null-input \
       agent: {sha256: $agent_sha256, size: $agent_size},
       containerd_shim: {sha256: $shim_sha256, size: $shim_size}
     },
+    external_tools: {
+      criu: {
+        packaged: false,
+        version: $criu_version,
+        git_id: $criu_git_id,
+        sha256: $criu_sha256,
+        size: $criu_size
+      }
+    },
+    checkpoint_driver_build_digest: $checkpoint_driver_build_digest,
     package_layout_verified: true,
     static_elf_verified: true,
     features_verified: true,
     kvm_absent_before_lifecycle: true,
     full_sdk_matrix_completed: true,
     oar02_pause_resume_verified: true,
+    oar03_checkpoint_restore_verified: true,
     evidence: $evidence
   }' >"$package_report.tmp"
 chmod 0644 "$package_report.tmp"
@@ -261,7 +388,7 @@ rm "$evidence_manifest"
 
 jq --exit-status \
   'select(
-     .schema_version == "a3s.oci.native-linux-package-qualification.v3"
+     .schema_version == "a3s.oci.native-linux-package-qualification.v4"
      and .status == "available"
      and .package_layout_verified
      and .static_elf_verified
@@ -269,6 +396,13 @@ jq --exit-status \
      and .kvm_absent_before_lifecycle
      and .full_sdk_matrix_completed
      and .oar02_pause_resume_verified
-     and (.evidence | length == 8)
+     and .oar03_checkpoint_restore_verified
+     and .external_tools.criu.packaged == false
+     and .external_tools.criu.version == "4.2.1"
+     and .external_tools.criu.git_id == "v4.2.1"
+     and (.external_tools.criu.sha256 | test("^[0-9a-f]{64}$"))
+     and (.external_tools.criu.size > 0)
+     and (.checkpoint_driver_build_digest | test("^sha256:[0-9a-f]{64}$"))
+     and (.evidence | length == 11)
    )' \
   "$package_report"

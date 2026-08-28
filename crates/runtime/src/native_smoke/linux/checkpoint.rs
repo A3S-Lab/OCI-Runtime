@@ -380,6 +380,11 @@ async fn exercise(
     if !report.checkpoint_advertised || !report.restore_advertised {
         return Err("CRIU-backed driver did not expose Checkpoint and Restore together".into());
     }
+    if !report.driver_source_revision_matches() {
+        return Err(
+            "CRIU-backed driver source revision does not match the qualification source".into(),
+        );
+    }
 
     let id = ContainerId::new(format!("checkpoint-{nonce}"))
         .map_err(|error| format!("failed to construct checkpoint container ID: {error}"))?;

@@ -395,9 +395,11 @@ reopen the same durable roots in both cases, recreate a live paused process,
 return the exact replayed response, and leave no restore journal, staging,
 executor, or session residue. Companion reports prove that private PID and
 configured network namespaces are rejected deterministically without residue.
-This is a constrained mechanism gate, not published-package, broad-profile,
-cross-driver, multi-architecture, or production qualification. The immutable
-format and replay contract are documented in
+This is a constrained mechanism gate. Package qualification v4 runs it with
+the staged release CLI and Agent and binds all three reports to the exact
+runtime and host-provided CRIU digests. Broader profiles, cross-driver and
+retained tagged multi-architecture runs, and production qualification remain
+open. The immutable format and replay contract are documented in
 [the checkpoint contract](checkpoint-contract.md).
 
 ## Experimental lifecycle gate
@@ -1194,18 +1196,26 @@ strict `A3S_OCI_NATIVE_RUNTIME_BINARY` and
 continue to build and use `target/debug`; supplying only one path, a symbolic
 link, a non-file, or a non-executable fails before host mutation.
 
+The workflow also builds upstream CRIU tag `v4.2.1` at commit
+`9539417f3e3cfa4eb84c319cd71f4d52f1f08645`, installs the result as a
+root-owned host qualification tool, and passes it through
+`A3S_OCI_CRIU_BINARY`. CRIU is never copied into the archive. Its exact
+version, Git ID, digest, and size are retained in the package report.
+
 The gate removes `/dev/kvm` before the lifecycle dispatch and retains
-`a3s.oci.native-linux-package-qualification.v3` in
+`a3s.oci.native-linux-package-qualification.v4` in
 `qualification/native-linux-package.json`. That report binds the source
 commit, workflow run, host architecture and kernel, driver, isolation class,
 profile, runtime version, and exact SHA-256/size identity of all three package
-executables. It also SHA-256-binds eight subordinate reports covering Features,
-the bounded soak, rootful and rootless recovery, Hook owner-death recovery,
-rootless device policy, OAR-01 network enforcement, and the KVM-absence
-boundary. Its soak evidence additionally closes the OAR-02 mechanism gate for
-exact operation identity, frozen/resumed progress, and Pause/Resume replay
-across two Host Service reopens per wave. The reports are archived and later
-covered by the release checksum and signed provenance.
+executables. It also SHA-256-binds eleven subordinate reports covering
+Features, the bounded soak, rootful and rootless recovery, Hook owner-death
+recovery, rootless device policy, OAR-01 network enforcement, the KVM-absence
+boundary, and the three OAR-03 checkpoint/restore results. Its soak evidence
+closes the OAR-02 mechanism gate for exact operation identity, frozen/resumed
+progress, and Pause/Resume replay across two Host Service reopens per wave.
+The OAR-03 evidence proves replacement-process replay at both Restore fault
+boundaries and deterministic PID/network namespace rejection. The reports are
+archived and later covered by the release checksum and signed provenance.
 
 This closes the reproducible package-to-Native-matrix wiring. Actual tag
 artifacts still need retained runs, and A3S Box product startup and its
@@ -1235,9 +1245,8 @@ following pass:
   transport-level fault injection, and adversarial cleanup beyond the bounded
   native lifecycle churn gate;
 - Native Linux CRIU wider checkpoint namespace and descriptor profiles,
-  published-package execution, cross-driver compatibility,
-  multi-architecture real-host qualification, upgrade compatibility, and
-  release soak;
+  cross-driver compatibility, retained tagged x86_64/aarch64 qualification,
+  upgrade compatibility, and release soak;
 - the complete A3S Box Rust, Python, and TypeScript Sandbox SDK suites on
   x86_64 and aarch64 without KVM.
 

@@ -2661,7 +2661,17 @@ for source in copies:
 
 socket_path = os.path.join(service_root, "runtime.sock")
 deadline = time.monotonic() + 15
-while not os.path.exists(socket_path):
+socket_observation = "absent"
+while True:
+    if os.path.lexists(socket_path):
+        socket_metadata = os.lstat(socket_path)
+        socket_mode = stat.S_IMODE(socket_metadata.st_mode)
+        socket_observation = (
+            f"type={stat.S_IFMT(socket_metadata.st_mode):#o} "
+            f"mode={socket_mode:#o}"
+        )
+        if stat.S_ISSOCK(socket_metadata.st_mode) and socket_mode == 0o600:
+            break
     if process.poll() is not None:
         stdout, stderr = process.communicate()
         raise RuntimeError(
@@ -2672,7 +2682,8 @@ while not os.path.exists(socket_path):
         process.kill()
         stdout, stderr = process.communicate()
         raise RuntimeError(
-            f"timed out waiting for native service: stdout={stdout!r} stderr={stderr!r}"
+            "timed out waiting for protected native service socket "
+            f"({socket_observation}): stdout={stdout!r} stderr={stderr!r}"
         )
     time.sleep(0.025)
 

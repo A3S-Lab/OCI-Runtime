@@ -87,14 +87,15 @@ if [[ ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
     'A3S_QUALIFICATION_SOURCE_COMMIT must be one lowercase 40-character Git commit' >&2
   exit 2
 fi
-if [[ -z "$criu_binary" || "$criu_binary" != /* ]]; then
-  printf '%s\n' 'A3S_OCI_CRIU_BINARY must name one absolute CRIU executable' >&2
+if [[ -z "$criu_binary" || "$criu_binary" != /* ]] ||
+  [[ ! -f "$criu_binary" || -L "$criu_binary" || ! -x "$criu_binary" ]]; then
+  printf '%s\n' \
+    'A3S_OCI_CRIU_BINARY must name one absolute regular nonsymlink executable' >&2
   exit 2
 fi
 criu_binary="$(realpath -e -- "$criu_binary")"
 criu_mode="$(stat --format '%a' -- "$criu_binary")"
-if [[ ! -f "$criu_binary" || -L "$criu_binary" || ! -x "$criu_binary" ]] ||
-  [[ "$(stat --format '%u' -- "$criu_binary")" != 0 ]] ||
+if [[ "$(stat --format '%u' -- "$criu_binary")" != 0 ]] ||
   (((8#$criu_mode & 8#022) != 0)); then
   printf '%s\n' \
     'CRIU must be a root-owned nonsymlink executable without group/world write access' >&2
@@ -124,7 +125,8 @@ if [[ -z "$runtime_binary" && -z "$agent_binary" ]]; then
     printf '%s\n' 'Development checkpoint qualification requires cargo' >&2
     exit 2
   }
-  cargo build -p a3s-oci-agent -p a3s-oci-cli
+  A3S_OCI_GIT_REVISION="$source_commit" \
+    cargo build -p a3s-oci-agent -p a3s-oci-cli
   runtime_binary="$PWD/target/debug/a3s-oci"
   agent_binary="$PWD/target/debug/a3s-oci-agent"
 elif [[ -z "$runtime_binary" || -z "$agent_binary" ]]; then
@@ -274,6 +276,7 @@ jq --exit-status \
     and .driverEvidence.restore_backend == "criu"
     and .driverEvidence.checkpoint_format == "native-linux-criu-v1"
     and .driverEvidence.checkpoint_criu_digest == $criu_digest
+    and .driverEvidence.checkpoint_source_revision == $source
     and (.driverEvidence.checkpoint_driver_build_digest | test("^sha256:[0-9a-f]{64}$"))
     and (.artifactDigest | test("^sha256:[0-9a-f]{64}$"))
     and (.artifactSizeBytes > 0)
@@ -294,6 +297,7 @@ if ((pidns_status == 0)); then
   exit 1
 fi
 jq --exit-status \
+  --arg source "$source_commit" \
   '
     .schemaVersion == "a3s.oci.native-linux-checkpoint-smoke.v3"
     and .status == "unavailable"
@@ -302,6 +306,7 @@ jq --exit-status \
     and .preexistingDestinationRejected
     and .preexistingDestinationPreserved
     and .executorRuntimeClean and .sessionRootClean
+    and .driverEvidence.checkpoint_source_revision == $source
     and (.reason | contains("format v1 does not support a private PID namespace"))
   ' \
   <<<"$pidns_report" >/dev/null
@@ -319,6 +324,7 @@ if ((network_status == 0)); then
   exit 1
 fi
 jq --exit-status \
+  --arg source "$source_commit" \
   '
     .schemaVersion == "a3s.oci.native-linux-checkpoint-smoke.v3"
     and .status == "unavailable"
@@ -327,6 +333,7 @@ jq --exit-status \
     and .preexistingDestinationRejected
     and .preexistingDestinationPreserved
     and .executorRuntimeClean and .sessionRootClean
+    and .driverEvidence.checkpoint_source_revision == $source
     and (.reason | contains("format v1 does not support a configured network namespace"))
   ' \
   <<<"$network_report" >/dev/null

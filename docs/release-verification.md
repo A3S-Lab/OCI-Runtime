@@ -80,33 +80,42 @@ for the intended host and integration.
 
 Each Linux host archive contains
 `qualification/native-linux-package.json` with schema
-`a3s.oci.native-linux-package-qualification.v3`. The tag workflow creates this
+`a3s.oci.native-linux-package-qualification.v4`. The tag workflow creates this
 report before compression by running the staged musl CLI and Agent, not Cargo
 development binaries. The gate verifies the package layout and all three
 static ELF executables, removes `/dev/kvm` across the lifecycle portion, and
 runs the complete Native Linux SDK, rootless, owner-death, Hook-recovery,
 OAR-01 network-enforcement, fault-cleanup, and OAR-02 pause/resume recovery
-soak matrix.
+soak matrix. It then runs the OAR-03 checkpoint/restore matrix with a
+host-provided CRIU built from upstream tag `v4.2.1` at commit
+`9539417f3e3cfa4eb84c319cd71f4d52f1f08645`.
 
 The report binds the source commit, workflow run, Linux architecture and
 kernel, `native-linux` driver, `shared-host-kernel` isolation class, exact test
 profile, runtime version, and SHA-256 digest and size of the CLI, Agent, and
 containerd shim. Its `evidence` array binds the retained Features, soak,
 rootful recovery, Hook recovery, rootless recovery, rootless device-policy,
-OAR-01 network-enforcement, and KVM-absence records. Soak schema v2 retains
-every exact Pause and Resume operation ID, both post-reopen response replays,
-and the frozen and resumed workload counters for all 100 lifecycles. After
-verifying the outer archive provenance, inspect the package report with:
+OAR-01 network-enforcement, KVM-absence, positive checkpoint/restore,
+private-PID-namespace rejection, and configured-network-namespace rejection
+records. The `external_tools.criu` entry binds the exact version, Git ID,
+SHA-256 digest, and size while recording that CRIU is not packaged. Soak schema
+v2 retains every exact Pause and Resume operation ID, both post-reopen response
+replays, and the frozen and resumed workload counters for all 100 lifecycles.
+After verifying the outer archive provenance, inspect the package report with:
 
 ```bash
 jq --exit-status \
-  '.schema_version == "a3s.oci.native-linux-package-qualification.v3"
+  '.schema_version == "a3s.oci.native-linux-package-qualification.v4"
    and .status == "available"
    and .static_elf_verified
    and .kvm_absent_before_lifecycle
    and .full_sdk_matrix_completed
    and .oar02_pause_resume_verified
-   and (.evidence | length == 8)' \
+   and .oar03_checkpoint_restore_verified
+   and .external_tools.criu.packaged == false
+   and .external_tools.criu.version == "4.2.1"
+   and (.external_tools.criu.sha256 | test("^[0-9a-f]{64}$"))
+   and (.evidence | length == 11)' \
   a3s-oci-runtime-vX.Y.Z-linux-*/qualification/native-linux-package.json
 ```
 
@@ -117,10 +126,11 @@ release gates.
 
 ## Native Linux CRIU checkpoint qualification
 
-CRIU is host-provided and is not bundled into the Runtime archive. The initial
-`native-linux-criu` checkpoint format therefore has a separate rootful gate
-that binds the exact CRIU, CLI, Agent, source commit, driver-build digest, and
-resulting immutable artifact:
+CRIU is host-provided and is not bundled into the Runtime archive. Package
+qualification v4 builds the pinned upstream source into
+`/usr/local/lib/a3s-oci-tools/criu-4.2.1`, runs the rootful gate, and binds the
+exact CRIU, CLI, Agent, source commit, driver-build digest, and resulting
+immutable artifact. The same gate can be run independently with:
 
 ```bash
 A3S_OCI_NATIVE_RUNTIME_BINARY=/absolute/path/to/a3s-oci \
@@ -148,9 +158,12 @@ configured-network-namespace rejections. Default Features must still omit
 Checkpoint and Restore, while the explicit CRIU-qualified driver advertises
 both operations.
 
-These three reports are not yet members of
-`a3s.oci.native-linux-package-qualification.v3` and are not covered merely by
-verifying a release archive's provenance. Retain them beside the exact host
-and CRIU identity when evaluating the experimental checkpoint profile.
-Broader source profiles, cross-driver and multi-architecture package
-qualification, security, upgrade, rollback, and release soak remain open.
+Package qualification v4 retains these three reports as evidence entries,
+requires their embedded `checkpoint_source_revision` to equal the outer
+`source_commit`, requires one exact driver-build digest across all three,
+separately binds the outer executable, and requires every CRIU digest to match
+`external_tools.criu` exactly. Verifying archive provenance alone
+still does not prove that a different host-provided CRIU is qualified for
+runtime use. Broader source profiles, cross-driver qualification, retained
+tagged multi-architecture runs, security, upgrade, rollback, and release soak
+remain open.

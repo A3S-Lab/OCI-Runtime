@@ -130,6 +130,12 @@ impl NativeLinuxCheckpointSmokeReport {
         report
     }
 
+    pub(crate) fn driver_source_revision_matches(&self) -> bool {
+        self.driver_evidence
+            .get("checkpoint_source_revision")
+            .is_some_and(|revision| revision == &self.source_revision)
+    }
+
     /// Whether every immutable-artifact, retry, quiescence, and cleanup check passed.
     #[must_use]
     pub fn is_success(&self) -> bool {
@@ -143,6 +149,7 @@ impl NativeLinuxCheckpointSmokeReport {
             && self
                 .driver_evidence
                 .contains_key("checkpoint_driver_build_digest")
+            && self.driver_source_revision_matches()
             && self.lifecycle_started
             && self.paused_source_observed
             && self.preexisting_destination_rejected
@@ -182,5 +189,29 @@ impl NativeLinuxCheckpointSmokeReport {
             && self.executor_runtime_clean
             && self.session_root_clean
             && self.reason.is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use a3s_oci_core::HostPlatform;
+
+    use super::NativeLinuxCheckpointSmokeReport;
+
+    #[test]
+    fn driver_source_revision_must_match_the_report_source() {
+        let source_revision = "a".repeat(40);
+        let mut report =
+            NativeLinuxCheckpointSmokeReport::initial(HostPlatform::Linux, source_revision.clone());
+
+        assert!(!report.driver_source_revision_matches());
+        report
+            .driver_evidence
+            .insert("checkpoint_source_revision".to_string(), "b".repeat(40));
+        assert!(!report.driver_source_revision_matches());
+        report
+            .driver_evidence
+            .insert("checkpoint_source_revision".to_string(), source_revision);
+        assert!(report.driver_source_revision_matches());
     }
 }
