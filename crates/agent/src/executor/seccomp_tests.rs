@@ -105,6 +105,26 @@ fn plans_native_and_multiple_compatibility_architectures() {
 }
 
 #[test]
+fn plans_aarch64_with_arm_compatibility_architecture() {
+    let plan = plan(json!({
+        "defaultAction": "SCMP_ACT_ERRNO",
+        "defaultErrnoRet": 1,
+        "architectures": [
+            "SCMP_ARCH_AARCH64",
+            "SCMP_ARCH_ARM"
+        ],
+        "syscalls": [{
+            "names": ["read", "write", "exit"],
+            "action": "SCMP_ACT_ALLOW"
+        }]
+    }))
+    .expect("aarch64 plus ARM compatibility architecture");
+    let expected_architectures = if cfg!(target_arch = "aarch64") { 2 } else { 3 };
+    assert_eq!(plan.architecture_count(), expected_architectures);
+    assert_eq!(plan.filter_count(), expected_architectures + 1);
+}
+
+#[test]
 fn plans_every_advertised_seccomp_action_and_operator() {
     for action in OCI_LINUX_SECCOMP_ACTIONS {
         let mut configuration = json!({"defaultAction": action});
@@ -159,7 +179,7 @@ fn recognizes_but_does_not_advertise_unsupported_seccomp_flags() {
 fn rejects_unsupported_seccomp_architectures_and_notify_actions() {
     let error = plan(json!({
         "defaultAction": "SCMP_ACT_ALLOW",
-        "architectures": ["SCMP_ARCH_ARM"]
+        "architectures": ["SCMP_ARCH_S390X"]
     }))
     .expect_err("unsupported seccomp architecture must fail");
     assert_eq!(error.code, ErrorCode::Unsupported);

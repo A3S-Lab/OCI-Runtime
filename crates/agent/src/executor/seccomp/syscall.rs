@@ -22,6 +22,11 @@ pub(super) fn resolve(architecture: SeccompArchitecture, name: &str) -> Vec<Sysc
                 .ok()
                 .map(|syscall| i64::from(syscall.id())),
         ),
+        SeccompArchitecture::Arm => direct(
+            syscalls::arm::Sysno::from_str(name)
+                .ok()
+                .map(|syscall| i64::from(syscall.id())),
+        ),
         SeccompArchitecture::X86_64 => direct(
             syscalls::x86_64::Sysno::from_str(name)
                 .ok()
@@ -205,6 +210,21 @@ mod tests {
             number: 117,
             multiplexer_selector: Some(1),
         }));
+    }
+
+    #[test]
+    fn arm_compatibility_uses_its_32_bit_syscall_table() {
+        assert_eq!(
+            resolve(SeccompArchitecture::Arm, "read"),
+            [SyscallTarget {
+                number: 3,
+                multiplexer_selector: None,
+            }]
+        );
+        assert_ne!(
+            resolve(SeccompArchitecture::Arm, "read"),
+            resolve(SeccompArchitecture::Aarch64, "read")
+        );
     }
 
     #[test]

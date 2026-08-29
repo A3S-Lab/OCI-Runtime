@@ -75,11 +75,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
   package gate does not promote Native Linux beyond `probe-only` or replace
   the remaining A3S Box, descriptor-preserving/full upstream lifecycle,
   security, or release-host gates.
-- Completed the OCI Runtime Tools x86_64 execution-compatibility slice. The
+- Completed the OCI Runtime Tools Linux execution-compatibility slice. The
   shared Linux executor now accepts the X86 and X32 compatibility ABIs beside
-  native x86_64, compiles ABI-scoped pure-Rust seccomp BPF with fail-closed
-  architecture dispatch, resolves legacy x86 multiplexers and x32 syscall
-  numbers, and implements OCI `MASKED_EQ` operand semantics. Relative
+  native x86_64 and the 32-bit ARM ABI beside native AArch64. It compiles
+  ABI-scoped pure-Rust seccomp BPF with fail-closed architecture dispatch,
+  resolves legacy x86 multiplexers plus x32 and ARM syscall numbers, and
+  implements OCI `MASKED_EQ` operand semantics. Relative
   `root.path`, omitted `process`, false or omitted `noNewPrivileges`, exact
   `execvp` argv/PATH behavior, ENOEXEC shell fallback, and the six normative
   default devices are covered without weakening the immutable device

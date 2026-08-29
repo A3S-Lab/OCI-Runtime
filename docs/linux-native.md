@@ -1222,10 +1222,12 @@ adapter on both architectures. Seven pass their original TAP assertions.
 `start` and `pidfile` each expose one exact, source-audited Runtime Tools harness
 defect; the gate accepts them only when the runtime's spec-correct state
 transition, error, cleanup, and journal evidence matches the locked signatures.
-The result remains transparent: the rootfs provenance, both raw TAP failures,
-both defect identifiers, every retired CLI journal, and clean Host Service
-shutdown are retained. The exact tool/build-manifest identities are retained;
-the tool and fixtures are never copied into the archive.
+The AArch64 configuration's `SCMP_ARCH_AARCH64` and `SCMP_ARCH_ARM` entries use
+separate audit identities and native/compatibility syscall tables. The result
+remains transparent: the rootfs provenance, both raw TAP failures, both defect
+identifiers, every retired CLI journal, and clean Host Service shutdown are
+retained. The exact tool/build-manifest identities are retained; the tool and
+fixtures are never copied into the archive.
 
 The gate removes `/dev/kvm` before the lifecycle dispatch and retains
 `a3s.oci.native-linux-package-qualification.v7` in

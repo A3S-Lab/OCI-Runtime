@@ -1211,7 +1211,9 @@ and architecture drift before installing it under the filename expected by the
 upstream harness. All nine selected tests execute: seven pass their original
 TAP assertions, while `start` and `pidfile` are retained as semantically
 conformant with two exact, source-audited Runtime Tools harness defects. The
-report records the rootfs source, both defect identifiers, all retired CLI
+upstream AArch64 configuration's native and 32-bit ARM seccomp ABIs are both
+compiled with architecture-scoped syscall tables. The report records the
+rootfs source, both defect identifiers, all retired CLI
 journals, and clean service shutdown and qualifies the pinned core lifecycle
 profile on both Linux architectures without hiding the two raw TAP failures.
 The workflow also builds upstream CRIU v4.2.1 at pinned commit
