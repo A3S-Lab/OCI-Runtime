@@ -18,12 +18,12 @@ pub(super) struct SyscallTarget {
 pub(super) fn resolve(architecture: SeccompArchitecture, name: &str) -> Vec<SyscallTarget> {
     match architecture {
         SeccompArchitecture::Aarch64 => direct(
-            syscalls::aarch64::Sysno::from_str(name)
+            syscalls::aarch64::Sysno::from_str(architecture_syscall_name(architecture, name))
                 .ok()
                 .map(|syscall| i64::from(syscall.id())),
         ),
         SeccompArchitecture::Arm => direct(
-            syscalls::arm::Sysno::from_str(name)
+            syscalls::arm::Sysno::from_str(architecture_syscall_name(architecture, name))
                 .ok()
                 .map(|syscall| i64::from(syscall.id())),
         ),
@@ -34,6 +34,16 @@ pub(super) fn resolve(architecture: SeccompArchitecture, name: &str) -> Vec<Sysc
         ),
         SeccompArchitecture::X86 => resolve_x86(name),
         SeccompArchitecture::X32 => direct(resolve_x32(name)),
+    }
+}
+
+/// Translate libseccomp's architecture-neutral syscall names to the spellings
+/// used by the kernel tables exposed by the `syscalls` crate.
+fn architecture_syscall_name(architecture: SeccompArchitecture, name: &str) -> &str {
+    match (architecture, name) {
+        (SeccompArchitecture::Aarch64, "newfstatat") => "fstatat",
+        (SeccompArchitecture::Arm, "newfstatat") => "fstatat64",
+        _ => name,
     }
 }
 
@@ -224,6 +234,24 @@ mod tests {
         assert_ne!(
             resolve(SeccompArchitecture::Arm, "read"),
             resolve(SeccompArchitecture::Aarch64, "read")
+        );
+    }
+
+    #[test]
+    fn arm_fstatat_uses_the_libseccomp_newfstatat_name() {
+        assert_eq!(
+            resolve(SeccompArchitecture::Aarch64, "newfstatat"),
+            [SyscallTarget {
+                number: 79,
+                multiplexer_selector: None,
+            }]
+        );
+        assert_eq!(
+            resolve(SeccompArchitecture::Arm, "newfstatat"),
+            [SyscallTarget {
+                number: 327,
+                multiplexer_selector: None,
+            }]
         );
     }
 

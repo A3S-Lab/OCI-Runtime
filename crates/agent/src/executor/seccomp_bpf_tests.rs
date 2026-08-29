@@ -7,7 +7,9 @@ use super::seccomp::SeccompPlan;
 const AUDIT_ARCH_AARCH64: u32 = 0xc000_00b7;
 const AUDIT_ARCH_ARM: u32 = 0x4000_0028;
 const AARCH64_CLONE: u32 = 220;
+const AARCH64_NEWFSTATAT: u32 = 79;
 const ARM_CLONE: u32 = 120;
+const ARM_NEWFSTATAT: u32 = 327;
 const CLONE_NAMESPACE_MASK: u64 = 2_114_060_288;
 
 const BPF_LD_W_ABS: u16 = 0x20;
@@ -22,23 +24,29 @@ const SECCOMP_DATA_ARCH_OFFSET: u32 = 4;
 const SECCOMP_DATA_ARGS_OFFSET: u32 = 16;
 
 #[test]
-fn compiled_arm_clone_condition_allows_process_creation_without_namespaces() {
+fn compiled_arm_runtime_tools_policy_allows_shell_process_creation() {
     let plan = plan(json!({
         "defaultAction": "SCMP_ACT_ERRNO",
         "defaultErrnoRet": 1,
         "architectures": ["SCMP_ARCH_ARM", "SCMP_ARCH_AARCH64"],
-        "syscalls": [{
-            "names": ["clone"],
-            "action": "SCMP_ACT_ALLOW",
-            "args": [{
-                "index": 0,
-                "value": CLONE_NAMESPACE_MASK,
-                "valueTwo": 0,
-                "op": "SCMP_CMP_MASKED_EQ"
-            }]
-        }]
+        "syscalls": [
+            {
+                "names": ["clone"],
+                "action": "SCMP_ACT_ALLOW",
+                "args": [{
+                    "index": 0,
+                    "value": CLONE_NAMESPACE_MASK,
+                    "valueTwo": 0,
+                    "op": "SCMP_CMP_MASKED_EQ"
+                }]
+            },
+            {
+                "names": ["newfstatat"],
+                "action": "SCMP_ACT_ALLOW"
+            }
+        ]
     }))
-    .expect("runtime-tools compatible ARM clone policy");
+    .expect("runtime-tools compatible ARM process policy");
     let filters = plan.compiled_filters().expect("compile seccomp filters");
 
     assert_all_filters_allow(
@@ -53,6 +61,13 @@ fn compiled_arm_clone_condition_allows_process_creation_without_namespaces() {
         ARM_CLONE,
         [libc::SIGCHLD as u64, 0, 0, 0, 0, 0],
     );
+    assert_all_filters_allow(
+        &filters,
+        AUDIT_ARCH_AARCH64,
+        AARCH64_NEWFSTATAT,
+        [0, 0, 0, 0, 0, 0],
+    );
+    assert_all_filters_allow(&filters, AUDIT_ARCH_ARM, ARM_NEWFSTATAT, [0, 0, 0, 0, 0, 0]);
 
     assert_one_filter_returns(
         &filters,
