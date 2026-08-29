@@ -342,7 +342,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 
 The default profile requires:
 
-- 25 consecutive full protocol-v10 OCI lifecycles;
+- 25 consecutive full protocol-v10 OCI lifecycles with an x86_64/AArch64
+  seccomp architecture set;
 - three waves of two independent VMs and three two-container lifecycles inside
   one authenticated VM;
 - cleanup without a normal delete after create, start, and kill;
@@ -350,7 +351,8 @@ The default profile requires:
 - persistent read-write and enforced read-only bind volumes;
 - a delayed successful init script and an expected nonzero init failure, both
   with state written through a bind volume;
-- ten exact host/guest validation rejections;
+- ten exact host/guest validation rejections, including an unadvertised S390X
+  seccomp architecture;
 - owner termination at 0, 250, 1000, and 2500 milliseconds after shim spawn.
 
 The runner writes every Linux guest workload asset as BOM-free LF text even
@@ -365,6 +367,11 @@ and bounded host working-set and log growth. The evidence directory contains
 `host.json`, start/final process inventories, `capability-results.tsv`,
 `operations.tsv`, `resource-samples.tsv`, every command report and console,
 `summary.json`, and a final `verify.out`.
+
+Guest-side rejections must retain the exact bounded post-VM bootstrap layout.
+The host-side process-field preflight rejection must instead leave the initial
+single empty `dev` directory pristine and must never bind an endpoint or spawn
+the shim.
 
 The August 1, 2026 direct-driver qualification ran from clean commit
 `7bb09dff81b5445e275c31faff6592ad4c32a45f` and emitted

@@ -627,12 +627,12 @@ function New-SoakFixture {
             'mounts-without-namespace',
             'apparmor-profile',
             'mount-label',
-            'seccomp-multi-arch',
+            'seccomp-unsupported-arch',
             'ambiguous-propagation',
             'additional-root-mount',
             'bind-without-source',
             'username',
-            'net-devices',
+            'net-device-missing-source',
             'missing-mount-source',
             'network-isolated',
             'network-inherited',
@@ -664,11 +664,20 @@ function New-SoakFixture {
     $scenarioMetadata = [pscustomobject]@{
         Evidence = $null
         Source = $null
+        ExpectedSourceSha256 = $null
         ReadOnlySource = $null
         Scratch = $null
         RoundTrip = $null
     }
     switch ($Variant) {
+        'positive' {
+            $seccomp = [pscustomobject][ordered]@{
+                defaultAction = 'SCMP_ACT_ALLOW'
+                architectures = @('SCMP_ARCH_X86_64', 'SCMP_ARCH_AARCH64')
+            }
+            $config.linux | Add-Member -NotePropertyName seccomp `
+                -NotePropertyValue $seccomp
+        }
         'mounts-without-namespace' {
             $config.linux.namespaces = @(
                 $config.linux.namespaces | Where-Object { $_.type -ne 'mount' }
@@ -682,10 +691,10 @@ function New-SoakFixture {
             $config.linux | Add-Member -NotePropertyName mountLabel `
                 -NotePropertyValue 'system_u:object_r:container_file_t:s0'
         }
-        'seccomp-multi-arch' {
+        'seccomp-unsupported-arch' {
             $seccomp = [pscustomobject][ordered]@{
                 defaultAction = 'SCMP_ACT_ALLOW'
-                architectures = @('SCMP_ARCH_X86_64', 'SCMP_ARCH_AARCH64')
+                architectures = @('SCMP_ARCH_S390X')
             }
             $config.linux | Add-Member -NotePropertyName seccomp `
                 -NotePropertyValue $seccomp
@@ -721,7 +730,7 @@ function New-SoakFixture {
             $config.process.user | Add-Member -NotePropertyName username `
                 -NotePropertyValue 'root'
         }
-        'net-devices' {
+        'net-device-missing-source' {
             $netDevices = [pscustomobject][ordered]@{
                 eth0 = [pscustomobject][ordered]@{
                     name = 'container-eth0'
@@ -870,6 +879,22 @@ function Get-FixtureAudit {
     $bootstrapLayoutValid = @(
         Compare-Object -ReferenceObject $expectedNames -DifferenceObject $observedNames
     ).Count -eq 0
+    $bootstrapPristine = @(
+        Compare-Object -ReferenceObject @('dev') -DifferenceObject $observedNames
+    ).Count -eq 0
+    $initialDev = Get-Item -LiteralPath (Join-Path $Fixture.VmRootfs 'dev') `
+        -Force -ErrorAction SilentlyContinue
+    $initialDevLink = if ($null -ne $initialDev) {
+        $initialDev.PSObject.Properties['LinkType']
+    }
+    else {
+        $null
+    }
+    if ($null -eq $initialDev -or -not $initialDev.PSIsContainer -or
+        ($null -ne $initialDevLink -and $initialDevLink.Value) -or
+        @(Get-ChildItem -LiteralPath $initialDev.FullName -Force).Count -ne 0) {
+        $bootstrapPristine = $false
+    }
     foreach ($name in $mountPointNames) {
         $mountPoint = Get-Item -LiteralPath (Join-Path $Fixture.VmRootfs $name) `
             -Force -ErrorAction SilentlyContinue
@@ -926,11 +951,31 @@ function Get-FixtureAudit {
     [pscustomobject]@{
         BootstrapRootEntries = $bootstrapRootEntries.Count
         BootstrapLayoutValid = $bootstrapLayoutValid
+        BootstrapPristine = $bootstrapPristine
         BootstrapDirectories = $bootstrapDirectories.Count
         RuntimeDirectories = $runtimeDirectories.Count
         DirectTokenLogHits = $tokenHits.Count
         MarkerExists = Test-Path -LiteralPath $Fixture.Marker
         RootLogBytes = [int64]$logBytes
+    }
+}
+
+function Assert-NoRuntimeResidue {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Label,
+        [Parameter(Mandatory)]
+        [object]$Audit
+    )
+
+    if ($Audit.BootstrapDirectories -ne 0) {
+        throw "$Label left $($Audit.BootstrapDirectories) bootstrap directories"
+    }
+    if ($Audit.RuntimeDirectories -ne 0) {
+        throw "$Label left $($Audit.RuntimeDirectories) guest runtime directories"
+    }
+    if ($Audit.DirectTokenLogHits -ne 0) {
+        throw "$Label exposed the direct session-token environment entry in guest logs"
     }
 }
 
@@ -945,15 +990,21 @@ function Assert-RuntimeAudit {
     if ($Audit.BootstrapLayoutValid -ne $true) {
         throw "$Label did not retain the exact bounded VM bootstrap layout"
     }
-    if ($Audit.BootstrapDirectories -ne 0) {
-        throw "$Label left $($Audit.BootstrapDirectories) bootstrap directories"
+    Assert-NoRuntimeResidue -Label $Label -Audit $Audit
+}
+
+function Assert-HostPreflightAudit {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Label,
+        [Parameter(Mandatory)]
+        [object]$Audit
+    )
+
+    if ($Audit.BootstrapPristine -ne $true) {
+        throw "$Label mutated the pristine VM bootstrap layout"
     }
-    if ($Audit.RuntimeDirectories -ne 0) {
-        throw "$Label left $($Audit.RuntimeDirectories) guest runtime directories"
-    }
-    if ($Audit.DirectTokenLogHits -ne 0) {
-        throw "$Label exposed the direct session-token environment entry in guest logs"
-    }
+    Assert-NoRuntimeResidue -Label $Label -Audit $Audit
 }
 
 function Get-A3sProcesses {
@@ -2026,10 +2077,10 @@ try {
                 Expected = 'linux.mountLabel'
             },
             [pscustomobject]@{
-                Variant = 'seccomp-multi-arch'
+                Variant = 'seccomp-unsupported-arch'
                 Layer = 'guest'
                 Code = 'Unsupported'
-                Expected = 'linux.seccomp.architectures'
+                Expected = 'linux.seccomp.architectures[0]'
             },
             [pscustomobject]@{
                 Variant = 'ambiguous-propagation'
@@ -2056,10 +2107,10 @@ try {
                 Expected = 'process.user.username'
             },
             [pscustomobject]@{
-                Variant = 'net-devices'
+                Variant = 'net-device-missing-source'
                 Layer = 'guest'
-                Code = 'Unsupported'
-                Expected = 'linux.netDevices'
+                Code = 'FailedPrecondition'
+                Expected = 'linux.netDevices source `eth0`'
             },
             [pscustomobject]@{
                 Variant = 'missing-mount-source'
@@ -2093,13 +2144,20 @@ try {
                 }
                 Assert-WindowsShimHandleReclamation -Label $label `
                     -Bridge $run.Report.bridge
+                $audit = Get-FixtureAudit -Fixture $fixture
+                Assert-RuntimeAudit -Label $label -Audit $audit
             }
             elseif ($run.Report.bridge.endpoint_bound -ne $false -or
                 $run.Report.bridge.shim_spawned -ne $false) {
                 throw "$label crossed the host preflight boundary"
             }
-            $audit = Get-FixtureAudit -Fixture $fixture
-            Assert-RuntimeAudit -Label $label -Audit $audit
+            else {
+                $audit = Get-FixtureAudit -Fixture $fixture
+                Assert-HostPreflightAudit -Label $label -Audit $audit
+            }
+            if ($audit.MarkerExists) {
+                throw "$label unexpectedly produced the workload marker"
+            }
             Assert-NoA3sProcesses -Label $label
             $samples += [ordered]@{
                 kind = 'negative'
