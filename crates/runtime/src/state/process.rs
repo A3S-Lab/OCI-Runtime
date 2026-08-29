@@ -649,13 +649,14 @@ impl DurableStateStore {
                     Err(exit_status_conflict(target, existing, &status))
                 };
             }
-            match *container.record.state.status() {
+            let stopped_now = match *container.record.state.status() {
                 ContainerState::Created | ContainerState::Running => {
                     container.record.state =
                         rebuild_state(&container.record.state, ContainerState::Stopped, None)?;
                     OciSchemaValidator::new()?.validate_state(&container.record.state)?;
+                    true
                 }
-                ContainerState::Stopped => {}
+                ContainerState::Stopped => false,
                 ContainerState::Creating => {
                     return Err(state_error(
                         ErrorCode::FailedPrecondition,
@@ -666,7 +667,7 @@ impl DurableStateStore {
                         ),
                     ));
                 }
-            }
+            };
             self.append_process_event(
                 "exited",
                 &target.container,
@@ -675,13 +676,15 @@ impl DurableStateStore {
                 exit_status_attributes(&status),
             )
             .await?;
-            self.append_container_event(
-                "stopped",
-                &target.container,
-                RuntimeEventKind::ContainerStopped,
-                BTreeMap::new(),
-            )
-            .await?;
+            if stopped_now {
+                self.append_container_event(
+                    "stopped",
+                    &target.container,
+                    RuntimeEventKind::ContainerStopped,
+                    BTreeMap::new(),
+                )
+                .await?;
+            }
             container.init_exit_status = Some(status.clone());
             self.write_json(
                 DurableMutation::CacheInitWait,

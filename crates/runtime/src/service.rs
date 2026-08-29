@@ -576,7 +576,7 @@ impl OciRuntimeService for HostRuntimeService {
         let result = registered.driver().state(target.clone()).await;
         lifecycle.driver_boundary(DriverOperation::State, DriverBoundaryStage::AfterCall)?;
         let observed = result?;
-        lifecycle
+        let reconciled = lifecycle
             .store
             .observe_state_with_pause(
                 &target,
@@ -584,7 +584,41 @@ impl OciRuntimeService for HostRuntimeService {
                 observed.pid(),
                 observed.paused(),
             )
-            .await
+            .await?;
+        if observed.status() != ContainerState::Stopped
+            || !registered.supports_operation(RuntimeOperation::Wait)
+        {
+            return Ok(reconciled);
+        }
+
+        let process_request = WaitProcessRequest {
+            process: ProcessTarget {
+                container: target,
+                process_id: ProcessId::init(),
+            },
+            timeout_ms: Some(0),
+        };
+        let process = match lifecycle
+            .store
+            .prepare_wait_process(&process_request)
+            .await?
+        {
+            ProcessWaitPreparation::Replayed(_) => return Ok(reconciled),
+            ProcessWaitPreparation::Prepared(process) => process,
+        };
+        lifecycle.driver_boundary(DriverOperation::Wait, DriverBoundaryStage::BeforeCall)?;
+        let result = registered
+            .driver()
+            .wait(DriverWaitRequest {
+                target: process.container.clone(),
+                timeout_ms: Some(0),
+            })
+            .await;
+        lifecycle.driver_boundary(DriverOperation::Wait, DriverBoundaryStage::AfterCall)?;
+        let status = result?;
+        status.validate()?;
+        lifecycle.complete_process_wait(&process, status).await?;
+        Ok(reconciled)
     }
 
     async fn start(&self, request: StartRequest) -> Result<ContainerRecord> {

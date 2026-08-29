@@ -45,11 +45,15 @@ impl RegisteredDriver {
         operation: RuntimeOperation,
         name: &'static str,
     ) -> Result<()> {
-        if self.operations.contains(&operation) {
+        if self.supports_operation(operation) {
             Ok(())
         } else {
             Err(Error::unsupported(name))
         }
+    }
+
+    pub(super) fn supports_operation(&self, operation: RuntimeOperation) -> bool {
+        self.operations.contains(&operation)
     }
 }
 

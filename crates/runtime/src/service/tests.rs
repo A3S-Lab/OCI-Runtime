@@ -71,6 +71,7 @@ mod process_operations;
 mod resource_operations;
 mod restore_operations;
 mod schema_profiles;
+mod state_observation;
 
 const TEST_CONFIG: &str = concat!(
     "{\n",
