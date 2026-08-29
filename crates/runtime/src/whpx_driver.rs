@@ -56,14 +56,15 @@ pub struct WhpxRuntimeDriverConfig {
 }
 
 impl WhpxRuntimeDriverConfig {
-    /// Describe the isolated shim, protected runtime root, empty bootstrap, and
+    /// Describe the isolated shim, protected runtime root, bootstrap, and
     /// immutable system-image manifest.
     ///
-    /// The bootstrap must be a strict, empty descendant of `runtime_root`; the
-    /// manifest and its assets must remain outside that mutable tree. Opening
-    /// the candidate verifies those paths, binds the manifest digest into the
-    /// driver capability, creates the share parent, and applies the private
-    /// Windows DACL before any VM can launch.
+    /// The bootstrap must be a strict descendant of `runtime_root` and may
+    /// contain only the runtime-owned empty `dev` mount point; the manifest and
+    /// its assets must remain outside that mutable tree. Opening the candidate
+    /// verifies those paths, binds the manifest digest into the driver
+    /// capability, creates the mount point and share parent, and applies the
+    /// private Windows DACL before any VM can launch.
     #[must_use]
     pub fn new(
         shim: impl Into<PathBuf>,
@@ -93,7 +94,7 @@ impl WhpxRuntimeDriverConfig {
         &self.runtime_root
     }
 
-    /// Empty bootstrap root used while each dedicated utility VM starts.
+    /// Bootstrap root used while each dedicated utility VM starts.
     #[must_use]
     pub fn vm_rootfs(&self) -> &Path {
         &self.vm_rootfs
@@ -1273,38 +1274,7 @@ impl PreparedWhpxLayout {
             )
             .for_operation("open-whpx-driver-candidate"));
         }
-        let mut bootstrap_entries = tokio::fs::read_dir(&vm_rootfs).await.map_err(|error| {
-            path_error(
-                ErrorCode::FailedPrecondition,
-                format!(
-                    "failed to inspect WHPX bootstrap root {}: {error}",
-                    vm_rootfs.display()
-                ),
-            )
-        })?;
-        if bootstrap_entries
-            .next_entry()
-            .await
-            .map_err(|error| {
-                path_error(
-                    ErrorCode::FailedPrecondition,
-                    format!(
-                        "failed to enumerate WHPX bootstrap root {}: {error}",
-                        vm_rootfs.display()
-                    ),
-                )
-            })?
-            .is_some()
-        {
-            return Err(Error::new(
-                ErrorCode::FailedPrecondition,
-                format!(
-                    "WHPX bootstrap root must be empty because the manifest-bound ext4 disk owns the guest system root: {}",
-                    vm_rootfs.display()
-                ),
-            )
-            .for_operation("open-whpx-driver-candidate"));
-        }
+        validate_whpx_bootstrap_root(&vm_rootfs).await?;
 
         let system_image_manifest =
             canonical_plain_file(&config.system_image_manifest, "WHPX system-image manifest")
@@ -1339,6 +1309,8 @@ impl PreparedWhpxLayout {
 
         protect_path(runtime_root.clone()).await?;
         protect_path(vm_rootfs.clone()).await?;
+        ensure_private_directory(vm_rootfs.join("dev"), "bootstrap-dev").await?;
+        validate_whpx_bootstrap_root(&vm_rootfs).await?;
         let configured_runtime_share_root = config.runtime_share_root;
         ensure_private_directory(configured_runtime_share_root.clone(), "runtime-share").await?;
         let runtime_share_root =
@@ -1375,6 +1347,109 @@ impl PreparedWhpxLayout {
             recovery_directory,
         })
     }
+}
+
+async fn validate_whpx_bootstrap_root(path: &Path) -> Result<()> {
+    let mut entries = tokio::fs::read_dir(path).await.map_err(|error| {
+        path_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect WHPX bootstrap root {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    let Some(entry) = entries.next_entry().await.map_err(|error| {
+        path_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to enumerate WHPX bootstrap root {}: {error}",
+                path.display()
+            ),
+        )
+    })?
+    else {
+        return Ok(());
+    };
+    let has_additional_entry = entries
+        .next_entry()
+        .await
+        .map_err(|error| {
+            path_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "failed to enumerate WHPX bootstrap root {}: {error}",
+                    path.display()
+                ),
+            )
+        })?
+        .is_some();
+    if entry.file_name() != "dev" || has_additional_entry {
+        return Err(Error::new(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "WHPX bootstrap root may contain only the runtime-owned empty dev mount point: {}",
+                path.display()
+            ),
+        )
+        .for_operation("open-whpx-driver-candidate"));
+    }
+
+    let dev = path.join("dev");
+    let metadata = tokio::fs::symlink_metadata(&dev).await.map_err(|error| {
+        path_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect WHPX bootstrap dev mount point {}: {error}",
+                dev.display()
+            ),
+        )
+    })?;
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return Err(path_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "WHPX bootstrap dev mount point is not a plain directory: {}",
+                dev.display()
+            ),
+        ));
+    }
+    let mut dev_entries = tokio::fs::read_dir(&dev).await.map_err(|error| {
+        path_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect WHPX bootstrap dev mount point {}: {error}",
+                dev.display()
+            ),
+        )
+    })?;
+    if dev_entries
+        .next_entry()
+        .await
+        .map_err(|error| {
+            path_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "failed to enumerate WHPX bootstrap dev mount point {}: {error}",
+                    dev.display()
+                ),
+            )
+        })?
+        .is_some()
+    {
+        return Err(Error::new(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "WHPX bootstrap dev mount point must be empty before VM launch: {}",
+                dev.display()
+            ),
+        )
+        .for_operation("open-whpx-driver-candidate"));
+    }
+    Ok(())
 }
 
 async fn canonical_plain_file(path: &Path, label: &str) -> Result<PathBuf> {
@@ -2632,9 +2707,18 @@ mod tests {
         assert_eq!(config.runtime_share_root(), runtime_root.join("shares"));
         assert_eq!(config.system_image_manifest(), system_image_manifest);
 
-        let prepared = PreparedWhpxLayout::open(config)
+        let prepared = PreparedWhpxLayout::open(config.clone())
             .await
             .expect("protected WHPX layout");
+        assert!(prepared.vm_rootfs.join("dev").is_dir());
+        assert_eq!(
+            std::fs::read_dir(&prepared.vm_rootfs)
+                .expect("enumerate bootstrap root")
+                .map(|entry| entry.expect("bootstrap entry").file_name())
+                .collect::<Vec<_>>(),
+            [std::ffi::OsString::from("dev")],
+            "the protected /dev mount point must be the only bootstrap entry"
+        );
         assert!(prepared.runtime_share_root.is_dir());
         assert!(!prepared.runtime_share_root.starts_with(&prepared.vm_rootfs));
         assert!(!prepared.vm_rootfs.starts_with(&prepared.runtime_share_root));
@@ -2643,6 +2727,10 @@ mod tests {
             .system_image_manifest_sha256
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+
+        PreparedWhpxLayout::open(config)
+            .await
+            .expect("an existing empty bootstrap dev mount point must be reusable");
     }
 
     #[tokio::test]
@@ -2667,6 +2755,32 @@ mod tests {
         ))
         .await
         .expect_err("nonempty bootstrap root must fail");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    }
+
+    #[tokio::test]
+    async fn prepared_layout_rejects_a_nonempty_bootstrap_dev_mount_point() {
+        let temporary = tempfile::tempdir().expect("temporary WHPX layout");
+        let shim = temporary.path().join("a3s-oci-krun-shim.exe");
+        let runtime_root = temporary.path().join("runtime");
+        let system_root = runtime_root.join("system");
+        let dev = system_root.join("dev");
+        let asset_root = temporary.path().join("assets");
+        let system_image_manifest = asset_root.join("system-image.json");
+        std::fs::create_dir_all(&dev).expect("bootstrap dev mount point");
+        std::fs::create_dir_all(&asset_root).expect("asset root");
+        std::fs::write(&shim, b"shim").expect("shim fixture");
+        std::fs::write(dev.join("unexpected"), b"mutable device").expect("device fixture");
+        std::fs::write(&system_image_manifest, b"manifest").expect("manifest fixture");
+
+        let error = PreparedWhpxLayout::open(WhpxRuntimeDriverConfig::new(
+            &shim,
+            &runtime_root,
+            &system_root,
+            &system_image_manifest,
+        ))
+        .await
+        .expect_err("nonempty bootstrap dev mount point must fail");
         assert_eq!(error.code, ErrorCode::FailedPrecondition);
     }
 
