@@ -66,6 +66,7 @@ pub(super) struct BindSourceResolver<'a> {
 #[derive(Debug)]
 pub(super) struct ResolvedBindSource {
     path: PathBuf,
+    mount_path: PathBuf,
     descriptor: Option<File>,
     kind: MountTargetKind,
 }
@@ -87,6 +88,7 @@ impl<'a> BindSourceResolver<'a> {
         source: &Path,
     ) -> Result<Option<ResolvedBindSource>> {
         if let Some(bundle) = self.pinned_bundle {
+            let mount_path = bind_source_candidate_path(self.bundle_directory, source);
             let descriptor = bundle.open_relative(
                 source,
                 libc::O_PATH,
@@ -95,7 +97,9 @@ impl<'a> BindSourceResolver<'a> {
                 "prepare-container-mounts",
             )?;
             return descriptor
-                .map(|descriptor| ResolvedBindSource::from_descriptor(index, descriptor))
+                .map(|descriptor| {
+                    ResolvedBindSource::from_descriptor(index, mount_path, descriptor)
+                })
                 .transpose();
         }
         let candidate = bind_source_candidate_path(self.bundle_directory, source);
@@ -114,6 +118,7 @@ impl<'a> BindSourceResolver<'a> {
             MountTargetKind::File
         };
         Ok(Some(ResolvedBindSource {
+            mount_path: path.clone(),
             path,
             descriptor: None,
             kind,
@@ -135,7 +140,7 @@ impl<'a> BindSourceResolver<'a> {
 }
 
 impl ResolvedBindSource {
-    fn from_descriptor(index: usize, descriptor: File) -> Result<Self> {
+    fn from_descriptor(index: usize, mount_path: PathBuf, descriptor: File) -> Result<Self> {
         let metadata = descriptor.metadata().map_err(|error| {
             permission_denied(format!(
                 "failed to inspect descriptor-confined mounts[{index}].source: {error}"
@@ -148,6 +153,7 @@ impl ResolvedBindSource {
         };
         Ok(Self {
             path: PathBuf::from(format!("/proc/self/fd/{}", descriptor.as_raw_fd())),
+            mount_path,
             descriptor: Some(descriptor),
             kind,
         })
@@ -161,8 +167,12 @@ impl ResolvedBindSource {
         &self.path
     }
 
+    pub(super) const fn is_descriptor_confined(&self) -> bool {
+        self.descriptor.is_some()
+    }
+
     fn cstring(&self, index: usize) -> Result<CString> {
-        let source = path_cstring(index, "source", &self.path)?;
+        let source = path_cstring(index, "source", &self.mount_path)?;
         debug_assert!(self
             .descriptor
             .as_ref()
@@ -626,9 +636,20 @@ impl MountPlan {
             Some(string_cstring(self.index, "options", &self.data.join(","))?)
         };
 
+        let descriptor_bind_attached = if let Some(source) = bind_source.as_ref() {
+            idmap::attach_descriptor_bind(
+                self.index,
+                source,
+                &target,
+                self.flags & libc::MS_REC != 0,
+            )?
+        } else {
+            false
+        };
+
         if let Some(destination) = detached_destination.as_ref() {
             detached_sources.attach(self.index, destination)?;
-        } else {
+        } else if !descriptor_bind_attached {
             mount_call(
                 self.index,
                 source.as_ref(),
@@ -642,6 +663,9 @@ impl MountPlan {
                 data.as_ref(),
                 "apply",
             )?;
+            if let Some(source) = bind_source.as_ref() {
+                idmap::verify_legacy_descriptor_bind(self.index, source, &target)?;
+            }
         }
         if self.bind && self.remount_bind && !detached_bind {
             let remount_flags = (self.flags & !(libc::MS_REC | libc::MS_REMOUNT))

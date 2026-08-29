@@ -152,6 +152,11 @@ The current mount slice:
   bounded filesystem-specific option data;
 - remounts bind attributes explicitly and fails the complete create operation
   on any syscall error;
+- keeps utility-VM bundle bind sources descriptor-confined: it attaches an
+  exact `open_tree(AT_EMPTY_PATH)` clone when the backing filesystem supports
+  it; otherwise it performs the legacy path bind and immediately compares the
+  mounted device, inode, file type, and device identity with the retained
+  descriptor, detaching any mismatch before Create can report readiness;
 - applies recursive read-only, suid, device, execute, access-time, directory
   access-time, and symbolic-link-follow policies with `mount_setattr` against
   a descriptor-pinned destination;

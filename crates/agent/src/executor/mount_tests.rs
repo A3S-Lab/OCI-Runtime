@@ -795,6 +795,7 @@ async fn descriptor_confined_bind_source_survives_an_entry_swap() {
     let resolved = resolver
         .resolve_required(0, Path::new("source"))
         .expect("resolve exact bind source");
+    assert!(resolved.is_descriptor_confined());
 
     std::fs::rename(&source, &retained).expect("move retained source");
     symlink(&external, &source).expect("install hostile source link");

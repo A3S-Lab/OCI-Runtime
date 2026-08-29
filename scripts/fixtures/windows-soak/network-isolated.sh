@@ -11,7 +11,7 @@ on_term() {
 trap on_term TERM
 
 printf 'phase=begin\n' > "$evidence"
-self_net="$(readlink /proc/self/ns/net)"
+self_net="$(readlink /proc/self/ns/net 2>&1)" || self_net="error:$self_net"
 printf 'self_net=%s\n' "$self_net" >> "$evidence"
 
 interfaces="$(
@@ -22,22 +22,24 @@ interfaces="$(
                 print $1
             }
         }
-    ' /proc/self/net/dev | sort
-)"
+    ' /proc/self/net/dev 2>&1 | sort
+)" || interfaces="error:$interfaces"
 
 route_count="$(
-    awk 'NR > 1 { count += 1 } END { print count + 0 }' /proc/self/net/route
-)"
+    awk 'NR > 1 { count += 1 } END { print count + 0 }' /proc/self/net/route 2>&1
+)" || route_count="error:$route_count"
+
+validation='pass'
+if [ "$interfaces" != 'lo' ] || [ "$route_count" != '0' ]; then
+    validation='fail'
+fi
 
 {
     printf 'phase=probe\n'
     printf 'self_net=%s\n' "$self_net"
-    printf 'interfaces=%s\n' "$interfaces"
+    printf 'interfaces=%s\n' "$(printf '%s' "$interfaces" | tr '\n' ',')"
     printf 'route_count=%s\n' "$route_count"
-} >> "$evidence"
-test "$interfaces" = 'lo'
-test "$route_count" -eq 0
-{
+    printf 'validation=%s\n' "$validation"
     printf 'phase=ready\n'
     printf 'mode=isolated\n'
 } >> "$evidence"

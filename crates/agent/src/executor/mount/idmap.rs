@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
+use std::fs::{File, Metadata};
 use std::io;
 use std::mem::size_of;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::fs::MetadataExt;
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
@@ -11,7 +13,7 @@ use super::attributes::{
     MOUNT_ATTR_NOEXEC, MOUNT_ATTR_NOSUID, MOUNT_ATTR_NOSYMFOLLOW, MOUNT_ATTR_RDONLY,
     MOUNT_ATTR_STRICTATIME,
 };
-use super::{path_cstring, BindSourceResolver, MountPlan, MountTargetKind};
+use super::{path_cstring, BindSourceResolver, MountPlan, MountTargetKind, ResolvedBindSource};
 use crate::executor::namespace::IdmapNamespaceHandles;
 
 #[derive(Debug, Default)]
@@ -63,9 +65,8 @@ impl DetachedMountSources {
                     }
                 };
                 let kind = source.kind();
-                let source_path = path_cstring(plan.index, "source", source.path())?;
                 (
-                    clone_mount(plan.index, &source_path, plan.flags & libc::MS_REC != 0)?,
+                    clone_resolved_mount(plan.index, &source, plan.flags & libc::MS_REC != 0)?,
                     kind,
                 )
             } else {
@@ -137,30 +138,7 @@ impl DetachedMountSources {
                 "detached mount source is missing or was already attached",
             )
         })?;
-        let empty_path = c"";
-        let flags = libc::MOVE_MOUNT_F_EMPTY_PATH | libc::MOVE_MOUNT_T_EMPTY_PATH;
-        // SAFETY: both descriptors are live, both paths are empty
-        // NUL-terminated strings selected by the EMPTY_PATH flags, and
-        // move_mount does not retain either pointer.
-        let moved = unsafe {
-            libc::syscall(
-                libc::SYS_move_mount,
-                source.descriptor.as_raw_fd(),
-                empty_path.as_ptr(),
-                destination.as_raw_fd(),
-                empty_path.as_ptr(),
-                flags,
-            )
-        };
-        if moved == 0 {
-            Ok(())
-        } else {
-            Err(syscall_error(
-                index,
-                "attach the detached mount",
-                io::Error::last_os_error(),
-            ))
-        }
+        move_mount(index, &source.descriptor, destination)
     }
 
     pub(in crate::executor) fn ensure_consumed(&self) -> Result<()> {
@@ -177,6 +155,93 @@ impl DetachedMountSources {
             .for_operation("prepare-container-mounts"))
         }
     }
+}
+
+pub(super) fn attach_descriptor_bind(
+    index: usize,
+    source: &ResolvedBindSource,
+    target: &CStr,
+    recursive: bool,
+) -> Result<bool> {
+    if !source.is_descriptor_confined() {
+        return Ok(false);
+    }
+    let attachment = (|| {
+        let source = clone_resolved_mount(index, source, recursive)?;
+        let destination = open_path(index, target, "retain the descriptor bind destination")?;
+        move_mount(index, &source, &destination)
+    })();
+    match attachment {
+        Ok(()) => Ok(true),
+        // Some shared filesystems expose stable O_PATH descriptors but reject
+        // OPEN_TREE_CLONE. The caller may use the retained path only when it
+        // immediately proves that the resulting bind has this descriptor's
+        // exact identity.
+        Err(error) if error.code == ErrorCode::Unsupported => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+pub(super) fn verify_legacy_descriptor_bind(
+    index: usize,
+    source: &ResolvedBindSource,
+    target: &CStr,
+) -> Result<()> {
+    let Some(expected) = source.descriptor.as_ref() else {
+        return Ok(());
+    };
+    let observed = match open_path(index, target, "inspect the legacy bind destination") {
+        Ok(observed) => observed,
+        Err(error) => {
+            return Err(reject_legacy_descriptor_bind(
+                index,
+                target,
+                format!("failed to retain the attached bind destination: {error}"),
+            ));
+        }
+    };
+    let observed = File::from(observed);
+    let expected_metadata = expected.metadata().map_err(|error| {
+        reject_legacy_descriptor_bind(
+            index,
+            target,
+            format!("failed to inspect the retained bind source: {error}"),
+        )
+    })?;
+    let observed_metadata = observed.metadata().map_err(|error| {
+        reject_legacy_descriptor_bind(
+            index,
+            target,
+            format!("failed to inspect the attached bind destination: {error}"),
+        )
+    })?;
+    if same_bind_identity(&expected_metadata, &observed_metadata) {
+        Ok(())
+    } else {
+        let expected_kind = expected_metadata.mode() & libc::S_IFMT;
+        let observed_kind = observed_metadata.mode() & libc::S_IFMT;
+        Err(reject_legacy_descriptor_bind(
+            index,
+            target,
+            format!(
+                "legacy bind source identity changed: expected dev={} ino={} mode={expected_kind:#o} \
+                 rdev={}, found dev={} ino={} mode={observed_kind:#o} rdev={}",
+                expected_metadata.dev(),
+                expected_metadata.ino(),
+                expected_metadata.rdev(),
+                observed_metadata.dev(),
+                observed_metadata.ino(),
+                observed_metadata.rdev(),
+            ),
+        ))
+    }
+}
+
+fn same_bind_identity(expected: &Metadata, observed: &Metadata) -> bool {
+    expected.dev() == observed.dev()
+        && expected.ino() == observed.ino()
+        && (expected.mode() & libc::S_IFMT) == (observed.mode() & libc::S_IFMT)
+        && expected.rdev() == observed.rdev()
 }
 
 fn create_filesystem_mount(plan: &MountPlan) -> Result<OwnedFd> {
@@ -387,10 +452,22 @@ fn owned_syscall_fd(index: usize, action: &str, descriptor: libc::c_long) -> Res
     Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
 }
 
-fn clone_mount(index: usize, source: &CString, recursive: bool) -> Result<OwnedFd> {
+fn clone_resolved_mount(
+    index: usize,
+    source: &ResolvedBindSource,
+    recursive: bool,
+) -> Result<OwnedFd> {
+    if let Some(descriptor) = source.descriptor.as_ref() {
+        return clone_mount_from_descriptor(index, descriptor, recursive);
+    }
+    let source = path_cstring(index, "source", source.path())?;
+    clone_mount_from_path(index, &source, recursive)
+}
+
+fn clone_mount_from_path(index: usize, source: &CString, recursive: bool) -> Result<OwnedFd> {
     let mut flags = libc::OPEN_TREE_CLONE | libc::OPEN_TREE_CLOEXEC;
     if recursive {
-        flags |= u32::try_from(libc::AT_RECURSIVE).expect("AT_RECURSIVE fits open_tree flags");
+        flags |= open_tree_flag(index, libc::AT_RECURSIVE, "AT_RECURSIVE")?;
     }
     // SAFETY: source is NUL-terminated and open_tree does not retain its
     // pointer. OPEN_TREE_CLONE returns a detached mount.
@@ -412,6 +489,78 @@ fn clone_mount(index: usize, source: &CString, recursive: bool) -> Result<OwnedF
     })?;
     // SAFETY: descriptor is a newly owned successful open_tree result.
     Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
+}
+
+fn clone_mount_from_descriptor(index: usize, source: &File, recursive: bool) -> Result<OwnedFd> {
+    let mut flags = libc::OPEN_TREE_CLONE
+        | libc::OPEN_TREE_CLOEXEC
+        | open_tree_flag(index, libc::AT_EMPTY_PATH, "AT_EMPTY_PATH")?;
+    if recursive {
+        flags |= open_tree_flag(index, libc::AT_RECURSIVE, "AT_RECURSIVE")?;
+    }
+    // SAFETY: source is a live O_PATH descriptor, the empty pathname is
+    // NUL-terminated, and AT_EMPTY_PATH selects that exact descriptor.
+    let descriptor =
+        unsafe { libc::syscall(libc::SYS_open_tree, source.as_raw_fd(), c"".as_ptr(), flags) };
+    owned_syscall_fd(
+        index,
+        "clone the descriptor-confined bind source with open_tree",
+        descriptor,
+    )
+}
+
+fn open_tree_flag(index: usize, flag: libc::c_int, name: &str) -> Result<u32> {
+    u32::try_from(flag).map_err(|error| {
+        apply_error(
+            ErrorCode::Internal,
+            index,
+            format!("{name} does not fit the open_tree flags ABI: {error}"),
+        )
+    })
+}
+
+fn move_mount(index: usize, source: &OwnedFd, destination: &OwnedFd) -> Result<()> {
+    let empty_path = c"";
+    let flags = libc::MOVE_MOUNT_F_EMPTY_PATH | libc::MOVE_MOUNT_T_EMPTY_PATH;
+    // SAFETY: both descriptors are live, both paths are empty NUL-terminated
+    // strings selected by the EMPTY_PATH flags, and move_mount retains none.
+    let moved = unsafe {
+        libc::syscall(
+            libc::SYS_move_mount,
+            source.as_raw_fd(),
+            empty_path.as_ptr(),
+            destination.as_raw_fd(),
+            empty_path.as_ptr(),
+            flags,
+        )
+    };
+    if moved == 0 {
+        Ok(())
+    } else {
+        Err(syscall_error(
+            index,
+            "attach the detached mount",
+            io::Error::last_os_error(),
+        ))
+    }
+}
+
+fn reject_legacy_descriptor_bind(index: usize, target: &CStr, reason: String) -> Error {
+    // SAFETY: target is a live NUL-terminated pathname. MNT_DETACH removes
+    // only the just-created private bind layer and retains neither pointer nor
+    // mount reference after returning.
+    if unsafe { libc::umount2(target.as_ptr(), libc::MNT_DETACH) } == 0 {
+        apply_error(ErrorCode::PermissionDenied, index, reason)
+    } else {
+        apply_error(
+            ErrorCode::Internal,
+            index,
+            format!(
+                "{reason}; failed to detach the rejected legacy bind: {}",
+                io::Error::last_os_error()
+            ),
+        )
+    }
 }
 
 fn apply_idmap_attribute(
@@ -571,13 +720,14 @@ fn apply_error(code: ErrorCode, index: usize, message: impl Into<String>) -> Err
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
 
     use a3s_oci_sdk::ErrorCode;
 
     use super::{
-        bind_mount_attributes, classify_errno, filesystem_mount_attributes, BindSourceResolver,
-        DetachedMountSources,
+        bind_mount_attributes, classify_errno, filesystem_mount_attributes, same_bind_identity,
+        BindSourceResolver, DetachedMountSources,
     };
     use crate::executor::mount::MountPlan;
     use crate::executor::namespace::IdmapNamespaceHandles;
@@ -591,6 +741,23 @@ mod tests {
             assert_eq!(classify_errno(Some(errno)), ErrorCode::PermissionDenied);
         }
         assert_eq!(classify_errno(Some(libc::EIO)), ErrorCode::Internal);
+    }
+
+    #[test]
+    fn legacy_bind_verification_requires_the_retained_inode_identity() {
+        let temporary = tempfile::tempdir().expect("temporary bind sources");
+        let retained = temporary.path().join("retained");
+        let alias = temporary.path().join("alias");
+        let replacement = temporary.path().join("replacement");
+        fs::write(&retained, b"retained").expect("retained source");
+        fs::hard_link(&retained, &alias).expect("same-inode alias");
+        fs::write(&replacement, b"replacement").expect("replacement source");
+
+        let retained = fs::metadata(retained).expect("retained metadata");
+        let alias = fs::metadata(alias).expect("alias metadata");
+        let replacement = fs::metadata(replacement).expect("replacement metadata");
+        assert!(same_bind_identity(&retained, &alias));
+        assert!(!same_bind_identity(&retained, &replacement));
     }
 
     #[test]

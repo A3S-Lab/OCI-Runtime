@@ -353,6 +353,11 @@ The default profile requires:
 - ten exact host/guest validation rejections;
 - owner termination at 0, 250, 1000, and 2500 milliseconds after shim spawn.
 
+The runner writes every Linux guest workload asset as BOM-free LF text even
+when Git checked out the source on Windows. The storage profile adds a bounded
+qualification annotation so its serialized OCI Create request remains above
+4 KiB independently of PowerShell JSON whitespace behavior.
+
 Success additionally requires exact requested/completed counts, no bootstrap
 token directory, guest runtime directory, marker, host CLI, or host shim
 remaining, every operation sample marked `pass`, a bounded owner-to-shim exit,

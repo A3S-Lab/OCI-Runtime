@@ -524,7 +524,9 @@ function Copy-WorkloadAsset {
     }
     $parent = Split-Path -Parent $Destination
     New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    Copy-Item -LiteralPath $source -Destination $Destination -Force
+    $contents = [IO.File]::ReadAllText($source)
+    $contents = $contents.Replace("`r`n", "`n").Replace("`r", "`n")
+    Write-Utf8Text -Path $Destination -Text $contents
 }
 
 function New-OciMount {
@@ -773,6 +775,10 @@ function New-SoakFixture {
                 (New-OciMount -Destination '/mnt/readonly' -Type 'none' `
                     -Source 'volumes/readonly' -Options @('bind', 'ro'))
             )
+            $config | Add-Member -NotePropertyName annotations `
+                -NotePropertyValue ([pscustomobject][ordered]@{
+                    'org.a3s.qualification.transport-padding' = 'x' * 1024
+                })
             $config.process.args = @('/bin/sh', '/opt/a3s/storage-matrix.sh')
             $scenarioMetadata.Evidence = Join-Path $rwSource 'lifecycle.log'
             $scenarioMetadata.ReadOnlySource = $sentinel
@@ -1855,6 +1861,7 @@ try {
                             'self_net=',
                             'interfaces=lo',
                             'route_count=0',
+                            'validation=pass',
                             'phase=term'
                         )
                 }
