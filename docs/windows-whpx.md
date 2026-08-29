@@ -373,6 +373,28 @@ The host-side process-field preflight rejection must instead leave the initial
 single empty `dev` directory pristine and must never bind an endpoint or spawn
 the shim.
 
+The August 29, 2026 clean-worktree current-host regression at commit
+`83f104531fd737b980c67e17d558efbab1925969` passed the complete default soak in
+648.349 seconds. All 56 operation samples passed: 25 serial lifecycles, three
+multi-container runs, three lifecycle-cleanup faults, six parallel runs, five
+workload cases, ten typed rejections, and four owner-termination points. The
+start and final process inventories were empty. All 51 VM reports retained
+nonzero equal in-process handle inventories (`111 -> 111` or `126 -> 126`).
+The summary SHA-256 is
+`eaab81b6d666c70bf5274d966e3e69096766a47b0717a2b61a5e8360d1c87ae0`;
+the operation table SHA-256 is
+`2f5bd37ca37abca18848f975e77d13bccfc4a696c39a1132e9793529d3d50266`.
+The immutable system-image manifest and ext4 image SHA-256 values are
+`54ff73617b2e1246ef2e795ff606b7e28804033bb0fdd4feae4896eef5042be2` and
+`532bce3a68581dec7711049e9db3a4d08d77f7ad71fa8a17064110911f2490ad`.
+
+Separately scoped recovery and direct-driver runs from the same clean commit
+also returned `available`. Their summary SHA-256 values are
+`dfad84b1151b5004e281b797f7f5f37f4b4a68b60b358baa29d9d4a5fe13100b` and
+`672e7af62eb35d506b27de02a65e7bad5422911c12f364ee43386e0c7efd81e3`.
+This current-host regression does not replace the Roadmap's remaining
+newly-provisioned fresh-host release-promotion run.
+
 The August 1, 2026 direct-driver qualification ran from clean commit
 `7bb09dff81b5445e275c31faff6592ad4c32a45f` and emitted
 `a3s.oci.whpx-driver-smoke-run.v1`. From 12:50:37Z through 12:51:08Z it built
