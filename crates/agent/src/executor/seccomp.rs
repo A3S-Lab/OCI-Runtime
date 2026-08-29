@@ -104,6 +104,11 @@ impl SeccompPlan {
             .map_or(0, |architectures| architectures.len())
     }
 
+    #[cfg(test)]
+    pub(super) fn compiled_filters(&self) -> Result<Vec<BpfProgram>> {
+        self.compile_filters()
+    }
+
     fn compile_filters(&self) -> Result<Vec<BpfProgram>> {
         let program_count = usize::from(self.architecture.is_some())
             .checked_add(self.filters.len())

@@ -54,6 +54,8 @@ mod rootfs_tests;
 mod scheduler;
 mod seccomp;
 #[cfg(test)]
+mod seccomp_bpf_tests;
+#[cfg(test)]
 mod seccomp_tests;
 mod state;
 mod sysctl;
