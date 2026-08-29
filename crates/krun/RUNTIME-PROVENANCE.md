@@ -96,37 +96,64 @@ The Windows x86_64 shim carries one deterministic native runtime archive:
 `runtime/windows-x86_64/krun-windows-x64.tar.xz`
 
 Its SHA-256 is
-`ce178184bc9e309c9f8fef181312cd6c398fc825807124e31afab949b790627e`.
+`5650721e43c2a1825314367d60bc2bdace2a88be4a424ba42711f9580c4b69af`.
 The build script verifies the archive and every extracted file before linking
 or staging them:
 
 | File | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `krun.dll` | 7,428,608 | `f21293b65ee16058c9014b543c708d84c50dc28d7775dbd77bac32faabafa59e` |
+| `krun.dll` | 7,579,648 | `cc18d354fec2c235fdce53b723b96dccb2ef3994a7dda141c923a0efa0bba7db` |
 | `krun.lib` | 11,870 | `3ac760758158bd4d2d6570db58037d47cd370a8e6ea04ccf54a8b24fd1fdec3d` |
-| `libkrunfw.dll` | 21,473,280 | `44f25540f58155c01258fe123617636fdc6cff27873e38e71dbc75f139602077` |
+| `libkrunfw.dll` | 29,413,376 | `295e8a8e660f396fd0007d48c43175d9ed5b19243570640ad65fc47b41e7596a` |
 
-The archive is created with bsdtar 3.8.2 using the file order above and fixed
-ustar metadata:
+The archive is created with bsdtar 3.7.7 using the file order above and fixed
+ustar metadata. Set each staged file's UTC modification time to the Unix epoch,
+then run:
 
 ```powershell
-tar.exe -cJf krun-windows-x64.tar.xz --format ustar `
-  --mtime '1970-01-01 00:00:00 UTC' -C stage `
+tar.exe -cJf krun-windows-x64.tar.xz --format ustar -C stage `
   krun.dll krun.lib libkrunfw.dll
 ```
 
 Repacking the prior archive with this command reproduced its SHA-256 exactly;
 two independent staging directories produced the new hash above.
 
-`krun.dll` and `krun.lib` were built from
-[`A3S-Lab/libkrun@dc5519f`](https://github.com/A3S-Lab/libkrun/commit/dc5519faeabd8bf38d984ed29c44e6da977f0b5c).
-That revision retains segmented Windows host-to-guest stream reads and opens
-writable virtio-fs files with write access before `fsync`, allowing the guest
-to durably publish its authenticated shutdown report. The native build
-controls are in that revision. License notices, firmware provenance, and the
-corresponding kernel source are recorded by
+`krun.dll` and `krun.lib` were built by the repository Windows release job from
+[`A3S-Lab/libkrun@de07dd8`](https://github.com/A3S-Lab/libkrun/commit/de07dd8a4f94b1e5f70ce2d8e3f99359b3a02eb9),
+merged as
+[`d1f53d7`](https://github.com/A3S-Lab/libkrun/commit/d1f53d78708bac269fa04aaefa404ead401d6002).
+That revision retains the segmented Windows stream and writable virtio-fs
+fixes, restores virtio queue notifications and used lengths, and replaces the
+PIT sleep thread with an owned, interruptible worker that is joined during
+shutdown. License notices and corresponding source for those native-library
+inputs are recorded by
 [`A3S-Lab/Box@93fc281`](https://github.com/A3S-Lab/Box/commit/93fc281a798cdfd8ee463f69add3f6989d561ee3)
 under `src/deps/libkrun-sys`.
+
+`libkrunfw.dll` was built twice with byte-identical output by the strict
+`libkrunfw-windows` wrapper from
+[`A3S-Lab/libkrun@10dca31`](https://github.com/A3S-Lab/libkrun/commit/10dca312c63080916dbb456c3a019dba3e8b4da0),
+merged as
+[`414b2d3`](https://github.com/A3S-Lab/libkrun/commit/414b2d3c1724580f1100da2eda140ecc9be5e8f5).
+The wrapper validates executable ELF load segments, accepts the physical entry
+encoding used by the official x86_64 kernel, and requires embedded proof of
+NUMA, virtio-mmio command-line discovery, and x86 MP-table support.
+
+The embedded ELF was built from
+[`libkrunfw v5.5.0`](https://github.com/libkrun/libkrunfw/tree/v5.5.0),
+revision `ec4b297964877d83432f9ccda6dad8ff6e9de3e4`. It uses Linux 6.12.91
+from the kernel.org archive with SHA-256
+`0ff2ab9e169f9f1948557471fbb450d3018f8c5b77caf288e1a3982582597969`,
+the complete upstream 30-patch series, the upstream generic x86_64 config, and
+the checked-in `config-libkrunfw-numa-x86_64.fragment`. The resolved config is
+74,991 bytes with SHA-256
+`39f3dd84f3a046ffdb2dac98ddb1d9cb6b4edd32def6b503e95e2b4fd5b586f6`;
+the resulting `vmlinux` is 29,315,896 bytes with SHA-256
+`09657f5bf3e12aef5d1c36e96512973ceb4427bce445c76b635152a1b290af0e`.
+The DLL exports a 23,158,784-byte guest bundle with SHA-256
+`1c211df81b481a906409cb32f25f392577389a2f5ccf48bc2dd913bb64a1f6b4`,
+load address `0x0000000001000000`, and entry address
+`0x0000000001000123`.
 
 The Rust FFI declarations remain pinned to `a3s-libkrun-sys 3.1.0`. The import
 library ABI is unchanged from that release; the runtime-owned archive prevents

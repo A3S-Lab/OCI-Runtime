@@ -66,7 +66,7 @@ fn valid_output(platform: &str) -> BoundedOutput {
                 "kernel_version": "6.12.91",
                 "kernel_source_sha256": "1".repeat(64),
                 "kernel_bundle_sha256": "2".repeat(64),
-                "kernel_bundle_size": 21364736,
+                "kernel_bundle_size": 23158784,
                 "kernel_guest_load_address": "0x0000000001000000",
                 "kernel_entry_address": "0x0000000001000123",
                 "root_disk_read_only": true,

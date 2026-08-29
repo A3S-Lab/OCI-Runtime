@@ -12,6 +12,9 @@ use a3s_oci_agent_protocol::{
 use a3s_oci_core::CapabilityStatus;
 use a3s_oci_core::HostPlatform;
 
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+use crate::windows_handle_baseline::initialize_windows_handle_baseline;
+
 use crate::{fallback_config, KrunAgentVmSmokeReport, VmConfig};
 
 /// Optional host/guest handoff paths used by a driver-owned utility VM.
@@ -342,6 +345,11 @@ fn agent_vm_smoke_windows(
             "failed to create console directory {}: {error}",
             console_parent.display()
         ));
+        return report;
+    }
+
+    if let Err(reason) = initialize_windows_handle_baseline() {
+        report.reason = Some(reason);
         return report;
     }
 

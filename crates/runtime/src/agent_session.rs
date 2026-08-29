@@ -1683,7 +1683,7 @@ fn parse_shim_report(
         }
         if assets.get("kernel_version").and_then(Value::as_str) != Some("6.12.91")
             || assets.get("system_image_size").and_then(Value::as_u64) != Some(67_108_864)
-            || assets.get("kernel_bundle_size").and_then(Value::as_u64) != Some(21_364_736)
+            || assets.get("kernel_bundle_size").and_then(Value::as_u64) != Some(23_158_784)
             || assets
                 .get("kernel_guest_load_address")
                 .and_then(Value::as_str)

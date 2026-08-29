@@ -81,6 +81,8 @@ mod runtime_assets;
 ))]
 mod unix_process;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+mod windows_handle_baseline;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod windows_system_image;
 
 pub use a3s_oci_agent_protocol::{AgentVsockEndpoint, AGENT_VSOCK_PORT};

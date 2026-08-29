@@ -15,8 +15,11 @@ The runtime:
 4. optionally creates and deletes a WHPX partition object as a smoke test;
 5. links the `a3s-libkrun-sys 3.1.0` FFI ABI only into an isolated shim and
    stages a runtime-owned, checksum-verified native bundle with firmware
-   provenance from `A3S-Lab/Box@93fc281` and segmented WHPX stream plus
-   writable virtio-fs flush fixes from `A3S-Lab/libkrun@dc5519f`;
+   provenance from `A3S-Lab/Box@93fc281` and the segmented stream, writable
+   virtio-fs, virtio queue, and owned PIT worker fixes from
+   `A3S-Lab/libkrun@de07dd8`; its NUMA-capable Linux 6.12.91 firmware is built
+   from `libkrunfw` v5.5.0 and the strict wrapper from
+   `A3S-Lab/libkrun@10dca31`, merged as `414b2d3`;
 6. creates, configures for one vCPU and 128 MiB, replaces implicit TSI with a
    zero-feature plain-vsock device, maps guest port 4093 to a validated bare
    Windows pipe name, and releases one real libkrun context without entering a
@@ -34,10 +37,11 @@ The runtime:
    operations plus the maintenance acknowledgement, and waits for zero
    guest/shim exit;
 10. runs a fixed OCI bundle through distinct create, start, init signal/wait,
-    exact-target exec, process signal/wait, live resource update and stats,
-    pause/resume, process inventory, captured output, piped stdin, controlling
-    PTYs, terminal resize, and delete calls, verifies replay and cleanup, and
-    keeps the built-in driver disabled;
+     exact-target exec, process signal/wait, live resource update and stats,
+     pause/resume, process inventory, captured output, piped stdin, controlling
+     PTYs, terminal resize, exact guest `MPOL_BIND` memory-policy readback, and
+     delete calls, verifies replay and cleanup, and keeps the built-in driver
+     disabled;
 11. emits stable JSON evidence through `a3s-oci features`,
    `a3s-oci whpx-smoke`, `a3s-oci-krun-shim context-smoke`, and
    `a3s-oci-krun-shim vm-smoke`, plus nested host/shim evidence through
@@ -404,6 +408,30 @@ boundary, and every case left zero A3S host processes and zero guest
 bootstrap/runtime directories. This is focused transport regression evidence;
 the default profile above remains the broader hardware gate.
 
+The focused August 29, 2026 immutable-root qualification ran from base commit
+`94a1de2e46fc40ccffcad35d97f2f93ff1ec2e60` with the changes recorded by this
+revision. It used `krun.dll` SHA-256
+`cc18d354fec2c235fdce53b723b96dccb2ef3994a7dda141c923a0efa0bba7db`,
+NUMA-capable `libkrunfw.dll` SHA-256
+`295e8a8e660f396fd0007d48c43175d9ed5b19243570640ad65fc47b41e7596a`,
+and kernel bundle SHA-256
+`1c211df81b481a906409cb32f25f392577389a2f5ccf48bc2dd913bb64a1f6b4`.
+The retained workload requested `MPOL_BIND` on node zero with
+`MPOL_F_STATIC_NODES` and required `/proc/self/numa_maps` to contain
+`bind=static:0` before publishing its marker. Its configuration SHA-256 is
+`cf68d31de5e1ffd5076353953d4608f4b907d8165050cd7794a5a66de0cfb64a`.
+The immediately preceding shim schema-v7 report completed real VM entry with
+guest exit zero and recorded 127 process handles both before and after VM
+entry, with `windows_handle_inventory_restored=true`; its outer report SHA-256
+is `240abb97b6fb5f3476dc9be330ac482e22c23b547df2bfcd8a75f1d80fb63b1e`.
+After synchronizing the Host's expected kernel-bundle size, the final direct
+driver report passed every lifecycle, replay, deletion, and cleanup field. The
+final report and summary SHA-256 values are respectively
+`871c230ace4c7a2c1ca12c965ba7e03fc9b14d74859bacdb57e5d8bef3620292`
+and `38fb73b6fe38acc3d596631d48dc034b04130a9a2bc8b44e769326e1e83bd92f`.
+This is focused current-asset evidence; it does not replace the complete SDK,
+recovery, negative, and soak matrix required for promotion.
+
 `fixtures/utility-vm/config.windows.json` is an explicit Windows qualification
 profile. It requests UTS, mount, IPC, network, cgroup, and PID namespaces. It
 does not request user or time namespaces because those paths hang in the
@@ -529,8 +557,9 @@ terminal replay, stopped-only delete, and complete transient cleanup.
 ## Next Windows gate
 
 The version-pinned image, read-only root attachment, source/digest manifest,
-pre-entry drift checks, and separate runtime-share path are implemented. They
-do not count as real WHPX evidence until the following two gates pass:
+pre-entry drift checks, separate runtime-share path, NUMA-capable firmware, and
+one focused real-host lifecycle are implemented. The release gate remains open
+until the following two complete matrix gates pass:
 
 1. rerun the complete WHPX SDK, soak, owner-death, and service-recovery
    matrices against the exact v1 manifest on a fresh WHPX-enabled Windows
@@ -542,10 +571,13 @@ do not count as real WHPX evidence until the following two gates pass:
 
 The implementation now captures those two inventories in the libkrun shim,
 after immutable assets are pinned and again immediately after
-`krun_start_enter` returns. Host validation and the hardware soak script reject
-missing, zero, mismatched, or false evidence. This closes the code path but not
-the release gate: the complete fresh-host rerun must still retain the evidence
-before WHPX can become `experimental`.
+`krun_start_enter` returns. Before capturing the baseline it initializes the
+Windows error-resource, WHPX partition/vCPU, and system-RNG facilities, then
+releases the temporary vCPU and partition, so process-global lazy handles are
+not misclassified as VM leaks. Host validation and the hardware soak script
+reject missing, zero, mismatched, or false evidence. The focused current-asset
+run retained exact equality, but the complete fresh-host rerun must retain the
+same evidence before WHPX can become `experimental`.
 
 Broader namespace, mount, capability, resource, seccomp, hook, and shared-guest
 coverage remains part of the shared executor, OCI conformance, and later
