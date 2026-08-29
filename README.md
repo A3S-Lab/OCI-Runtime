@@ -1194,7 +1194,7 @@ dynamic dependencies. Before either Linux directory is archived, its exact
 CLI and Agent run the complete Native Linux SDK, rootless, owner-death,
 Hook-recovery, OAR-01 network-enforcement, fault-cleanup, and bounded-soak
 matrix with `/dev/kvm` removed. The archive retains
-`qualification/native-linux-package.json` schema v6 plus thirteen digest-bound,
+`qualification/native-linux-package.json` schema v7 plus thirteen digest-bound,
 regular, nonsymlink subordinate reports normalized to mode `0644`. Three of
 those reports run the OAR-03 CRIU
 checkpoint/restore, replacement-process recovery, and PID/network namespace
@@ -1202,22 +1202,25 @@ rejection gates with the staged binaries. A fourth runs official OCI Runtime
 Tools 0.9.0 at exact commit
 `8a4db579f5c88af5a0d036fad34bddc9c1f703f3` against the Native Linux and
 utility-VM OCI 1.3.0 bundle configurations and an escaping-rootfs negative.
-On x86_64, a fifth report starts the pinned upstream lifecycle profile through
-the staged CLI and durable Host Service. All nine selected tests execute: seven
-pass their original TAP assertions, while `start` and `pidfile` are retained as
-semantically conformant with two exact, source-audited Runtime Tools harness
-defects. The report records both defect identifiers, all retired CLI journals,
-and clean service shutdown and qualifies the pinned x86_64 core lifecycle
-profile without hiding the two raw TAP failures.
-AArch64 retains a separate unavailable result because the pinned upstream
-revision has no AArch64 rootfs fixture.
+On both x86_64 and AArch64, a fifth report starts the pinned upstream lifecycle
+profile through the staged CLI and durable Host Service. The compatibility lock
+supplies an architecture-matched Alpine 3.22.5 minirootfs with exact URL, size,
+and SHA-256 provenance because Runtime Tools itself only carries an amd64
+fixture. The builder rejects unsafe archive paths, missing BusyBox identities,
+and architecture drift before installing it under the filename expected by the
+upstream harness. All nine selected tests execute: seven pass their original
+TAP assertions, while `start` and `pidfile` are retained as semantically
+conformant with two exact, source-audited Runtime Tools harness defects. The
+report records the rootfs source, both defect identifiers, all retired CLI
+journals, and clean service shutdown and qualifies the pinned core lifecycle
+profile on both Linux architectures without hiding the two raw TAP failures.
 The workflow also builds upstream CRIU v4.2.1 at pinned commit
 `9539417f3e3cfa4eb84c319cd71f4d52f1f08645`. CRIU and Runtime Tools remain
 host-provided and outside the archive; their exact identities and executable
-digests are bound by the package report. The x86_64 core profile does not
+digests are bound by the package report. The pinned core profile does not
 qualify inherited stdio descriptor transport, terminal console sockets,
-`LISTEN_FDS`, broader upstream suites, AArch64 lifecycle execution, or other
-platforms. Package availability never overrides the readiness reported by the
+`LISTEN_FDS`, broader upstream suites, or non-Linux platforms. Package
+availability never overrides the readiness reported by the
 exact binary's `features` result.
 
 ## License

@@ -64,7 +64,7 @@ if [[ ! -f "$lock_file" || -L "$lock_file" ]]; then
   exit 2
 fi
 jq --exit-status \
-  '.schema_version == "a3s.oci.upstream-runtime-tools-lock.v1"
+  '.schema_version == "a3s.oci.upstream-runtime-tools-lock.v2"
    and (.repository | type == "string" and length > 0)
    and (.commit | test("^[0-9a-f]{40}$"))
    and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
@@ -79,10 +79,18 @@ jq --exit-status \
    and .integration.bundle_validation == "native-linux-package"
    and .integration.lifecycle_validation == "native-linux-core-qualified-v1"
    and .lifecycle.profile == "native-linux-core-v1"
-   and .lifecycle.validated_architectures == ["x86_64"]
+   and .lifecycle.validated_architectures == ["aarch64", "x86_64"]
    and .lifecycle.preflight_architectures == []
-   and (.lifecycle.blockers | keys) == ["aarch64"]
-   and .lifecycle.blockers.aarch64 == "missing-upstream-aarch64-rootfs"
+   and .lifecycle.blockers == {}
+   and (.lifecycle.rootfs_sources | keys) == ["aarch64", "x86_64"]
+   and all(
+     .lifecycle.rootfs_sources[];
+     .distribution == "alpine"
+     and .version == "3.22.5"
+     and (.url | startswith("https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/"))
+     and (.sha256 | test("^[0-9a-f]{64}$"))
+     and (.size | type == "number" and . > 0)
+   )
    and .lifecycle.upstream_harness_defects == [
      "runtime-tools-start-process-unset-inverted-assertion",
      "runtime-tools-pidfile-true-kill-race"
@@ -175,9 +183,10 @@ jq --exit-status \
   --argjson validated_architectures "$(jq --compact-output '.lifecycle.validated_architectures' "$lock_file")" \
   --argjson preflight_architectures "$(jq --compact-output '.lifecycle.preflight_architectures' "$lock_file")" \
   --argjson lifecycle_blockers "$(jq --compact-output '.lifecycle.blockers' "$lock_file")" \
+  --argjson rootfs_sources "$(jq --compact-output '.lifecycle.rootfs_sources' "$lock_file")" \
   --argjson upstream_harness_defects "$(jq --compact-output '.lifecycle.upstream_harness_defects' "$lock_file")" \
   --argjson lifecycle_test_count "$lifecycle_test_count" \
-  '.schema_version == "a3s.oci.upstream-runtime-tools-build.v2"
+  '.schema_version == "a3s.oci.upstream-runtime-tools-build.v3"
    and .repository == $repository
    and .commit == $commit
    and .version == $version
@@ -194,6 +203,19 @@ jq --exit-status \
    and .lifecycle.validated_architectures == $validated_architectures
    and .lifecycle.preflight_architectures == $preflight_architectures
    and .lifecycle.blockers == $lifecycle_blockers
+   and .lifecycle.qualified_input_available == true
+   and (
+     (
+       .lifecycle.architecture == "amd64"
+       and .lifecycle.rootfs.path == "lifecycle/rootfs-amd64.tar.gz"
+       and .lifecycle.rootfs.source == $rootfs_sources.x86_64
+     )
+     or (
+       .lifecycle.architecture == "arm64"
+       and .lifecycle.rootfs.path == "lifecycle/rootfs-arm64.tar.gz"
+       and .lifecycle.rootfs.source == $rootfs_sources.aarch64
+     )
+   )
    and .lifecycle.upstream_harness_defects == $upstream_harness_defects
    and (.lifecycle.tests | length) == $lifecycle_test_count
    and all(.lifecycle.tests[]; .static_elf == true)' \

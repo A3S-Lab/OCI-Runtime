@@ -1211,22 +1211,24 @@ The workflow separately builds official OCI Runtime Tools 0.9.0 at exact
 commit `8a4db579f5c88af5a0d036fad34bddc9c1f703f3` with Go 1.24.0. The root-owned,
 static host tool validates the staged Native Linux and utility-VM OCI 1.3.0
 bundle configurations at MUST level and must reject an escaping rootfs path.
-On x86_64, the same exact source also supplies its `rootfs-amd64.tar.gz`,
-`runtimetest`, and nine selected lifecycle executables. All nine drive the
-staged CLI through its durable Host Service adapter. Seven pass their original
-TAP assertions. `start` and `pidfile` each expose one exact, source-audited
-Runtime Tools harness defect; the gate accepts them only when the runtime's
-spec-correct state transition, error, cleanup, and journal evidence matches the
-locked signatures. The result remains transparent: both raw TAP failures and
-both defect identifiers are retained, every CLI journal is retired, and the
-Host Service stops cleanly. The
-upstream revision has no AArch64 rootfs, so that package records a separate
-unavailable blocker. The compatibility lock and exact
-tool/build-manifest identities are retained; the tool and fixtures are never
-copied into the archive.
+The same exact source supplies `runtimetest` and nine selected lifecycle
+executables. Runtime Tools only checks in an amd64 rootfs, so the compatibility
+lock separately pins Alpine 3.22.5 minirootfs archives for x86_64 and AArch64 by
+URL, exact size, and SHA-256. The builder selects the host architecture, rejects
+unsafe archive paths, verifies the BusyBox executable and `/bin/sh` identity,
+and publishes it as the `rootfs-${GOARCH}.tar.gz` name consumed by the upstream
+harness. All nine tests drive the staged CLI through its durable Host Service
+adapter on both architectures. Seven pass their original TAP assertions.
+`start` and `pidfile` each expose one exact, source-audited Runtime Tools harness
+defect; the gate accepts them only when the runtime's spec-correct state
+transition, error, cleanup, and journal evidence matches the locked signatures.
+The result remains transparent: the rootfs provenance, both raw TAP failures,
+both defect identifiers, every retired CLI journal, and clean Host Service
+shutdown are retained. The exact tool/build-manifest identities are retained;
+the tool and fixtures are never copied into the archive.
 
 The gate removes `/dev/kvm` before the lifecycle dispatch and retains
-`a3s.oci.native-linux-package-qualification.v6` in
+`a3s.oci.native-linux-package-qualification.v7` in
 `qualification/native-linux-package.json`. That report binds the source
 commit, workflow run, host architecture and kernel, driver, isolation class,
 profile, runtime version, and exact SHA-256/size identity of all three package
@@ -1239,10 +1241,10 @@ Its soak evidence
 closes the OAR-02 mechanism gate for exact operation identity, frozen/resumed
 progress, and Pause/Resume replay across two Host Service reopens per wave.
 The OAR-03 evidence proves replacement-process replay at both Restore fault
-boundaries and deterministic PID/network namespace rejection. The x86_64
-report qualifies the pinned core lifecycle profile; it does not qualify
-inherited stdio descriptors, terminal console sockets, `LISTEN_FDS`, broader
-upstream suites, AArch64, or other platforms. The reports are archived and
+boundaries and deterministic PID/network namespace rejection. Both Linux
+architecture reports qualify the pinned core lifecycle profile; they do not
+qualify inherited stdio descriptors, terminal console sockets, `LISTEN_FDS`,
+broader upstream suites, or other platforms. The reports are archived and
 later covered by the release checksum and signed provenance.
 
 This closes the reproducible package-to-Native-matrix wiring. Actual tag

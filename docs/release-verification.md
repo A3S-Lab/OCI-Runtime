@@ -80,7 +80,7 @@ for the intended host and integration.
 
 Each Linux host archive contains
 `qualification/native-linux-package.json` with schema
-`a3s.oci.native-linux-package-qualification.v6`. The tag workflow creates this
+`a3s.oci.native-linux-package-qualification.v7`. The tag workflow creates this
 report before compression by running the staged musl CLI and Agent, not Cargo
 development binaries. The gate verifies the package layout and all three
 static ELF executables, removes `/dev/kvm` across the lifecycle portion, and
@@ -93,16 +93,18 @@ Runtime Tools 0.9.0 from exact commit
 `8a4db579f5c88af5a0d036fad34bddc9c1f703f3` with Go 1.24.0 and validates the
 staged Native Linux and utility-VM OCI 1.3.0 bundle configurations at MUST
 level without host-specific checks. A separate negative bundle must reject an
-escaping rootfs path. On x86_64, the exact staged runtime and Agent then start
-the nine-test pinned command-line lifecycle profile. All nine execute: seven
+escaping rootfs path. On x86_64 and AArch64, the exact staged runtime and Agent
+then start the nine-test pinned command-line lifecycle profile. The Runtime
+Tools lock supplies architecture-matched Alpine 3.22.5 minirootfs archives with
+exact URL, size, and SHA-256 provenance. Publication requires safe archive
+paths, the expected BusyBox and `/bin/sh` identities, and the matching ELF
+architecture. All nine execute: seven
 pass their original TAP assertions, while `start` and `pidfile` retain two
 exact, source-audited Runtime Tools harness defects. Qualification requires the
 runtime's spec-correct state, error, cleanup, and PID-file evidence to match the
 locked signatures, all durable CLI journals to retire, and the Host Service to
-stop cleanly. Both raw TAP failures and both defect identifiers remain visible
-in the report.
-The pinned revision has no AArch64 rootfs archive, so AArch64 retains a separate
-explicit `unavailable` lifecycle report.
+stop cleanly. The rootfs source, both raw TAP failures, and both defect
+identifiers remain visible in the report.
 
 The report binds the source commit, workflow run, Linux architecture and
 kernel, `native-linux` driver, `shared-host-kernel` isolation class, exact test
@@ -116,7 +118,8 @@ official upstream bundle-validation, and upstream lifecycle records. The
 binds the exact version, Git ID, SHA-256 digest, and size. The
 `external_tools.oci_runtime_tools` entry binds the exact upstream commit,
 version, Runtime Spec version, Go version, build-manifest digest, executable
-digest, and size. Both tools are explicitly recorded as not packaged. Soak
+digest, size, and architecture-specific rootfs source. Both tools are
+explicitly recorded as not packaged. Soak
 schema v2 retains every exact Pause and Resume operation ID, both post-reopen
 response replays, and the frozen and resumed workload counters for all 100
 lifecycles. Before binding their sizes and digests, the package gate rejects
@@ -126,7 +129,7 @@ After verifying the outer archive provenance, inspect the package report with:
 
 ```bash
 jq --exit-status \
-  '.schema_version == "a3s.oci.native-linux-package-qualification.v6"
+  '.schema_version == "a3s.oci.native-linux-package-qualification.v7"
    and .status == "available"
    and .static_elf_verified
    and .kvm_absent_before_lifecycle
@@ -134,13 +137,9 @@ jq --exit-status \
    and .oar02_pause_resume_verified
    and .oar03_checkpoint_restore_verified
    and .upstream_bundle_validation_verified
-   and .upstream_lifecycle_validation_status ==
-     (if .architecture == "x86_64" then "available" else "unavailable" end)
-   and .upstream_lifecycle_blocker ==
-     (if .architecture == "x86_64"
-      then null
-      else "missing-upstream-aarch64-rootfs" end)
-   and .upstream_core_lifecycle_verified == (.architecture == "x86_64")
+   and .upstream_lifecycle_validation_status == "available"
+   and .upstream_lifecycle_blocker == null
+   and .upstream_core_lifecycle_verified
    and .upstream_full_lifecycle_verified == false
    and .external_tools.criu.packaged == false
    and .external_tools.criu.version == "4.2.1"
@@ -150,7 +149,12 @@ jq --exit-status \
    and .external_tools.oci_runtime_tools.runtime_spec_version == "1.3.0"
    and (.external_tools.oci_runtime_tools.sha256 | test("^[0-9a-f]{64}$"))
    and .external_tools.oci_runtime_tools.lifecycle_preflight_architectures == []
-   and .external_tools.oci_runtime_tools.lifecycle_validated_architectures == ["x86_64"]
+   and .external_tools.oci_runtime_tools.lifecycle_validated_architectures ==
+     ["aarch64", "x86_64"]
+   and .external_tools.oci_runtime_tools.lifecycle_rootfs_source.distribution ==
+     "alpine"
+   and .external_tools.oci_runtime_tools.lifecycle_rootfs_source.version ==
+     "3.22.5"
    and .external_tools.oci_runtime_tools.lifecycle_upstream_harness_defects ==
      ["runtime-tools-start-process-unset-inverted-assertion",
       "runtime-tools-pidfile-true-kill-race"]
@@ -159,10 +163,10 @@ jq --exit-status \
 ```
 
 This report qualifies the packaged Native mechanism and the two supported
-bundle configurations against the official validator and the pinned x86_64
-core lifecycle profile. It does not qualify inherited stdio descriptor
-transport, terminal console sockets, `LISTEN_FDS`, the broader upstream
-lifecycle suites, AArch64 lifecycle execution, or any non-Linux platform. The
+bundle configurations against the official validator and the pinned x86_64 or
+AArch64 core lifecycle profile matching the archive. It does not qualify
+inherited stdio descriptor transport, terminal console sockets, `LISTEN_FDS`,
+the broader upstream lifecycle suites, or any non-Linux platform. The
 report does not turn the `probe-only` driver into a
 supported capability or substitute the separate A3S Box consumer, security,
 upgrade, rollback, and long-running release gates.

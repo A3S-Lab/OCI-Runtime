@@ -1161,6 +1161,90 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  upstream-runtime-tools:
+    name: upstream OCI core lifecycle (${{ matrix.architecture }})
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x86_64
+            os: ubuntu-latest
+            rust_target: x86_64-unknown-linux-musl
+          - architecture: aarch64
+            os: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.0'
+          cache: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: upstream-runtime-tools-${{ matrix.architecture }}
+      - name: Install upstream lifecycle host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes binutils file jq
+      - name: Build exact static Native Linux executables
+        env:
+          A3S_OCI_GIT_REVISION: ${{ github.sha }}
+        run: |
+          .github/scripts/build-static-musl.sh \
+            "${{ matrix.rust_target }}" \
+            a3s-oci-cli \
+            a3s-oci-agent
+          release="$GITHUB_WORKSPACE/target/${{ matrix.rust_target }}/release"
+          .github/scripts/verify-static-elf.sh \
+            "$release/a3s-oci" \
+            "$release/a3s-oci-agent"
+      - name: Build pinned OCI Runtime Tools and rootfs
+        run: |
+          bash .github/scripts/build-pinned-runtime-tools.sh \
+            /usr/local/lib/a3s-oci-tools/runtime-tools-8a4db579f5c88af5a0d036fad34bddc9c1f703f3
+      - name: Run pinned upstream OCI core lifecycle
+        env:
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          release="$GITHUB_WORKSPACE/target/${{ matrix.rust_target }}/release"
+          tools=/usr/local/lib/a3s-oci-tools/runtime-tools-8a4db579f5c88af5a0d036fad34bddc9c1f703f3
+          report="$RUNNER_TEMP/a3s-oci-upstream-lifecycle-${{ matrix.architecture }}.json"
+          bash .github/scripts/upstream-oci-lifecycle-validation.sh \
+            "$tools/oci-runtime-tool" \
+            "$tools/build.json" \
+            "$release/a3s-oci" \
+            "$release/a3s-oci-agent" \
+            "$A3S_QUALIFICATION_SOURCE_COMMIT" \
+            "$report"
+          jq --exit-status \
+            --arg architecture "${{ matrix.architecture }}" \
+            '.schema_version == "a3s.oci.upstream-lifecycle-validation.v1"
+             and .status == "available"
+             and .architecture == $architecture
+             and .reason == null
+             and .blocker == null
+             and .validation.all_selected_conformant
+             and .validation.all_lifecycles_retired
+             and .validation.service_shutdown_clean
+             and .core_lifecycle_qualified
+             and .full_lifecycle_qualified == false
+             and .upstream.rootfs_source.distribution == "alpine"
+             and .upstream.rootfs_source.version == "3.22.5"' \
+            "$report" >/dev/null
+      - if: always()
+        name: Upload upstream OCI lifecycle evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-oci-lifecycle-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/a3s-oci-upstream-lifecycle-${{ matrix.architecture }}.json
+          if-no-files-found: warn
+          retention-days: 14
+
   guest-agent-musl:
     runs-on: ubuntu-latest
     steps:

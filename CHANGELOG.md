@@ -52,21 +52,23 @@ All notable changes to A3S OCI Runtime are documented in this file.
   OCI, security, upgrade, rollback, and soak qualification.
 - Added exact staged-package qualification for tagged Linux x86_64 and arm64
   archives. The static musl CLI and Agent run the complete Native Linux matrix
-  with `/dev/kvm` removed before compression. Package schema v6 additionally
+  with `/dev/kvm` removed before compression. Package schema v7 additionally
   builds CRIU v4.2.1 from pinned upstream commit
   `9539417f3e3cfa4eb84c319cd71f4d52f1f08645` and requires the three-report
   OAR-03 checkpoint/restore matrix. It also builds OCI Runtime Tools 0.9.0 from
   exact commit `8a4db579f5c88af5a0d036fad34bddc9c1f703f3` with Go 1.24.0 and validates
   the staged Native Linux and utility-VM OCI 1.3.0 bundles, including a
-  fail-closed escaping-rootfs negative. On x86_64 it also starts the pinned
-  lifecycle profile through the staged CLI and Host Service. All nine selected
-  tests execute: seven pass their original TAP assertions, while `start` and
-  `pidfile` are transparently retained as conformant with two exact,
-  source-audited Runtime Tools harness defects. The report requires those exact
-  defect identifiers, retired CLI journals, clean service shutdown, and a
-  qualified x86_64 core profile. AArch64 records the separate upstream rootfs
-  limitation as unavailable. The report
-  binds the source commit,
+  fail-closed escaping-rootfs negative. Both x86_64 and AArch64 start the pinned
+  lifecycle profile through the staged CLI and Host Service using
+  architecture-matched Alpine 3.22.5 minirootfs archives whose URLs, sizes, and
+  SHA-256 identities are compatibility-locked. The builder rejects unsafe
+  paths, missing BusyBox identities, and architecture drift before publication.
+  All nine selected tests execute: seven pass their original TAP assertions,
+  while `start` and `pidfile` are transparently retained as conformant with two
+  exact, source-audited Runtime Tools harness defects. The report requires the
+  locked rootfs provenance, those exact defect identifiers, retired CLI
+  journals, clean service shutdown, and a qualified core profile on both Linux
+  architectures. The report binds the source commit,
   platform, driver/isolation profile, all three packaged executable digests,
   both external tool identities, and thirteen subordinate evidence records.
   CRIU and Runtime Tools remain host-provided and outside the archive. The

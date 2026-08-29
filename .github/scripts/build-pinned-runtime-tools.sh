@@ -59,8 +59,8 @@ if [[ -e "$destination" || -L "$destination" ]]; then
   exit 2
 fi
 
-for command in basename chmod cut dirname file git go grep install jq make \
-  mktemp readelf realpath rm sha256sum stat; do
+for command in basename chmod curl cut dirname file git go grep install jq make \
+  mktemp mv readelf readlink realpath rm sed sha256sum stat tar; do
   command -v "$command" >/dev/null || {
     printf 'Pinned Runtime Tools build requires %s\n' "$command" >&2
     exit 2
@@ -76,7 +76,7 @@ if [[ ! -f "$lock_file" || -L "$lock_file" ]]; then
   exit 2
 fi
 jq --exit-status \
-  '.schema_version == "a3s.oci.upstream-runtime-tools-lock.v1"
+  '.schema_version == "a3s.oci.upstream-runtime-tools-lock.v2"
    and (.repository | type == "string" and length > 0)
    and (.commit | test("^[0-9a-f]{40}$"))
    and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
@@ -91,10 +91,18 @@ jq --exit-status \
    and .integration.bundle_validation == "native-linux-package"
    and .integration.lifecycle_validation == "native-linux-core-qualified-v1"
    and .lifecycle.profile == "native-linux-core-v1"
-   and .lifecycle.validated_architectures == ["x86_64"]
+   and .lifecycle.validated_architectures == ["aarch64", "x86_64"]
    and .lifecycle.preflight_architectures == []
-   and (.lifecycle.blockers | keys) == ["aarch64"]
-   and .lifecycle.blockers.aarch64 == "missing-upstream-aarch64-rootfs"
+   and .lifecycle.blockers == {}
+   and (.lifecycle.rootfs_sources | keys) == ["aarch64", "x86_64"]
+   and all(
+     .lifecycle.rootfs_sources[];
+     .distribution == "alpine"
+     and .version == "3.22.5"
+     and (.url | test("^https://dl-cdn\\.alpinelinux\\.org/alpine/v3\\.22/releases/(aarch64|x86_64)/alpine-minirootfs-3\\.22\\.5-(aarch64|x86_64)\\.tar\\.gz$"))
+     and (.sha256 | test("^[0-9a-f]{64}$"))
+     and (.size | type == "number" and . > 0)
+   )
    and .lifecycle.upstream_harness_defects == [
      "runtime-tools-start-process-unset-inverted-assertion",
      "runtime-tools-pidfile-true-kill-race"
@@ -105,10 +113,11 @@ jq --exit-status \
      type == "string" and test("^[a-z0-9][a-z0-9_]{0,63}$")
    )
    and (.lifecycle.tests | length) == (.lifecycle.tests | unique | length)
-   and (.lifecycle.limitations | index("stdio-descriptor-transport")) != null
-   and (.lifecycle.limitations | index("terminal-console-socket")) != null
-   and (.lifecycle.limitations | index("listen-fds")) != null
-   and (.lifecycle.limitations | index("aarch64-upstream-rootfs")) != null' \
+   and .lifecycle.limitations == [
+     "stdio-descriptor-transport",
+     "terminal-console-socket",
+     "listen-fds"
+   ]' \
   "$lock_file" >/dev/null
 
 upstream_repository="$(jq --raw-output '.repository' "$lock_file")"
@@ -120,11 +129,21 @@ required_go_version="$(jq --raw-output '.build.go_version' "$lock_file")"
 lifecycle_profile="$(jq --raw-output '.lifecycle.profile' "$lock_file")"
 mapfile -t lifecycle_tests < <(jq --raw-output '.lifecycle.tests[]' "$lock_file")
 go_architecture="$(go env GOARCH)"
-if [[ "$go_architecture" != amd64 && "$go_architecture" != arm64 ]]; then
-  printf 'Pinned Runtime Tools lifecycle fixtures do not support GOARCH=%s\n' \
-    "$go_architecture" >&2
-  exit 2
-fi
+case "$go_architecture" in
+  amd64)
+    package_architecture=x86_64
+    rootfs_elf_machine='Advanced Micro Devices X86-64'
+    ;;
+  arm64)
+    package_architecture=aarch64
+    rootfs_elf_machine='AArch64'
+    ;;
+  *)
+    printf 'Pinned Runtime Tools lifecycle fixtures do not support GOARCH=%s\n' \
+      "$go_architecture" >&2
+    exit 2
+    ;;
+esac
 actual_go_version="$(go env GOVERSION)"
 if [[ "$actual_go_version" != "$required_go_version" ]]; then
   printf 'Pinned Runtime Tools requires %s, found %s\n' \
@@ -259,25 +278,104 @@ for lifecycle_test in "${lifecycle_tests[@]}"; do
     >>"$lifecycle_entries"
 done
 
-rootfs_available=false
-rootfs_name=''
-rootfs_sha256=''
-rootfs_size=0
-if [[ "$go_architecture" == amd64 ]]; then
-  rootfs_name='rootfs-amd64.tar.gz'
-  rootfs_source="$source_directory/$rootfs_name"
-  if [[ ! -f "$rootfs_source" || -L "$rootfs_source" ]]; then
-    printf 'Pinned Runtime Tools source lacks %s\n' "$rootfs_name" >&2
+rootfs_available=true
+rootfs_name="rootfs-$go_architecture.tar.gz"
+rootfs_source="$build_root/$rootfs_name"
+rootfs_download="$rootfs_source.download"
+rootfs_distribution="$(
+  jq --raw-output --arg architecture "$package_architecture" \
+    '.lifecycle.rootfs_sources[$architecture].distribution' "$lock_file"
+)"
+rootfs_version="$(
+  jq --raw-output --arg architecture "$package_architecture" \
+    '.lifecycle.rootfs_sources[$architecture].version' "$lock_file"
+)"
+rootfs_url="$(
+  jq --raw-output --arg architecture "$package_architecture" \
+    '.lifecycle.rootfs_sources[$architecture].url' "$lock_file"
+)"
+rootfs_sha256="$(
+  jq --raw-output --arg architecture "$package_architecture" \
+    '.lifecycle.rootfs_sources[$architecture].sha256' "$lock_file"
+)"
+rootfs_size="$(
+  jq --raw-output --arg architecture "$package_architecture" \
+    '.lifecycle.rootfs_sources[$architecture].size' "$lock_file"
+)"
+
+curl --fail --location --retry 3 --output "$rootfs_download" "$rootfs_url"
+if [[ ! -f "$rootfs_download" || -L "$rootfs_download" ]] ||
+  [[ "$(stat --format '%s' "$rootfs_download")" != "$rootfs_size" ]] ||
+  [[ "$(sha256sum "$rootfs_download" | cut -d ' ' -f 1)" != \
+    "$rootfs_sha256" ]]; then
+  printf 'Downloaded %s %s %s rootfs differs from the compatibility lock\n' \
+    "$rootfs_distribution" "$rootfs_version" "$package_architecture" >&2
+  exit 1
+fi
+mv -- "$rootfs_download" "$rootfs_source"
+
+rootfs_entries="$build_root/rootfs.entries"
+tar --list --gzip --file "$rootfs_source" >"$rootfs_entries"
+while IFS= read -r rootfs_entry; do
+  if [[ "$rootfs_entry" == './' || "$rootfs_entry" == '.' ]]; then
+    continue
+  fi
+  normalized_entry="${rootfs_entry#./}"
+  if [[ -z "$normalized_entry" || "$normalized_entry" == /* ]]; then
+    printf 'Locked lifecycle rootfs contains an invalid path: %s\n' \
+      "$rootfs_entry" >&2
     exit 1
   fi
-  rootfs_available=true
-  rootfs_sha256="$(sha256sum "$rootfs_source" | cut -d ' ' -f 1)"
-  rootfs_size="$(stat --format '%s' "$rootfs_source")"
+  case "/$normalized_entry/" in
+    */../*)
+      printf 'Locked lifecycle rootfs contains a parent traversal: %s\n' \
+        "$rootfs_entry" >&2
+      exit 1
+      ;;
+  esac
+done <"$rootfs_entries"
+for required_rootfs_entry in bin/busybox bin/sh etc/group etc/passwd; do
+  if ! sed 's#^\./##' "$rootfs_entries" |
+    grep --fixed-strings --line-regexp "$required_rootfs_entry" >/dev/null; then
+    printf 'Locked lifecycle rootfs lacks required entry: %s\n' \
+      "$required_rootfs_entry" >&2
+    exit 1
+  fi
+done
+
+rootfs_verification="$build_root/rootfs-verification"
+install -d -m 0700 -- "$rootfs_verification"
+tar --extract --gzip --file "$rootfs_source" \
+  --directory "$rootfs_verification" \
+  --no-same-owner --no-same-permissions -- \
+  ./bin/busybox ./bin/sh ./etc/group ./etc/passwd
+if [[ ! -f "$rootfs_verification/bin/busybox" || \
+  -L "$rootfs_verification/bin/busybox" || \
+  ! -x "$rootfs_verification/bin/busybox" ]] ||
+  ! readelf --file-header "$rootfs_verification/bin/busybox" |
+    grep --extended-regexp \
+      "Machine:[[:space:]]+$rootfs_elf_machine" >/dev/null; then
+  printf 'Locked lifecycle rootfs has an invalid %s BusyBox executable\n' \
+    "$package_architecture" >&2
+  exit 1
 fi
+if [[ ! -L "$rootfs_verification/bin/sh" ]] ||
+  [[ "$(readlink -- "$rootfs_verification/bin/sh")" != '/bin/busybox' ]]; then
+  printf '%s\n' 'Locked lifecycle rootfs has an invalid /bin/sh identity' >&2
+  exit 1
+fi
+for rootfs_identity_file in etc/group etc/passwd; do
+  if [[ ! -f "$rootfs_verification/$rootfs_identity_file" || \
+    -L "$rootfs_verification/$rootfs_identity_file" ]]; then
+    printf 'Locked lifecycle rootfs has an invalid identity file: %s\n' \
+      "$rootfs_identity_file" >&2
+    exit 1
+  fi
+done
 
 manifest="$build_root/upstream-runtime-tools-build.json"
 jq --null-input \
-  --arg schema_version 'a3s.oci.upstream-runtime-tools-build.v2' \
+  --arg schema_version 'a3s.oci.upstream-runtime-tools-build.v3' \
   --arg repository "$upstream_repository" \
   --arg commit "$upstream_commit" \
   --arg version "$upstream_version" \
@@ -300,6 +398,9 @@ jq --null-input \
   --arg rootfs_name "$rootfs_name" \
   --arg rootfs_sha256 "$rootfs_sha256" \
   --argjson rootfs_size "$rootfs_size" \
+  --arg rootfs_distribution "$rootfs_distribution" \
+  --arg rootfs_version "$rootfs_version" \
+  --arg rootfs_url "$rootfs_url" \
   '{
     schema_version: $schema_version,
     repository: $repository,
@@ -340,7 +441,14 @@ jq --null-input \
         if $rootfs_available then {
           path: ("lifecycle/" + $rootfs_name),
           sha256: $rootfs_sha256,
-          size: $rootfs_size
+          size: $rootfs_size,
+          source: {
+            distribution: $rootfs_distribution,
+            version: $rootfs_version,
+            url: $rootfs_url,
+            sha256: $rootfs_sha256,
+            size: $rootfs_size
+          }
         } else null end
       ),
       limitations: $lifecycle_limitations
@@ -461,13 +569,19 @@ jq --exit-status \
   --argjson size "$built_size" \
   --arg lifecycle_profile "$lifecycle_profile" \
   --arg architecture "$go_architecture" \
+  --argjson rootfs_source "$(
+    jq --compact-output --arg architecture "$package_architecture" \
+      '.lifecycle.rootfs_sources[$architecture]' "$lock_file"
+  )" \
   --argjson test_count "${#lifecycle_tests[@]}" \
   --argjson upstream_harness_defects "$(jq --compact-output '.lifecycle.upstream_harness_defects' "$lock_file")" \
-  '.schema_version == "a3s.oci.upstream-runtime-tools-build.v2"
+  '.schema_version == "a3s.oci.upstream-runtime-tools-build.v3"
    and .binary.sha256 == $sha256
    and .binary.size == $size
    and .lifecycle.profile == $lifecycle_profile
    and .lifecycle.architecture == $architecture
+   and .lifecycle.qualified_input_available == true
+   and .lifecycle.rootfs.source == $rootfs_source
    and .lifecycle.upstream_harness_defects == $upstream_harness_defects
    and (.lifecycle.tests | length) == $test_count
    and all(.lifecycle.tests[]; .static_elf)' \

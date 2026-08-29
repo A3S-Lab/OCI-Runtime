@@ -106,7 +106,7 @@ if [[ ! -f "$lock_file" || -L "$lock_file" ]]; then
   exit 2
 fi
 jq --exit-status \
-  '.schema_version == "a3s.oci.upstream-runtime-tools-lock.v1"
+  '.schema_version == "a3s.oci.upstream-runtime-tools-lock.v2"
    and (.repository | type == "string" and length > 0)
    and (.commit | test("^[0-9a-f]{40}$"))
    and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
@@ -120,20 +120,29 @@ jq --exit-status \
    and .upstream_interface == "oci-runtime-command-line-interface"
    and .integration.lifecycle_validation == "native-linux-core-qualified-v1"
    and .lifecycle.profile == "native-linux-core-v1"
-   and .lifecycle.validated_architectures == ["x86_64"]
+   and .lifecycle.validated_architectures == ["aarch64", "x86_64"]
    and .lifecycle.preflight_architectures == []
-   and (.lifecycle.blockers | keys) == ["aarch64"]
-   and .lifecycle.blockers.aarch64 == "missing-upstream-aarch64-rootfs"
+   and .lifecycle.blockers == {}
+   and (.lifecycle.rootfs_sources | keys) == ["aarch64", "x86_64"]
+   and all(
+     .lifecycle.rootfs_sources[];
+     .distribution == "alpine"
+     and .version == "3.22.5"
+     and (.url | startswith("https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/"))
+     and (.sha256 | test("^[0-9a-f]{64}$"))
+     and (.size | type == "number" and . > 0)
+   )
    and .lifecycle.upstream_harness_defects == [
      "runtime-tools-start-process-unset-inverted-assertion",
      "runtime-tools-pidfile-true-kill-race"
    ]
    and (.lifecycle.tests | length) > 0
    and (.lifecycle.tests | length) == (.lifecycle.tests | unique | length)
-   and (.lifecycle.limitations | index("stdio-descriptor-transport")) != null
-   and (.lifecycle.limitations | index("terminal-console-socket")) != null
-   and (.lifecycle.limitations | index("listen-fds")) != null
-   and (.lifecycle.limitations | index("aarch64-upstream-rootfs")) != null' \
+   and .lifecycle.limitations == [
+     "stdio-descriptor-transport",
+     "terminal-console-socket",
+     "listen-fds"
+   ]' \
   "$lock_file" >/dev/null
 
 upstream_repository="$(jq --raw-output '.repository' "$lock_file")"
@@ -143,7 +152,6 @@ runtime_spec_version="$(jq --raw-output '.runtime_spec.version' "$lock_file")"
 runtime_spec_sum="$(jq --raw-output '.runtime_spec.module_sum' "$lock_file")"
 required_go_version="$(jq --raw-output '.build.go_version' "$lock_file")"
 lifecycle_profile="$(jq --raw-output '.lifecycle.profile' "$lock_file")"
-aarch64_blocker="$(jq --raw-output '.lifecycle.blockers.aarch64' "$lock_file")"
 mapfile -t lifecycle_tests < <(jq --raw-output '.lifecycle.tests[]' "$lock_file")
 lifecycle_test_names="$(jq --compact-output '.lifecycle.tests' "$lock_file")"
 lifecycle_limitations="$(jq --compact-output '.lifecycle.limitations' "$lock_file")"
@@ -223,6 +231,11 @@ case "$architecture" in
     exit 2
     ;;
 esac
+expected_rootfs_path="lifecycle/rootfs-$go_architecture.tar.gz"
+expected_rootfs_source="$(
+  jq --compact-output --arg architecture "$package_architecture" \
+    '.lifecycle.rootfs_sources[$architecture]' "$lock_file"
+)"
 
 tool_sha256="$(sha256sum "$tool" | cut -d ' ' -f 1)"
 tool_size="$(stat --format '%s' "$tool")"
@@ -244,7 +257,9 @@ jq --exit-status \
   --argjson upstream_harness_defects "$expected_upstream_harness_defects" \
   --argjson lifecycle_tests "$lifecycle_test_names" \
   --argjson lifecycle_limitations "$lifecycle_limitations" \
-  '.schema_version == "a3s.oci.upstream-runtime-tools-build.v2"
+  --arg expected_rootfs_path "$expected_rootfs_path" \
+  --argjson expected_rootfs_source "$expected_rootfs_source" \
+  '.schema_version == "a3s.oci.upstream-runtime-tools-build.v3"
    and .repository == $repository
    and .commit == $commit
    and .version == $version
@@ -263,6 +278,9 @@ jq --exit-status \
    and .lifecycle.preflight_architectures == $preflight_architectures
    and .lifecycle.blockers == $lifecycle_blockers
    and .lifecycle.upstream_harness_defects == $upstream_harness_defects
+   and .lifecycle.qualified_input_available == true
+   and .lifecycle.rootfs.path == $expected_rootfs_path
+   and .lifecycle.rootfs.source == $expected_rootfs_source
    and [(.lifecycle.tests[]).name] == $lifecycle_tests
    and all(.lifecycle.tests[]; .static_elf == true)
    and .lifecycle.limitations == $lifecycle_limitations' \
@@ -278,116 +296,6 @@ fi
 
 runtime_sha256="$(sha256sum "$runtime_binary" | cut -d ' ' -f 1)"
 agent_sha256="$(sha256sum "$agent_binary" | cut -d ' ' -f 1)"
-qualified_input_available="$(
-  jq --raw-output '.lifecycle.qualified_input_available' "$tool_manifest"
-)"
-if [[ "$qualified_input_available" != true && \
-  "$qualified_input_available" != false ]]; then
-  printf '%s\n' 'Runtime Tools manifest has an invalid lifecycle availability value' >&2
-  exit 1
-fi
-
-if [[ "$package_architecture" == aarch64 ]]; then
-  if [[ "$qualified_input_available" != false ]] ||
-    [[ "$(jq --raw-output '.lifecycle.rootfs == null' "$tool_manifest")" != true ]]; then
-    printf '%s\n' 'AArch64 Runtime Tools manifest must retain the missing-rootfs limitation' >&2
-    exit 1
-  fi
-  jq --null-input \
-    --arg schema_version 'a3s.oci.upstream-lifecycle-validation.v1' \
-    --arg status 'unavailable' \
-    --arg reason 'the pinned upstream source has no aarch64 lifecycle rootfs' \
-    --arg source_commit "$source_commit" \
-    --arg architecture "$package_architecture" \
-    --arg repository "$upstream_repository" \
-    --arg upstream_commit "$upstream_commit" \
-    --arg upstream_version "$upstream_version" \
-    --arg runtime_spec_version "$runtime_spec_version" \
-    --arg go_version "$required_go_version" \
-    --arg tool_sha256 "$tool_sha256" \
-    --argjson tool_size "$tool_size" \
-    --arg tool_manifest_sha256 "$tool_manifest_sha256" \
-    --arg runtime_sha256 "$runtime_sha256" \
-    --argjson runtime_size "$(stat --format '%s' "$runtime_binary")" \
-    --arg agent_sha256 "$agent_sha256" \
-    --argjson agent_size "$(stat --format '%s' "$agent_binary")" \
-    --arg lifecycle_profile "$lifecycle_profile" \
-    --arg blocker "$aarch64_blocker" \
-    --argjson selected_tests "$lifecycle_test_names" \
-    --argjson limitations "$lifecycle_limitations" \
-    '{
-      schema_version: $schema_version,
-      status: $status,
-      reason: $reason,
-      blocker: $blocker,
-      source_commit: $source_commit,
-      platform: "linux",
-      architecture: $architecture,
-      upstream: {
-        repository: $repository,
-        commit: $upstream_commit,
-        version: $upstream_version,
-        runtime_spec_version: $runtime_spec_version,
-        go_version: $go_version,
-        tool_sha256: $tool_sha256,
-        tool_size: $tool_size,
-        build_manifest_sha256: $tool_manifest_sha256,
-        static_elf: true
-      },
-      package_executables: {
-        runtime: {sha256: $runtime_sha256, size: $runtime_size},
-        agent: {sha256: $agent_sha256, size: $agent_size}
-      },
-      validation: {
-        interface: "oci-runtime-command-line-interface",
-        profile: $lifecycle_profile,
-        isolation: "shared-host-kernel",
-        endpoint_transport: "unix-socket",
-        cli_state_journal_schema: "a3s.oci.cli-lifecycle.v1",
-        selected_tests: $selected_tests,
-        results: [],
-        all_selected_passed: false,
-        all_lifecycles_retired: false,
-        service_shutdown_clean: false,
-        service_log_sha256: null
-      },
-      core_lifecycle_qualified: false,
-      full_lifecycle_qualified: false,
-      limitations: $limitations
-    }' >"$report.tmp"
-  chmod 0644 "$report.tmp"
-  mv "$report.tmp" "$report"
-  jq --exit-status \
-    --arg source_commit "$source_commit" \
-    --arg blocker "$aarch64_blocker" \
-    --arg runtime_sha256 "$runtime_sha256" \
-    --arg agent_sha256 "$agent_sha256" \
-    --argjson selected_tests "$lifecycle_test_names" \
-    'select(
-       .schema_version == "a3s.oci.upstream-lifecycle-validation.v1"
-       and .status == "unavailable"
-       and .source_commit == $source_commit
-       and .architecture == "aarch64"
-       and .blocker == $blocker
-       and .package_executables.runtime.sha256 == $runtime_sha256
-       and .package_executables.agent.sha256 == $agent_sha256
-       and .validation.selected_tests == $selected_tests
-       and (.validation.results | length) == 0
-       and .validation.all_selected_passed == false
-       and .validation.all_lifecycles_retired == false
-       and .validation.service_shutdown_clean == false
-       and .core_lifecycle_qualified == false
-       and .full_lifecycle_qualified == false
-     )' "$report" >/dev/null
-  exit 0
-fi
-
-if [[ "$qualified_input_available" != true ]] ||
-  [[ "$(jq --raw-output '.lifecycle.rootfs.path' "$tool_manifest")" != \
-    'lifecycle/rootfs-amd64.tar.gz' ]]; then
-  printf '%s\n' 'x86_64 Runtime Tools manifest lacks its locked lifecycle rootfs' >&2
-  exit 1
-fi
 
 lifecycle_directory="$tools_directory/lifecycle"
 if [[ ! -d "$lifecycle_directory" || -L "$lifecycle_directory" ]]; then
@@ -401,7 +309,7 @@ if [[ "$(stat --format '%u:%g:%a' -- "$lifecycle_directory")" != \
     "$lifecycle_directory" >&2
   exit 1
 fi
-rootfs="$lifecycle_directory/rootfs-amd64.tar.gz"
+rootfs="$tools_directory/$expected_rootfs_path"
 runtimetest="$lifecycle_directory/runtimetest"
 for lifecycle_input in "$rootfs" "$runtimetest"; do
   if [[ ! -f "$lifecycle_input" || -L "$lifecycle_input" ]]; then
@@ -415,7 +323,9 @@ if [[ ! -x "$runtimetest" ]] ||
   [[ "$(sha256sum "$runtimetest" | cut -d ' ' -f 1)" != \
     "$(jq --raw-output '.lifecycle.runtimetest.sha256' "$tool_manifest")" ]] ||
   [[ "$(sha256sum "$rootfs" | cut -d ' ' -f 1)" != \
-    "$(jq --raw-output '.lifecycle.rootfs.sha256' "$tool_manifest")" ]]; then
+    "$(jq --raw-output '.lifecycle.rootfs.sha256' "$tool_manifest")" ]] ||
+  [[ "$(stat --format '%s' "$rootfs")" != \
+    "$(jq --raw-output '.lifecycle.rootfs.size' "$tool_manifest")" ]]; then
   printf '%s\n' 'Installed Runtime Tools lifecycle fixture differs from its manifest' >&2
   exit 1
 fi
@@ -698,6 +608,7 @@ jq --null-input \
   --arg tool_manifest_sha256 "$tool_manifest_sha256" \
   --arg rootfs_sha256 "$rootfs_sha256" \
   --argjson rootfs_size "$(stat --format '%s' "$rootfs")" \
+  --argjson rootfs_source "$expected_rootfs_source" \
   --arg runtime_sha256 "$runtime_sha256" \
   --argjson runtime_size "$(stat --format '%s' "$runtime_binary")" \
   --arg agent_sha256 "$agent_sha256" \
@@ -728,6 +639,7 @@ jq --null-input \
       build_manifest_sha256: $tool_manifest_sha256,
       rootfs_sha256: $rootfs_sha256,
       rootfs_size: $rootfs_size,
+      rootfs_source: $rootfs_source,
       static_elf: true
     },
     package_executables: {
@@ -759,16 +671,19 @@ mv "$report.tmp" "$report"
 jq --exit-status \
   --arg source_commit "$source_commit" \
   --arg upstream_commit "$upstream_commit" \
+  --arg architecture "$package_architecture" \
   --arg runtime_sha256 "$runtime_sha256" \
   --arg agent_sha256 "$agent_sha256" \
+  --argjson rootfs_source "$expected_rootfs_source" \
   --argjson selected_tests "$lifecycle_test_names" \
   --argjson upstream_harness_defects "$upstream_harness_defects_json" \
   'select(
      .schema_version == "a3s.oci.upstream-lifecycle-validation.v1"
      and .status == "available"
      and .source_commit == $source_commit
-     and .architecture == "x86_64"
+     and .architecture == $architecture
      and .upstream.commit == $upstream_commit
+     and .upstream.rootfs_source == $rootfs_source
      and .package_executables.runtime.sha256 == $runtime_sha256
      and .package_executables.agent.sha256 == $agent_sha256
      and .validation.selected_tests == $selected_tests

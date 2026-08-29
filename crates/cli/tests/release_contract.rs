@@ -1,4 +1,5 @@
 const RELEASE_WORKFLOW: &str = include_str!("../../../.github/workflows/release.yml");
+const CI_WORKFLOW: &str = include_str!("../../../.github/workflows/ci.yml");
 const RELEASE_GUIDE: &str = include_str!("../../../docs/release-verification.md");
 const README: &str = include_str!("../../../README.md");
 const CONTAINERD_GUIDE: &str = include_str!("../../../docs/containerd-runtime-v2.md");
@@ -190,8 +191,8 @@ fn linux_release_archives_retain_exact_package_qualification() {
     assert!(qualification_position < archive_position);
 
     for required in [
-        "a3s.oci.native-linux-package-qualification.v6",
-        "full-sdk-oar01-oar02-oar03-upstream-lifecycle-qualified-without-kvm-v6",
+        "a3s.oci.native-linux-package-qualification.v7",
+        "full-sdk-oar01-oar02-oar03-upstream-lifecycle-qualified-without-kvm-v7",
         "A3S_OCI_NATIVE_RUNTIME_BINARY",
         "A3S_OCI_NATIVE_AGENT_BINARY",
         "A3S_OCI_NATIVE_NETWORK_ENFORCEMENT_REPORT",
@@ -250,6 +251,7 @@ fn native_package_qualification_retains_oar01_real_host_evidence() {
 #[test]
 fn native_package_qualification_pins_upstream_oci_bundle_validation() {
     for required in [
+        "a3s.oci.upstream-runtime-tools-lock.v2",
         "https://github.com/opencontainers/runtime-tools.git",
         "8a4db579f5c88af5a0d036fad34bddc9c1f703f3",
         "\"version\": \"0.9.0\"",
@@ -260,13 +262,16 @@ fn native_package_qualification_pins_upstream_oci_bundle_validation() {
         "\"lifecycle_validation\": \"native-linux-core-qualified-v1\"",
         "\"validated_architectures\":",
         "\"preflight_architectures\":",
+        "\"rootfs_sources\":",
+        "alpine-minirootfs-3.22.5-aarch64.tar.gz",
+        "3fbc6285032ed46821b511292633d7b2a6306a2e254f590e92bdafff56cf2f70",
+        "alpine-minirootfs-3.22.5-x86_64.tar.gz",
+        "4b4daa9fe2fc696c4919c4412a4c3d3e770d8fb70292a004a2c72f5096175282",
         "\"runtime-tools-start-process-unset-inverted-assertion\"",
         "\"runtime-tools-pidfile-true-kill-race\"",
-        "\"missing-upstream-aarch64-rootfs\"",
         "\"stdio-descriptor-transport\"",
         "\"terminal-console-socket\"",
         "\"listen-fds\"",
-        "\"aarch64-upstream-rootfs\"",
     ] {
         assert!(
             UPSTREAM_RUNTIME_TOOLS_LOCK.contains(required),
@@ -277,9 +282,11 @@ fn native_package_qualification_pins_upstream_oci_bundle_validation() {
         "CGO_ENABLED=0 GOFLAGS=-mod=readonly",
         "-trimpath -buildvcs=false",
         "git -C \"$source_directory\" diff --exit-code",
-        "a3s.oci.upstream-runtime-tools-build.v2",
+        "a3s.oci.upstream-runtime-tools-build.v3",
         "tool runtimetest \"${validation_targets[@]}\"",
-        "rootfs-amd64.tar.gz",
+        "rootfs-$go_architecture.tar.gz",
+        "curl --fail --location --retry 3",
+        "rootfs.source == $rootfs_source",
         "expected_destination=\"/usr/local/lib/a3s-oci-tools/runtime-tools-$upstream_commit\"",
         "install -m 0755 -o root -g root",
     ] {
@@ -330,13 +337,14 @@ fn native_package_qualification_retains_the_pinned_upstream_lifecycle_qualificat
         "runtime-tools-start-process-unset-inverted-assertion",
         "runtime-tools-pidfile-true-kill-race",
         "result: \"conformant-with-upstream-harness-defect\"",
-        "all_selected_passed: false",
+        "and .validation.all_selected_passed == false",
         "all_selected_conformant: true",
         "all_lifecycles_retired: true",
         "service_shutdown_clean: true",
         "core_lifecycle_qualified: true",
         "full_lifecycle_qualified: false",
-        "the pinned upstream source has no aarch64 lifecycle rootfs",
+        "expected_rootfs_path=\"lifecycle/rootfs-$go_architecture.tar.gz\"",
+        "rootfs_source: $rootfs_source",
     ] {
         assert!(
             UPSTREAM_LIFECYCLE_VALIDATION.contains(required),
@@ -363,9 +371,77 @@ fn native_package_qualification_retains_the_pinned_upstream_lifecycle_qualificat
         .contains("bash .github/scripts/upstream-oci-lifecycle-validation.sh"));
     assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("upstream_lifecycle_status=available"));
     assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("upstream_core_lifecycle_verified=true"));
-    assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("upstream_lifecycle_status=unavailable"));
-    assert!(NATIVE_LINUX_PACKAGE_SMOKE.contains("upstream_core_lifecycle_verified=false"));
+    assert!(!NATIVE_LINUX_PACKAGE_SMOKE.contains("upstream_lifecycle_status=unavailable"));
+    assert!(!NATIVE_LINUX_PACKAGE_SMOKE.contains("upstream_core_lifecycle_verified=false"));
+    assert!(!UPSTREAM_RUNTIME_TOOLS_LOCK.contains("missing-upstream-aarch64-rootfs"));
+    assert!(!UPSTREAM_RUNTIME_TOOLS_LOCK.contains("aarch64-upstream-rootfs"));
     assert!(!UPSTREAM_LIFECYCLE_VALIDATION.contains("8a4db579f5c88af5a0d036fad34bddc9c1f703f3"));
+}
+
+#[test]
+fn upstream_lifecycle_lock_pins_qualified_rootfs_inputs_for_both_linux_architectures() {
+    let lock: serde_json::Value =
+        serde_json::from_str(UPSTREAM_RUNTIME_TOOLS_LOCK).expect("Runtime Tools lock must be JSON");
+
+    assert_eq!(
+        lock.pointer("/lifecycle/validated_architectures"),
+        Some(&serde_json::json!(["aarch64", "x86_64"]))
+    );
+    assert_eq!(
+        lock.pointer("/lifecycle/preflight_architectures"),
+        Some(&serde_json::json!([]))
+    );
+    assert_eq!(
+        lock.pointer("/lifecycle/blockers"),
+        Some(&serde_json::json!({}))
+    );
+    assert_eq!(
+        lock.pointer("/lifecycle/rootfs_sources/aarch64"),
+        Some(&serde_json::json!({
+            "distribution": "alpine",
+            "version": "3.22.5",
+            "url": "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.5-aarch64.tar.gz",
+            "sha256": "3fbc6285032ed46821b511292633d7b2a6306a2e254f590e92bdafff56cf2f70",
+            "size": 3_966_256
+        }))
+    );
+    assert_eq!(
+        lock.pointer("/lifecycle/rootfs_sources/x86_64"),
+        Some(&serde_json::json!({
+            "distribution": "alpine",
+            "version": "3.22.5",
+            "url": "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/x86_64/alpine-minirootfs-3.22.5-x86_64.tar.gz",
+            "sha256": "4b4daa9fe2fc696c4919c4412a4c3d3e770d8fb70292a004a2c72f5096175282",
+            "size": 3_638_276
+        }))
+    );
+}
+
+#[test]
+fn ci_runs_the_pinned_upstream_core_lifecycle_on_both_linux_architectures() {
+    let ci_workflow = normalize_newlines(CI_WORKFLOW);
+
+    for required in [
+        "upstream-runtime-tools:",
+        "name: upstream OCI core lifecycle (${{ matrix.architecture }})",
+        "architecture: x86_64",
+        "os: ubuntu-latest",
+        "rust_target: x86_64-unknown-linux-musl",
+        "architecture: aarch64",
+        "os: ubuntu-24.04-arm",
+        "rust_target: aarch64-unknown-linux-musl",
+        "go-version: '1.24.0'",
+        "bash .github/scripts/build-pinned-runtime-tools.sh",
+        "bash .github/scripts/upstream-oci-lifecycle-validation.sh",
+        "upstream-oci-lifecycle-${{ matrix.architecture }}",
+        "and .status == \"available\"",
+        "and .core_lifecycle_qualified",
+    ] {
+        assert!(
+            ci_workflow.contains(required),
+            "Dual-architecture upstream lifecycle CI lost {required}"
+        );
+    }
 }
 
 #[test]
