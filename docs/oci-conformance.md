@@ -275,8 +275,11 @@ The conformance pipeline pins the OCI 1.3.0 release. It currently provides:
 7. positive and negative semantic fixtures with stable rule identifiers;
 8. request-validation tests, including an untrusted raw-wire rejection test;
 9. in-memory end-to-end transport tests plus real Windows named-pipe and Unix
-   socket connector tests, and the complete CLI lifecycle journal matrix on
-   Windows with inherited-DACL and hard-link security negatives;
+   socket connector tests, the complete CLI lifecycle journal matrix on
+   Windows with inherited-DACL and hard-link security negatives, and a real
+   short-process `a3s-oci` binary lifecycle over platform IPC that verifies
+   created/running/stopped State, PID publication, signal delivery, Delete,
+   and container-ID reuse across distinct client processes;
 10. a versioned ten-case real-Guest path-isolation profile, wired into macOS
    Apple Silicon CI and the Linux KVM 17-case lifecycle matrix, that requires
    exact typed rejection, unchanged canaries, absent container state, and
