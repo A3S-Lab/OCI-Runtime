@@ -159,3 +159,86 @@ async fn state_does_not_wait_when_the_selected_driver_omits_wait() {
         .iter()
         .all(|call| !matches!(call, DriverCall::Wait(_))));
 }
+
+#[tokio::test]
+async fn state_preserves_a_stopped_tombstone_without_inventing_exit_evidence() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let driver = Arc::new(RecordingDriver::supported());
+    let service = open_service(&temporary, Arc::clone(&driver)).await;
+    let create = create_request(&bundle_directory, "state-tombstone-create");
+    let created = service.create(create.clone()).await.expect("create");
+    let target = ContainerTarget::exact(create.id.clone(), created.generation);
+    service
+        .start(StartRequest {
+            context: OperationContext::new(operation_id("state-tombstone-start")),
+            target: target.clone(),
+        })
+        .await
+        .expect("start");
+    driver
+        .states
+        .lock()
+        .expect("driver states lock")
+        .insert(create.id, (created.generation, DriverState::stopped()));
+    for _ in 0..2 {
+        driver.fail_next(
+            "wait",
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                "no authenticated parent retained exact init exit evidence",
+            )
+            .for_operation("driver-wait"),
+        );
+    }
+
+    let observed = service
+        .state(StateRequest {
+            target: target.clone(),
+        })
+        .await
+        .expect("observe stopped tombstone without exact exit evidence");
+    assert_eq!(observed.state.status(), &ContainerState::Stopped);
+    assert_eq!(
+        service
+            .wait(WaitRequest {
+                target: target.clone(),
+                timeout_ms: Some(0),
+            })
+            .await
+            .expect_err("wait must not invent exit evidence")
+            .code,
+        ErrorCode::FailedPrecondition
+    );
+
+    let events = service
+        .events(EventsRequest {
+            container: Some(target),
+            after_sequence: 0,
+            limit: 32,
+            wait_timeout_ms: None,
+        })
+        .await
+        .expect("read tombstone events");
+    assert!(events
+        .events
+        .iter()
+        .all(|event| event.kind != RuntimeEventKind::ProcessExited));
+    assert_eq!(
+        events
+            .events
+            .iter()
+            .filter(|event| event.kind == RuntimeEventKind::ContainerStopped)
+            .count(),
+        1
+    );
+    assert_eq!(
+        driver
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Wait(_)))
+            .count(),
+        2
+    );
+}

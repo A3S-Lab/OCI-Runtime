@@ -615,7 +615,18 @@ impl OciRuntimeService for HostRuntimeService {
             })
             .await;
         lifecycle.driver_boundary(DriverOperation::Wait, DriverBoundaryStage::AfterCall)?;
-        let status = result?;
+        let status = match result {
+            Ok(status) => status,
+            Err(error)
+                if matches!(
+                    error.code,
+                    ErrorCode::FailedPrecondition | ErrorCode::DeadlineExceeded
+                ) =>
+            {
+                return Ok(reconciled);
+            }
+            Err(error) => return Err(error),
+        };
         status.validate()?;
         lifecycle.complete_process_wait(&process, status).await?;
         Ok(reconciled)
