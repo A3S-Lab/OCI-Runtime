@@ -501,6 +501,84 @@ async fn corrupt_latest_snapshot_fails_closed() {
     assert_eq!(error.code, ErrorCode::Internal);
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_inherited_state_root_is_rejected_before_runtime_mutation() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let state_root = temporary.path().join("inherited-state");
+    fs::create_dir(&state_root).expect("ordinary inherited-ACL directory");
+    let bundle = write_bundle(temporary.path().join("bundle"), false, &["/bin/true"]).await;
+    let service = Arc::new(MockService::default());
+    let adapter = Adapter::new(state_root, RuntimeClient::from_arc(service.clone()));
+
+    let error = adapter
+        .create(
+            ContainerId::new("insecure-state-root").expect("container ID"),
+            bundle,
+            IsolationRequest::SharedHostKernel,
+            None,
+        )
+        .await
+        .expect_err("an inherited Windows DACL must fail closed");
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
+    assert!(service.inner().create_calls.is_empty());
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_hardlinked_snapshot_is_rejected_before_replay() {
+    let fixture = Fixture::new().await;
+    fixture
+        .adapter()
+        .create(
+            fixture.id(),
+            fixture.bundle.clone(),
+            IsolationRequest::SharedHostKernel,
+            None,
+        )
+        .await
+        .expect("create");
+    let snapshot = latest_snapshot(&fixture);
+    fs::hard_link(&snapshot, fixture.temporary.path().join("snapshot-alias"))
+        .expect("hard-link snapshot outside the journal directory");
+
+    let error = fixture
+        .adapter()
+        .state(fixture.id())
+        .await
+        .expect_err("a multiply linked snapshot must fail closed");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert_eq!(fixture.service.inner().create_calls.len(), 1);
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_inherited_snapshot_dacl_is_rejected_before_replay() {
+    let fixture = Fixture::new().await;
+    fixture
+        .adapter()
+        .create(
+            fixture.id(),
+            fixture.bundle.clone(),
+            IsolationRequest::SharedHostKernel,
+            None,
+        )
+        .await
+        .expect("create");
+    let snapshot = latest_snapshot(&fixture);
+    let encoded = fs::read(&snapshot).expect("read protected snapshot");
+    fs::remove_file(&snapshot).expect("remove protected snapshot");
+    fs::write(&snapshot, encoded).expect("replace with inherited-DACL snapshot");
+
+    let error = fixture
+        .adapter()
+        .state(fixture.id())
+        .await
+        .expect_err("an inherited snapshot DACL must fail closed");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert_eq!(fixture.service.inner().create_calls.len(), 1);
+}
+
 #[tokio::test]
 async fn terminal_bundle_is_rejected_before_runtime_mutation() {
     let fixture = Fixture::new().await;
@@ -587,6 +665,20 @@ impl Fixture {
     }
 }
 
+#[cfg(windows)]
+fn latest_snapshot(fixture: &Fixture) -> PathBuf {
+    fs::read_dir(fixture.state_root.join(fixture.id().as_str()))
+        .expect("journal directory")
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .max()
+        .expect("journal snapshot")
+}
+
 async fn write_bundle(directory: PathBuf, terminal: bool, args: &[&str]) -> OciBundle {
     fs::create_dir(&directory).expect("bundle directory");
     fs::create_dir(directory.join("rootfs")).expect("rootfs directory");
@@ -610,13 +702,17 @@ async fn write_bundle(directory: PathBuf, terminal: bool, args: &[&str]) -> OciB
     OciBundle::load(directory).await.expect("load bundle")
 }
 
+#[cfg(windows)]
+fn create_private_directory(path: &Path) {
+    a3s_oci_runtime::windows_security::create_private_directory(path)
+        .expect("private Windows directory");
+}
+
+#[cfg(unix)]
 fn create_private_directory(path: &Path) {
     fs::create_dir(path).expect("private directory");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).expect("private permissions");
-    }
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).expect("private permissions");
 }
 
 fn matching_record(inner: &MockInner, target: &ContainerTarget) -> Result<ContainerRecord> {

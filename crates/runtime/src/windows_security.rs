@@ -3,106 +3,34 @@ use std::io;
 use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
-use std::ptr::{addr_of, null, null_mut};
+use std::ptr::{addr_of, null_mut};
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
 use windows_sys::Win32::Security::Authorization::{
-    GetNamedSecurityInfoW, GetSecurityInfo, SetNamedSecurityInfoW, SetSecurityInfo, SE_FILE_OBJECT,
-    SE_KERNEL_OBJECT,
+    GetNamedSecurityInfoW, GetSecurityInfo, SE_FILE_OBJECT, SE_KERNEL_OBJECT,
 };
 use windows_sys::Win32::Security::{
     AddAccessAllowedAceEx, CopySid, CreateWellKnownSid, EqualSid, GetAce, GetLengthSid,
     GetSecurityDescriptorControl, GetTokenInformation, InitializeAcl, InitializeSecurityDescriptor,
     SetSecurityDescriptorControl, SetSecurityDescriptorDacl, SetSecurityDescriptorOwner, TokenUser,
-    WinLocalSystemSid, ACL, ACL_REVISION, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION,
-    OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+    WinLocalSystemSid, ACL, ACL_REVISION, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
     PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE,
     SE_DACL_PROTECTED, TOKEN_QUERY, TOKEN_USER,
 };
-use windows_sys::Win32::Storage::FileSystem::{CreateDirectoryW, FILE_ALL_ACCESS};
+use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 use windows_sys::Win32::System::SystemServices::{
     ACCESS_ALLOWED_ACE_TYPE, SECURITY_DESCRIPTOR_REVISION,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-const PRIVATE_DIRECTORY_ACE_FLAGS: u32 = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
+mod path;
 
-pub(super) fn create_private_directory(path: &Path) -> Result<()> {
-    let path_wide = wide_path(path)?;
-    let mut security =
-        PrivateSecurityDescriptor::new(PRIVATE_DIRECTORY_ACE_FLAGS, "build-state-dacl", path)?;
-    let attributes = security.security_attributes("create-state-directory", path)?;
-
-    // SAFETY: `path_wide` is NUL-terminated and the security descriptor,
-    // DACL, and copied SIDs remain live and immutable for the call.
-    let created = unsafe { CreateDirectoryW(path_wide.as_ptr(), &attributes) };
-    if created == 0 {
-        return Err(last_windows_error("create-state-directory", path));
-    }
-    protect_path(path)
-}
-
-pub(super) fn protect_path(path: &Path) -> Result<()> {
-    let mut path_wide = wide_path(path)?;
-    let metadata = std::fs::metadata(path).map_err(|error| {
-        windows_error(
-            "protect-state-path",
-            path,
-            format!("failed to inspect protected path: {error}"),
-        )
-    })?;
-    let ace_flags = if metadata.is_dir() {
-        PRIVATE_DIRECTORY_ACE_FLAGS
-    } else {
-        0
-    };
-    let security = PrivateSecurityDescriptor::new(ace_flags, "build-state-dacl", path)?;
-
-    // SAFETY: `path_wide` is NUL-terminated and mutable for APIs that use the
-    // historical `PWSTR` signature. The ACL remains live for the call.
-    let status = unsafe {
-        SetNamedSecurityInfoW(
-            path_wide.as_mut_ptr(),
-            SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION
-                | DACL_SECURITY_INFORMATION
-                | PROTECTED_DACL_SECURITY_INFORMATION,
-            security.allowed_sids[0].as_ptr(),
-            null_mut(),
-            security.acl,
-            null(),
-        )
-    };
-    if status != 0 {
-        return Err(status_error("protect-state-path", path, status));
-    }
-    verify_private_path_dacl(path, &security.allowed_sids, ace_flags)
-}
-
-pub(super) fn protect_file_handle(handle: HANDLE, path: &Path) -> Result<()> {
-    let security = PrivateSecurityDescriptor::new(0, "build-state-dacl", path)?;
-
-    // SAFETY: `handle` is a live file handle opened with WRITE_OWNER and
-    // WRITE_DAC. The owner SID and ACL remain live and immutable for the call.
-    let status = unsafe {
-        SetSecurityInfo(
-            handle,
-            SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION
-                | DACL_SECURITY_INFORMATION
-                | PROTECTED_DACL_SECURITY_INFORMATION,
-            security.allowed_sids[0].as_ptr(),
-            null_mut(),
-            security.acl,
-            null(),
-        )
-    };
-    if status != 0 {
-        return Err(status_error("protect-state-file", path, status));
-    }
-    verify_private_file_handle_dacl(handle, path, &security.allowed_sids)
-}
+pub use path::{
+    create_private_directory, create_private_file, ensure_private_directory, open_private_file,
+    rename_private_file_noreplace, verify_private_file, verify_private_path,
+};
+pub(crate) use path::{protect_file_handle, protect_path};
 
 pub(crate) struct PrivateSecurityDescriptor {
     _acl_storage: AlignedBuffer,

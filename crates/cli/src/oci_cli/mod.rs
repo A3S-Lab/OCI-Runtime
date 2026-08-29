@@ -749,5 +749,5 @@ fn internal(message: impl Into<String>) -> Error {
     Error::new(ErrorCode::Internal, message).for_operation("oci-cli")
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod tests;

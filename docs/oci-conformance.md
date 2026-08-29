@@ -212,12 +212,15 @@ These additions do not replace or reinterpret OCI configuration fields.
 
 ## OCI command-line adapter
 
-On Unix, `a3s-oci` exposes the standard short-process core commands `create`,
-`state`, `start`, `kill`, and `delete`. Each invocation connects to an
+On Unix and Windows, `a3s-oci` exposes the standard short-process core commands
+`create`, `state`, `start`, `kill`, and `delete`. Each invocation connects to an
 already-running Host Service through `A3S_OCI_RUNTIME_ENDPOINT`. It also requires
-`A3S_OCI_CLI_STATE_ROOT` to name an existing canonical private directory;
-the directory and its per-container children must be owned by the invoking
-identity and deny group/world access. `create` additionally requires
+`A3S_OCI_CLI_STATE_ROOT` to name an existing canonical private directory. Unix
+directories and files must be owned by the invoking identity and deny
+group/world access. Windows directories and files must carry a protected DACL
+that grants full access only to the invoking identity and LocalSystem; reparse
+points, hard-linked files, inherited or extra access entries, and identity drift
+fail closed. `create` additionally requires
 `A3S_OCI_CLI_ISOLATION` to be `shared-host-kernel`, `dedicated-vm`, or
 `shared-guest-kernel`; the last form also requires
 `A3S_OCI_CLI_TRUST_DOMAIN`.
@@ -229,9 +232,9 @@ operation sequence, and acknowledgement state. An ambiguous invocation must
 be retried with the same arguments and operation identity; acknowledged
 duplicate Create or Start commands fail, while a completed Delete retires the
 incarnation and permits safe container-ID reuse. Corrupt, linked, incorrectly
-owned, or overly permissive state fails closed. Non-Unix hosts currently reject
-the adapter before journal mutation because equivalent private ACL validation
-has not been integrated.
+owned, or overly permissive state fails closed. Windows journal directories and
+files are created atomically with the same DACL implementation used by Runtime
+state and are verified again from retained handles before replay.
 
 The current adapter intentionally rejects terminal bundles and
 `--console-socket`, and rejects nonzero `LISTEN_FDS`. Inherited standard-I/O
@@ -272,7 +275,8 @@ The conformance pipeline pins the OCI 1.3.0 release. It currently provides:
 7. positive and negative semantic fixtures with stable rule identifiers;
 8. request-validation tests, including an untrusted raw-wire rejection test;
 9. in-memory end-to-end transport tests plus real Windows named-pipe and Unix
-   socket connector tests;
+   socket connector tests, and the complete CLI lifecycle journal matrix on
+   Windows with inherited-DACL and hard-link security negatives;
 10. a versioned ten-case real-Guest path-isolation profile, wired into macOS
    Apple Silicon CI and the Linux KVM 17-case lifecycle matrix, that requires
    exact typed rejection, unchanged canaries, absent container state, and

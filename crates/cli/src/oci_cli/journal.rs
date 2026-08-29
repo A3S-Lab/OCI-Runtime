@@ -1,4 +1,6 @@
-use std::fs::{self, File, OpenOptions};
+#[cfg(not(windows))]
+use std::fs::OpenOptions;
+use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -220,16 +222,16 @@ fn open_locked_journal(
     })
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn ensure_secure_journal_platform() -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn ensure_secure_journal_platform() -> Result<()> {
     Err(Error::new(
         ErrorCode::Unsupported,
-        "the OCI CLI lifecycle journal requires Unix ownership and mode enforcement",
+        "the OCI CLI lifecycle journal requires Unix permissions or Windows protected DACLs",
     )
     .for_operation("oci-cli-journal-open"))
 }
@@ -289,15 +291,7 @@ fn persist_locked_journal(mut journal: LockedJournal) -> Result<LockedJournal> {
             )
         })?;
         drop(pending);
-        fs::rename(&pending_path, &final_path).map_err(|error| {
-            journal_io(
-                format!(
-                    "failed to publish lifecycle journal {}",
-                    final_path.display()
-                ),
-                error,
-            )
-        })?;
+        publish_snapshot(&pending_path, &final_path)?;
         sync_directory(&journal.directory)?;
         Ok(())
     })();
@@ -349,11 +343,11 @@ fn validate_state_root(path: &Path) -> Result<PathBuf> {
     Ok(canonical)
 }
 
+#[cfg(unix)]
 fn create_private_directory(path: &Path) -> Result<()> {
     if path.exists() {
         return Ok(());
     }
-    #[cfg(unix)]
     let result = {
         use std::os::unix::fs::DirBuilderExt;
 
@@ -361,8 +355,6 @@ fn create_private_directory(path: &Path) -> Result<()> {
         builder.mode(0o700);
         builder.create(path)
     };
-    #[cfg(not(unix))]
-    let result = fs::DirBuilder::new().create(path);
     match result {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
@@ -374,6 +366,32 @@ fn create_private_directory(path: &Path) -> Result<()> {
             error,
         )),
     }
+}
+
+#[cfg(windows)]
+fn create_private_directory(path: &Path) -> Result<()> {
+    a3s_oci_runtime::windows_security::ensure_private_directory(path).map_err(|error| {
+        windows_journal_error(
+            format!(
+                "failed to create private container lifecycle journal directory {}",
+                path.display()
+            ),
+            error,
+        )
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn create_private_directory(path: &Path) -> Result<()> {
+    fs::DirBuilder::new().create(path).map_err(|error| {
+        journal_io(
+            format!(
+                "failed to create container lifecycle journal directory {}",
+                path.display()
+            ),
+            error,
+        )
+    })
 }
 
 fn validate_private_directory(path: &Path, label: &str) -> Result<()> {
@@ -418,7 +436,13 @@ fn validate_private_metadata(metadata: &fs::Metadata, path: &Path, label: &str) 
             path.display()
         )));
     }
-    Ok(())
+    a3s_oci_runtime::windows_security::verify_private_path(path).map_err(|error| {
+        permission(format!(
+            "{label} must have an owner-and-LocalSystem-only protected DACL: {}: {}",
+            path.display(),
+            error.message
+        ))
+    })
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -430,20 +454,52 @@ fn validate_private_metadata(_metadata: &fs::Metadata, _path: &Path, _label: &st
     .for_operation("oci-cli-journal-open"))
 }
 
+#[cfg(unix)]
 fn open_lock_file(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
+    use std::os::unix::fs::OpenOptionsExt;
+    options.mode(0o600);
     options.open(path).map_err(|error| {
         journal_io(
             format!("failed to open lifecycle journal lock {}", path.display()),
             error,
         )
     })
+}
+
+#[cfg(windows)]
+fn open_lock_file(path: &Path) -> Result<File> {
+    match a3s_oci_runtime::windows_security::create_private_file(path) {
+        Ok(file) => Ok(file),
+        Err(error) if error.code == ErrorCode::AlreadyExists => {
+            a3s_oci_runtime::windows_security::open_private_file(path, true).map_err(|error| {
+                windows_journal_error(
+                    format!("failed to open lifecycle journal lock {}", path.display()),
+                    error,
+                )
+            })
+        }
+        Err(error) => Err(windows_journal_error(
+            format!("failed to create lifecycle journal lock {}", path.display()),
+            error,
+        )),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_lock_file(path: &Path) -> Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(path)
+        .map_err(|error| {
+            journal_io(
+                format!("failed to open lifecycle journal lock {}", path.display()),
+                error,
+            )
+        })
 }
 
 fn validate_lock_file(path: &Path, file: &File) -> Result<()> {
@@ -479,6 +535,14 @@ fn validate_lock_file(path: &Path, file: &File) -> Result<()> {
             )));
         }
     }
+    #[cfg(windows)]
+    a3s_oci_runtime::windows_security::verify_private_file(file, path).map_err(|error| {
+        permission(format!(
+            "lifecycle journal lock must retain its exact private file identity and DACL: {}: {}",
+            path.display(),
+            error.message
+        ))
+    })?;
     validate_private_file_metadata(&file_metadata, path, "lifecycle journal lock")
 }
 
@@ -560,6 +624,15 @@ fn read_snapshot(
     revision: u64,
 ) -> Result<JournalSnapshot> {
     validate_regular_path(path, "lifecycle journal snapshot")?;
+    #[cfg(windows)]
+    let mut file =
+        a3s_oci_runtime::windows_security::open_private_file(path, false).map_err(|error| {
+            windows_journal_error(
+                format!("failed to open lifecycle journal {}", path.display()),
+                error,
+            )
+        })?;
+    #[cfg(not(windows))]
     let mut file = File::open(path).map_err(|error| {
         journal_io(
             format!("failed to open lifecycle journal {}", path.display()),
@@ -627,7 +700,22 @@ fn validate_private_file_metadata(metadata: &fs::Metadata, path: &Path, label: &
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn validate_private_file_metadata(
+    _metadata: &fs::Metadata,
+    path: &Path,
+    label: &str,
+) -> Result<()> {
+    a3s_oci_runtime::windows_security::verify_private_path(path).map_err(|error| {
+        permission(format!(
+            "{label} must have an owner-and-LocalSystem-only protected DACL: {}: {}",
+            path.display(),
+            error.message
+        ))
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
 fn validate_private_file_metadata(
     _metadata: &fs::Metadata,
     _path: &Path,
@@ -636,17 +724,67 @@ fn validate_private_file_metadata(
     Ok(())
 }
 
+#[cfg(unix)]
 fn create_private_file(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
+    use std::os::unix::fs::OpenOptionsExt;
+    options.mode(0o600);
     options.open(path).map_err(|error| {
         journal_io(
             format!("failed to create lifecycle journal {}", path.display()),
+            error,
+        )
+    })
+}
+
+#[cfg(windows)]
+fn create_private_file(path: &Path) -> Result<File> {
+    a3s_oci_runtime::windows_security::create_private_file(path).map_err(|error| {
+        windows_journal_error(
+            format!("failed to create lifecycle journal {}", path.display()),
+            error,
+        )
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn create_private_file(path: &Path) -> Result<File> {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| {
+            journal_io(
+                format!("failed to create lifecycle journal {}", path.display()),
+                error,
+            )
+        })
+}
+
+#[cfg(windows)]
+fn publish_snapshot(source: &Path, destination: &Path) -> Result<()> {
+    a3s_oci_runtime::windows_security::rename_private_file_noreplace(source, destination).map_err(
+        |error| {
+            windows_journal_error(
+                format!(
+                    "failed to publish lifecycle journal {}",
+                    destination.display()
+                ),
+                error,
+            )
+        },
+    )
+}
+
+#[cfg(not(windows))]
+fn publish_snapshot(source: &Path, destination: &Path) -> Result<()> {
+    fs::rename(source, destination).map_err(|error| {
+        journal_io(
+            format!(
+                "failed to publish lifecycle journal {}",
+                destination.display()
+            ),
             error,
         )
     })
@@ -794,6 +932,11 @@ fn corrupt(message: impl Into<String>) -> Error {
 
 fn journal_io(context: String, error: std::io::Error) -> Error {
     Error::new(ErrorCode::Internal, format!("{context}: {error}")).for_operation("oci-cli-journal")
+}
+
+#[cfg(windows)]
+fn windows_journal_error(context: String, error: Error) -> Error {
+    Error::new(error.code, format!("{context}: {}", error.message)).for_operation("oci-cli-journal")
 }
 
 fn join_error(error: tokio::task::JoinError) -> Error {

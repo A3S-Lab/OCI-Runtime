@@ -132,7 +132,8 @@ mod whpx_driver;
 mod whpx_driver_smoke;
 mod whpx_recovery_smoke;
 #[cfg(windows)]
-mod windows_security;
+#[doc(hidden)]
+pub mod windows_security;
 #[cfg(windows)]
 mod windows_service;
 
