@@ -4,8 +4,9 @@ mod mask;
 use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::{self, ErrorKind};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
@@ -53,40 +54,231 @@ impl RootfsPropagation {
     }
 }
 
-pub(super) fn prepare_pivot(rootfs: &Path, propagation: Option<RootfsPropagation>) -> Result<()> {
-    let rootfs = path_cstring(rootfs)?;
+/// Rootfs mount retained across OCI mount setup and the create-hook barrier.
+#[derive(Debug)]
+pub(super) struct PreparedRootfsMount {
+    path: PathBuf,
+    _descriptor: Option<OwnedFd>,
+}
+
+impl PreparedRootfsMount {
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+pub(super) fn prepare_pivot(
+    rootfs: &Path,
+    propagation: Option<RootfsPropagation>,
+) -> Result<PreparedRootfsMount> {
+    prepare_mount_tree_propagation(propagation)?;
+    let rootfs_c = path_cstring(rootfs)?;
     let null_path = std::ptr::null::<libc::c_char>();
     let null_data = std::ptr::null::<libc::c_void>();
-    let preparation_flags = propagation.map_or(libc::MS_REC | libc::MS_PRIVATE, |mode| {
-        mode.preparation_flags()
-    });
 
-    // SAFETY: every pathname is NUL-terminated and remains live for each
-    // syscall. The null source, filesystem type, and data pointers are valid
-    // for propagation and bind mount operations.
-    unsafe {
-        if libc::mount(
-            null_path,
-            ROOT_DIRECTORY.as_ptr().cast(),
-            null_path,
-            preparation_flags,
-            null_data,
-        ) != 0
-        {
-            return Err(last_os_error("prepare the guest mount tree propagation"));
-        }
-        if libc::mount(
-            rootfs.as_ptr(),
-            rootfs.as_ptr(),
+    // SAFETY: both rootfs pointers reference the same live NUL-terminated
+    // pathname, and the remaining mount arguments are valid null pointers.
+    if unsafe {
+        libc::mount(
+            rootfs_c.as_ptr(),
+            rootfs_c.as_ptr(),
             null_path,
             (libc::MS_BIND | libc::MS_REC) as libc::c_ulong,
             null_data,
-        ) != 0
-        {
-            return Err(last_os_error("bind the container rootfs onto itself"));
-        }
+        )
+    } != 0
+    {
+        return Err(last_os_error("bind the container rootfs onto itself"));
     }
-    Ok(())
+    Ok(PreparedRootfsMount {
+        path: rootfs.to_path_buf(),
+        _descriptor: None,
+    })
+}
+
+/// Clone a descriptor-confined rootfs into the current mount namespace.
+///
+/// A rootfs descriptor inherited across `unshare(CLONE_NEWNS)` still refers
+/// to the source namespace's mount. Linux consequently rejects using its
+/// `/proc/self/fd` magic link as a legacy mount target. Reopening and matching
+/// the real entry in the current namespace, then cloning and attaching by
+/// descriptor, preserves the pinned inode without a path-race window.
+pub(super) fn prepare_descriptor_pinned_pivot(
+    rootfs_mountpoint: &Path,
+    retained_rootfs: &File,
+    propagation: Option<RootfsPropagation>,
+) -> Result<PreparedRootfsMount> {
+    prepare_mount_tree_propagation(propagation)?;
+    let current_rootfs = open_current_rootfs(rootfs_mountpoint)?;
+    verify_same_rootfs(retained_rootfs, &current_rootfs, rootfs_mountpoint)?;
+    let detached = clone_rootfs_mount(&current_rootfs)?;
+    attach_rootfs_mount(&detached, &current_rootfs)?;
+    let path = PathBuf::from(format!("/proc/self/fd/{}", detached.as_raw_fd()));
+    if !path.is_dir() {
+        return Err(rootfs_error(
+            ErrorCode::FailedPrecondition,
+            "descriptor-attached container rootfs is not reachable in the current mount namespace",
+        ));
+    }
+    Ok(PreparedRootfsMount {
+        path,
+        _descriptor: Some(detached),
+    })
+}
+
+fn prepare_mount_tree_propagation(propagation: Option<RootfsPropagation>) -> Result<()> {
+    let flags = propagation.map_or(libc::MS_REC | libc::MS_PRIVATE, |mode| {
+        mode.preparation_flags()
+    });
+    // SAFETY: propagation changes use one live root pathname and otherwise
+    // null pointers, which mount(2) requires for this operation.
+    if unsafe {
+        libc::mount(
+            std::ptr::null(),
+            ROOT_DIRECTORY.as_ptr().cast(),
+            std::ptr::null(),
+            flags,
+            std::ptr::null(),
+        )
+    } != 0
+    {
+        Err(last_os_error("prepare the guest mount tree propagation"))
+    } else {
+        Ok(())
+    }
+}
+
+fn open_current_rootfs(path: &Path) -> Result<File> {
+    if !path.is_absolute() {
+        return Err(rootfs_error(
+            ErrorCode::InvalidArgument,
+            format!(
+                "descriptor-pinned container rootfs mount point must be absolute: {}",
+                path.display()
+            ),
+        ));
+    }
+    let path_c = path_cstring(path)?;
+    let mut how = std::mem::MaybeUninit::<libc::open_how>::zeroed();
+    // SAFETY: zero is valid for every open_how field.
+    let how = unsafe { how.assume_init_mut() };
+    how.flags = (libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC) as u64;
+    how.resolve = libc::RESOLVE_NO_MAGICLINKS | libc::RESOLVE_NO_SYMLINKS;
+    // SAFETY: the pathname and initialized open_how remain live for the call.
+    let descriptor = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            libc::AT_FDCWD,
+            path_c.as_ptr(),
+            how as *const libc::open_how,
+            std::mem::size_of::<libc::open_how>(),
+        )
+    };
+    if descriptor < 0 {
+        return Err(descriptor_mount_error(
+            "reopen the descriptor-pinned container rootfs in the current mount namespace",
+            io::Error::last_os_error(),
+        ));
+    }
+    let descriptor = libc::c_int::try_from(descriptor).map_err(|error| {
+        rootfs_error(
+            ErrorCode::Internal,
+            format!("openat2 returned an invalid container rootfs descriptor: {error}"),
+        )
+    })?;
+    // SAFETY: openat2 returned this fresh descriptor exactly once.
+    Ok(unsafe { File::from_raw_fd(descriptor) })
+}
+
+fn verify_same_rootfs(retained: &File, current: &File, path: &Path) -> Result<()> {
+    let retained = retained.metadata().map_err(|error| {
+        rootfs_error(
+            ErrorCode::FailedPrecondition,
+            format!("failed to inspect retained container rootfs: {error}"),
+        )
+    })?;
+    let current = current.metadata().map_err(|error| {
+        rootfs_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect current container rootfs {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if retained.dev() == current.dev() && retained.ino() == current.ino() {
+        Ok(())
+    } else {
+        Err(rootfs_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "descriptor-pinned container rootfs changed before mount attachment: {}",
+                path.display()
+            ),
+        ))
+    }
+}
+
+fn clone_rootfs_mount(rootfs: &File) -> Result<OwnedFd> {
+    let traversal_flags =
+        u32::try_from(libc::AT_EMPTY_PATH | libc::AT_RECURSIVE).map_err(|error| {
+            rootfs_error(
+                ErrorCode::Internal,
+                format!("rootfs open_tree traversal flags do not fit the kernel ABI: {error}"),
+            )
+        })?;
+    let flags = libc::OPEN_TREE_CLONE | libc::OPEN_TREE_CLOEXEC | traversal_flags;
+    // SAFETY: rootfs is a live directory descriptor, the empty pathname is
+    // NUL-terminated, and AT_EMPTY_PATH selects that exact descriptor.
+    let descriptor =
+        unsafe { libc::syscall(libc::SYS_open_tree, rootfs.as_raw_fd(), c"".as_ptr(), flags) };
+    if descriptor < 0 {
+        return Err(descriptor_mount_error(
+            "clone the descriptor-pinned container rootfs mount",
+            io::Error::last_os_error(),
+        ));
+    }
+    let descriptor = libc::c_int::try_from(descriptor).map_err(|error| {
+        rootfs_error(
+            ErrorCode::Internal,
+            format!("open_tree returned an invalid container rootfs descriptor: {error}"),
+        )
+    })?;
+    // SAFETY: open_tree returned this fresh descriptor exactly once.
+    Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
+}
+
+fn attach_rootfs_mount(detached: &OwnedFd, destination: &File) -> Result<()> {
+    let flags = libc::MOVE_MOUNT_F_EMPTY_PATH | libc::MOVE_MOUNT_T_EMPTY_PATH;
+    // SAFETY: both descriptors are live, both paths are empty NUL-terminated
+    // strings selected by the EMPTY_PATH flags, and move_mount retains none.
+    let moved = unsafe {
+        libc::syscall(
+            libc::SYS_move_mount,
+            detached.as_raw_fd(),
+            c"".as_ptr(),
+            destination.as_raw_fd(),
+            c"".as_ptr(),
+            flags,
+        )
+    };
+    if moved == 0 {
+        Ok(())
+    } else {
+        Err(descriptor_mount_error(
+            "attach the descriptor-pinned container rootfs mount",
+            io::Error::last_os_error(),
+        ))
+    }
+}
+
+fn descriptor_mount_error(operation: &str, error: io::Error) -> Error {
+    let code = match error.raw_os_error() {
+        Some(libc::ENOSYS | libc::EOPNOTSUPP | libc::EINVAL) => ErrorCode::Unsupported,
+        Some(libc::EACCES | libc::EPERM | libc::ELOOP | libc::EXDEV) => ErrorCode::PermissionDenied,
+        _ => ErrorCode::FailedPrecondition,
+    };
+    rootfs_error(code, format!("{operation} failed: {error}"))
 }
 
 pub(super) fn finalize(

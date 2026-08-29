@@ -42,6 +42,27 @@ struct ContainerInitInvocation {
     process_io: ProcessIo,
 }
 
+#[derive(Debug)]
+struct PreparedContainerRootfs {
+    access_path: PathBuf,
+    descriptor_mountpoint: Option<PathBuf>,
+    file: File,
+}
+
+impl PreparedContainerRootfs {
+    fn access_path(&self) -> &Path {
+        &self.access_path
+    }
+
+    fn descriptor_mountpoint(&self) -> Option<&Path> {
+        self.descriptor_mountpoint.as_deref()
+    }
+
+    const fn file(&self) -> &File {
+        &self.file
+    }
+}
+
 pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     let mut arguments = std::env::args_os().skip(1);
     if arguments.next().as_deref() != Some(OsStr::new("container-init")) {
@@ -259,7 +280,7 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
         Ok(process_group) => process_group,
         Err(error) => return reject_before_ready(&mut control, error),
     };
-    let (plan, canonical_bundle, rootfs, rootfs_file, host_proc) = match prepare_container_init(
+    let (plan, canonical_bundle, rootfs, host_proc) = match prepare_container_init(
         config_snapshot,
         bundle_directory,
         rootfs_scope,
@@ -289,7 +310,7 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
         Ok(prepared) => prepared,
         Err(error) => return reject_before_ready(&mut control, error),
     };
-    if let Err(error) = prepared_devices.bind_rootfs(&rootfs) {
+    if let Err(error) = prepared_devices.bind_rootfs(rootfs.access_path()) {
         return reject_before_ready(&mut control, error);
     }
     let idmap_namespaces = match IdmapNamespaceHandles::prepare(
@@ -353,7 +374,6 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
         plan: &plan,
         source_resolver: &source_resolver,
         rootfs: &rootfs,
-        rootfs_file: &rootfs_file,
         prepared_devices: &prepared_devices,
         hook_state: &hook_state,
     };
@@ -369,8 +389,7 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
 pub(super) struct CreateContext<'a> {
     plan: &'a InitPlan,
     source_resolver: &'a mount::BindSourceResolver<'a>,
-    rootfs: &'a Path,
-    rootfs_file: &'a File,
+    rootfs: &'a PreparedContainerRootfs,
     prepared_devices: &'a PreparedDeviceSources,
     hook_state: &'a HookStateTemplate,
 }
@@ -386,15 +405,16 @@ pub(super) fn complete_create_and_wait_for_start(
     if let Err(error) = prepare_configured_process_group(create.plan.terminal) {
         return reject_before_ready(&mut control, error);
     }
-    if let Err(error) = prepare_create_environment_before_pivot(
+    let prepared_rootfs_mount = match prepare_create_environment_before_pivot(
         create.plan,
         create.rootfs,
         create.prepared_devices,
         &mut detached_sources,
         create.source_resolver,
     ) {
-        return reject_before_ready(&mut control, error);
-    }
+        Ok(prepared) => prepared,
+        Err(error) => return reject_before_ready(&mut control, error),
+    };
     drop(detached_sources);
     let creating = match create.hook_state.encode(
         a3s_oci_sdk::oci_spec::runtime::ContainerState::Creating,
@@ -414,10 +434,14 @@ pub(super) fn complete_create_and_wait_for_start(
     {
         return reject_before_ready(&mut control, error);
     }
+    let effective_rootfs = prepared_rootfs_mount.as_ref().map_or_else(
+        || create.rootfs.access_path(),
+        rootfs::PreparedRootfsMount::path,
+    );
     let applied_sysctls = match finish_create_environment(
         create.plan,
-        create.rootfs,
-        create.rootfs_file,
+        effective_rootfs,
+        create.rootfs.file(),
         create.prepared_devices,
         host_proc,
     ) {
@@ -431,7 +455,7 @@ pub(super) fn complete_create_and_wait_for_start(
     wait_for_start_and_exec(
         create.plan,
         host_proc,
-        create.rootfs_file,
+        create.rootfs.file(),
         runtime_pid,
         control,
         create.hook_state,
@@ -524,7 +548,7 @@ fn prepare_container_init(
     pinned_rootfs: Option<File>,
     vm_storage_sources: &crate::vm_attachment::UtilityVmStorageSources,
     process_io: &ProcessIo,
-) -> Result<(InitPlan, PathBuf, PathBuf, File, File)> {
+) -> Result<(InitPlan, PathBuf, PreparedContainerRootfs, File)> {
     let config_json = read_bounded_config(&config_snapshot)?;
     let bundle = OciBundle::from_json(bundle_directory, config_json)?;
     let root_path_is_absolute = bundle
@@ -615,6 +639,7 @@ fn prepare_container_init(
         }
         None
     };
+    let descriptor_mountpoint = pinned_rootfs.as_ref().map(|_| plan.rootfs.clone());
     let rootfs = if let Some(rootfs) = pinned_rootfs.as_ref() {
         PathBuf::from(format!("/proc/self/fd/{}", rootfs.as_raw_fd()))
     } else {
@@ -699,17 +724,26 @@ fn prepare_container_init(
             "retained host procfs path is not a directory",
         ));
     }
-    Ok((plan, canonical_bundle, rootfs, rootfs_file, host_proc))
+    Ok((
+        plan,
+        canonical_bundle,
+        PreparedContainerRootfs {
+            access_path: rootfs,
+            descriptor_mountpoint,
+            file: rootfs_file,
+        },
+        host_proc,
+    ))
 }
 
 fn prepare_create_environment_before_pivot(
     plan: &InitPlan,
-    rootfs: &Path,
+    rootfs: &PreparedContainerRootfs,
     prepared_devices: &PreparedDeviceSources,
     detached_sources: &mut DetachedMountSources,
     source_resolver: &mount::BindSourceResolver<'_>,
-) -> Result<()> {
-    super::portable_rootfs_metadata::replay_if_requested(&plan.annotations, rootfs)?;
+) -> Result<Option<rootfs::PreparedRootfsMount>> {
+    super::portable_rootfs_metadata::replay_if_requested(&plan.annotations, rootfs.access_path())?;
     if let Some(hostname) = &plan.hostname {
         if !plan.namespaces.has_uts() {
             return Err(init_error(
@@ -740,17 +774,35 @@ fn prepare_create_environment_before_pivot(
     }
     verify_uts_names(plan)?;
     if plan.namespaces.new_mount() {
-        plan.devices.validate_rootfs(rootfs)?;
-        rootfs::prepare_pivot(rootfs, plan.rootfs_propagation)?;
+        plan.devices.validate_rootfs(rootfs.access_path())?;
+        let prepared_rootfs = match rootfs.descriptor_mountpoint() {
+            Some(mountpoint) => rootfs::prepare_descriptor_pinned_pivot(
+                mountpoint,
+                rootfs.file(),
+                plan.rootfs_propagation,
+            )?,
+            None => rootfs::prepare_pivot(rootfs.access_path(), plan.rootfs_propagation)?,
+        };
+        let effective_rootfs = prepared_rootfs.path();
+        plan.default_filesystems.apply_early(
+            effective_rootfs,
+            detached_sources,
+            source_resolver,
+        )?;
+        mount::apply_all(
+            &plan.mounts,
+            effective_rootfs,
+            detached_sources,
+            source_resolver,
+        )?;
         plan.default_filesystems
-            .apply_early(rootfs, detached_sources, source_resolver)?;
-        mount::apply_all(&plan.mounts, rootfs, detached_sources, source_resolver)?;
-        plan.default_filesystems
-            .apply_late(rootfs, detached_sources, source_resolver)?;
+            .apply_late(effective_rootfs, detached_sources, source_resolver)?;
         plan.devices
-            .bind_prepared_sources(rootfs, prepared_devices)?;
+            .bind_prepared_sources(effective_rootfs, prepared_devices)?;
+        Ok(Some(prepared_rootfs))
+    } else {
+        Ok(None)
     }
-    Ok(())
 }
 
 fn finish_create_environment<'a>(

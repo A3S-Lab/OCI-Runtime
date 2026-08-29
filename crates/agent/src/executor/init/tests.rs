@@ -39,7 +39,7 @@ fn native_scope_accepts_an_explicit_absolute_rootfs_outside_the_bundle() {
     std::fs::create_dir(&rootfs).expect("external rootfs directory");
     let config = write_configuration(temporary.path(), &rootfs);
 
-    let (_, canonical_bundle, canonical_rootfs, _, _) = prepare_container_init(
+    let (_, canonical_bundle, prepared_rootfs, _) = prepare_container_init(
         config,
         bundle.clone(),
         RootfsScope::NativeAbsolute,
@@ -55,9 +55,10 @@ fn native_scope_accepts_an_explicit_absolute_rootfs_outside_the_bundle() {
         bundle.canonicalize().expect("canonical bundle")
     );
     assert_eq!(
-        canonical_rootfs,
+        prepared_rootfs.access_path(),
         rootfs.canonicalize().expect("canonical rootfs")
     );
+    assert_eq!(prepared_rootfs.descriptor_mountpoint(), None);
 }
 
 #[test]
@@ -173,7 +174,7 @@ fn prepared_init_reloads_terminal_bundle_with_forwarded_process_io() {
         }),
     };
 
-    let (plan, _, _, _, _) = prepare_container_init(
+    let (plan, _, _, _) = prepare_container_init(
         config_path,
         bundle,
         RootfsScope::NativeAbsolute,
@@ -185,6 +186,53 @@ fn prepared_init_reloads_terminal_bundle_with_forwarded_process_io() {
     .expect("prepared terminal init");
 
     assert!(plan.terminal);
+}
+
+#[tokio::test]
+async fn descriptor_pinned_rootfs_separates_mountpoint_from_descriptor_access() {
+    use a3s_oci_agent_protocol::GuestPath;
+
+    use crate::executor::bundle_scope::BundleDirectoryScope;
+
+    let temporary = tempdir().expect("temporary utility VM share");
+    let share = temporary.path().join("share");
+    let state = share.join("run");
+    let bundle = share.join("bundle");
+    let rootfs = bundle.join("rootfs");
+    std::fs::create_dir_all(&state).expect("runtime state");
+    std::fs::create_dir_all(&rootfs).expect("rootfs");
+    let config = write_configuration(temporary.path(), Path::new("rootfs"));
+    let (_, scope) = BundleDirectoryScope::utility_vm(&state)
+        .await
+        .expect("utility VM scope");
+    let pinned = scope
+        .pin(&GuestPath::new(bundle.to_string_lossy()).expect("guest bundle"))
+        .expect("pin bundle")
+        .expect("utility VM pin");
+    let pinned_rootfs = pinned
+        .open_rootfs(Path::new("rootfs"), "run-container-init")
+        .expect("open rootfs")
+        .expect("rootfs exists");
+
+    let (_, _, prepared_rootfs, _) = prepare_container_init(
+        config,
+        bundle,
+        RootfsScope::BundleOnly,
+        Some(&pinned),
+        Some(pinned_rootfs),
+        &UtilityVmStorageSources::default(),
+        &ProcessIo::default(),
+    )
+    .expect("descriptor-pinned rootfs");
+
+    assert!(prepared_rootfs
+        .access_path()
+        .starts_with(Path::new("/proc/self/fd")));
+    assert_eq!(
+        prepared_rootfs.descriptor_mountpoint(),
+        Some(rootfs.as_path()),
+        "the real entry is retained only as a descriptor-validated mount point"
+    );
 }
 
 #[tokio::test]
