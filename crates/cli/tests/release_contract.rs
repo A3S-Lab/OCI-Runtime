@@ -345,6 +345,10 @@ fn native_package_qualification_retains_the_pinned_upstream_lifecycle_qualificat
         "full_lifecycle_qualified: false",
         "expected_rootfs_path=\"lifecycle/rootfs-$go_architecture.tar.gz\"",
         "rootfs_source: $rootfs_source",
+        "print_upstream_failure_diagnostics",
+        "$state_root/events/records",
+        "durable lifecycle events (last 48 records)",
+        "initExitStatus: .initExitStatus",
     ] {
         assert!(
             UPSTREAM_LIFECYCLE_VALIDATION.contains(required),
@@ -376,6 +380,13 @@ fn native_package_qualification_retains_the_pinned_upstream_lifecycle_qualificat
     assert!(!UPSTREAM_RUNTIME_TOOLS_LOCK.contains("missing-upstream-aarch64-rootfs"));
     assert!(!UPSTREAM_RUNTIME_TOOLS_LOCK.contains("aarch64-upstream-rootfs"));
     assert!(!UPSTREAM_LIFECYCLE_VALIDATION.contains("8a4db579f5c88af5a0d036fad34bddc9c1f703f3"));
+    assert_eq!(
+        UPSTREAM_LIFECYCLE_VALIDATION
+            .matches("print_upstream_failure_diagnostics")
+            .count(),
+        3,
+        "Both lifecycle failure paths must emit bounded durable-state diagnostics"
+    );
 }
 
 #[test]

@@ -3,10 +3,73 @@
 set -euo pipefail
 
 validation_root=''
+service_root=''
+service_log=''
 service_pid=''
 service_job_pid=''
 service_stopped=false
 sudo_command=()
+
+print_upstream_failure_diagnostics() {
+  local state_root=''
+  local record=''
+  local -a diagnostic_records=()
+
+  printf '%s\n' 'Native Host Service failure diagnostics:' >&2
+  if [[ -n "$service_log" && -f "$service_log" ]]; then
+    printf '%s\n' '--- host service log (first 160 lines) ---' >&2
+    sed -n '1,160p' "$service_log" >&2
+  fi
+  if [[ -z "$service_root" ]]; then
+    printf '%s\n' 'Service state root was not initialized.' >&2
+    return 0
+  fi
+
+  state_root="$service_root/state"
+  if ! "${sudo_command[@]}" test -d "$state_root"; then
+    printf 'Durable state root is unavailable: %s\n' "$state_root" >&2
+    return 0
+  fi
+
+  mapfile -t diagnostic_records < <(
+    "${sudo_command[@]}" find "$state_root/events/records" \
+      -mindepth 1 -maxdepth 1 -type f -name '*.json' -print 2>/dev/null |
+      sort |
+      tail -n 48
+  )
+  printf '%s\n' '--- durable lifecycle events (last 48 records) ---' >&2
+  if ((${#diagnostic_records[@]} == 0)); then
+    printf '%s\n' 'No durable lifecycle event records were found.' >&2
+  else
+    for record in "${diagnostic_records[@]}"; do
+      printf 'event %s: ' "$(basename -- "$record")" >&2
+      if ! "${sudo_command[@]}" jq --compact-output \
+        '{schemaVersion: .schemaVersion, event: .event}' "$record" >&2; then
+        printf 'Could not decode durable event record %s\n' "$record" >&2
+      fi
+    done
+  fi
+
+  mapfile -t diagnostic_records < <(
+    "${sudo_command[@]}" find "$state_root/containers" \
+      -mindepth 2 -maxdepth 2 -type f -name 'record.json' -print 2>/dev/null |
+      sort |
+      tail -n 8
+  )
+  printf '%s\n' '--- retained container records (last 8 records) ---' >&2
+  if ((${#diagnostic_records[@]} == 0)); then
+    printf '%s\n' 'No container records remain after the failed test cleanup.' >&2
+  else
+    for record in "${diagnostic_records[@]}"; do
+      printf 'container %s: ' "$(basename -- "$(dirname -- "$record")")" >&2
+      if ! "${sudo_command[@]}" jq --compact-output \
+        '{schemaVersion: .schemaVersion, id: .id, record: .record, initExitStatus: .initExitStatus}' \
+        "$record" >&2; then
+        printf 'Could not decode retained container record %s\n' "$record" >&2
+      fi
+    done
+  fi
+}
 
 stop_service() {
   local exit_status=0
@@ -430,6 +493,7 @@ for lifecycle_test in "${lifecycle_tests[@]}"; do
     printf 'Upstream lifecycle test %s exited with %d:\n' \
       "$lifecycle_test" "$test_status" >&2
     sed -n '1,200p' "$output" >&2
+    print_upstream_failure_diagnostics
     exit 1
   fi
   tap_summary="$(awk '
@@ -524,6 +588,7 @@ for lifecycle_test in "${lifecycle_tests[@]}"; do
     printf 'Upstream lifecycle test %s emitted failing or incomplete TAP:\n' \
       "$lifecycle_test" >&2
     sed -n '1,200p' "$output" >&2
+    print_upstream_failure_diagnostics
     exit 1
   fi
   jq --compact-output --null-input \
