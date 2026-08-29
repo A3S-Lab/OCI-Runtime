@@ -642,11 +642,12 @@ function New-SoakFixture {
         throw "Refusing to overwrite an existing fixture: $fixture"
     }
     $vmRootfs = Join-Path $fixture 'bootstrap'
+    $vmDev = Join-Path $vmRootfs 'dev'
     $runtimeShare = Join-Path $fixture 'runtime-share'
     $bundle = Join-Path $runtimeShare 'bundle'
     $containerRootfs = Join-Path $bundle 'rootfs'
     New-Item -ItemType Directory -Path `
-        $vmRootfs, $runtimeShare, (Join-Path $runtimeShare 'run') | Out-Null
+        $vmRootfs, $vmDev, $runtimeShare, (Join-Path $runtimeShare 'run') | Out-Null
     New-Item -ItemType Directory -Path $containerRootfs | Out-Null
     & $script:tar -xf $script:rootfsArchive -C $containerRootfs
     if ($LASTEXITCODE -ne 0) {
@@ -846,8 +847,53 @@ function Get-FixtureAudit {
         Get-ChildItem -LiteralPath $Fixture.VmRootfs -Force `
             -ErrorAction SilentlyContinue
     )
-    $logs = @(Get-ChildItem -LiteralPath $Fixture.RuntimeShare -File -Filter '*.log' `
-        -Force -ErrorAction SilentlyContinue)
+    $mountPointNames = @('dev', 'newroot', 'proc', 'sys')
+    $logNames = @(
+        'guest-init.stderr.log',
+        'guest-init.stdout.log',
+        'init-rust.log',
+        'init.krun.log',
+        'init.trace.log'
+    )
+    $expectedNames = @($mountPointNames + $logNames | Sort-Object)
+    $observedNames = @($bootstrapRootEntries.Name | Sort-Object)
+    $bootstrapLayoutValid = @(
+        Compare-Object -ReferenceObject $expectedNames -DifferenceObject $observedNames
+    ).Count -eq 0
+    foreach ($name in $mountPointNames) {
+        $mountPoint = Get-Item -LiteralPath (Join-Path $Fixture.VmRootfs $name) `
+            -Force -ErrorAction SilentlyContinue
+        $linkProperty = if ($null -ne $mountPoint) {
+            $mountPoint.PSObject.Properties['LinkType']
+        }
+        else {
+            $null
+        }
+        if ($null -eq $mountPoint -or -not $mountPoint.PSIsContainer -or
+            ($null -ne $linkProperty -and $linkProperty.Value) -or
+            @(Get-ChildItem -LiteralPath $mountPoint.FullName -Force).Count -ne 0) {
+            $bootstrapLayoutValid = $false
+        }
+    }
+    $logs = @()
+    foreach ($name in $logNames) {
+        $log = Get-Item -LiteralPath (Join-Path $Fixture.VmRootfs $name) `
+            -Force -ErrorAction SilentlyContinue
+        $linkProperty = if ($null -ne $log) {
+            $log.PSObject.Properties['LinkType']
+        }
+        else {
+            $null
+        }
+        if ($null -eq $log -or $log.PSIsContainer -or
+            ($null -ne $linkProperty -and $linkProperty.Value) -or
+            $log.Length -gt 65536) {
+            $bootstrapLayoutValid = $false
+        }
+        elseif ($null -ne $log) {
+            $logs += $log
+        }
+    }
     $tokenHits = @(
         $logs | Select-String -SimpleMatch 'A3S_OCI_AGENT_SESSION_TOKEN='
     )
@@ -869,6 +915,7 @@ function Get-FixtureAudit {
     }
     [pscustomobject]@{
         BootstrapRootEntries = $bootstrapRootEntries.Count
+        BootstrapLayoutValid = $bootstrapLayoutValid
         BootstrapDirectories = $bootstrapDirectories.Count
         RuntimeDirectories = $runtimeDirectories.Count
         DirectTokenLogHits = $tokenHits.Count
@@ -885,8 +932,8 @@ function Assert-RuntimeAudit {
         [object]$Audit
     )
 
-    if ($Audit.BootstrapRootEntries -ne 0) {
-        throw "$Label modified the empty VM bootstrap root"
+    if ($Audit.BootstrapLayoutValid -ne $true) {
+        throw "$Label did not retain the exact bounded VM bootstrap layout"
     }
     if ($Audit.BootstrapDirectories -ne 0) {
         throw "$Label left $($Audit.BootstrapDirectories) bootstrap directories"

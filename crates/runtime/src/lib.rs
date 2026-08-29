@@ -128,6 +128,8 @@ mod utility_vm_driver;
 mod utility_vm_host_service;
 mod utility_vm_soak_report;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+mod whpx_bootstrap;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod whpx_driver;
 mod whpx_driver_smoke;
 mod whpx_recovery_smoke;

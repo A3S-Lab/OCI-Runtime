@@ -508,10 +508,12 @@ The runtime contains a qualification-only `WhpxRuntimeDriver` candidate.
 It uses the same twenty-operation adapter as native Linux, owns one VM per
 exact dedicated-VM generation, retains the VM across retryable create calls,
 and reaps terminal create failures, deletes, and driver shutdown exactly once.
-Opening it requires an empty bootstrap directory below the protected runtime
-root, a manifest and image outside that mutable tree, and a disjoint
-runtime-created `shares` parent. Create accepts a bundle only below the exact
-`<container>/<generation>` share, exports only that directory, and rejects
+Opening it requires a bootstrap directory below the protected runtime root, a
+manifest and image outside that mutable tree, and a disjoint runtime-created
+`shares` parent. The driver creates an empty `dev` mount point and, after a VM
+exit, accepts only the fixed empty `dev`, `newroot`, `proc`, and `sys` mount
+points plus five bounded plain init logs. Create accepts a bundle only below
+the exact `<container>/<generation>` share, exports only that directory, and rejects
 cross-generation or external paths before launching a VM. The shim stages
 token and recovery files in the share and emits v4 evidence for the read-only
 block root, fixed native boot assets, and separate virtio-fs device; the host

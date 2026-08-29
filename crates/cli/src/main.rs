@@ -520,7 +520,7 @@ enum Command {
         /// Isolated libkrun shim executable.
         #[arg(long, value_name = "FILE")]
         shim: PathBuf,
-        /// Empty bootstrap directory kept separate from the immutable system image.
+        /// Bootstrap directory kept separate from the immutable system image.
         #[arg(long, value_name = "DIR")]
         rootfs: PathBuf,
         /// Immutable system-image manifest required by each utility-VM host path.
@@ -557,7 +557,7 @@ enum Command {
         /// Isolated libkrun shim executable.
         #[arg(long, value_name = "FILE")]
         shim: PathBuf,
-        /// Empty virtio-fs bootstrap root when a separate runtime share is supplied.
+        /// Platform bootstrap root; Windows requires an empty `dev` mount point.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
         /// Immutable system-image manifest required by macOS HVF and Windows WHPX.
@@ -602,7 +602,7 @@ enum Command {
         /// Protected runtime root containing bootstrap, shares, console, and recovery.
         #[arg(long, value_name = "DIR")]
         runtime_root: PathBuf,
-        /// Empty protected virtio-fs bootstrap root used only for init.krun.
+        /// Protected init.krun bootstrap root; the driver owns its `dev` mount point.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
         /// Manifest for the pinned read-only x86_64 ext4 system image.
@@ -626,7 +626,7 @@ enum Command {
         /// Protected runtime root containing bootstrap, shares, console, and handoffs.
         #[arg(long, value_name = "DIR")]
         runtime_root: PathBuf,
-        /// Empty protected virtio-fs bootstrap root used only for init.krun.
+        /// Protected init.krun bootstrap root; the driver owns its `dev` mount point.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
         /// Manifest for the pinned read-only x86_64 ext4 system image.
@@ -687,7 +687,7 @@ enum Command {
         /// Isolated libkrun shim executable.
         #[arg(long, value_name = "FILE")]
         shim: PathBuf,
-        /// Empty virtio-fs bootstrap root when a separate runtime share is supplied.
+        /// Platform bootstrap root; Windows requires an empty `dev` mount point.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
         /// Immutable system-image manifest required by macOS HVF and Windows WHPX.
@@ -735,7 +735,7 @@ enum Command {
         /// Isolated libkrun shim executable.
         #[arg(long, value_name = "FILE")]
         shim: PathBuf,
-        /// Empty protected virtio-fs bootstrap root used only for init.krun.
+        /// Bootstrap root containing the empty init.krun `dev` mount point.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
         /// Manifest for the pinned read-only x86_64 ext4 system image.
@@ -759,7 +759,7 @@ enum Command {
         /// Isolated libkrun shim executable.
         #[arg(long, value_name = "FILE")]
         shim: PathBuf,
-        /// Empty virtio-fs bootstrap root when a separate runtime share is supplied.
+        /// Platform bootstrap root; Windows requires an empty `dev` mount point.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
         /// Immutable system-image manifest required by macOS HVF and Windows WHPX.
@@ -783,7 +783,7 @@ enum Command {
         /// Isolated libkrun shim executable.
         #[arg(long, value_name = "FILE")]
         shim: PathBuf,
-        /// Empty virtio-fs bootstrap root when a separate runtime share is supplied.
+        /// Platform bootstrap root; Windows requires an empty `dev` mount point.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
         /// Immutable system-image manifest required by macOS HVF and Windows WHPX.
