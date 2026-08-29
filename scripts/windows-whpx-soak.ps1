@@ -568,6 +568,9 @@ function Initialize-InitScriptFixture {
     $stateDirectory = Join-Path $Bundle 'volumes\rw'
     New-Item -ItemType Directory -Path $stateDirectory -Force | Out-Null
     Copy-WorkloadAsset -Name $Asset -Destination $scriptSource
+    $expectedSourceSha256 = (
+        Get-FileHash -LiteralPath $scriptSource -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
 
     $stateTarget = Join-Path $ContainerRootfs 'mnt\rw'
     New-Item -ItemType Directory -Path $stateTarget -Force | Out-Null
@@ -587,6 +590,7 @@ function Initialize-InitScriptFixture {
     [pscustomobject]@{
         Evidence = Join-Path $stateDirectory 'lifecycle.log'
         Source = $scriptSource
+        ExpectedSourceSha256 = $expectedSourceSha256
         ReadOnlySource = $null
         Scratch = $null
         RoundTrip = $null
@@ -1904,16 +1908,14 @@ try {
                             'phase=ready',
                             'phase=term'
                         )
-                    $expectedScript = Join-Path `
-                        $fixtureAssetDirectory 'init-volume.sh'
                     $sourceHash = (
                         Get-FileHash -LiteralPath $fixture.Scenario.Source `
                             -Algorithm SHA256
-                    ).Hash
-                    $expectedHash = (
-                        Get-FileHash -LiteralPath $expectedScript -Algorithm SHA256
-                    ).Hash
-                    if ($sourceHash -ne $expectedHash) {
+                    ).Hash.ToLowerInvariant()
+                    if (
+                        $sourceHash -ne `
+                            $fixture.Scenario.ExpectedSourceSha256
+                    ) {
                         throw "$label mutated the init script source"
                     }
                 }
