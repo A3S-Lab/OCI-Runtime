@@ -175,16 +175,18 @@ mod tests {
             while !ready.exists() {
                 std::thread::yield_now();
             }
+            let staging = state.join("compatibility-drift-continue.staging");
             let mut marker = OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .mode(0o600)
-                .open(&proceed)
-                .expect("create continue marker");
+                .open(&staging)
+                .expect("create staged continue marker");
             marker
                 .write_all(b"manifest-replacement\n")
-                .expect("write continue marker");
-            marker.sync_all().expect("flush continue marker");
+                .expect("write staged continue marker");
+            marker.sync_all().expect("flush staged continue marker");
+            fs::rename(staging, proceed).expect("publish continue marker atomically");
         });
 
         let barrier = CompatibilityDriftBarrier::wait(temporary.path(), "manifest-replacement")

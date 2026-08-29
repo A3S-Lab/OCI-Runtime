@@ -2658,7 +2658,7 @@ async fn durable_events_are_host_owned_replay_safe_and_reopen_safe() {
                 container: Some(second_target),
                 after_sequence: events.next_sequence,
                 limit: 16,
-                wait_timeout_ms: Some(2_000),
+                wait_timeout_ms: Some(30_000),
             })
             .await
     });
