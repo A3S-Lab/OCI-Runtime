@@ -490,6 +490,28 @@ drift and stale Host/Guest generations, force-deletes the workload, and
 restores every inventory. The aggregate schema is
 `a3s.oci.linux-kvm-signal-process-reopen-matrix.v1`.
 
+WaitProcess terminates the same committed terminal Exec with signal 10, then
+waits up to 15 seconds for its exact non-init exit:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_WAIT_PROCESS_REOPEN_REPORT=/absolute/path/to/wait-process-reopen.json \
+  bash .github/scripts/linux-kvm-wait-process-reopen.sh
+```
+
+The first eight Host/Guest points have no Host process-exit cache. A fresh
+`HostRuntimeService` and VM owner recreate init and the byte-identical Exec,
+reapply the committed signal after the nonce-bound readiness marker, and
+dispatch the exact resolved WaitProcess target and 15-second timeout once on
+API retry. That response persists `signal=10, oom_killed=false`; every later
+wait replays without a driver dispatch. At `guest-after-response-write`, the
+first Host already retained that cache. Recovery still rebuilds and terminates
+the Exec but does not register it as live, so both replacement and later
+WaitProcess calls are dispatch-free. Every path preserves all setup identities,
+rejects stale generations at Host and Guest boundaries, force-deletes the
+workload, and restores every inventory. The aggregate schema is
+`a3s.oci.linux-kvm-wait-process-reopen-matrix.v1`.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -513,7 +535,7 @@ nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
 
 If KVM is unavailable, none of the lifecycle, recovery, operation-reopen, or soak
 scripts downloads or unpacks the Alpine fixture. Lifecycle, recovery, and
-Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess reopen emit zero-case
+Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess reopen emit zero-case
 `unavailable` reports; soak emits `completed_iterations: 0` and
 `fixture_downloaded: false`. CI uploads those reports, but they are not
 `available` hardware results. The driver remains `probe-only` until fresh
@@ -560,7 +582,13 @@ the committed signal exactly once during recovery and replayed the Host
 response with zero additional driver dispatch. The retained aggregate has
 SHA-256
 `d2a764664bb368ba05a228da4c36f2a6d5e55a409391e386835c405621ed32e5`.
-AArch64 hardware evidence and the other 12 workload-operation matrices plus
+Clean revision `4338d37` then retained all 9/9 WaitProcess owner replacements.
+Its first eight paths rebuilt and terminated the exact Exec before dispatching
+the resolved WaitProcess once; `guest-after-response-write` retained the exit
+cache and replayed replacement and later waits with zero driver dispatch. The
+retained aggregate has SHA-256
+`af1f5001f82fdd7f05a1a3f2971f6ea1b8e9a0292aa62465b03dda5df4297ac4`.
+AArch64 hardware evidence and the other 11 workload-operation matrices plus
 Host shutdown remain open; the candidate therefore remains `probe-only`.
 
 ## Experimental CRIU checkpoint and restore gate

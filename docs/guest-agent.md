@@ -735,6 +735,12 @@ calls do not reach the driver; the temporary rebuilt process is also omitted
 from the recovered live inventory. Stale generations fail at both Host and
 Guest boundaries. All nine stages passed in 18 fresh VMs on August 11, 2026
 under `a3s.oci.oci-vm-operation-reopen-replacement.v8`.
+Clean revision `4338d37` also passed all nine stages on x86_64 Linux KVM on
+August 30, 2026. The first eight replacement owners dispatched the resolved
+WaitProcess exactly once after rebuilding and terminating the Exec; the final
+stage and all later waits replayed the retained Host exit cache with no driver
+dispatch. The aggregate SHA-256 is
+`af1f5001f82fdd7f05a1a3f2971f6ea1b8e9a0292aa62465b03dda5df4297ac4`.
 
 Pause now crosses the same nine owner-handoff points. The first eight leave the
 Host journal Prepared, so the replacement Guest rebuilds an unpaused init and

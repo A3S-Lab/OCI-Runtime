@@ -570,6 +570,12 @@ already exists: recovery does not register the rebuilt exited Exec as live,
 and both replacement and later WaitProcess calls return without driver
 dispatch. All nine Apple Silicon stages passed in 18 fresh VMs on August 11,
 2026.
+On August 30, 2026, clean revision `4338d37` also passed all nine stages on
+x86_64 Linux KVM. Its first eight paths rebuilt and terminated the exact Exec
+before dispatching the resolved WaitProcess once; `guest-after-response-write`
+retained the process-exit cache and replayed replacement and later waits with
+zero driver dispatch. The retained aggregate has SHA-256
+`af1f5001f82fdd7f05a1a3f2971f6ea1b8e9a0292aa62465b03dda5df4297ac4`.
 
 Real Pause recovery uses
 `a3s.oci.oci-vm-operation-reopen-replacement.v9`. Setup commits Create and
