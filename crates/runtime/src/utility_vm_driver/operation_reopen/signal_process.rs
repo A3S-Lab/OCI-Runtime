@@ -3,9 +3,10 @@ use std::path::PathBuf;
 use a3s_oci_agent_protocol::AgentTransportOperationStage;
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use a3s_oci_sdk::{
-    CreateRequest, IsolationRequest, OciBundle, OperationContext, ProcessId, ProcessIo,
+    CreateRequest, IsolationRequest, OciBundle, OperationContext, ProcessId, ProcessIo, Signal,
 };
 
+use super::exec::{nonce_bound_bundle, EXEC_MARKER_NAME};
 use super::{bundle_marker, directory_is_empty, operation_id, unique_nonce};
 use crate::linux_kvm_recovery_smoke::bundle;
 use crate::utility_vm_driver::layout::{
@@ -15,15 +16,11 @@ use crate::OciVmOperationReopenReplacementReport;
 
 mod flow;
 
-use flow::support::exec_process;
-pub(super) use flow::support::{
-    dispatch_may_have_reached, exact_process_target, nonce_bound_bundle, stale_target,
-    wait_for_exact_marker, EXEC_MARKER_NAME,
-};
+use flow::support::{signalable_exec_process, SIGNAL_MARKER_NAME, SIGNAL_PROCESS_SIGNAL};
 
-/// Exact inputs for one real Linux KVM terminal Exec interruption and owner reopen.
+/// Exact inputs for one real Linux KVM terminal SignalProcess interruption and owner reopen.
 #[derive(Debug, Clone)]
-pub struct LinuxKvmExecReopenConfig {
+pub struct LinuxKvmSignalProcessReopenConfig {
     pub shim: PathBuf,
     pub runtime_root: PathBuf,
     pub system_image_manifest: PathBuf,
@@ -35,30 +32,38 @@ pub(super) struct Qualification {
     create: CreateRequest,
     start_operation_id: a3s_oci_sdk::OperationId,
     exec_operation_id: a3s_oci_sdk::OperationId,
+    signal_operation_id: a3s_oci_sdk::OperationId,
     delete_operation_id: a3s_oci_sdk::OperationId,
     stale_guest_operation_id: a3s_oci_sdk::OperationId,
     stale_host_operation_id: a3s_oci_sdk::OperationId,
     process_id: ProcessId,
     process: a3s_oci_sdk::oci_spec::runtime::Process,
     io: ProcessIo,
+    signal: Signal,
     init_marker_contents: Vec<u8>,
     exec_marker_contents: Vec<u8>,
+    signal_marker_contents: Vec<u8>,
     stage: AgentTransportOperationStage,
 }
 
-/// Rebuild or replay one terminal Exec in a distinct real KVM owner.
+/// Rebuild or replay one terminal SignalProcess in a distinct real KVM owner.
 ///
-/// Create, Start, Exec, process-record rebinding, stale-generation fencing,
-/// marker verification, and cleanup all use the production immutable-image,
+/// Create, Start, Exec, SignalProcess, process-record rebinding, stale-generation
+/// fencing, marker verification, and cleanup all use the production immutable-image,
 /// exact-generation handoff, and authenticated Guest Agent path. This remains
 /// qualification-only and does not register the probe-only KVM candidate.
-pub async fn linux_kvm_exec_reopen_replacement(
-    config: LinuxKvmExecReopenConfig,
+pub async fn linux_kvm_signal_process_reopen_replacement(
+    config: LinuxKvmSignalProcessReopenConfig,
 ) -> OciVmOperationReopenReplacementReport {
-    let mut report =
-        OciVmOperationReopenReplacementReport::initial_exec(HostPlatform::current(), config.stage);
+    let mut report = OciVmOperationReopenReplacementReport::initial_signal_process(
+        HostPlatform::current(),
+        config.stage,
+    );
     if HostPlatform::current() != HostPlatform::Linux {
-        return failed(report, "Linux KVM Exec reopen qualification requires Linux");
+        return failed(
+            report,
+            "Linux KVM SignalProcess reopen qualification requires Linux",
+        );
     }
 
     let prepared = match PreparedUtilityVmLayout::open(
@@ -76,36 +81,47 @@ pub async fn linux_kvm_exec_reopen_replacement(
         Ok(nonce) => nonce,
         Err(reason) => return failed(report, reason),
     };
-    let container_id = match a3s_oci_sdk::ContainerId::new(format!("kvm-exec-reopen-{nonce}")) {
-        Ok(id) => id,
-        Err(error) => return failed(report, format!("failed to construct container ID: {error}")),
-    };
-    let create_operation_id = match operation_id(&format!("kvm-exec-reopen-{nonce}-create")) {
-        Ok(operation_id) => operation_id,
-        Err(reason) => return failed(report, reason),
-    };
-    let start_operation_id = match operation_id(&format!("kvm-exec-reopen-{nonce}-start")) {
-        Ok(operation_id) => operation_id,
-        Err(reason) => return failed(report, reason),
-    };
-    let exec_operation_id = match operation_id(&format!("kvm-exec-reopen-{nonce}-exec")) {
-        Ok(operation_id) => operation_id,
-        Err(reason) => return failed(report, reason),
-    };
-    let delete_operation_id = match operation_id(&format!("kvm-exec-reopen-{nonce}-delete")) {
-        Ok(operation_id) => operation_id,
-        Err(reason) => return failed(report, reason),
-    };
-    let stale_guest_operation_id =
-        match operation_id(&format!("kvm-exec-reopen-{nonce}-stale-guest")) {
+    let container_id =
+        match a3s_oci_sdk::ContainerId::new(format!("kvm-signal-process-reopen-{nonce}")) {
+            Ok(id) => id,
+            Err(error) => {
+                return failed(report, format!("failed to construct container ID: {error}"));
+            }
+        };
+    let create_operation_id =
+        match operation_id(&format!("kvm-signal-process-reopen-{nonce}-create")) {
             Ok(operation_id) => operation_id,
             Err(reason) => return failed(report, reason),
         };
-    let stale_host_operation_id = match operation_id(&format!("kvm-exec-reopen-{nonce}-stale-host"))
+    let start_operation_id = match operation_id(&format!("kvm-signal-process-reopen-{nonce}-start"))
     {
         Ok(operation_id) => operation_id,
         Err(reason) => return failed(report, reason),
     };
+    let exec_operation_id = match operation_id(&format!("kvm-signal-process-reopen-{nonce}-exec")) {
+        Ok(operation_id) => operation_id,
+        Err(reason) => return failed(report, reason),
+    };
+    let signal_operation_id =
+        match operation_id(&format!("kvm-signal-process-reopen-{nonce}-signal")) {
+            Ok(operation_id) => operation_id,
+            Err(reason) => return failed(report, reason),
+        };
+    let delete_operation_id =
+        match operation_id(&format!("kvm-signal-process-reopen-{nonce}-delete")) {
+            Ok(operation_id) => operation_id,
+            Err(reason) => return failed(report, reason),
+        };
+    let stale_guest_operation_id =
+        match operation_id(&format!("kvm-signal-process-reopen-{nonce}-stale-guest")) {
+            Ok(operation_id) => operation_id,
+            Err(reason) => return failed(report, reason),
+        };
+    let stale_host_operation_id =
+        match operation_id(&format!("kvm-signal-process-reopen-{nonce}-stale-host")) {
+            Ok(operation_id) => operation_id,
+            Err(reason) => return failed(report, reason),
+        };
     let source_bundle = match OciBundle::load(&config.bundle).await {
         Ok(bundle) => bundle,
         Err(error) => {
@@ -119,16 +135,22 @@ pub async fn linux_kvm_exec_reopen_replacement(
         Ok(marker) => marker,
         Err(reason) => return failed(report, reason),
     };
-    let source_exec_marker = match source_init_marker.parent() {
-        Some(rootfs) => rootfs.join(EXEC_MARKER_NAME),
-        None => return failed(report, "KVM Exec init marker has no rootfs parent"),
+    let source_rootfs = match source_init_marker.parent() {
+        Some(rootfs) => rootfs,
+        None => return failed(report, "KVM SignalProcess init marker has no rootfs parent"),
     };
-    for (label, marker) in [("init", &source_init_marker), ("Exec", &source_exec_marker)] {
+    let source_exec_marker = source_rootfs.join(EXEC_MARKER_NAME);
+    let source_signal_marker = source_rootfs.join(SIGNAL_MARKER_NAME);
+    for (label, marker) in [
+        ("init", &source_init_marker),
+        ("Exec", &source_exec_marker),
+        ("SignalProcess", &source_signal_marker),
+    ] {
         if marker.exists() {
             return failed(
                 report,
                 format!(
-                    "refusing to use a KVM Exec qualification bundle with an existing {label} marker: {}",
+                    "refusing to use a KVM SignalProcess qualification bundle with an existing {label} marker: {}",
                     marker.display()
                 ),
             );
@@ -150,14 +172,24 @@ pub async fn linux_kvm_exec_reopen_replacement(
         Ok(staged) => staged,
         Err(reason) => return failed(report, reason),
     };
-    let (process_id, process, io) = match exec_process(&nonce) {
+    let (process_id, process, io) = match signalable_exec_process(&nonce) {
         Ok(process) => process,
         Err(reason) => return failed(report, reason),
     };
+    let signal = match Signal::new(SIGNAL_PROCESS_SIGNAL) {
+        Ok(signal) => signal,
+        Err(error) => {
+            return failed(
+                report,
+                format!("failed to construct SignalProcess signal: {error}"),
+            );
+        }
+    };
     report.bundle_loaded = true;
-    report.qualification_operation_id = Some(exec_operation_id.clone());
+    report.qualification_operation_id = Some(signal_operation_id.clone());
     report.setup_create_operation_id = Some(create_operation_id.clone());
     report.setup_start_operation_id = Some(start_operation_id.clone());
+    report.setup_exec_operation_id = Some(exec_operation_id.clone());
     report.container_id = Some(container_id.clone());
     report.exec_process_id = Some(process_id.clone());
     let qualification = Qualification {
@@ -170,14 +202,17 @@ pub async fn linux_kvm_exec_reopen_replacement(
         },
         start_operation_id,
         exec_operation_id,
+        signal_operation_id,
         delete_operation_id,
         stale_guest_operation_id,
         stale_host_operation_id,
         process_id,
         process,
         io,
+        signal,
         init_marker_contents: format!("a3s-oci-exec-init-{nonce}\n").into_bytes(),
         exec_marker_contents: format!("a3s-oci-exec-process-{nonce}\n").into_bytes(),
+        signal_marker_contents: format!("a3s-oci-signal-process-{nonce}\n").into_bytes(),
         stage: config.stage,
     };
     let state_root = prepared.runtime_root.join("operation-reopen-state");
@@ -186,10 +221,12 @@ pub async fn linux_kvm_exec_reopen_replacement(
     {
         return failed(report, format!("failed to prepare durable state: {error}"));
     }
-    let first_console = prepared.console_directory.join("exec-reopen-first.log");
+    let first_console = prepared
+        .console_directory
+        .join("signal-process-reopen-first.log");
     let replacement_console = prepared
         .console_directory
-        .join("exec-reopen-replacement.log");
+        .join("signal-process-reopen-replacement.log");
 
     if let Err(reason) = flow::exercise(
         &prepared,
@@ -208,6 +245,8 @@ pub async fn linux_kvm_exec_reopen_replacement(
         report.marker_absent_after_cleanup && !source_init_marker.exists();
     report.exec_marker_absent_after_cleanup =
         report.exec_marker_absent_after_cleanup && !source_exec_marker.exists();
+    report.signal_marker_absent_after_cleanup =
+        report.signal_marker_absent_after_cleanup && !source_signal_marker.exists();
     match bundle::runtime_inventory(&prepared.runtime_root) {
         Ok(inventory)
             if inventory.bundle_handoffs_clean
@@ -217,7 +256,7 @@ pub async fn linux_kvm_exec_reopen_replacement(
         Ok(inventory) => append_reason(
             &mut report,
             format!(
-                "KVM Exec reopen left transient runtime state: bundle_handoffs_clean={}, runtime_shares_clean={}, recovery_reports_clean={}, console_files={}",
+                "KVM SignalProcess reopen left transient runtime state: bundle_handoffs_clean={}, runtime_shares_clean={}, recovery_reports_clean={}, console_files={}",
                 inventory.bundle_handoffs_clean,
                 inventory.runtime_shares_clean,
                 inventory.recovery_reports_clean,
@@ -231,7 +270,7 @@ pub async fn linux_kvm_exec_reopen_replacement(
         Ok(false) => append_reason(
             &mut report,
             format!(
-                "KVM Exec reopen modified the private bootstrap root {}",
+                "KVM SignalProcess reopen modified the private bootstrap root {}",
                 prepared.bootstrap_root.display()
             ),
         ),

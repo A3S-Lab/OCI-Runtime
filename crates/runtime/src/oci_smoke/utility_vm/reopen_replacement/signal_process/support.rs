@@ -12,11 +12,7 @@ use super::SIGNAL_MARKER_NAME;
 use crate::transport_cleanup_report::is_retryable_disconnect_operation;
 use crate::OciVmOperationReopenReplacementReport;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SignalProcessJournalStatus {
-    Prepared,
-    SucceededEmpty,
-}
+pub(super) use crate::operation_journal_evidence::EmptyOperationJournalStatus as SignalProcessJournalStatus;
 
 pub(super) fn signalable_exec_process(
     nonce: &str,
@@ -121,56 +117,13 @@ pub(super) async fn signal_process_journal_status(
     operation_id: &OperationId,
     target: &ProcessTarget,
 ) -> std::result::Result<SignalProcessJournalStatus, String> {
-    let path = state_root
-        .join("operations")
-        .join(format!("{}.json", operation_id.as_str()));
-    let contents = tokio::fs::read(&path).await.map_err(|error| {
-        format!(
-            "failed to read durable SignalProcess journal {}: {error}",
-            path.display()
-        )
-    })?;
-    let value: serde_json::Value = serde_json::from_slice(&contents).map_err(|error| {
-        format!(
-            "failed to decode durable SignalProcess journal {}: {error}",
-            path.display()
-        )
-    })?;
-    let expected_generation = serde_json::to_value(target.container.generation)
-        .map_err(|error| format!("failed to encode expected SignalProcess generation: {error}"))?;
-    let identity_matches = value
-        .get("schemaVersion")
-        .and_then(serde_json::Value::as_str)
-        == Some(crate::state::DURABLE_OPERATION_SCHEMA_VERSION)
-        && value.get("operationId").and_then(serde_json::Value::as_str)
-            == Some(operation_id.as_str())
-        && value.get("kind").and_then(serde_json::Value::as_str) == Some("signal-process")
-        && value.get("containerId").and_then(serde_json::Value::as_str)
-            == Some(target.container.id.as_str())
-        && value.get("generation") == Some(&expected_generation)
-        && value.get("processId").and_then(serde_json::Value::as_str)
-            == Some(target.process_id.as_str())
-        && value
-            .get("requestDigest")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|digest| !digest.is_empty());
-    if !identity_matches {
-        return Err(format!(
-            "durable SignalProcess journal {} did not match the exact operation and process",
-            path.display()
-        ));
-    }
-    let status = value
-        .pointer("/outcome/status")
-        .and_then(serde_json::Value::as_str);
-    match status {
-        Some("prepared") => Ok(SignalProcessJournalStatus::Prepared),
-        Some("succeeded-empty") => Ok(SignalProcessJournalStatus::SucceededEmpty),
-        status => Err(format!(
-            "durable SignalProcess journal {} had unexpected status {status:?}",
-            path.display()
-        )),
-    }
+    crate::operation_journal_evidence::process_empty_operation_journal_status(
+        state_root,
+        operation_id,
+        "signal-process",
+        target,
+    )
+    .await
 }
 
 pub(super) fn identity_or_expected<T: Clone>(

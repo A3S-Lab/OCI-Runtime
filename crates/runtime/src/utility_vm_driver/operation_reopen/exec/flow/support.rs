@@ -15,7 +15,7 @@ use crate::{DriverExecRequest, OciVmOperationReopenReplacementReport};
 
 use super::super::super::{QUALIFICATION_FAULT_OPERATION, QUALIFICATION_TIMEOUT};
 
-pub(in crate::utility_vm_driver::operation_reopen::exec) const EXEC_MARKER_NAME: &str =
+pub(in crate::utility_vm_driver::operation_reopen) const EXEC_MARKER_NAME: &str =
     ".a3s-oci-exec-reopen-smoke";
 const ORIGINAL_INIT_MARKER_WRITE: &str =
     "printf 'a3s-oci-create-start-user-time-v1\\n' > /.a3s-oci-create-start-smoke;";
@@ -37,7 +37,7 @@ pub(super) struct FirstOwnerOutcome {
     pub(super) response_delivered: bool,
 }
 
-pub(in crate::utility_vm_driver::operation_reopen::exec) fn nonce_bound_bundle(
+pub(in crate::utility_vm_driver::operation_reopen) fn nonce_bound_bundle(
     bundle: OciBundle,
     nonce: &str,
 ) -> Result<OciBundle, String> {
@@ -110,7 +110,7 @@ pub(super) fn exec_marker(init_marker: &Path) -> Result<PathBuf, String> {
         .ok_or_else(|| "KVM Exec init marker has no rootfs parent".to_string())
 }
 
-pub(super) async fn wait_for_exact_marker(
+pub(in crate::utility_vm_driver::operation_reopen) async fn wait_for_exact_marker(
     marker: &Path,
     expected: &[u8],
     label: &str,
@@ -157,7 +157,9 @@ pub(super) async fn verify_first_exec_marker(
     }
 }
 
-const fn dispatch_may_have_reached(stage: AgentTransportOperationStage) -> bool {
+pub(in crate::utility_vm_driver::operation_reopen) const fn dispatch_may_have_reached(
+    stage: AgentTransportOperationStage,
+) -> bool {
     matches!(
         stage,
         AgentTransportOperationStage::HostAfterRequestWrite
@@ -190,14 +192,18 @@ pub(super) async fn durable_exec_process(
     crate::operation_journal_evidence::durable_process(state_root, target).await
 }
 
-pub(super) fn exact_process_target(exec: &ExecRequest) -> ProcessTarget {
+pub(in crate::utility_vm_driver::operation_reopen) fn exact_process_target(
+    exec: &ExecRequest,
+) -> ProcessTarget {
     ProcessTarget {
         container: exec.container.clone(),
         process_id: exec.process_id.clone(),
     }
 }
 
-pub(super) fn stale_target(container: &ContainerTarget) -> Result<ContainerTarget, String> {
+pub(in crate::utility_vm_driver::operation_reopen) fn stale_target(
+    container: &ContainerTarget,
+) -> Result<ContainerTarget, String> {
     let generation = container
         .generation
         .ok_or_else(|| "KVM Exec qualification container target is not exact".to_string())?;

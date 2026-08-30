@@ -9,7 +9,7 @@ use a3s_oci_sdk::{
 use super::{qualification_error, QualificationKvmOperationDriver};
 use crate::driver::{
     DriverCreateAttachments, DriverCreateRequest, DriverExecRequest, DriverKillRequest,
-    DriverStartRequest,
+    DriverSignalProcessRequest, DriverStartRequest,
 };
 use crate::DriverRecovery;
 
@@ -113,6 +113,25 @@ impl QualificationKvmOperationDriver {
                 })?;
                 self.rehydrated_exec_pid.store(pid, Ordering::SeqCst);
                 self.rehydrated_exec_record.store(true, Ordering::SeqCst);
+                if self.retained_signal_process.is_some() {
+                    let (marker, expected) =
+                        self.retained_signal_ready_marker.as_ref().ok_or_else(|| {
+                            qualification_error(
+                                ErrorCode::FailedPrecondition,
+                                "KVM SignalProcess recovery has no Exec readiness marker",
+                            )
+                        })?;
+                    super::super::exec::wait_for_exact_marker(
+                        marker,
+                        expected,
+                        "replacement KVM signalable Exec readiness",
+                    )
+                    .await
+                    .map_err(|reason| qualification_error(ErrorCode::FailedPrecondition, reason))?;
+                    let request = self.recovery_signal_process_request(record)?;
+                    self.dispatch_signal_process(request).await?;
+                    self.rehydrated_signal_process.store(true, Ordering::SeqCst);
+                }
                 return DriverRecovery::recreated_running_with_processes(
                     running,
                     vec![ProcessRecord {
@@ -252,6 +271,47 @@ impl QualificationKvmOperationDriver {
             },
             process: request.process.clone(),
             io: request.io.clone(),
+        })
+    }
+
+    fn recovery_signal_process_request(
+        &self,
+        record: &ContainerRecord,
+    ) -> Result<DriverSignalProcessRequest> {
+        let request = self.retained_signal_process.as_ref().ok_or_else(|| {
+            qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM replacement has no retained SignalProcess request",
+            )
+        })?;
+        let exact_container =
+            ContainerTarget::exact(request.process.container.id.clone(), record.generation);
+        let expected_process_id = self
+            .retained_exec
+            .as_ref()
+            .map(|exec| &exec.process_id)
+            .ok_or_else(|| {
+                qualification_error(
+                    ErrorCode::FailedPrecondition,
+                    "KVM SignalProcess recovery has no retained Exec request",
+                )
+            })?;
+        if request.process.container != exact_container
+            || request.process.container.id != self.retained_create.id
+            || &request.process.process_id != expected_process_id
+        {
+            return Err(qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM recovery SignalProcess target differs from the durable Exec process",
+            ));
+        }
+        Ok(DriverSignalProcessRequest {
+            context: request.context.clone(),
+            target: ProcessTarget {
+                container: exact_container,
+                process_id: request.process.process_id.clone(),
+            },
+            signal: request.signal,
         })
     }
 }
