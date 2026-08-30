@@ -29,6 +29,7 @@ mod delete;
 mod driver;
 mod exec;
 mod kill;
+mod pause;
 mod signal_process;
 mod start;
 mod state;
@@ -40,6 +41,7 @@ pub use delete::{linux_kvm_delete_reopen_replacement, LinuxKvmDeleteReopenConfig
 use driver::QualificationKvmOperationDriver;
 pub use exec::{linux_kvm_exec_reopen_replacement, LinuxKvmExecReopenConfig};
 pub use kill::{linux_kvm_kill_reopen_replacement, LinuxKvmKillReopenConfig};
+pub use pause::{linux_kvm_pause_reopen_replacement, LinuxKvmPauseReopenConfig};
 pub use signal_process::{
     linux_kvm_signal_process_reopen_replacement, LinuxKvmSignalProcessReopenConfig,
 };

@@ -4,9 +4,9 @@ use a3s_oci_sdk::{ErrorCode, ExitStatus, Result};
 
 use super::{qualification_error, QualificationKvmOperationDriver};
 use crate::driver::{
-    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
-    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverWaitProcessRequest,
-    DriverWaitRequest,
+    DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
+    DriverKillRequest, DriverProcess, DriverSignalProcessRequest, DriverStartRequest, DriverState,
+    DriverWaitProcessRequest, DriverWaitRequest,
 };
 
 impl QualificationKvmOperationDriver {
@@ -233,6 +233,34 @@ impl QualificationKvmOperationDriver {
             .await?
             .client
             .wait_process(request)
+            .await
+    }
+
+    pub(super) async fn dispatch_pause(
+        &self,
+        request: DriverContainerOperationRequest,
+    ) -> Result<DriverState> {
+        let identity = (request.context.operation_id.clone(), request.target.clone());
+        {
+            let mut retained = self.pause_identity.lock().map_err(|_| {
+                qualification_error(ErrorCode::Internal, "KVM Pause identity lock was poisoned")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &identity => {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        "qualification KVM owner received a changed Pause identity",
+                    ));
+                }
+                Some(_) => {}
+                None => *retained = Some(identity),
+            }
+        }
+        self.pause_calls.fetch_add(1, Ordering::SeqCst);
+        self.live_session(&request.target)
+            .await?
+            .client
+            .pause(request)
             .await
     }
 }

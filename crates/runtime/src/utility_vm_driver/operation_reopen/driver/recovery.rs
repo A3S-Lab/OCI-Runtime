@@ -8,8 +8,8 @@ use a3s_oci_sdk::{
 
 use super::{qualification_error, QualificationKvmOperationDriver};
 use crate::driver::{
-    DriverCreateAttachments, DriverCreateRequest, DriverExecRequest, DriverKillRequest,
-    DriverSignalProcessRequest, DriverStartRequest,
+    DriverContainerOperationRequest, DriverCreateAttachments, DriverCreateRequest,
+    DriverExecRequest, DriverKillRequest, DriverSignalProcessRequest, DriverStartRequest,
 };
 use crate::DriverRecovery;
 
@@ -57,6 +57,14 @@ impl QualificationKvmOperationDriver {
                 "KVM operation-reopen qualification accepts only its creating, created, retained running, or retained stopped durable state",
             ));
         }
+        if *record.state.status() == ContainerState::Running
+            && record.is_paused() != self.retained_pause.is_some()
+        {
+            return Err(qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM Pause recovery request does not match the durable freezer state",
+            ));
+        }
         if self.recovery_calls.fetch_add(1, Ordering::SeqCst) != 0 {
             return Err(qualification_error(
                 ErrorCode::Conflict,
@@ -100,6 +108,41 @@ impl QualificationKvmOperationDriver {
             .store(running_pid, Ordering::SeqCst);
         self.rehydrated_running_record.store(true, Ordering::SeqCst);
         if *record.state.status() == ContainerState::Running {
+            if self.retained_pause.is_some() {
+                let (marker, expected) =
+                    self.retained_pause_ready_marker.as_ref().ok_or_else(|| {
+                        qualification_error(
+                            ErrorCode::FailedPrecondition,
+                            "KVM Pause recovery has no init readiness marker",
+                        )
+                    })?;
+                super::super::exec::wait_for_exact_marker(
+                    marker,
+                    expected,
+                    "replacement KVM Pause init readiness",
+                )
+                .await
+                .map_err(|reason| qualification_error(ErrorCode::FailedPrecondition, reason))?;
+                let paused = self
+                    .dispatch_pause(self.recovery_pause_request(record)?)
+                    .await?;
+                if paused.status() != ContainerState::Running
+                    || !paused.paused()
+                    || paused.pid() != Some(running_pid)
+                {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        format!(
+                            "replacement KVM Guest rebuilt Pause as {} with PID {:?} and paused={}; durable state requires paused running PID {running_pid}",
+                            paused.status(),
+                            paused.pid(),
+                            paused.paused()
+                        ),
+                    ));
+                }
+                self.rehydrated_paused_record.store(true, Ordering::SeqCst);
+                return DriverRecovery::recreated_paused_running(paused);
+            }
             if self.retained_exec.is_some() {
                 let request = self.recovery_exec_request(record)?;
                 let target = request.target.clone();
@@ -315,6 +358,29 @@ impl QualificationKvmOperationDriver {
                 process_id: request.process.process_id.clone(),
             },
             signal: request.signal,
+        })
+    }
+
+    fn recovery_pause_request(
+        &self,
+        record: &ContainerRecord,
+    ) -> Result<DriverContainerOperationRequest> {
+        let request = self.retained_pause.as_ref().ok_or_else(|| {
+            qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM replacement has no retained Pause request",
+            )
+        })?;
+        let exact_target = ContainerTarget::exact(request.target.id.clone(), record.generation);
+        if request.target != exact_target || request.target.id != self.retained_create.id {
+            return Err(qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM recovery Pause target differs from the durable record",
+            ));
+        }
+        Ok(DriverContainerOperationRequest {
+            context: request.context.clone(),
+            target: exact_target,
         })
     }
 }

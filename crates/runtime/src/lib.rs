@@ -346,10 +346,11 @@ pub use transport_cleanup_report::{
 pub use utility_vm_driver::operation_reopen::{
     linux_kvm_create_reopen_replacement, linux_kvm_delete_reopen_replacement,
     linux_kvm_exec_reopen_replacement, linux_kvm_kill_reopen_replacement,
-    linux_kvm_signal_process_reopen_replacement, linux_kvm_start_reopen_replacement,
-    linux_kvm_state_reopen_replacement, linux_kvm_wait_process_reopen_replacement,
-    linux_kvm_wait_reopen_replacement, LinuxKvmCreateReopenConfig, LinuxKvmDeleteReopenConfig,
-    LinuxKvmExecReopenConfig, LinuxKvmKillReopenConfig, LinuxKvmSignalProcessReopenConfig,
+    linux_kvm_pause_reopen_replacement, linux_kvm_signal_process_reopen_replacement,
+    linux_kvm_start_reopen_replacement, linux_kvm_state_reopen_replacement,
+    linux_kvm_wait_process_reopen_replacement, linux_kvm_wait_reopen_replacement,
+    LinuxKvmCreateReopenConfig, LinuxKvmDeleteReopenConfig, LinuxKvmExecReopenConfig,
+    LinuxKvmKillReopenConfig, LinuxKvmPauseReopenConfig, LinuxKvmSignalProcessReopenConfig,
     LinuxKvmStartReopenConfig, LinuxKvmStateReopenConfig, LinuxKvmWaitProcessReopenConfig,
     LinuxKvmWaitReopenConfig,
 };
