@@ -1,12 +1,15 @@
 use std::sync::atomic::Ordering;
 
-use a3s_oci_sdk::{ContainerStats, ContainerTarget, ErrorCode, ExitStatus, ProcessRecord, Result};
+use a3s_oci_sdk::{
+    ContainerStats, ContainerTarget, ErrorCode, ExitStatus, OutputChunk, ProcessRecord, Result,
+};
 
 use super::{qualification_error, QualificationKvmOperationDriver};
 use crate::driver::{
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverProcess, DriverSignalProcessRequest, DriverStartRequest, DriverState,
-    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
+    DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverSignalProcessRequest,
+    DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
+    DriverWaitRequest,
 };
 
 impl QualificationKvmOperationDriver {
@@ -367,5 +370,35 @@ impl QualificationKvmOperationDriver {
         }
         self.stats_calls.fetch_add(1, Ordering::SeqCst);
         self.live_session(&target).await?.client.stats(target).await
+    }
+
+    pub(super) async fn dispatch_read_output(
+        &self,
+        request: DriverReadOutputRequest,
+    ) -> Result<Vec<OutputChunk>> {
+        {
+            let mut retained = self.read_output_identity.lock().map_err(|_| {
+                qualification_error(
+                    ErrorCode::Internal,
+                    "KVM ReadOutput identity lock was poisoned",
+                )
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &request => {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        "qualification KVM owner received a changed ReadOutput request",
+                    ));
+                }
+                Some(_) => {}
+                None => *retained = Some(request.clone()),
+            }
+        }
+        self.read_output_calls.fetch_add(1, Ordering::SeqCst);
+        self.live_session(&request.target.container)
+            .await?
+            .client
+            .read_output(request)
+            .await
     }
 }
