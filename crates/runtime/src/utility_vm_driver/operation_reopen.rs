@@ -41,6 +41,7 @@ mod update;
 mod wait;
 mod wait_process;
 mod workload_marker;
+mod write_stdin;
 
 pub use delete::{linux_kvm_delete_reopen_replacement, LinuxKvmDeleteReopenConfig};
 use driver::QualificationKvmOperationDriver;
@@ -61,6 +62,7 @@ pub use wait::{linux_kvm_wait_reopen_replacement, LinuxKvmWaitReopenConfig};
 pub use wait_process::{
     linux_kvm_wait_process_reopen_replacement, LinuxKvmWaitProcessReopenConfig,
 };
+pub use write_stdin::{linux_kvm_write_stdin_reopen_replacement, LinuxKvmWriteStdinReopenConfig};
 
 const QUALIFICATION_TIMEOUT: Duration = Duration::from_secs(25);
 const QUALIFICATION_FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";

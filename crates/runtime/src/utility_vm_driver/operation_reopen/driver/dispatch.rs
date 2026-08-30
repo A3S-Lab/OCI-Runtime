@@ -9,7 +9,7 @@ use crate::driver::{
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
     DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverSignalProcessRequest,
     DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
-    DriverWaitRequest,
+    DriverWaitRequest, DriverWriteStdinRequest,
 };
 
 impl QualificationKvmOperationDriver {
@@ -399,6 +399,36 @@ impl QualificationKvmOperationDriver {
             .await?
             .client
             .read_output(request)
+            .await
+    }
+
+    pub(super) async fn dispatch_write_stdin(
+        &self,
+        request: DriverWriteStdinRequest,
+    ) -> Result<()> {
+        {
+            let mut retained = self.write_stdin_identity.lock().map_err(|_| {
+                qualification_error(
+                    ErrorCode::Internal,
+                    "KVM WriteStdin identity lock was poisoned",
+                )
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &request => {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        "qualification KVM owner received a changed WriteStdin request",
+                    ));
+                }
+                Some(_) => {}
+                None => *retained = Some(request.clone()),
+            }
+        }
+        self.write_stdin_calls.fetch_add(1, Ordering::SeqCst);
+        self.live_session(&request.target.container)
+            .await?
+            .client
+            .write_stdin(request)
             .await
     }
 }

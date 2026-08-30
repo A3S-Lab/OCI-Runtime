@@ -10,7 +10,7 @@ use super::{qualification_error, QualificationKvmOperationDriver};
 use crate::driver::{
     DriverContainerOperationRequest, DriverCreateAttachments, DriverCreateRequest,
     DriverExecRequest, DriverKillRequest, DriverSignalProcessRequest, DriverStartRequest,
-    DriverUpdateRequest,
+    DriverUpdateRequest, DriverWriteStdinRequest,
 };
 use crate::DriverRecovery;
 
@@ -234,6 +234,25 @@ impl QualificationKvmOperationDriver {
                     self.dispatch_signal_process(request).await?;
                     self.rehydrated_signal_process.store(true, Ordering::SeqCst);
                 }
+                if self.retained_write_stdin.is_some() {
+                    let (marker, expected) =
+                        self.retained_write_ready_marker.as_ref().ok_or_else(|| {
+                            qualification_error(
+                                ErrorCode::FailedPrecondition,
+                                "KVM WriteStdin recovery has no Exec readiness marker",
+                            )
+                        })?;
+                    super::super::exec::wait_for_exact_marker(
+                        marker,
+                        expected,
+                        "replacement KVM stdin Exec readiness",
+                    )
+                    .await
+                    .map_err(|reason| qualification_error(ErrorCode::FailedPrecondition, reason))?;
+                    let request = self.recovery_write_stdin_request(record)?;
+                    self.dispatch_write_stdin(request).await?;
+                    self.rehydrated_write_stdin.store(true, Ordering::SeqCst);
+                }
                 if self.recovery_exec_is_live {
                     return DriverRecovery::recreated_running_with_processes(
                         running,
@@ -417,6 +436,47 @@ impl QualificationKvmOperationDriver {
                 process_id: request.process.process_id.clone(),
             },
             signal: request.signal,
+        })
+    }
+
+    fn recovery_write_stdin_request(
+        &self,
+        record: &ContainerRecord,
+    ) -> Result<DriverWriteStdinRequest> {
+        let request = self.retained_write_stdin.as_ref().ok_or_else(|| {
+            qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM replacement has no retained WriteStdin request",
+            )
+        })?;
+        let exact_container =
+            ContainerTarget::exact(request.process.container.id.clone(), record.generation);
+        let expected_process_id = self
+            .retained_exec
+            .as_ref()
+            .map(|exec| &exec.process_id)
+            .ok_or_else(|| {
+                qualification_error(
+                    ErrorCode::FailedPrecondition,
+                    "KVM WriteStdin recovery has no retained Exec request",
+                )
+            })?;
+        if request.process.container != exact_container
+            || request.process.container.id != self.retained_create.id
+            || &request.process.process_id != expected_process_id
+        {
+            return Err(qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM recovery WriteStdin target differs from the durable Exec process",
+            ));
+        }
+        Ok(DriverWriteStdinRequest {
+            context: request.context.clone(),
+            target: ProcessTarget {
+                container: exact_container,
+                process_id: request.process.process_id.clone(),
+            },
+            data: request.data.clone(),
         })
     }
 
