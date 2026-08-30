@@ -663,6 +663,35 @@ fn dispatch(
             target_os = "linux",
             any(target_arch = "x86_64", target_arch = "aarch64")
         ))]
+        Command::LinuxKvmUpdateReopen {
+            shim,
+            runtime_root,
+            system_image_manifest,
+            bundle,
+            fault_at,
+        } => command_future!({
+            let report = a3s_oci_runtime::linux_kvm_update_reopen_replacement(
+                a3s_oci_runtime::LinuxKvmUpdateReopenConfig {
+                    shim,
+                    runtime_root,
+                    system_image_manifest,
+                    bundle,
+                    stage: fault_at.into(),
+                },
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }),
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
         Command::LinuxKvmSoak {
             shim,
             system_image_manifest,
@@ -1778,6 +1807,51 @@ mod tests {
         ])
         .expect("complete Processes qualification command");
         let Command::LinuxKvmProcessesReopen { fault_at, .. } = parsed.command else {
+            panic!("parsed a different command");
+        };
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        assert_eq!(
+            stage,
+            a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
+        );
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[test]
+    fn linux_kvm_update_reopen_cli_requires_the_complete_exact_input_set() {
+        assert!(try_parse_cli_for_test(&[
+            "a3s-oci",
+            "linux-kvm-update-reopen",
+            "--shim",
+            "/tmp/shim",
+            "--runtime-root",
+            "/tmp/runtime",
+            "--system-image-manifest",
+            "/tmp/system-image.json",
+            "--bundle",
+            "/tmp/bundle",
+        ])
+        .is_err());
+
+        let parsed = try_parse_cli_for_test(&[
+            "a3s-oci",
+            "linux-kvm-update-reopen",
+            "--shim",
+            "/tmp/shim",
+            "--runtime-root",
+            "/tmp/runtime",
+            "--system-image-manifest",
+            "/tmp/system-image.json",
+            "--bundle",
+            "/tmp/bundle",
+            "--fault-at",
+            "guest-after-response-write",
+        ])
+        .expect("complete Update qualification command");
+        let Command::LinuxKvmUpdateReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
         let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();

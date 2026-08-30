@@ -10,6 +10,7 @@ use super::{qualification_error, QualificationKvmOperationDriver};
 use crate::driver::{
     DriverContainerOperationRequest, DriverCreateAttachments, DriverCreateRequest,
     DriverExecRequest, DriverKillRequest, DriverSignalProcessRequest, DriverStartRequest,
+    DriverUpdateRequest,
 };
 use crate::DriverRecovery;
 
@@ -110,6 +111,41 @@ impl QualificationKvmOperationDriver {
             .store(running_pid, Ordering::SeqCst);
         self.rehydrated_running_record.store(true, Ordering::SeqCst);
         if *record.state.status() == ContainerState::Running {
+            if self.retained_update.is_some() {
+                let (marker, expected) =
+                    self.retained_update_ready_marker.as_ref().ok_or_else(|| {
+                        qualification_error(
+                            ErrorCode::FailedPrecondition,
+                            "KVM Update recovery has no init readiness marker",
+                        )
+                    })?;
+                super::super::exec::wait_for_exact_marker(
+                    marker,
+                    expected,
+                    "replacement KVM Update init readiness",
+                )
+                .await
+                .map_err(|reason| qualification_error(ErrorCode::FailedPrecondition, reason))?;
+                let updated = self
+                    .dispatch_update(self.recovery_update_request(record)?)
+                    .await?;
+                if updated.status() != ContainerState::Running
+                    || updated.paused()
+                    || updated.pid() != Some(running_pid)
+                {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        format!(
+                            "replacement KVM Guest rebuilt Update as {} with PID {:?} and paused={}; durable state requires unpaused running PID {running_pid}",
+                            updated.status(),
+                            updated.pid(),
+                            updated.paused()
+                        ),
+                    ));
+                }
+                self.rehydrated_update.store(true, Ordering::SeqCst);
+                return DriverRecovery::recreated_running(updated);
+            }
             if self.retained_pause.is_some() {
                 let (marker, expected) =
                     self.retained_pause_ready_marker.as_ref().ok_or_else(|| {
@@ -427,6 +463,27 @@ impl QualificationKvmOperationDriver {
         Ok(DriverContainerOperationRequest {
             context: request.context.clone(),
             target: exact_target,
+        })
+    }
+
+    fn recovery_update_request(&self, record: &ContainerRecord) -> Result<DriverUpdateRequest> {
+        let request = self.retained_update.as_ref().ok_or_else(|| {
+            qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM replacement has no retained Update request",
+            )
+        })?;
+        let exact_target = ContainerTarget::exact(request.target.id.clone(), record.generation);
+        if request.target != exact_target || request.target.id != self.retained_create.id {
+            return Err(qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM recovery Update target differs from the durable record",
+            ));
+        }
+        Ok(DriverUpdateRequest {
+            context: request.context.clone(),
+            target: exact_target,
+            resources: request.resources.clone(),
         })
     }
 }

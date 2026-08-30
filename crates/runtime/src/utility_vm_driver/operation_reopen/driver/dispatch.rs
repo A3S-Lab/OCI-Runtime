@@ -6,7 +6,7 @@ use super::{qualification_error, QualificationKvmOperationDriver};
 use crate::driver::{
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
     DriverKillRequest, DriverProcess, DriverSignalProcessRequest, DriverStartRequest, DriverState,
-    DriverWaitProcessRequest, DriverWaitRequest,
+    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
 };
 
 impl QualificationKvmOperationDriver {
@@ -319,6 +319,33 @@ impl QualificationKvmOperationDriver {
             .await?
             .client
             .processes(target)
+            .await
+    }
+
+    pub(super) async fn dispatch_update(
+        &self,
+        request: DriverUpdateRequest,
+    ) -> Result<DriverState> {
+        {
+            let mut retained = self.update_identity.lock().map_err(|_| {
+                qualification_error(ErrorCode::Internal, "KVM Update identity lock was poisoned")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &request => {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        "qualification KVM owner received a changed Update request",
+                    ));
+                }
+                Some(_) => {}
+                None => *retained = Some(request.clone()),
+            }
+        }
+        self.update_calls.fetch_add(1, Ordering::SeqCst);
+        self.live_session(&request.target)
+            .await?
+            .client
+            .update(request)
             .await
     }
 }
