@@ -753,6 +753,12 @@ requests and stale generations fail at both Host and Guest boundaries, and
 force-delete cleans up the frozen replacement. All nine stages passed in 18
 fresh VMs on August 11, 2026 under
 `a3s.oci.oci-vm-operation-reopen-replacement.v9`.
+Clean revision `3e9fc4b` also passed all nine stages on x86_64 Linux KVM on
+August 30, 2026. The first eight replacement owners dispatched the unchanged
+Pause once after rebuilding an unpaused init; the final stage reapplied Pause
+during recovery and replayed the retained Host result with no additional
+API-driven dispatch. The aggregate SHA-256 is
+`2b76d5fbd0620dee152d97572ab1bcbf0bed42e39a18a87d03415039405cc271`.
 
 Resume adds a deliberately reconstructed freezer history rather than treating
 the fresh init as already thawed. Every replacement Guest receives the original

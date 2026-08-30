@@ -591,6 +591,12 @@ their cached PIDs; the Pause API retry does not dispatch again. Every path
 rejects changed and stale Host and Guest requests, force-deletes the paused
 generation, and restores both owner inventories. All nine Apple Silicon stages
 passed in 18 fresh VMs on August 11, 2026.
+On August 30, 2026, clean revision `3e9fc4b` also passed all nine stages on
+x86_64 Linux KVM. Its first eight paths rebuilt an unpaused init before one
+unchanged Pause dispatch; `guest-after-response-write` reapplied the committed
+Pause during recovery and replayed the Host response with no additional
+API-driven dispatch. The retained aggregate has SHA-256
+`2b76d5fbd0620dee152d97572ab1bcbf0bed42e39a18a87d03415039405cc271`.
 
 Real Resume recovery uses
 `a3s.oci.oci-vm-operation-reopen-replacement.v10`. Setup commits Create,

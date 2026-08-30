@@ -512,6 +512,27 @@ rejects stale generations at Host and Guest boundaries, force-deletes the
 workload, and restores every inventory. The aggregate schema is
 `a3s.oci.linux-kvm-wait-process-reopen-matrix.v1`.
 
+Pause retains the exact setup Create and Start requests and waits for the
+nonce-bound init marker before injecting the selected interruption:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_PAUSE_REOPEN_REPORT=/absolute/path/to/pause-reopen.json \
+  bash .github/scripts/linux-kvm-pause-reopen.sh
+```
+
+The first eight Host/Guest points retain Running state and a Prepared Pause
+journal. A fresh `HostRuntimeService` and VM owner recreate and start init,
+rebind its positive PID, verify the replacement marker, and dispatch the
+unchanged Pause once on API retry. At `guest-after-response-write`, durable
+state is already paused and the journal is Succeeded: recovery starts the
+replacement init, waits for its readiness marker, reapplies Pause, and reports
+recreated-paused-running evidence before the Host replays without another
+API-driven dispatch. Every path preserves all setup identities, rejects
+changed requests and stale Host/Guest generations, force-deletes the paused
+workload, and restores every inventory. The aggregate schema is
+`a3s.oci.linux-kvm-pause-reopen-matrix.v1`.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -535,8 +556,8 @@ nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
 
 If KVM is unavailable, none of the lifecycle, recovery, operation-reopen, or soak
 scripts downloads or unpacks the Alpine fixture. Lifecycle, recovery, and
-Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess reopen emit zero-case
-`unavailable` reports; soak emits `completed_iterations: 0` and
+Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause reopen
+emit zero-case `unavailable` reports; soak emits `completed_iterations: 0` and
 `fixture_downloaded: false`. CI uploads those reports, but they are not
 `available` hardware results. The driver remains `probe-only` until fresh
 x86_64 and AArch64 KVM hosts retain every required available report, including
@@ -588,7 +609,13 @@ the resolved WaitProcess once; `guest-after-response-write` retained the exit
 cache and replayed replacement and later waits with zero driver dispatch. The
 retained aggregate has SHA-256
 `af1f5001f82fdd7f05a1a3f2971f6ea1b8e9a0292aa62465b03dda5df4297ac4`.
-AArch64 hardware evidence and the other 11 workload-operation matrices plus
+Clean revision `3e9fc4b` then retained all 9/9 Pause owner replacements. Its
+first eight paths rebuilt an unpaused init and dispatched the unchanged Pause
+once; `guest-after-response-write` reapplied the committed Pause during
+recovery and replayed the Host response with zero additional API-driven
+dispatch. The retained aggregate has SHA-256
+`2b76d5fbd0620dee152d97572ab1bcbf0bed42e39a18a87d03415039405cc271`.
+AArch64 hardware evidence and the other 10 workload-operation matrices plus
 Host shutdown remain open; the candidate therefore remains `probe-only`.
 
 ## Experimental CRIU checkpoint and restore gate
