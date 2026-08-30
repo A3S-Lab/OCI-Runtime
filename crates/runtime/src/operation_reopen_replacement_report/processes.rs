@@ -38,7 +38,7 @@ impl OciVmOperationReopenReplacementReport {
         report.replacement_vm.reason =
             Some("the replacement HVF owner was not started".to_string());
         report.reason = Some(
-            "real utility-VM Processes reopen and owner replacement is implemented only for macOS aarch64/HVF"
+            "the generic utility-VM Processes reopen command is implemented for macOS aarch64/HVF; Linux KVM uses its dedicated qualification entry"
                 .to_string(),
         );
         report
@@ -98,7 +98,7 @@ impl OciVmOperationReopenReplacementReport {
                 self.inventory_matches(inventory, init_pid, exec_pid)
             });
 
-        matches!(self.platform, HostPlatform::Macos)
+        matches!(self.platform, HostPlatform::Macos | HostPlatform::Linux)
             && self.first_vm.platform == self.platform
             && self.replacement_vm.platform == self.platform
             && self.bundle_loaded
@@ -375,6 +375,34 @@ mod tests {
             assert!(stage_report.is_success(), "{stage_report:?}");
         }
 
+        let mut linux_report = report.clone();
+        linux_report.platform = HostPlatform::Linux;
+        linux_report.first_vm = complete_linux_bridge("first", 11, 12);
+        linux_report.replacement_vm = complete_linux_bridge("replacement", 21, 22);
+        for stage in AgentTransportOperationStage::ALL {
+            let mut stage_report = linux_report.clone();
+            stage_report.requested_stage = stage;
+            stage_report.injected_point = Some(format!(
+                "agent-v{AGENT_PROTOCOL_VERSION_MAX}.processes-{}",
+                stage.as_str()
+            ));
+            if stage.is_guest() {
+                stage_report.first_operation_error_operation =
+                    Some("read-agent-frame-header".to_string());
+                stage_report.guest_evidence_verified = true;
+                stage_report.guest_evidence_operation_id =
+                    stage_report.qualification_operation_id.clone();
+            }
+            if stage == AgentTransportOperationStage::GuestAfterResponseWrite {
+                stage_report.first_operation_response_received = true;
+                stage_report.disconnect_probe_attempted = true;
+                stage_report.first_process_inventory =
+                    Some(inventory(&container, &process_id, 41, 6_201));
+                stage_report.first_process_inventory_verified = true;
+            }
+            assert!(stage_report.is_success(), "{stage_report:?}");
+        }
+
         for incomplete in [
             OciVmOperationReopenReplacementReport {
                 replacement_rehydrated_exec_record: false,
@@ -450,6 +478,27 @@ mod tests {
             descriptor_inventory_restored: true,
             reason: None,
         });
+        report
+    }
+
+    fn complete_linux_bridge(name: &str, shim: u32, bridge: u32) -> AgentVmSmokeReport {
+        let mut report = AgentVmSmokeReport::initial(HostPlatform::Linux);
+        report.status = CapabilityStatus::Available;
+        report.endpoint_bound = true;
+        report.endpoint_name = Some(format!("a3s-oci-agent-{name}"));
+        report.shim_spawned = true;
+        report.shim_process_id = Some(shim);
+        report.bridge_process_id = Some(bridge);
+        report.shim_client_verified = true;
+        report.protocol_negotiated = true;
+        report.selected_protocol = Some(AGENT_PROTOCOL_VERSION_MAX);
+        report.agent_version = Some(env!("CARGO_PKG_VERSION").into());
+        report.guest_architecture = Some(std::env::consts::ARCH.into());
+        report.advertised_operations = AgentOperation::ALL.to_vec();
+        report.shim_report_verified = true;
+        report.shim_exit_code = Some(0);
+        report.console_created = true;
+        report.shim_report = Some(json!({}));
         report
     }
 }

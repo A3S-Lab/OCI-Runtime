@@ -74,7 +74,7 @@ pub(in crate::utility_vm_driver::operation_reopen) fn nonce_bound_bundle(
         .map_err(|error| format!("failed to validate nonce-bound KVM Exec bundle: {error}"))
 }
 
-pub(in crate::utility_vm_driver::operation_reopen::exec) fn exec_process(
+pub(in crate::utility_vm_driver::operation_reopen) fn exec_process(
     nonce: &str,
 ) -> Result<(ProcessId, Process, ProcessIo), String> {
     let process_id = ProcessId::new(format!("worker-{nonce}"))

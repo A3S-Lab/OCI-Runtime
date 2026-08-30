@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use a3s_oci_sdk::{ErrorCode, ExitStatus, Result};
+use a3s_oci_sdk::{ContainerTarget, ErrorCode, ExitStatus, ProcessRecord, Result};
 
 use super::{qualification_error, QualificationKvmOperationDriver};
 use crate::driver::{
@@ -289,6 +289,36 @@ impl QualificationKvmOperationDriver {
             .await?
             .client
             .resume(request)
+            .await
+    }
+
+    pub(super) async fn dispatch_processes(
+        &self,
+        target: ContainerTarget,
+    ) -> Result<Vec<ProcessRecord>> {
+        {
+            let mut retained = self.processes_identity.lock().map_err(|_| {
+                qualification_error(
+                    ErrorCode::Internal,
+                    "KVM Processes identity lock was poisoned",
+                )
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &target => {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        "qualification KVM owner received a changed Processes target",
+                    ));
+                }
+                Some(_) => {}
+                None => *retained = Some(target.clone()),
+            }
+        }
+        self.processes_calls.fetch_add(1, Ordering::SeqCst);
+        self.live_session(&target)
+            .await?
+            .client
+            .processes(target)
             .await
     }
 }

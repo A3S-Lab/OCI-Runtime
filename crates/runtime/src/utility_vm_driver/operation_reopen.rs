@@ -30,6 +30,7 @@ mod driver;
 mod exec;
 mod kill;
 mod pause;
+mod processes;
 mod resume;
 mod signal_process;
 mod start;
@@ -43,6 +44,7 @@ use driver::QualificationKvmOperationDriver;
 pub use exec::{linux_kvm_exec_reopen_replacement, LinuxKvmExecReopenConfig};
 pub use kill::{linux_kvm_kill_reopen_replacement, LinuxKvmKillReopenConfig};
 pub use pause::{linux_kvm_pause_reopen_replacement, LinuxKvmPauseReopenConfig};
+pub use processes::{linux_kvm_processes_reopen_replacement, LinuxKvmProcessesReopenConfig};
 pub use resume::{linux_kvm_resume_reopen_replacement, LinuxKvmResumeReopenConfig};
 pub use signal_process::{
     linux_kvm_signal_process_reopen_replacement, LinuxKvmSignalProcessReopenConfig,

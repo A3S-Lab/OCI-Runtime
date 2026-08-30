@@ -6,6 +6,7 @@ use a3s_oci_sdk::{
     CreateRequest, IsolationRequest, OciBundle, OperationContext, ProcessId, ProcessIo,
 };
 
+use super::exec::{exec_process, nonce_bound_bundle, EXEC_MARKER_NAME};
 use super::{bundle_marker, directory_is_empty, operation_id, unique_nonce};
 use crate::linux_kvm_recovery_smoke::bundle;
 use crate::utility_vm_driver::layout::{
@@ -15,14 +16,9 @@ use crate::OciVmOperationReopenReplacementReport;
 
 mod flow;
 
-pub(super) use flow::support::{
-    dispatch_may_have_reached, exact_process_target, exec_process, nonce_bound_bundle,
-    stale_target, wait_for_exact_marker, EXEC_MARKER_NAME,
-};
-
-/// Exact inputs for one real Linux KVM terminal Exec interruption and owner reopen.
+/// Exact inputs for one real Linux KVM Processes interruption and owner reopen.
 #[derive(Debug, Clone)]
-pub struct LinuxKvmExecReopenConfig {
+pub struct LinuxKvmProcessesReopenConfig {
     pub shim: PathBuf,
     pub runtime_root: PathBuf,
     pub system_image_manifest: PathBuf,
@@ -34,9 +30,8 @@ pub(super) struct Qualification {
     create: CreateRequest,
     start_operation_id: a3s_oci_sdk::OperationId,
     exec_operation_id: a3s_oci_sdk::OperationId,
+    processes_operation_id: a3s_oci_sdk::OperationId,
     delete_operation_id: a3s_oci_sdk::OperationId,
-    stale_guest_operation_id: a3s_oci_sdk::OperationId,
-    stale_host_operation_id: a3s_oci_sdk::OperationId,
     process_id: ProcessId,
     process: a3s_oci_sdk::oci_spec::runtime::Process,
     io: ProcessIo,
@@ -45,19 +40,25 @@ pub(super) struct Qualification {
     stage: AgentTransportOperationStage,
 }
 
-/// Rebuild or replay one terminal Exec in a distinct real KVM owner.
+/// Rebuild one live init and Exec inventory in a distinct real KVM owner.
 ///
-/// Create, Start, Exec, process-record rebinding, stale-generation fencing,
-/// marker verification, and cleanup all use the production immutable-image,
-/// exact-generation handoff, and authenticated Guest Agent path. This remains
-/// qualification-only and does not register the probe-only KVM candidate.
-pub async fn linux_kvm_exec_reopen_replacement(
-    config: LinuxKvmExecReopenConfig,
+/// Create, Start, Exec, Processes, process-record rebinding, stale-generation
+/// fencing, marker verification, and cleanup all use the production
+/// immutable-image, exact-generation handoff, and authenticated Guest Agent
+/// path. This remains qualification-only and does not register the probe-only
+/// KVM candidate.
+pub async fn linux_kvm_processes_reopen_replacement(
+    config: LinuxKvmProcessesReopenConfig,
 ) -> OciVmOperationReopenReplacementReport {
-    let mut report =
-        OciVmOperationReopenReplacementReport::initial_exec(HostPlatform::current(), config.stage);
+    let mut report = OciVmOperationReopenReplacementReport::initial_processes(
+        HostPlatform::current(),
+        config.stage,
+    );
     if HostPlatform::current() != HostPlatform::Linux {
-        return failed(report, "Linux KVM Exec reopen qualification requires Linux");
+        return failed(
+            report,
+            "Linux KVM Processes reopen qualification requires Linux",
+        );
     }
 
     let prepared = match PreparedUtilityVmLayout::open(
@@ -75,33 +76,29 @@ pub async fn linux_kvm_exec_reopen_replacement(
         Ok(nonce) => nonce,
         Err(reason) => return failed(report, reason),
     };
-    let container_id = match a3s_oci_sdk::ContainerId::new(format!("kvm-exec-reopen-{nonce}")) {
+    let container_id = match a3s_oci_sdk::ContainerId::new(format!("kvm-processes-reopen-{nonce}"))
+    {
         Ok(id) => id,
         Err(error) => return failed(report, format!("failed to construct container ID: {error}")),
     };
-    let create_operation_id = match operation_id(&format!("kvm-exec-reopen-{nonce}-create")) {
+    let create_operation_id = match operation_id(&format!("kvm-processes-reopen-{nonce}-create")) {
         Ok(operation_id) => operation_id,
         Err(reason) => return failed(report, reason),
     };
-    let start_operation_id = match operation_id(&format!("kvm-exec-reopen-{nonce}-start")) {
+    let start_operation_id = match operation_id(&format!("kvm-processes-reopen-{nonce}-start")) {
         Ok(operation_id) => operation_id,
         Err(reason) => return failed(report, reason),
     };
-    let exec_operation_id = match operation_id(&format!("kvm-exec-reopen-{nonce}-exec")) {
+    let exec_operation_id = match operation_id(&format!("kvm-processes-reopen-{nonce}-exec")) {
         Ok(operation_id) => operation_id,
         Err(reason) => return failed(report, reason),
     };
-    let delete_operation_id = match operation_id(&format!("kvm-exec-reopen-{nonce}-delete")) {
-        Ok(operation_id) => operation_id,
-        Err(reason) => return failed(report, reason),
-    };
-    let stale_guest_operation_id =
-        match operation_id(&format!("kvm-exec-reopen-{nonce}-stale-guest")) {
-            Ok(operation_id) => operation_id,
-            Err(reason) => return failed(report, reason),
-        };
-    let stale_host_operation_id = match operation_id(&format!("kvm-exec-reopen-{nonce}-stale-host"))
+    let processes_operation_id = match operation_id(&format!("kvm-processes-reopen-{nonce}-query"))
     {
+        Ok(operation_id) => operation_id,
+        Err(reason) => return failed(report, reason),
+    };
+    let delete_operation_id = match operation_id(&format!("kvm-processes-reopen-{nonce}-delete")) {
         Ok(operation_id) => operation_id,
         Err(reason) => return failed(report, reason),
     };
@@ -120,14 +117,14 @@ pub async fn linux_kvm_exec_reopen_replacement(
     };
     let source_exec_marker = match source_init_marker.parent() {
         Some(rootfs) => rootfs.join(EXEC_MARKER_NAME),
-        None => return failed(report, "KVM Exec init marker has no rootfs parent"),
+        None => return failed(report, "KVM Processes init marker has no rootfs parent"),
     };
     for (label, marker) in [("init", &source_init_marker), ("Exec", &source_exec_marker)] {
         if marker.exists() {
             return failed(
                 report,
                 format!(
-                    "refusing to use a KVM Exec qualification bundle with an existing {label} marker: {}",
+                    "refusing to use a KVM Processes qualification bundle with an existing {label} marker: {}",
                     marker.display()
                 ),
             );
@@ -154,9 +151,10 @@ pub async fn linux_kvm_exec_reopen_replacement(
         Err(reason) => return failed(report, reason),
     };
     report.bundle_loaded = true;
-    report.qualification_operation_id = Some(exec_operation_id.clone());
+    report.qualification_operation_id = Some(processes_operation_id.clone());
     report.setup_create_operation_id = Some(create_operation_id.clone());
     report.setup_start_operation_id = Some(start_operation_id.clone());
+    report.setup_exec_operation_id = Some(exec_operation_id.clone());
     report.container_id = Some(container_id.clone());
     report.exec_process_id = Some(process_id.clone());
     let qualification = Qualification {
@@ -169,9 +167,8 @@ pub async fn linux_kvm_exec_reopen_replacement(
         },
         start_operation_id,
         exec_operation_id,
+        processes_operation_id,
         delete_operation_id,
-        stale_guest_operation_id,
-        stale_host_operation_id,
         process_id,
         process,
         io,
@@ -185,10 +182,12 @@ pub async fn linux_kvm_exec_reopen_replacement(
     {
         return failed(report, format!("failed to prepare durable state: {error}"));
     }
-    let first_console = prepared.console_directory.join("exec-reopen-first.log");
+    let first_console = prepared
+        .console_directory
+        .join("processes-reopen-first.log");
     let replacement_console = prepared
         .console_directory
-        .join("exec-reopen-replacement.log");
+        .join("processes-reopen-replacement.log");
 
     if let Err(reason) = flow::exercise(
         &prepared,
@@ -216,7 +215,7 @@ pub async fn linux_kvm_exec_reopen_replacement(
         Ok(inventory) => append_reason(
             &mut report,
             format!(
-                "KVM Exec reopen left transient runtime state: bundle_handoffs_clean={}, runtime_shares_clean={}, recovery_reports_clean={}, console_files={}",
+                "KVM Processes reopen left transient runtime state: bundle_handoffs_clean={}, runtime_shares_clean={}, recovery_reports_clean={}, console_files={}",
                 inventory.bundle_handoffs_clean,
                 inventory.runtime_shares_clean,
                 inventory.recovery_reports_clean,
@@ -230,7 +229,7 @@ pub async fn linux_kvm_exec_reopen_replacement(
         Ok(false) => append_reason(
             &mut report,
             format!(
-                "KVM Exec reopen modified the private bootstrap root {}",
+                "KVM Processes reopen modified the private bootstrap root {}",
                 prepared.bootstrap_root.display()
             ),
         ),
