@@ -925,6 +925,17 @@ A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-update-reopen.sh
 ```
 
+Stats retains the committed Create, Start, and Update setup while treating the
+query itself as read-only. Every replacement Guest receives one fresh Stats
+request, including after the first owner wrote a complete response. The final
+path requires the replacement snapshot to be newer and distinct while both
+snapshots preserve the exact generation and updated resource profile:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  bash .github/scripts/linux-kvm-stats-reopen.sh
+```
+
 The bounded soak uses its own qualification scope and one durable Host Service:
 
 ```bash
@@ -1053,7 +1064,13 @@ recovery reapplies the request to the fresh cgroup and Host replay performs no
 additional API-driven dispatch. Every path verifies the 512 MiB limit and live
 counters through direct Guest Stats, rejects changed requests and stale
 Host/Guest generations, force-deletes the workload, and restores every
-inventory. Equivalent coverage for the other 7 workload operations and Host
+inventory. Stats uses `a3s.oci.linux-kvm-stats-reopen-matrix.v1`. Every
+replacement owner reconstructs Create, Start, and the committed Update before
+dispatching one fresh read-only query. At `guest-after-response-write`, the
+first delivered snapshot and the newer replacement snapshot both retain the
+exact generation and updated resource profile. Every path rejects stale Host
+and Guest generations, force-deletes the workload, and restores every
+inventory. Equivalent coverage for the other 6 workload operations and Host
 shutdown remains an explicit readiness gate.
 
 | Owner | Keeps | Must not absorb |
@@ -1361,6 +1378,7 @@ The repository turns release claims into checked inventories:
 | Linux KVM Resume operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `b4c3a85` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 99 / 180 paths (11 / 20 operations) |
 | Linux KVM Processes operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `9a1a37c` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 108 / 180 paths (12 / 20 operations) |
 | Linux KVM Update operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `aa0f56a` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 117 / 180 paths (13 / 20 operations) |
+| Linux KVM Stats operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `09286d8` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 126 / 180 paths (14 / 20 operations) |
 | Guest operations behind protocol v10 | 21 (20 public workload operations + 1 maintenance acknowledgement) |
 
 The locks prove inventory and exercised boundaries, not full conformance by

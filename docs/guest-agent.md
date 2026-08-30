@@ -827,6 +827,12 @@ delivered first-owner snapshot must differ from and precede the replacement
 snapshot. Stale generations fail at both boundaries. All nine stages passed in
 18 fresh VMs on August 11, 2026 under
 `a3s.oci.oci-vm-operation-reopen-replacement.v13`.
+Clean revision `09286d8` also passed all nine stages on x86_64 Linux KVM on
+August 31, 2026. Every replacement Guest received exactly one fresh Stats
+query after rebuilding the updated running init. The delivered final-stage
+snapshot preceded and differed from the replacement snapshot while both kept
+the exact generation and 512 MiB limit. The aggregate SHA-256 is
+`ad2a1ec2eb72c106c1bf312253d06fcf187590b357661bed211a83ff5e5cf397`.
 
 ReadOutput crosses the same nine handoffs with a non-terminal Exec that writes
 one nonce-bound stdout chunk and stays live. Recovery replays the exact Create,

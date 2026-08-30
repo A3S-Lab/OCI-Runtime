@@ -670,6 +670,13 @@ live counters; the completed-response path also requires the replacement
 timestamp and snapshot to be newer and distinct. Stale Host and Guest
 generations fail closed. All nine Apple Silicon stages passed in 18 fresh VMs
 on August 11, 2026.
+On August 31, 2026, clean revision `09286d8` also passed all nine stages on
+x86_64 Linux KVM. Every replacement owner rebuilt the updated running init and
+dispatched exactly one fresh Stats query. At `guest-after-response-write`, the
+first delivered snapshot preceded and differed from the replacement snapshot;
+both retained the exact generation and 512 MiB limit. The retained aggregate
+has SHA-256
+`ad2a1ec2eb72c106c1bf312253d06fcf187590b357661bed211a83ff5e5cf397`.
 
 Real ReadOutput recovery uses
 `a3s.oci.oci-vm-operation-reopen-replacement.v14`. The durable Create, Start,

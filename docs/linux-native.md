@@ -593,6 +593,25 @@ rejects changed requests and stale Host/Guest generations, force-deletes the
 workload, and restores every inventory. The aggregate schema is
 `a3s.oci.linux-kvm-update-reopen-matrix.v1`.
 
+Stats retains the exact setup Create, Start, and committed Update requests plus
+the nonce-bound init readiness marker:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_STATS_REOPEN_REPORT=/absolute/path/to/stats-reopen.json \
+  bash .github/scripts/linux-kvm-stats-reopen.sh
+```
+
+A fresh `HostRuntimeService` and VM owner recreate the updated running init,
+rebind all completed setup responses, and dispatch one fresh read-only Stats
+query at every Host/Guest interruption point. At
+`guest-after-response-write`, the first owner delivers a verified snapshot
+before the disconnect; the replacement snapshot must be newer and distinct.
+Both snapshots preserve the exact generation, 512 MiB memory limit, live
+counters, and required event metrics. Every path rejects stale Host and Guest
+generations, force-deletes the workload, and restores every inventory. The
+aggregate schema is `a3s.oci.linux-kvm-stats-reopen-matrix.v1`.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -616,8 +635,9 @@ nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
 
 If KVM is unavailable, none of the lifecycle, recovery, operation-reopen, or soak
 scripts downloads or unpacks the Alpine fixture. Lifecycle, recovery, and
-Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update reopen
-emit zero-case `unavailable` reports; soak emits `completed_iterations: 0` and
+Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume,
+Processes/Update/Stats reopen emit zero-case `unavailable` reports; soak emits
+`completed_iterations: 0` and
 `fixture_downloaded: false`. CI uploads those reports, but they are not
 `available` hardware results. The driver remains `probe-only` until fresh
 x86_64 and AArch64 KVM hosts retain every required available report, including
@@ -694,7 +714,13 @@ recovery and replayed the Host response with zero additional API-driven
 dispatch. Direct Guest Stats verified the 512 MiB limit and live counters. The
 retained aggregate has SHA-256
 `61e7ccbf5c3181cce6fb0c62d1a36ad576e9860a58bcc54f8cd5bc41a766a052`.
-AArch64 hardware evidence and the other 7 workload-operation matrices plus
+Clean revision `09286d8` then retained all 9/9 Stats owner replacements. Every
+replacement rebuilt the updated running init and dispatched one fresh query;
+`guest-after-response-write` retained the delivered first snapshot and proved
+the replacement snapshot was newer and distinct. Both snapshots preserved the
+exact generation and 512 MiB limit. The retained aggregate has SHA-256
+`ad2a1ec2eb72c106c1bf312253d06fcf187590b357661bed211a83ff5e5cf397`.
+AArch64 hardware evidence and the other 6 workload-operation matrices plus
 Host shutdown remain open; the candidate therefore remains `probe-only`.
 
 ## Experimental CRIU checkpoint and restore gate
