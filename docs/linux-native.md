@@ -397,10 +397,11 @@ On August 30, 2026, clean x86_64 revision `e7567f9` retained `available`
 17/17 lifecycle, 1/1 owner-death/restart, and 25/25 fresh-generation soak
 reports. Clean revision `c435e26` then retained all 9/9 Create operation-stage
 owner replacements under the scope above, including committed-state
-rehydration at `guest-after-response-write`. The State matrix is implemented
-and CI-wired for x86_64 and AArch64, with retained clean-host evidence still
-pending. AArch64 hardware evidence and the other 18 workload-operation
-matrices plus Host shutdown remain open; the
+rehydration at `guest-after-response-write`. Clean revision `d0c29e2` then
+retained all 9/9 State owner replacements, including exact response delivery
+and disconnect probing at `guest-after-response-write`. AArch64 hardware
+evidence and the other 18 workload-operation matrices plus Host shutdown
+remain open; the
 candidate therefore remains `probe-only`.
 
 ## Experimental CRIU checkpoint and restore gate
