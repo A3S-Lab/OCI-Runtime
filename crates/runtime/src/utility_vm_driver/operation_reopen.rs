@@ -27,6 +27,7 @@ use crate::{AgentVmSmokeReport, HostRuntimeService, OciVmReopenReplacementReport
 
 mod delete;
 mod driver;
+mod exec;
 mod kill;
 mod start;
 mod state;
@@ -35,6 +36,7 @@ mod workload_marker;
 
 pub use delete::{linux_kvm_delete_reopen_replacement, LinuxKvmDeleteReopenConfig};
 use driver::QualificationKvmOperationDriver;
+pub use exec::{linux_kvm_exec_reopen_replacement, LinuxKvmExecReopenConfig};
 pub use kill::{linux_kvm_kill_reopen_replacement, LinuxKvmKillReopenConfig};
 pub use start::{linux_kvm_start_reopen_replacement, LinuxKvmStartReopenConfig};
 pub use state::{linux_kvm_state_reopen_replacement, LinuxKvmStateReopenConfig};

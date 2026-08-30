@@ -2,11 +2,14 @@ use std::sync::atomic::Ordering;
 
 use a3s_oci_core::{DriverKind, IsolationClass};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{ContainerRecord, ContainerTarget, ErrorCode, OciBundle, Result};
+use a3s_oci_sdk::{
+    ContainerRecord, ContainerTarget, ErrorCode, OciBundle, ProcessRecord, ProcessTarget, Result,
+};
 
 use super::{qualification_error, QualificationKvmOperationDriver};
 use crate::driver::{
-    DriverCreateAttachments, DriverCreateRequest, DriverKillRequest, DriverStartRequest,
+    DriverCreateAttachments, DriverCreateRequest, DriverExecRequest, DriverKillRequest,
+    DriverStartRequest,
 };
 use crate::DriverRecovery;
 
@@ -97,6 +100,28 @@ impl QualificationKvmOperationDriver {
             .store(running_pid, Ordering::SeqCst);
         self.rehydrated_running_record.store(true, Ordering::SeqCst);
         if *record.state.status() == ContainerState::Running {
+            if self.retained_exec.is_some() {
+                let request = self.recovery_exec_request(record)?;
+                let target = request.target.clone();
+                let process = self.dispatch_exec(request).await?;
+                let pid = process.pid();
+                let durable_pid = u32::try_from(pid).map_err(|error| {
+                    qualification_error(
+                        ErrorCode::Conflict,
+                        format!("replacement KVM Guest returned invalid Exec PID {pid}: {error}"),
+                    )
+                })?;
+                self.rehydrated_exec_pid.store(pid, Ordering::SeqCst);
+                self.rehydrated_exec_record.store(true, Ordering::SeqCst);
+                return DriverRecovery::recreated_running_with_processes(
+                    running,
+                    vec![ProcessRecord {
+                        target,
+                        pid: Some(durable_pid),
+                        terminal: process.terminal(),
+                    }],
+                );
+            }
             return DriverRecovery::recreated_running(running);
         }
 
@@ -201,6 +226,32 @@ impl QualificationKvmOperationDriver {
             target: exact_target,
             signal: request.signal,
             all: request.all,
+        })
+    }
+
+    fn recovery_exec_request(&self, record: &ContainerRecord) -> Result<DriverExecRequest> {
+        let request = self.retained_exec.as_ref().ok_or_else(|| {
+            qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM replacement has no retained Exec request",
+            )
+        })?;
+        let exact_container =
+            ContainerTarget::exact(request.container.id.clone(), record.generation);
+        if request.container != exact_container || request.container.id != self.retained_create.id {
+            return Err(qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM recovery Exec target differs from the durable record",
+            ));
+        }
+        Ok(DriverExecRequest {
+            context: request.context.clone(),
+            target: ProcessTarget {
+                container: exact_container,
+                process_id: request.process_id.clone(),
+            },
+            process: request.process.clone(),
+            io: request.io.clone(),
         })
     }
 }

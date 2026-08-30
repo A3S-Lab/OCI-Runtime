@@ -23,11 +23,7 @@ use crate::OciVmOperationReopenReplacementReport;
 const ORIGINAL_INIT_MARKER_WRITE: &str =
     "printf 'a3s-oci-create-start-user-time-v1\\n' > /.a3s-oci-create-start-smoke;";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::oci_smoke::utility_vm::reopen_replacement) enum ExecJournalStatus {
-    Prepared,
-    Succeeded(ProcessRecord),
-}
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) use crate::operation_journal_evidence::ProcessOperationJournalStatus as ExecJournalStatus;
 
 pub(in crate::oci_smoke::utility_vm::reopen_replacement) fn operation_id(
     value: &str,
@@ -236,131 +232,20 @@ pub(in crate::oci_smoke::utility_vm::reopen_replacement) async fn exec_journal_s
     operation_id: &OperationId,
     target: &ProcessTarget,
 ) -> std::result::Result<ExecJournalStatus, String> {
-    let path = state_root
-        .join("operations")
-        .join(format!("{}.json", operation_id.as_str()));
-    let contents = tokio::fs::read(&path).await.map_err(|error| {
-        format!(
-            "failed to read durable Exec journal {}: {error}",
-            path.display()
-        )
-    })?;
-    let value: serde_json::Value = serde_json::from_slice(&contents).map_err(|error| {
-        format!(
-            "failed to decode durable Exec journal {}: {error}",
-            path.display()
-        )
-    })?;
-    let expected_generation = serde_json::to_value(target.container.generation)
-        .map_err(|error| format!("failed to encode expected Exec generation: {error}"))?;
-    let identity_matches = value
-        .get("schemaVersion")
-        .and_then(serde_json::Value::as_str)
-        == Some(crate::state::DURABLE_OPERATION_SCHEMA_VERSION)
-        && value.get("operationId").and_then(serde_json::Value::as_str)
-            == Some(operation_id.as_str())
-        && value.get("kind").and_then(serde_json::Value::as_str) == Some("exec")
-        && value.get("containerId").and_then(serde_json::Value::as_str)
-            == Some(target.container.id.as_str())
-        && value.get("generation") == Some(&expected_generation)
-        && value.get("processId").and_then(serde_json::Value::as_str)
-            == Some(target.process_id.as_str())
-        && value
-            .get("requestDigest")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|digest| !digest.is_empty());
-    if !identity_matches {
-        return Err(format!(
-            "durable Exec journal {} did not match the exact operation and process",
-            path.display()
-        ));
-    }
-    let outcome = value
-        .get("outcome")
-        .ok_or_else(|| format!("durable Exec journal {} has no outcome", path.display()))?;
-    match outcome.get("status").and_then(serde_json::Value::as_str) {
-        Some("prepared") => Ok(ExecJournalStatus::Prepared),
-        Some("succeeded-process") => {
-            let response: ProcessRecord =
-                serde_json::from_value(outcome.get("response").cloned().ok_or_else(|| {
-                    format!(
-                        "durable Exec journal {} has no process response",
-                        path.display()
-                    )
-                })?)
-                .map_err(|error| {
-                    format!(
-                        "failed to decode durable Exec response {}: {error}",
-                        path.display()
-                    )
-                })?;
-            if response.target != *target {
-                return Err(format!(
-                    "durable Exec response {} changed its process target",
-                    path.display()
-                ));
-            }
-            Ok(ExecJournalStatus::Succeeded(response))
-        }
-        status => Err(format!(
-            "durable Exec journal {} had unexpected status {status:?}",
-            path.display()
-        )),
-    }
+    crate::operation_journal_evidence::process_operation_journal_status(
+        state_root,
+        operation_id,
+        "exec",
+        target,
+    )
+    .await
 }
 
 pub(in crate::oci_smoke::utility_vm::reopen_replacement) async fn durable_exec_process(
     state_root: &Path,
     target: &ProcessTarget,
 ) -> std::result::Result<ProcessRecord, String> {
-    let path = state_root
-        .join("containers")
-        .join(target.container.id.as_str())
-        .join("processes")
-        .join(format!("{}.json", target.process_id.as_str()));
-    let contents = tokio::fs::read(&path).await.map_err(|error| {
-        format!(
-            "failed to read durable Exec process {}: {error}",
-            path.display()
-        )
-    })?;
-    let value: serde_json::Value = serde_json::from_slice(&contents).map_err(|error| {
-        format!(
-            "failed to decode durable Exec process {}: {error}",
-            path.display()
-        )
-    })?;
-    if value
-        .get("schemaVersion")
-        .and_then(serde_json::Value::as_str)
-        != Some("a3s.oci.process-record.v1")
-        || value.get("activeOperation").is_some()
-        || value.get("exitStatus").is_some()
-    {
-        return Err(format!(
-            "durable Exec process {} retained invalid active or terminal state",
-            path.display()
-        ));
-    }
-    let record: ProcessRecord = serde_json::from_value(
-        value
-            .get("record")
-            .cloned()
-            .ok_or_else(|| format!("durable Exec process {} has no record", path.display()))?,
-    )
-    .map_err(|error| {
-        format!(
-            "failed to decode durable Exec record {}: {error}",
-            path.display()
-        )
-    })?;
-    if record.target != *target {
-        return Err(format!(
-            "durable Exec process {} changed its exact target",
-            path.display()
-        ));
-    }
-    Ok(record)
+    crate::operation_journal_evidence::durable_process(state_root, target).await
 }
 
 pub(in crate::oci_smoke::utility_vm::reopen_replacement) fn identity_or_expected<T: Clone>(

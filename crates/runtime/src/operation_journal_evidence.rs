@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use a3s_oci_sdk::{ContainerRecord, ContainerTarget, ExitStatus, OperationId};
+use a3s_oci_sdk::{
+    ContainerRecord, ContainerTarget, ExitStatus, OperationId, ProcessRecord, ProcessTarget,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ContainerOperationJournalStatus {
@@ -12,6 +14,12 @@ pub(crate) enum ContainerOperationJournalStatus {
 pub(crate) enum EmptyOperationJournalStatus {
     Prepared,
     SucceededEmpty,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProcessOperationJournalStatus {
+    Prepared,
+    Succeeded(ProcessRecord),
 }
 
 pub(crate) async fn init_exit_cache(
@@ -200,4 +208,134 @@ pub(crate) async fn container_operation_journal_status(
             path.display()
         )),
     }
+}
+
+pub(crate) async fn process_operation_journal_status(
+    state_root: &Path,
+    operation_id: &OperationId,
+    kind: &str,
+    target: &ProcessTarget,
+) -> Result<ProcessOperationJournalStatus, String> {
+    let path = state_root
+        .join("operations")
+        .join(format!("{}.json", operation_id.as_str()));
+    let contents = tokio::fs::read(&path).await.map_err(|error| {
+        format!(
+            "failed to read durable {kind} journal {}: {error}",
+            path.display()
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_slice(&contents).map_err(|error| {
+        format!(
+            "failed to decode durable {kind} journal {}: {error}",
+            path.display()
+        )
+    })?;
+    let expected_generation = serde_json::to_value(target.container.generation)
+        .map_err(|error| format!("failed to encode expected {kind} generation: {error}"))?;
+    let identity_matches = value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_str)
+        == Some(crate::state::DURABLE_OPERATION_SCHEMA_VERSION)
+        && value.get("operationId").and_then(serde_json::Value::as_str)
+            == Some(operation_id.as_str())
+        && value.get("kind").and_then(serde_json::Value::as_str) == Some(kind)
+        && value.get("containerId").and_then(serde_json::Value::as_str)
+            == Some(target.container.id.as_str())
+        && value.get("generation") == Some(&expected_generation)
+        && value.get("processId").and_then(serde_json::Value::as_str)
+            == Some(target.process_id.as_str())
+        && value
+            .get("requestDigest")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|digest| !digest.is_empty());
+    if !identity_matches {
+        return Err(format!(
+            "durable {kind} journal {} did not match the exact operation and process",
+            path.display()
+        ));
+    }
+    let outcome = value
+        .get("outcome")
+        .ok_or_else(|| format!("durable {kind} journal {} has no outcome", path.display()))?;
+    match outcome.get("status").and_then(serde_json::Value::as_str) {
+        Some("prepared") => Ok(ProcessOperationJournalStatus::Prepared),
+        Some("succeeded-process") => {
+            let response: ProcessRecord =
+                serde_json::from_value(outcome.get("response").cloned().ok_or_else(|| {
+                    format!(
+                        "durable {kind} journal {} has no process response",
+                        path.display()
+                    )
+                })?)
+                .map_err(|error| {
+                    format!(
+                        "failed to decode durable {kind} response {}: {error}",
+                        path.display()
+                    )
+                })?;
+            if response.target != *target {
+                return Err(format!(
+                    "durable {kind} response {} changed its process target",
+                    path.display()
+                ));
+            }
+            Ok(ProcessOperationJournalStatus::Succeeded(response))
+        }
+        status => Err(format!(
+            "durable {kind} journal {} had unexpected status {status:?}",
+            path.display()
+        )),
+    }
+}
+
+pub(crate) async fn durable_process(
+    state_root: &Path,
+    target: &ProcessTarget,
+) -> Result<ProcessRecord, String> {
+    let path = state_root
+        .join("containers")
+        .join(target.container.id.as_str())
+        .join("processes")
+        .join(format!("{}.json", target.process_id.as_str()));
+    let contents = tokio::fs::read(&path)
+        .await
+        .map_err(|error| format!("failed to read durable process {}: {error}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_slice(&contents).map_err(|error| {
+        format!(
+            "failed to decode durable process {}: {error}",
+            path.display()
+        )
+    })?;
+    if value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_str)
+        != Some("a3s.oci.process-record.v1")
+        || value.get("activeOperation").is_some()
+        || value.get("exitStatus").is_some()
+    {
+        return Err(format!(
+            "durable process {} retained invalid active or terminal state",
+            path.display()
+        ));
+    }
+    let record: ProcessRecord = serde_json::from_value(
+        value
+            .get("record")
+            .cloned()
+            .ok_or_else(|| format!("durable process {} has no record", path.display()))?,
+    )
+    .map_err(|error| {
+        format!(
+            "failed to decode durable process {}: {error}",
+            path.display()
+        )
+    })?;
+    if record.target != *target {
+        return Err(format!(
+            "durable process {} changed its exact target",
+            path.display()
+        ));
+    }
+    Ok(record)
 }

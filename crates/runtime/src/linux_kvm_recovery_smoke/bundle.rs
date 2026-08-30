@@ -22,6 +22,33 @@ pub(crate) async fn stage(
     container_id: &ContainerId,
     operation_id: &OperationId,
 ) -> Result<StagedBundle, String> {
+    stage_inner(source, runtime_root, container_id, operation_id, None).await
+}
+
+pub(crate) async fn stage_with_config(
+    source: &Path,
+    runtime_root: &Path,
+    container_id: &ContainerId,
+    operation_id: &OperationId,
+    config_json: &str,
+) -> Result<StagedBundle, String> {
+    stage_inner(
+        source,
+        runtime_root,
+        container_id,
+        operation_id,
+        Some(config_json),
+    )
+    .await
+}
+
+async fn stage_inner(
+    source: &Path,
+    runtime_root: &Path,
+    container_id: &ContainerId,
+    operation_id: &OperationId,
+    config_json: Option<&str>,
+) -> Result<StagedBundle, String> {
     let source = canonical_plain_directory(source, "source OCI bundle").await?;
     let destination = runtime_bundle_handoff_directory(runtime_root, container_id, operation_id)
         .map_err(|error| format!("failed to resolve bundle handoff path: {error}"))?;
@@ -59,7 +86,7 @@ pub(crate) async fn stage(
         ));
     }
     protect_bundle_root(&destination)?;
-    write_handoff_annotation(&destination.join("config.json"))?;
+    write_handoff_config(&destination.join("config.json"), config_json)?;
     let bundle = OciBundle::load(&destination)
         .await
         .map_err(|error| format!("failed to load staged bundle handoff: {error}"))?;
@@ -131,9 +158,12 @@ fn protect_bundle_root(bundle: &Path) -> Result<(), String> {
     .map_err(|error| format!("failed to protect staged config.json: {error}"))
 }
 
-fn write_handoff_annotation(config: &Path) -> Result<(), String> {
-    let bytes = std::fs::read(config)
-        .map_err(|error| format!("failed to read {}: {error}", config.display()))?;
+fn write_handoff_config(config: &Path, config_json: Option<&str>) -> Result<(), String> {
+    let bytes = match config_json {
+        Some(config_json) => config_json.as_bytes().to_vec(),
+        None => std::fs::read(config)
+            .map_err(|error| format!("failed to read {}: {error}", config.display()))?,
+    };
     let mut value: Value = serde_json::from_slice(&bytes)
         .map_err(|error| format!("failed to decode staged config.json: {error}"))?;
     let annotations = value
