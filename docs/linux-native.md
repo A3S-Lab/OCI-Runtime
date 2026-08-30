@@ -533,6 +533,27 @@ changed requests and stale Host/Guest generations, force-deletes the paused
 workload, and restores every inventory. The aggregate schema is
 `a3s.oci.linux-kvm-pause-reopen-matrix.v1`.
 
+Resume retains the exact setup Create, Start, and Pause requests and the same
+nonce-bound readiness marker:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_RESUME_REOPEN_REPORT=/absolute/path/to/resume-reopen.json \
+  bash .github/scripts/linux-kvm-resume-reopen.sh
+```
+
+The first eight Host/Guest points retain paused Running state and a Prepared
+Resume journal. A fresh `HostRuntimeService` and VM owner recreate init, rebind
+its positive PID, wait for the replacement marker, replay the setup Pause, and
+dispatch the unchanged Resume once on API retry. At
+`guest-after-response-write`, durable state is already unpaused and the journal
+is Succeeded: recovery reconstructs Create, Start, and Pause, reapplies Resume,
+and returns recreated-running evidence before the Host replays without another
+API-driven dispatch. Every path preserves all freezer identities, rejects
+changed requests and stale Host/Guest generations, force-deletes the resumed
+workload, and restores every inventory. The aggregate schema is
+`a3s.oci.linux-kvm-resume-reopen-matrix.v1`.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -556,7 +577,7 @@ nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
 
 If KVM is unavailable, none of the lifecycle, recovery, operation-reopen, or soak
 scripts downloads or unpacks the Alpine fixture. Lifecycle, recovery, and
-Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause reopen
+Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume reopen
 emit zero-case `unavailable` reports; soak emits `completed_iterations: 0` and
 `fixture_downloaded: false`. CI uploads those reports, but they are not
 `available` hardware results. The driver remains `probe-only` until fresh
@@ -615,7 +636,13 @@ once; `guest-after-response-write` reapplied the committed Pause during
 recovery and replayed the Host response with zero additional API-driven
 dispatch. The retained aggregate has SHA-256
 `2b76d5fbd0620dee152d97572ab1bcbf0bed42e39a18a87d03415039405cc271`.
-AArch64 hardware evidence and the other 10 workload-operation matrices plus
+Clean revision `b4c3a85` then retained all 9/9 Resume owner replacements. Its
+first eight paths reconstructed the paused freezer history and dispatched the
+unchanged Resume once; `guest-after-response-write` reapplied the committed
+Resume during recovery and replayed the Host response with zero additional
+API-driven dispatch. The retained aggregate has SHA-256
+`5a1bc69dd639a09fd6bc04b9250dd90dfd48b5d64b1b85b7762f14fac4647b4a`.
+AArch64 hardware evidence and the other 9 workload-operation matrices plus
 Host shutdown remain open; the candidate therefore remains `probe-only`.
 
 ## Experimental CRIU checkpoint and restore gate

@@ -611,6 +611,12 @@ freezer response while rebinding Create, Start, Pause, and Resume to the new
 PID. Every path rejects changed and stale requests, force-deletes the resumed
 generation, and restores both owner inventories. All nine Apple Silicon stages
 passed in 18 fresh VMs on August 11, 2026.
+On August 30, 2026, clean revision `b4c3a85` also passed all nine stages on
+x86_64 Linux KVM. Its first eight paths reconstructed paused state before one
+unchanged Resume dispatch; `guest-after-response-write` reapplied the committed
+Resume during recovery and replayed the Host response with no additional
+API-driven dispatch. The retained aggregate has SHA-256
+`5a1bc69dd639a09fd6bc04b9250dd90dfd48b5d64b1b85b7762f14fac4647b4a`.
 
 Real Processes recovery uses
 `a3s.oci.oci-vm-operation-reopen-replacement.v11`. Setup commits Create,

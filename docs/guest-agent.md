@@ -771,6 +771,12 @@ Create, Start, Pause, and Resume to the replacement PID. Changed requests and
 stale generations fail at both boundaries. All nine stages passed in 18 fresh
 VMs on August 11, 2026 under
 `a3s.oci.oci-vm-operation-reopen-replacement.v10`.
+Clean revision `b4c3a85` also passed all nine stages on x86_64 Linux KVM on
+August 30, 2026. The first eight replacement owners reconstructed the setup
+Pause and dispatched the unchanged Resume once; the final stage reapplied the
+committed Resume during recovery and replayed the retained Host result with no
+additional API-driven dispatch. The aggregate SHA-256 is
+`5a1bc69dd639a09fd6bc04b9250dd90dfd48b5d64b1b85b7762f14fac4647b4a`.
 
 Processes crosses the same nine owner handoffs after a live terminal Exec has
 been committed. The replacement Guest receives the original Create, Start, and
