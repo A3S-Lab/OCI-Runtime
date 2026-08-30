@@ -841,6 +841,12 @@ read-only, the replacement Guest receives one new request at every stage with
 the same process target, cursor, byte limit, and timeout. Stale generations
 fail at both boundaries. All nine stages passed in 18 fresh VMs on August 11,
 2026 under `a3s.oci.oci-vm-operation-reopen-replacement.v14`.
+Clean revision `dd47146` also passed all nine stages on x86_64 Linux KVM on
+August 31, 2026. Every replacement Guest rebuilt the live non-terminal Exec,
+rebound its PID, and received exactly one fresh ReadOutput request. The final
+stage retained the first owner's delivered stdout and returned the same
+nonce-bound chunk from the replacement owner. The aggregate SHA-256 is
+`84c75b01feb23f3d29140e61e2a7e3e56843ebaeadbe92a54c62926357b08d08`.
 
 WriteStdin crosses the same nine handoffs with a pipe-backed Exec waiting for
 one nonce-bound line. The first eight paths receive the write once when the

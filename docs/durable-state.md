@@ -685,6 +685,14 @@ requests and rebinds the response PIDs. ReadOutput itself is read-only and is
 therefore dispatched once to every fresh owner with the same cursor, byte
 limit, timeout, target, and generation. The replacement chunk must be the
 nonce-bound stdout produced by the rebuilt Exec.
+On August 31, 2026, clean revision `dd47146` passed all nine stages on x86_64
+Linux KVM. Every replacement owner rebuilt the live non-terminal Exec and
+received exactly one fresh ReadOutput request. At
+`guest-after-response-write`, the first owner delivered the verified stdout
+chunk before the replacement returned the same nonce-bound chunk. All paths
+fenced stale Host and Guest generations and restored every transient
+inventory. The retained aggregate has SHA-256
+`84c75b01feb23f3d29140e61e2a7e3e56843ebaeadbe92a54c62926357b08d08`.
 
 Real WriteStdin recovery uses
 `a3s.oci.oci-vm-operation-reopen-replacement.v15`. The first eight fault

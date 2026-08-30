@@ -612,6 +612,25 @@ counters, and required event metrics. Every path rejects stale Host and Guest
 generations, force-deletes the workload, and restores every inventory. The
 aggregate schema is `a3s.oci.linux-kvm-stats-reopen-matrix.v1`.
 
+ReadOutput retains the exact setup Create, Start, and committed non-terminal
+capture Exec requests plus both nonce-bound readiness markers:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_READ_OUTPUT_REOPEN_REPORT=/absolute/path/to/read-output-reopen.json \
+  bash .github/scripts/linux-kvm-read-output-reopen.sh
+```
+
+A fresh `HostRuntimeService` and VM owner recreate init and Exec, rebind both
+completed setup responses, and dispatch one fresh read-only ReadOutput request
+at every Host/Guest interruption point. At `guest-after-response-write`, the
+first owner delivers the exact nonce-bound stdout before disconnect; the
+replacement must return the same chunk from its rebuilt Exec. Every path
+preserves the complete process target, cursor, byte limit, timeout, and
+generation; rejects stale Host and Guest generations; force-deletes the
+workload; and restores every inventory. The aggregate schema is
+`a3s.oci.linux-kvm-read-output-reopen-matrix.v1`.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -720,7 +739,13 @@ replacement rebuilt the updated running init and dispatched one fresh query;
 the replacement snapshot was newer and distinct. Both snapshots preserved the
 exact generation and 512 MiB limit. The retained aggregate has SHA-256
 `ad2a1ec2eb72c106c1bf312253d06fcf187590b357661bed211a83ff5e5cf397`.
-AArch64 hardware evidence and the other 6 workload-operation matrices plus
+Clean revision `dd47146` then retained all 9/9 ReadOutput owner replacements.
+Every replacement rebuilt the live non-terminal Exec with rebound PIDs and
+received one fresh query with the exact request identity. The final stage
+retained the first owner's delivered stdout and returned the same nonce-bound
+chunk from the replacement. The retained aggregate has SHA-256
+`84c75b01feb23f3d29140e61e2a7e3e56843ebaeadbe92a54c62926357b08d08`.
+AArch64 hardware evidence and the other 5 workload-operation matrices plus
 Host shutdown remain open; the candidate therefore remains `probe-only`.
 
 ## Experimental CRIU checkpoint and restore gate
