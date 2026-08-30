@@ -11,11 +11,7 @@ use super::super::{append_failure, QualificationHvfDriver, FAULT_OPERATION};
 use crate::transport_cleanup_report::is_retryable_disconnect_operation;
 use crate::OciVmOperationReopenReplacementReport;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SignalProcessJournalStatus {
-    Prepared,
-    SucceededEmpty,
-}
+pub(super) use crate::operation_journal_evidence::EmptyOperationJournalStatus as SignalProcessJournalStatus;
 
 pub(super) fn waitable_exec_process(
     nonce: &str,
@@ -93,121 +89,20 @@ pub(super) async fn signal_process_journal_status(
     operation_id: &OperationId,
     target: &ProcessTarget,
 ) -> std::result::Result<SignalProcessJournalStatus, String> {
-    let path = state_root
-        .join("operations")
-        .join(format!("{}.json", operation_id.as_str()));
-    let contents = tokio::fs::read(&path).await.map_err(|error| {
-        format!(
-            "failed to read durable WaitProcess setup signal journal {}: {error}",
-            path.display()
-        )
-    })?;
-    let value: serde_json::Value = serde_json::from_slice(&contents).map_err(|error| {
-        format!(
-            "failed to decode durable WaitProcess setup signal journal {}: {error}",
-            path.display()
-        )
-    })?;
-    let expected_generation =
-        serde_json::to_value(target.container.generation).map_err(|error| {
-            format!("failed to encode expected WaitProcess setup generation: {error}")
-        })?;
-    let identity_matches = value
-        .get("schemaVersion")
-        .and_then(serde_json::Value::as_str)
-        == Some(crate::state::DURABLE_OPERATION_SCHEMA_VERSION)
-        && value.get("operationId").and_then(serde_json::Value::as_str)
-            == Some(operation_id.as_str())
-        && value.get("kind").and_then(serde_json::Value::as_str) == Some("signal-process")
-        && value.get("containerId").and_then(serde_json::Value::as_str)
-            == Some(target.container.id.as_str())
-        && value.get("generation") == Some(&expected_generation)
-        && value.get("processId").and_then(serde_json::Value::as_str)
-            == Some(target.process_id.as_str())
-        && value
-            .get("requestDigest")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|digest| !digest.is_empty());
-    if !identity_matches {
-        return Err(format!(
-            "durable WaitProcess setup signal journal {} changed identity",
-            path.display()
-        ));
-    }
-    match value
-        .pointer("/outcome/status")
-        .and_then(serde_json::Value::as_str)
-    {
-        Some("prepared") => Ok(SignalProcessJournalStatus::Prepared),
-        Some("succeeded-empty") => Ok(SignalProcessJournalStatus::SucceededEmpty),
-        status => Err(format!(
-            "durable WaitProcess setup signal journal {} had unexpected status {status:?}",
-            path.display()
-        )),
-    }
+    crate::operation_journal_evidence::process_empty_operation_journal_status(
+        state_root,
+        operation_id,
+        "signal-process",
+        target,
+    )
+    .await
 }
 
 pub(super) async fn process_exit_cache(
     state_root: &Path,
     target: &ProcessTarget,
 ) -> std::result::Result<(ProcessRecord, Option<ExitStatus>), String> {
-    let path = state_root
-        .join("containers")
-        .join(target.container.id.as_str())
-        .join("processes")
-        .join(format!("{}.json", target.process_id.as_str()));
-    let contents = tokio::fs::read(&path).await.map_err(|error| {
-        format!(
-            "failed to read durable WaitProcess record {}: {error}",
-            path.display()
-        )
-    })?;
-    let value: serde_json::Value = serde_json::from_slice(&contents).map_err(|error| {
-        format!(
-            "failed to decode durable WaitProcess record {}: {error}",
-            path.display()
-        )
-    })?;
-    if value
-        .get("schemaVersion")
-        .and_then(serde_json::Value::as_str)
-        != Some("a3s.oci.process-record.v1")
-        || value.get("activeOperation").is_some()
-    {
-        return Err(format!(
-            "durable WaitProcess record {} retained invalid schema or active operation",
-            path.display()
-        ));
-    }
-    let record: ProcessRecord =
-        serde_json::from_value(value.get("record").cloned().ok_or_else(|| {
-            format!(
-                "durable WaitProcess record {} has no process",
-                path.display()
-            )
-        })?)
-        .map_err(|error| {
-            format!(
-                "failed to decode durable WaitProcess process {}: {error}",
-                path.display()
-            )
-        })?;
-    if record.target != *target || record.pid.is_none() || record.pid == Some(0) {
-        return Err(format!(
-            "durable WaitProcess record {} changed its target or positive PID",
-            path.display()
-        ));
-    }
-    let exit_status = match value.get("exitStatus") {
-        None | Some(serde_json::Value::Null) => None,
-        Some(status) => Some(serde_json::from_value(status.clone()).map_err(|error| {
-            format!(
-                "failed to decode durable WaitProcess exit cache {}: {error}",
-                path.display()
-            )
-        })?),
-    };
-    Ok((record, exit_status))
+    crate::operation_journal_evidence::process_exit_cache(state_root, target).await
 }
 
 pub(super) fn identity_or_expected<T: Clone>(

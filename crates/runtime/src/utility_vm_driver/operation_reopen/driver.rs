@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use a3s_oci_agent_protocol::{
-    AgentExecRequest, AgentProcess, AgentSignalProcessRequest, AgentWaitRequest, GuestAgentService,
+    AgentExecRequest, AgentProcess, AgentSignalProcessRequest, AgentWaitProcessRequest,
+    AgentWaitRequest, GuestAgentService,
 };
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, HostPlatform, IsolationClass,
@@ -12,7 +13,7 @@ use a3s_oci_core::{
 use a3s_oci_sdk::{
     async_trait, AttachmentCapabilities, ContainerRecord, ContainerTarget, CreateRequest,
     DeleteMode, Error, ErrorCode, ExecRequest, ExitStatus, KillRequest, OciBundle, OperationId,
-    Result, RuntimeOperation, Signal, SignalProcessRequest, StartRequest,
+    ProcessTarget, Result, RuntimeOperation, Signal, SignalProcessRequest, StartRequest,
     RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
 };
 use tokio::sync::Mutex;
@@ -27,15 +28,15 @@ use crate::agent_session::{
 };
 use crate::driver::{
     DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
-    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverWaitRequest, OciHookPhase,
-    RuntimeDriver,
+    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverWaitProcessRequest,
+    DriverWaitRequest, OciHookPhase, RuntimeDriver,
 };
 use crate::{AgentVmSmokeReport, DriverRecovery};
 
 mod dispatch;
 mod recovery;
 
-const QUALIFICATION_OPERATIONS: [RuntimeOperation; 8] = [
+const QUALIFICATION_OPERATIONS: [RuntimeOperation; 9] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -44,6 +45,7 @@ const QUALIFICATION_OPERATIONS: [RuntimeOperation; 8] = [
     RuntimeOperation::Wait,
     RuntimeOperation::Exec,
     RuntimeOperation::SignalProcess,
+    RuntimeOperation::WaitProcess,
 ];
 const QUALIFICATION_SCOPE: &str = "linux-kvm-operation-stage-reopen-only-v1";
 
@@ -52,6 +54,12 @@ struct ActiveSession {
     owner: Arc<UtilityVmSession>,
     client: AgentDriverClient,
     target: ContainerTarget,
+}
+
+pub(super) struct WaitProcessRecovery {
+    pub(super) signal_process: SignalProcessRequest,
+    pub(super) signal_ready_marker: (PathBuf, Vec<u8>),
+    pub(super) exec_is_live: bool,
 }
 
 pub(super) struct QualificationKvmOperationDriver {
@@ -68,6 +76,7 @@ pub(super) struct QualificationKvmOperationDriver {
     retained_exec: Option<ExecRequest>,
     retained_signal_process: Option<SignalProcessRequest>,
     retained_signal_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    recovery_exec_is_live: bool,
     recovery_marker: Option<PathBuf>,
     qualification: Option<UtilityVmSessionQualification>,
     session: Mutex<Option<ActiveSession>>,
@@ -77,12 +86,14 @@ pub(super) struct QualificationKvmOperationDriver {
     kill_identity: StdMutex<Option<(OperationId, ContainerTarget, Signal, bool)>>,
     delete_identity: StdMutex<Option<(OperationId, ContainerTarget, DeleteMode)>>,
     wait_identity: StdMutex<Option<(ContainerTarget, Option<u64>)>>,
+    wait_process_identity: StdMutex<Option<(ProcessTarget, Option<u64>)>>,
     exec_identity: StdMutex<Option<DriverExecRequest>>,
     signal_process_identity: StdMutex<Option<DriverSignalProcessRequest>>,
     start_calls: AtomicU32,
     kill_calls: AtomicU32,
     delete_calls: AtomicU32,
     wait_calls: AtomicU32,
+    wait_process_calls: AtomicU32,
     exec_calls: AtomicU32,
     signal_process_calls: AtomicU32,
     recovery_calls: AtomicU32,
@@ -119,6 +130,7 @@ impl QualificationKvmOperationDriver {
             retained_exec: None,
             retained_signal_process: None,
             retained_signal_ready_marker: None,
+            recovery_exec_is_live: true,
             recovery_marker: None,
             qualification,
             session: Mutex::new(None),
@@ -128,12 +140,14 @@ impl QualificationKvmOperationDriver {
             kill_identity: StdMutex::new(None),
             delete_identity: StdMutex::new(None),
             wait_identity: StdMutex::new(None),
+            wait_process_identity: StdMutex::new(None),
             exec_identity: StdMutex::new(None),
             signal_process_identity: StdMutex::new(None),
             start_calls: AtomicU32::new(0),
             kill_calls: AtomicU32::new(0),
             delete_calls: AtomicU32::new(0),
             wait_calls: AtomicU32::new(0),
+            wait_process_calls: AtomicU32::new(0),
             exec_calls: AtomicU32::new(0),
             signal_process_calls: AtomicU32::new(0),
             recovery_calls: AtomicU32::new(0),
@@ -240,6 +254,27 @@ impl QualificationKvmOperationDriver {
         );
         driver.retained_signal_process = retained_signal_process;
         driver.retained_signal_ready_marker = retained_signal_ready_marker;
+        driver
+    }
+
+    pub(super) fn with_wait_process_recovery(
+        prepared: &PreparedUtilityVmLayout,
+        console: PathBuf,
+        retained_create: CreateRequest,
+        retained_start: StartRequest,
+        retained_exec: ExecRequest,
+        recovery: WaitProcessRecovery,
+    ) -> Self {
+        let mut driver = Self::with_signal_process_recovery(
+            prepared,
+            console,
+            retained_create,
+            retained_start,
+            retained_exec,
+            Some(recovery.signal_process),
+            Some(recovery.signal_ready_marker),
+        );
+        driver.recovery_exec_is_live = recovery.exec_is_live;
         driver
     }
 
@@ -435,6 +470,20 @@ impl QualificationKvmOperationDriver {
         self.wait_calls.load(Ordering::SeqCst)
     }
 
+    pub(super) fn wait_process_identity(
+        &self,
+    ) -> std::result::Result<(ProcessTarget, Option<u64>), String> {
+        self.wait_process_identity
+            .lock()
+            .map_err(|_| "KVM WaitProcess identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification KVM owner recorded no WaitProcess dispatch".to_string())
+    }
+
+    pub(super) fn wait_process_calls(&self) -> u32 {
+        self.wait_process_calls.load(Ordering::SeqCst)
+    }
+
     pub(super) fn exec_identity(&self) -> std::result::Result<DriverExecRequest, String> {
         self.exec_identity
             .lock()
@@ -543,6 +592,18 @@ impl QualificationKvmOperationDriver {
             .signal_process(request)
             .await
     }
+
+    pub(super) async fn guest_wait_process(
+        &self,
+        request: AgentWaitProcessRequest,
+    ) -> Result<ExitStatus> {
+        self.live_session(&request.target.container)
+            .await?
+            .owner
+            .client()
+            .wait_process(request)
+            .await
+    }
 }
 
 #[async_trait]
@@ -640,6 +701,10 @@ impl RuntimeDriver for QualificationKvmOperationDriver {
 
     async fn signal_process(&self, request: DriverSignalProcessRequest) -> Result<()> {
         self.dispatch_signal_process(request).await
+    }
+
+    async fn wait_process(&self, request: DriverWaitProcessRequest) -> Result<ExitStatus> {
+        self.dispatch_wait_process(request).await
     }
 }
 

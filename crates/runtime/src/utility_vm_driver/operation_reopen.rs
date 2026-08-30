@@ -33,6 +33,7 @@ mod signal_process;
 mod start;
 mod state;
 mod wait;
+mod wait_process;
 mod workload_marker;
 
 pub use delete::{linux_kvm_delete_reopen_replacement, LinuxKvmDeleteReopenConfig};
@@ -45,6 +46,9 @@ pub use signal_process::{
 pub use start::{linux_kvm_start_reopen_replacement, LinuxKvmStartReopenConfig};
 pub use state::{linux_kvm_state_reopen_replacement, LinuxKvmStateReopenConfig};
 pub use wait::{linux_kvm_wait_reopen_replacement, LinuxKvmWaitReopenConfig};
+pub use wait_process::{
+    linux_kvm_wait_process_reopen_replacement, LinuxKvmWaitProcessReopenConfig,
+};
 
 const QUALIFICATION_TIMEOUT: Duration = Duration::from_secs(25);
 const QUALIFICATION_FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";

@@ -398,3 +398,66 @@ pub(crate) async fn durable_process(
     }
     Ok(record)
 }
+
+pub(crate) async fn process_exit_cache(
+    state_root: &Path,
+    target: &ProcessTarget,
+) -> Result<(ProcessRecord, Option<ExitStatus>), String> {
+    let path = state_root
+        .join("containers")
+        .join(target.container.id.as_str())
+        .join("processes")
+        .join(format!("{}.json", target.process_id.as_str()));
+    let contents = tokio::fs::read(&path).await.map_err(|error| {
+        format!(
+            "failed to read durable process exit cache {}: {error}",
+            path.display()
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_slice(&contents).map_err(|error| {
+        format!(
+            "failed to decode durable process exit cache {}: {error}",
+            path.display()
+        )
+    })?;
+    if value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_str)
+        != Some("a3s.oci.process-record.v1")
+        || value.get("activeOperation").is_some()
+    {
+        return Err(format!(
+            "durable process exit cache {} retained invalid schema or active operation",
+            path.display()
+        ));
+    }
+    let record: ProcessRecord =
+        serde_json::from_value(value.get("record").cloned().ok_or_else(|| {
+            format!(
+                "durable process exit cache {} has no process",
+                path.display()
+            )
+        })?)
+        .map_err(|error| {
+            format!(
+                "failed to decode durable process {}: {error}",
+                path.display()
+            )
+        })?;
+    if record.target != *target || !record.pid.is_some_and(|pid| pid > 0) {
+        return Err(format!(
+            "durable process exit cache {} changed its target or positive PID",
+            path.display()
+        ));
+    }
+    let exit_status = match value.get("exitStatus") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(status) => Some(serde_json::from_value(status.clone()).map_err(|error| {
+            format!(
+                "failed to decode durable process exit status {}: {error}",
+                path.display()
+            )
+        })?),
+    };
+    Ok((record, exit_status))
+}

@@ -5,7 +5,8 @@ use a3s_oci_sdk::{ErrorCode, ExitStatus, Result};
 use super::{qualification_error, QualificationKvmOperationDriver};
 use crate::driver::{
     DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
-    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverWaitRequest,
+    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverWaitProcessRequest,
+    DriverWaitRequest,
 };
 
 impl QualificationKvmOperationDriver {
@@ -201,6 +202,37 @@ impl QualificationKvmOperationDriver {
             .await?
             .client
             .signal_process(request)
+            .await
+    }
+
+    pub(super) async fn dispatch_wait_process(
+        &self,
+        request: DriverWaitProcessRequest,
+    ) -> Result<ExitStatus> {
+        let identity = (request.target.clone(), request.timeout_ms);
+        {
+            let mut retained = self.wait_process_identity.lock().map_err(|_| {
+                qualification_error(
+                    ErrorCode::Internal,
+                    "KVM WaitProcess identity lock was poisoned",
+                )
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &identity => {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        "qualification KVM owner received a changed WaitProcess identity",
+                    ));
+                }
+                Some(_) => {}
+                None => *retained = Some(identity),
+            }
+        }
+        self.wait_process_calls.fetch_add(1, Ordering::SeqCst);
+        self.live_session(&request.target.container)
+            .await?
+            .client
+            .wait_process(request)
             .await
     }
 }

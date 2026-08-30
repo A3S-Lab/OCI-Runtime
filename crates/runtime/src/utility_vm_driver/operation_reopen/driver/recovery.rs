@@ -132,14 +132,17 @@ impl QualificationKvmOperationDriver {
                     self.dispatch_signal_process(request).await?;
                     self.rehydrated_signal_process.store(true, Ordering::SeqCst);
                 }
-                return DriverRecovery::recreated_running_with_processes(
-                    running,
-                    vec![ProcessRecord {
-                        target,
-                        pid: Some(durable_pid),
-                        terminal: process.terminal(),
-                    }],
-                );
+                if self.recovery_exec_is_live {
+                    return DriverRecovery::recreated_running_with_processes(
+                        running,
+                        vec![ProcessRecord {
+                            target,
+                            pid: Some(durable_pid),
+                            terminal: process.terminal(),
+                        }],
+                    );
+                }
+                return DriverRecovery::recreated_running(running);
             }
             return DriverRecovery::recreated_running(running);
         }
