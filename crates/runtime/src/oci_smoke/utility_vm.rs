@@ -29,7 +29,7 @@ mod multi_container;
 mod reopen_replacement;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod soak;
-mod transport_fault_cleanup;
+pub(crate) mod transport_fault_cleanup;
 
 use lifecycle::{best_effort_delete, exercise};
 

@@ -336,6 +336,14 @@ pub use transport_cleanup_report::{
     is_supported_transport_fault_stage, is_supported_transport_stage,
     OciVmTransportFaultCleanupReport, OCI_VM_TRANSPORT_FAULT_CLEANUP_SCHEMA_VERSION,
 };
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[doc(hidden)]
+pub use utility_vm_driver::operation_reopen::{
+    linux_kvm_create_reopen_replacement, LinuxKvmCreateReopenConfig,
+};
 pub use utility_vm_soak_report::{
     MacosHvfSoakConfig, MacosHvfSoakReport, MACOS_HVF_SOAK_CONCURRENT_CONTAINERS,
     MACOS_HVF_SOAK_SCHEMA_VERSION, MAX_MACOS_HVF_SOAK_ITERATIONS,

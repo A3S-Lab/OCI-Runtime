@@ -53,7 +53,7 @@ enum OperationArg {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-enum FaultStageArg {
+pub(crate) enum FaultStageArg {
     #[value(name = "host-before-request-write")]
     BeforeRequestWrite,
     #[value(name = "host-after-request-write")]

@@ -305,6 +305,45 @@ fn macos_hvf_host_service_smoke_fails_closed_without_creating_evidence() {
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 #[test]
+fn linux_kvm_create_reopen_fails_closed_with_versioned_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "linux-kvm-create-reopen",
+            "--shim",
+            "missing-a3s-oci-krun-shim",
+            "--runtime-root",
+            "relative-runtime-root",
+            "--system-image-manifest",
+            "missing-system-image.json",
+            "--bundle",
+            "missing-bundle",
+            "--fault-at",
+            "guest-after-response-write",
+        ])
+        .output()
+        .expect("Linux KVM Create reopen command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("Create reopen output must be valid JSON");
+    assert_eq!(
+        report["schema_version"],
+        "a3s.oci.oci-vm-reopen-replacement.v2"
+    );
+    assert_eq!(report["platform"], "linux");
+    assert_eq!(report["requested_operation"], "create");
+    assert_eq!(report["requested_stage"], "guest-after-response-write");
+    assert_ne!(report["status"], "available");
+    assert!(report["reason"]
+        .as_str()
+        .is_some_and(|reason| !reason.is_empty()));
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[test]
 fn linux_kvm_recovery_host_service_requires_all_owner_paths_without_creating_root() {
     let root = format!(
         "/tmp/a3s-oci-cli-kvm-recovery-host-contract-{}",

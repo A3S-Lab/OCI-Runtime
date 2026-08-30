@@ -320,6 +320,29 @@ return to their baselines. The nested runtime schema is
 `a3s.oci.linux-kvm-recovery-smoke.v1`; the retained aggregate is
 `a3s.oci.linux-kvm-recovery-matrix.v2`.
 
+The Create operation-stage gate uses another qualification-only driver with
+the exact `linux-kvm-operation-stage-reopen-only-v1` scope:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_CREATE_REOPEN_REPORT=/absolute/path/to/create-reopen.json \
+  bash .github/scripts/linux-kvm-create-reopen.sh
+```
+
+Each of the four Host and five Guest request/response transitions interrupts
+one authenticated Create, closes its first KVM owner, and opens a separate
+`HostRuntimeService` plus a separate VM owner on the same durable root. The
+first eight transitions retain exact `creating` state and dispatch once after
+reopen. `guest-after-response-write` retains exact `created` state and
+rehydrates it in the replacement Guest before Host replay. Every case must
+reuse the original generation and operation ID, force-delete the replacement,
+and restore endpoint, process, bootstrap, bundle-handoff, runtime-share,
+recovery-report, and marker inventories. Guest-side faults additionally
+require nonce-bound console evidence for the exact operation and injected
+point. The aggregate schema is
+`a3s.oci.linux-kvm-create-reopen-matrix.v1`. This scope qualifies recovery
+behavior without making the probe-only KVM candidate registerable.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -341,14 +364,15 @@ evidence, not a claim that the Host directly observed a Guest cgroup. The
 nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
 `a3s.oci.linux-kvm-soak-matrix.v2`.
 
-If KVM is unavailable, none of the lifecycle, recovery, or soak scripts
-downloads or unpacks the Alpine fixture. Lifecycle and recovery emit zero-case
-`unavailable` reports; soak emits `completed_iterations: 0` and
-`fixture_downloaded: false`. CI uploads those reports, but they are not
-`available` hardware results. The driver remains `probe-only` until fresh
-x86_64 and AArch64 KVM hosts retain all three available reports, including the
-integrated Guest path-isolation evidence. Other real-entry Guest
-negative-isolation profiles remain separate promotion gates.
+If KVM is unavailable, none of the lifecycle, recovery, Create-reopen, or soak
+scripts downloads or unpacks the Alpine fixture. Lifecycle, recovery, and
+Create-reopen emit zero-case `unavailable` reports; soak emits
+`completed_iterations: 0` and `fixture_downloaded: false`. CI uploads those
+reports, but they are not `available` hardware results. The driver remains
+`probe-only` until fresh x86_64 and AArch64 KVM hosts retain every required
+available report, including the integrated Guest path-isolation and
+operation-stage evidence. Other real-entry Guest negative-isolation profiles
+remain separate promotion gates.
 
 ## Experimental CRIU checkpoint and restore gate
 

@@ -27,7 +27,7 @@ const FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";
 const MAX_GUEST_CONSOLE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug)]
-pub(super) struct HostTransportFault {
+pub(crate) struct HostTransportFault {
     operation: AgentOperation,
     stage: AgentTransportFaultStage,
     crossings: AtomicU32,
@@ -35,11 +35,11 @@ pub(super) struct HostTransportFault {
 }
 
 impl HostTransportFault {
-    pub(super) const fn new(stage: AgentTransportFaultStage) -> Self {
+    pub(crate) const fn new(stage: AgentTransportFaultStage) -> Self {
         Self::for_operation(AgentOperation::Create, stage)
     }
 
-    pub(super) const fn for_operation(
+    pub(crate) const fn for_operation(
         operation: AgentOperation,
         stage: AgentTransportFaultStage,
     ) -> Self {
@@ -51,18 +51,18 @@ impl HostTransportFault {
         }
     }
 
-    pub(super) fn crossing_count(&self) -> u32 {
+    pub(crate) fn crossing_count(&self) -> u32 {
         self.crossings.load(Ordering::SeqCst)
     }
 
-    pub(super) fn protocol_version(&self) -> Option<u16> {
+    pub(crate) fn protocol_version(&self) -> Option<u16> {
         match self.protocol_version.load(Ordering::SeqCst) {
             0 => None,
             version => Some(version),
         }
     }
 
-    pub(super) fn injected_point(&self) -> Option<String> {
+    pub(crate) fn injected_point(&self) -> Option<String> {
         self.protocol_version().map(|protocol_version| {
             match self.stage {
                 AgentTransportFaultStage::Operation(stage) => AgentTransportFaultPoint::Operation {
@@ -506,7 +506,7 @@ fn record_guest_disconnect(
     }
 }
 
-pub(super) async fn read_guest_qualification_evidence(
+pub(crate) async fn read_guest_qualification_evidence(
     console: &Path,
     request: &AgentTransportQualificationRequest,
 ) -> Result<AgentTransportQualificationEvidence, String> {

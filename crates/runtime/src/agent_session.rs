@@ -110,6 +110,22 @@ pub(crate) struct VerifiedLinuxUtilityVmConnectOptions<'a> {
     pub(crate) vm_attachment_manifest_sha256: Option<&'a str>,
 }
 
+/// One explicitly armed transport interruption for a real Linux KVM session.
+///
+/// Production sessions never carry this value. Qualification owners retain
+/// the concrete Host injector or exact Guest request so the normal verified
+/// system-image, runtime-share, and attachment path remains the only launch
+/// implementation exercised by operation-stage recovery tests.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[derive(Clone)]
+pub(crate) enum UtilityVmSessionQualification {
+    Host(Arc<dyn AgentTransportFaultInjector>),
+    Guest(AgentTransportQualificationRequest),
+}
+
 // Connection failures intentionally return the complete retained qualification
 // report. Keeping that structured evidence by value is part of this internal
 // API; boxing it would make every report consumer heap-aware.
@@ -224,6 +240,30 @@ impl UtilityVmSession {
         shim: &Path,
         options: VerifiedLinuxUtilityVmConnectOptions<'_>,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
+        Self::connect_verified_linux(shim, options, None).await
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    pub(crate) async fn connect_with_verified_runtime_share_and_qualification(
+        shim: &Path,
+        options: VerifiedLinuxUtilityVmConnectOptions<'_>,
+        qualification: &UtilityVmSessionQualification,
+    ) -> std::result::Result<Self, AgentVmSmokeReport> {
+        Self::connect_verified_linux(shim, options, Some(qualification)).await
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    async fn connect_verified_linux(
+        shim: &Path,
+        options: VerifiedLinuxUtilityVmConnectOptions<'_>,
+        qualification: Option<&UtilityVmSessionQualification>,
+    ) -> std::result::Result<Self, AgentVmSmokeReport> {
         let VerifiedLinuxUtilityVmConnectOptions {
             rootfs,
             system_image_manifest,
@@ -233,6 +273,16 @@ impl UtilityVmSession {
             recovery_report,
             vm_attachment_manifest_sha256,
         } = options;
+        let (faults, guest_qualification): (
+            Arc<dyn AgentTransportFaultInjector>,
+            Option<&AgentTransportQualificationRequest>,
+        ) = match qualification {
+            Some(UtilityVmSessionQualification::Host(faults)) => (Arc::clone(faults), None),
+            Some(UtilityVmSessionQualification::Guest(request)) => {
+                (Arc::new(NoAgentTransportFaultInjector), Some(request))
+            }
+            None => (Arc::new(NoAgentTransportFaultInjector), None),
+        };
         let owner = AgentVmSession::connect_inner(
             shim,
             rootfs,
@@ -243,8 +293,8 @@ impl UtilityVmSession {
                 runtime_share: Some(runtime_share),
                 recovery_report,
                 vm_attachment_manifest_sha256,
-                faults: Arc::new(NoAgentTransportFaultInjector),
-                guest_qualification: None,
+                faults,
+                guest_qualification,
                 qualify_kvm_post_probe_failure: false,
                 qualify_kvm_compatibility_drift: None,
             },

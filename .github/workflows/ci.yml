@@ -185,6 +185,13 @@ jobs:
           A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
         run: bash .github/scripts/linux-kvm-recovery.sh
       - if: runner.os == 'Linux'
+        name: Linux KVM Create operation-stage owner replacement
+        timeout-minutes: 15
+        env:
+          A3S_OCI_LINUX_KVM_CREATE_REOPEN_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-create-reopen.json
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
+        run: bash .github/scripts/linux-kvm-create-reopen.sh
+      - if: runner.os == 'Linux'
         name: Linux KVM bounded fresh-generation soak
         timeout-minutes: 45
         env:
@@ -967,6 +974,7 @@ jobs:
             ${{ runner.temp }}/a3s-oci-linux-kvm-compatibility-drift.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-lifecycle.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-recovery.json
+            ${{ runner.temp }}/a3s-oci-linux-kvm-create-reopen.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-soak.json
           if-no-files-found: warn
           retention-days: 14
@@ -1122,6 +1130,12 @@ jobs:
           A3S_OCI_LINUX_KVM_RECOVERY_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-recovery.json
           A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
         run: bash .github/scripts/linux-kvm-recovery.sh
+      - name: Linux KVM Create operation-stage owner replacement
+        timeout-minutes: 15
+        env:
+          A3S_OCI_LINUX_KVM_CREATE_REOPEN_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-create-reopen.json
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
+        run: bash .github/scripts/linux-kvm-create-reopen.sh
       - name: Linux KVM bounded fresh-generation soak
         timeout-minutes: 45
         env:
@@ -1157,6 +1171,7 @@ jobs:
             ${{ runner.temp }}/a3s-oci-linux-kvm-compatibility-drift.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-lifecycle.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-recovery.json
+            ${{ runner.temp }}/a3s-oci-linux-kvm-create-reopen.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-soak.json
           if-no-files-found: warn
           retention-days: 14

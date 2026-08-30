@@ -315,6 +315,35 @@ fn dispatch(
             target_os = "linux",
             any(target_arch = "x86_64", target_arch = "aarch64")
         ))]
+        Command::LinuxKvmCreateReopen {
+            shim,
+            runtime_root,
+            system_image_manifest,
+            bundle,
+            fault_at,
+        } => command_future!({
+            let report = a3s_oci_runtime::linux_kvm_create_reopen_replacement(
+                a3s_oci_runtime::LinuxKvmCreateReopenConfig {
+                    shim,
+                    runtime_root,
+                    system_image_manifest,
+                    bundle,
+                    stage: fault_at.into(),
+                },
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }),
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
         Command::LinuxKvmSoak {
             shim,
             system_image_manifest,

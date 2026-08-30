@@ -10,13 +10,13 @@ use a3s_oci_sdk::{
 use serde_json::Value;
 use tokio::process::Command;
 
-pub(super) struct StagedBundle {
-    pub(super) bundle: OciBundle,
-    pub(super) attachments: CreateAttachments,
-    pub(super) directory: PathBuf,
+pub(crate) struct StagedBundle {
+    pub(crate) bundle: OciBundle,
+    pub(crate) attachments: CreateAttachments,
+    pub(crate) directory: PathBuf,
 }
 
-pub(super) async fn stage(
+pub(crate) async fn stage(
     source: &Path,
     runtime_root: &Path,
     container_id: &ContainerId,
@@ -73,14 +73,14 @@ pub(super) async fn stage(
     })
 }
 
-pub(super) struct RuntimeInventory {
-    pub(super) bundle_handoffs_clean: bool,
-    pub(super) runtime_shares_clean: bool,
-    pub(super) recovery_reports_clean: bool,
-    pub(super) console_files: u32,
+pub(crate) struct RuntimeInventory {
+    pub(crate) bundle_handoffs_clean: bool,
+    pub(crate) runtime_shares_clean: bool,
+    pub(crate) recovery_reports_clean: bool,
+    pub(crate) console_files: u32,
 }
 
-pub(super) fn runtime_inventory(runtime_root: &Path) -> Result<RuntimeInventory, String> {
+pub(crate) fn runtime_inventory(runtime_root: &Path) -> Result<RuntimeInventory, String> {
     Ok(RuntimeInventory {
         bundle_handoffs_clean: directory_is_empty(&runtime_root.join("bundle-handoffs"))?,
         runtime_shares_clean: directory_is_empty(&runtime_root.join("shares"))?,

@@ -8,12 +8,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::report::AgentVmSmokeReport;
 
-/// Schema emitted by the real HVF host-service reopen and VM replacement diagnostic.
+/// Schema emitted by a real utility-VM host-service reopen and VM replacement diagnostic.
 pub const OCI_VM_REOPEN_REPLACEMENT_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-reopen-replacement.v2";
 
 const QUALIFICATION_FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";
 
-/// Retained evidence for one durable create resumed by a replacement HVF owner.
+/// Retained evidence for one durable create resumed by a replacement utility-VM owner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OciVmReopenReplacementReport {
     /// Version of this JSON-compatible schema.
@@ -227,7 +227,7 @@ impl OciVmReopenReplacementReport {
             !self.guest_evidence_verified && self.guest_evidence_operation_id.is_none()
         };
 
-        matches!(self.platform, HostPlatform::Macos)
+        matches!(self.platform, HostPlatform::Macos | HostPlatform::Linux)
             && self.first_vm.platform == self.platform
             && self.replacement_vm.platform == self.platform
             && self.bundle_loaded
@@ -433,6 +433,48 @@ mod tests {
         assert!(!report.is_success());
     }
 
+    #[test]
+    fn report_accepts_complete_linux_kvm_owner_replacement_evidence() {
+        let mut report = OciVmReopenReplacementReport::initial(
+            HostPlatform::Linux,
+            AgentTransportOperationStage::HostBeforeRequestWrite,
+        );
+        report.status = CapabilityStatus::Available;
+        report.bundle_loaded = true;
+        report.qualification_operation_id =
+            Some(OperationId::new("kvm-reopen-create").expect("operation ID"));
+        report.container_id = Some(ContainerId::new("kvm-reopen-container").expect("container ID"));
+        report.negotiated_protocol = Some(AGENT_PROTOCOL_VERSION_MAX);
+        report.injected_point = Some(format!(
+            "agent-v{AGENT_PROTOCOL_VERSION_MAX}.create-host-before-request-write"
+        ));
+        report.fault_crossings = 1;
+        report.first_create_error_code = Some(ErrorCode::Unavailable);
+        report.first_create_error_operation =
+            Some("oci-vm-transport-qualification-fault".to_string());
+        report.first_create_error_retryable = true;
+        report.durable_creating_retained = true;
+        report.generation_before_reopen = Some(Generation(1));
+        report.host_service_reopened = true;
+        report.replacement_recovery_calls = 1;
+        report.create_completed_after_reopen = true;
+        report.generation_after_reopen = Some(Generation(1));
+        report.replacement_created_pid = Some(42);
+        report.same_generation_reused = true;
+        report.same_operation_id_reused = true;
+        report.force_delete_completed = true;
+        report.durable_records_empty = true;
+        report.marker_absent_after_cleanup = true;
+        report.first_guest_runtime_clean = true;
+        report.replacement_guest_runtime_clean = true;
+        report.owners_distinct = true;
+        report.state_root_removed = true;
+        report.first_vm = complete_linux_bridge("first", 11, 12);
+        report.replacement_vm = complete_linux_bridge("replacement", 21, 22);
+
+        assert!(report.is_success(), "{report:?}");
+    }
+
     fn complete_macos_bridge(name: &str, shim: u32, bridge: u32) -> AgentVmSmokeReport {
         let mut report = AgentVmSmokeReport::initial(HostPlatform::Macos);
         report.status = CapabilityStatus::Available;
@@ -460,6 +502,27 @@ mod tests {
             descriptor_inventory_restored: true,
             reason: None,
         });
+        report
+    }
+
+    fn complete_linux_bridge(name: &str, shim: u32, bridge: u32) -> AgentVmSmokeReport {
+        let mut report = AgentVmSmokeReport::initial(HostPlatform::Linux);
+        report.status = CapabilityStatus::Available;
+        report.endpoint_bound = true;
+        report.endpoint_name = Some(format!("a3s-oci-agent-{name}"));
+        report.shim_spawned = true;
+        report.shim_process_id = Some(shim);
+        report.bridge_process_id = Some(bridge);
+        report.shim_client_verified = true;
+        report.protocol_negotiated = true;
+        report.selected_protocol = Some(AGENT_PROTOCOL_VERSION_MAX);
+        report.agent_version = Some(env!("CARGO_PKG_VERSION").into());
+        report.guest_architecture = Some(std::env::consts::ARCH.into());
+        report.advertised_operations = AgentOperation::ALL.to_vec();
+        report.shim_report_verified = true;
+        report.shim_exit_code = Some(0);
+        report.console_created = true;
+        report.shim_report = Some(json!({}));
         report
     }
 }

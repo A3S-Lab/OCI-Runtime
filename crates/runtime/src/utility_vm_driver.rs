@@ -32,6 +32,11 @@ mod handoff;
 ))]
 pub(crate) mod kvm_network;
 pub(crate) mod layout;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+pub(crate) mod operation_reopen;
 pub(crate) mod recovery;
 mod session_lifecycle;
 mod session_marker;

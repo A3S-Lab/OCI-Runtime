@@ -784,6 +784,15 @@ A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-recovery.sh
 ```
 
+The Create operation-stage entry uses a separate qualification scope and
+replaces the real KVM VM/session owner at all four Host and five Guest
+request/response transitions:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  bash .github/scripts/linux-kvm-create-reopen.sh
+```
+
 The bounded soak uses its own qualification scope and one durable Host Service:
 
 ```bash
@@ -816,6 +825,15 @@ and Guest marker to return to baseline after each wave. Available lifecycle,
 recovery, and soak reports, including the integrated Guest-isolation entry, are
 still required from fresh x86_64 and AArch64 KVM hosts. Other real-entry
 negative-isolation profiles remain separate promotion evidence.
+
+The `a3s.oci.linux-kvm-create-reopen-matrix.v1` entry also skips Alpine when
+KVM is unavailable. On KVM it preserves the exact durable generation and
+Create operation identity across nine real Host/Guest interruption points,
+including rehydration of the committed `guest-after-response-write` outcome in
+a distinct replacement Guest. All cases force-delete and restore bootstrap,
+endpoint, process, bundle-handoff, runtime-share, recovery-report, and marker
+inventories. Equivalent coverage for the other 19 workload operations and
+Host shutdown remains an explicit readiness gate.
 
 | Owner | Keeps | Must not absorb |
 | --- | --- | --- |
