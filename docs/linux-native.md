@@ -467,6 +467,29 @@ identity; rejects a changed Host request and stale Host/Guest generations;
 force-deletes the workload; and restores every inventory. The aggregate schema
 is `a3s.oci.linux-kvm-exec-reopen-matrix.v1`.
 
+SignalProcess retains that exact committed terminal Exec and applies SIGUSR1
+(signal 10) to its non-init process target:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_SIGNAL_PROCESS_REOPEN_REPORT=/absolute/path/to/signal-process-reopen.json \
+  bash .github/scripts/linux-kvm-signal-process-reopen.sh
+```
+
+The first eight Host/Guest points retain Running state, a Succeeded Exec
+journal, and a Prepared SignalProcess journal. A fresh `HostRuntimeService` and
+VM owner recreate init and the byte-identical Exec, rebind both positive PIDs,
+verify their nonce-bound markers, and dispatch the unchanged target and signal
+once when the API retries. At `guest-after-response-write`, the SignalProcess
+journal is already SucceededEmpty: recovery recreates init and Exec, waits for
+the exact Exec readiness marker, reapplies SIGUSR1 exactly once, and records
+that recovery before the Host replays without another driver dispatch. Every
+path verifies a separate nonce-bound signal marker, preserves operation,
+process, specification, terminal, I/O, and signal identity, rejects signal
+drift and stale Host/Guest generations, force-deletes the workload, and
+restores every inventory. The aggregate schema is
+`a3s.oci.linux-kvm-signal-process-reopen-matrix.v1`.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -490,13 +513,13 @@ nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
 
 If KVM is unavailable, none of the lifecycle, recovery, operation-reopen, or soak
 scripts downloads or unpacks the Alpine fixture. Lifecycle, recovery, and
-Create/State/Start/Kill/Delete/Wait/Exec reopen emit zero-case `unavailable`
-reports; soak emits `completed_iterations: 0` and `fixture_downloaded: false`. CI
-uploads those reports, but they are not `available` hardware results. The
-driver remains `probe-only` until fresh x86_64 and AArch64 KVM hosts retain every required
-available report, including the integrated Guest path-isolation and
-operation-stage evidence. Other real-entry Guest negative-isolation profiles
-remain separate promotion gates.
+Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess reopen emit zero-case
+`unavailable` reports; soak emits `completed_iterations: 0` and
+`fixture_downloaded: false`. CI uploads those reports, but they are not
+`available` hardware results. The driver remains `probe-only` until fresh
+x86_64 and AArch64 KVM hosts retain every required available report, including
+the integrated Guest path-isolation and operation-stage evidence. Other
+real-entry Guest negative-isolation profiles remain separate promotion gates.
 
 On August 30, 2026, clean x86_64 revision `e7567f9` retained `available`
 17/17 lifecycle, 1/1 owner-death/restart, and 25/25 fresh-generation soak
@@ -530,7 +553,14 @@ dispatched the exact Exec once; `guest-after-response-write` reconstructed the
 committed Exec, rebound its positive PID, and replayed the Host response with
 zero additional API-driven dispatch. The retained aggregate has SHA-256
 `d07bb4575c2927373f6e8a8957cbde6cfa7a5da3eea8eb072eddeef3d4199b5a`.
-AArch64 hardware evidence and the other 13 workload-operation matrices plus
+Clean revision `2f5456c` then retained all 9/9 SignalProcess owner
+replacements. Its first eight paths rebuilt the committed Exec and dispatched
+the Prepared SIGUSR1 once on API retry; `guest-after-response-write` reapplied
+the committed signal exactly once during recovery and replayed the Host
+response with zero additional driver dispatch. The retained aggregate has
+SHA-256
+`d2a764664bb368ba05a228da4c36f2a6d5e55a409391e386835c405621ed32e5`.
+AArch64 hardware evidence and the other 12 workload-operation matrices plus
 Host shutdown remain open; the candidate therefore remains `probe-only`.
 
 ## Experimental CRIU checkpoint and restore gate
