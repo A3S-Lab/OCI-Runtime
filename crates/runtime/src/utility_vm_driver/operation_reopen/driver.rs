@@ -45,7 +45,7 @@ struct ActiveSession {
     target: ContainerTarget,
 }
 
-pub(super) struct QualificationKvmCreateDriver {
+pub(super) struct QualificationKvmOperationDriver {
     shim: PathBuf,
     bootstrap_root: PathBuf,
     system_image_manifest: PathBuf,
@@ -62,7 +62,7 @@ pub(super) struct QualificationKvmCreateDriver {
     rehydrated_created_record: AtomicBool,
 }
 
-impl QualificationKvmCreateDriver {
+impl QualificationKvmOperationDriver {
     pub(super) fn new(
         prepared: &PreparedUtilityVmLayout,
         console: PathBuf,
@@ -165,7 +165,7 @@ impl QualificationKvmCreateDriver {
             client: AgentDriverClient::new(
                 service,
                 "qualification-only KVM guest agent",
-                "qualification-kvm-create-reopen",
+                "qualification-kvm-operation-reopen",
             ),
             target: request.target.clone(),
         };
@@ -308,7 +308,7 @@ impl QualificationKvmCreateDriver {
 }
 
 #[async_trait]
-impl RuntimeDriver for QualificationKvmCreateDriver {
+impl RuntimeDriver for QualificationKvmOperationDriver {
     fn capability(&self) -> DriverCapability {
         DriverCapability {
             driver: DriverKind::LibkrunKvm,
@@ -375,7 +375,7 @@ impl RuntimeDriver for QualificationKvmCreateDriver {
         ) {
             return Err(qualification_error(
                 ErrorCode::FailedPrecondition,
-                "Create reopen qualification accepts only creating or created durable state",
+                "KVM operation-reopen qualification accepts only creating or created durable state",
             ));
         }
         if self.recovery_calls.fetch_add(1, Ordering::SeqCst) != 0 {
@@ -435,5 +435,5 @@ impl RuntimeDriver for QualificationKvmCreateDriver {
 }
 
 fn qualification_error(code: ErrorCode, message: impl Into<String>) -> Error {
-    Error::new(code, message).for_operation("qualification-kvm-create-reopen")
+    Error::new(code, message).for_operation("qualification-kvm-operation-reopen")
 }

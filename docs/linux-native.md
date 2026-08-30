@@ -343,6 +343,25 @@ point. The aggregate schema is
 `a3s.oci.linux-kvm-create-reopen-matrix.v1`. This scope qualifies recovery
 behavior without making the probe-only KVM candidate registerable.
 
+State extends that same qualification-only driver after an exact setup
+Create:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_STATE_REOPEN_REPORT=/absolute/path/to/state-reopen.json \
+  bash .github/scripts/linux-kvm-state-reopen.sh
+```
+
+All nine Host/Guest State points retain the exact Created generation. The
+first eight return a retryable interruption without a State response;
+`guest-after-response-write` first returns the exact durable record and then
+requires a disconnect probe to expose owner loss. A fresh
+`HostRuntimeService` and VM owner must rehydrate Created state from the setup
+Create identity, return that recovered record from State, force-delete it, and
+restore every endpoint, process, bootstrap, handoff, share, recovery, and
+marker inventory. Guest-side points retain nonce-bound console evidence. The
+aggregate schema is `a3s.oci.linux-kvm-state-reopen-matrix.v1`.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -364,9 +383,9 @@ evidence, not a claim that the Host directly observed a Guest cgroup. The
 nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
 `a3s.oci.linux-kvm-soak-matrix.v2`.
 
-If KVM is unavailable, none of the lifecycle, recovery, Create-reopen, or soak
+If KVM is unavailable, none of the lifecycle, recovery, operation-reopen, or soak
 scripts downloads or unpacks the Alpine fixture. Lifecycle, recovery, and
-Create-reopen emit zero-case `unavailable` reports; soak emits
+Create/State reopen emit zero-case `unavailable` reports; soak emits
 `completed_iterations: 0` and `fixture_downloaded: false`. CI uploads those
 reports, but they are not `available` hardware results. The driver remains
 `probe-only` until fresh x86_64 and AArch64 KVM hosts retain every required
@@ -378,8 +397,10 @@ On August 30, 2026, clean x86_64 revision `e7567f9` retained `available`
 17/17 lifecycle, 1/1 owner-death/restart, and 25/25 fresh-generation soak
 reports. Clean revision `c435e26` then retained all 9/9 Create operation-stage
 owner replacements under the scope above, including committed-state
-rehydration at `guest-after-response-write`. AArch64 hardware evidence and the
-other 19 workload-operation matrices plus Host shutdown remain open; the
+rehydration at `guest-after-response-write`. The State matrix is implemented
+and CI-wired for x86_64 and AArch64, with retained clean-host evidence still
+pending. AArch64 hardware evidence and the other 18 workload-operation
+matrices plus Host shutdown remain open; the
 candidate therefore remains `probe-only`.
 
 ## Experimental CRIU checkpoint and restore gate

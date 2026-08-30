@@ -342,7 +342,8 @@ pub use transport_cleanup_report::{
 ))]
 #[doc(hidden)]
 pub use utility_vm_driver::operation_reopen::{
-    linux_kvm_create_reopen_replacement, LinuxKvmCreateReopenConfig,
+    linux_kvm_create_reopen_replacement, linux_kvm_state_reopen_replacement,
+    LinuxKvmCreateReopenConfig, LinuxKvmStateReopenConfig,
 };
 pub use utility_vm_soak_report::{
     MacosHvfSoakConfig, MacosHvfSoakReport, MACOS_HVF_SOAK_CONCURRENT_CONTAINERS,

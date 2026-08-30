@@ -26,8 +26,10 @@ use crate::transport_cleanup_report::is_retryable_disconnect_operation;
 use crate::{AgentVmSmokeReport, HostRuntimeService, OciVmReopenReplacementReport};
 
 mod driver;
+mod state;
 
-use driver::QualificationKvmCreateDriver;
+use driver::QualificationKvmOperationDriver;
+pub use state::{linux_kvm_state_reopen_replacement, LinuxKvmStateReopenConfig};
 
 const QUALIFICATION_TIMEOUT: Duration = Duration::from_secs(25);
 const QUALIFICATION_FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";
@@ -239,7 +241,7 @@ async fn exercise(
         ),
     };
 
-    let first_driver = Arc::new(QualificationKvmCreateDriver::new(
+    let first_driver = Arc::new(QualificationKvmOperationDriver::new(
         prepared,
         first_console.to_path_buf(),
         request.clone(),
@@ -368,7 +370,7 @@ async fn exercise(
     }
     drop(first_driver);
 
-    let replacement_driver = Arc::new(QualificationKvmCreateDriver::new(
+    let replacement_driver = Arc::new(QualificationKvmOperationDriver::new(
         prepared,
         replacement_console.to_path_buf(),
         request.clone(),
@@ -487,7 +489,7 @@ async fn exercise(
 }
 
 async fn replacement_failure(
-    driver: &QualificationKvmCreateDriver,
+    driver: &QualificationKvmOperationDriver,
     target: &ContainerTarget,
     report: &mut OciVmReopenReplacementReport,
     reason: String,
