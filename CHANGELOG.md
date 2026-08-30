@@ -1358,6 +1358,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Make Linux KVM probing and real entry deterministic on variadic libc ABIs by
+  passing the unused `KVM_GET_API_VERSION` ioctl argument as an explicit zero.
+  Also expose each descriptor-pinned writable virtio-fs share through
+  `/proc/self/fd/<fd>/.`, so libkrun's `O_NOFOLLOW` root open resolves the
+  retained directory instead of the procfs descriptor symlink. A real KVM
+  Guest now mounts the share, starts the static Agent, and completes the
+  authenticated protocol-v10 bridge rather than failing its first state-path
+  lookup with `EIO`.
 - Prepare the protected `run` directory for both pre-positioned and
   runtime-owned WHPX bundles inside the serialized Create boundary before the
   first utility-VM launch. Failed Agent-session establishment now also removes

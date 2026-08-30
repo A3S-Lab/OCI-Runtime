@@ -103,10 +103,15 @@ impl LinuxRuntimeShare {
     }
 
     /// Stable procfs path backed by the retained directory descriptor.
+    ///
+    /// The final `/.` is required because libkrun opens the configured
+    /// virtio-fs root with `O_PATH | O_NOFOLLOW`. Making the descriptor link
+    /// an intermediate component preserves descriptor pinning while ensuring
+    /// libkrun opens the referenced directory rather than the procfs symlink.
     pub(crate) fn pinned_path(&self) -> PathBuf {
         use std::os::fd::AsRawFd;
 
-        PathBuf::from(format!("/proc/self/fd/{}", self.directory.as_raw_fd()))
+        PathBuf::from(format!("/proc/self/fd/{}/.", self.directory.as_raw_fd()))
     }
 
     pub(crate) fn reverify(&self) -> Result<()> {
@@ -199,7 +204,10 @@ fn share_error(message: String) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::CString;
     use std::fs;
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::{symlink, PermissionsExt};
 
     use super::LinuxRuntimeShare;
@@ -225,6 +233,28 @@ mod tests {
 
         assert_eq!(pinned.path(), share);
         assert!(pinned.pinned_path().starts_with("/proc/self/fd/"));
+        assert!(pinned.pinned_path().to_string_lossy().ends_with("/."));
+        let path = CString::new(pinned.pinned_path().as_os_str().as_bytes())
+            .expect("descriptor path must not contain NUL");
+        // SAFETY: `path` is a live NUL-terminated string and the returned
+        // descriptor is checked before ownership is transferred to `File`.
+        let descriptor = unsafe {
+            libc::openat(
+                libc::AT_FDCWD,
+                path.as_ptr(),
+                libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        assert!(descriptor >= 0, "open pinned virtio-fs root");
+        // SAFETY: `descriptor` was returned as an owned descriptor above.
+        let descriptor = unsafe { fs::File::from_raw_fd(descriptor) };
+        assert!(
+            descriptor
+                .metadata()
+                .expect("inspect pinned virtio-fs root")
+                .is_dir(),
+            "libkrun-compatible pinned path must resolve to the directory"
+        );
         pinned.reverify().expect("reverify runtime share");
     }
 

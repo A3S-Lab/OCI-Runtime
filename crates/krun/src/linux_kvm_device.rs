@@ -63,9 +63,11 @@ impl LinuxKvmDevice {
     }
 
     pub(crate) fn verify_api(&self) -> Result<()> {
-        // SAFETY: device is a live KVM character-device descriptor and
-        // KVM_GET_API_VERSION takes no pointer argument.
-        let version = unsafe { libc::ioctl(self.device.as_raw_fd(), KVM_GET_API_VERSION) };
+        // SAFETY: device is a live KVM character-device descriptor.
+        // `ioctl` is variadic even though KVM_GET_API_VERSION is an `_IO`
+        // request. Pass its unused argument explicitly so the libc wrapper
+        // cannot forward an indeterminate register value to KVM.
+        let version = unsafe { libc::ioctl(self.device.as_raw_fd(), KVM_GET_API_VERSION, 0) };
         if version < 0 {
             return Err(device_error(format!(
                 "KVM_GET_API_VERSION failed for {}: {}",
@@ -143,8 +145,9 @@ fn device_error(message: String) -> Error {
 mod tests {
     use std::fs;
     use std::os::unix::fs::symlink;
+    use std::path::Path;
 
-    use super::LinuxKvmDevice;
+    use super::{LinuxKvmDevice, KVM_DEVICE};
 
     #[test]
     fn rejects_missing_regular_and_symbolic_paths() {
@@ -159,5 +162,18 @@ mod tests {
         let alias = temporary.path().join("alias");
         symlink(&regular, &alias).expect("create symbolic fixture");
         assert!(LinuxKvmDevice::open_path(&alias).is_err());
+    }
+
+    #[test]
+    fn verifies_the_real_kvm_api_when_the_device_can_be_opened() {
+        if !Path::new(KVM_DEVICE).exists() {
+            return;
+        }
+        let Ok(device) = LinuxKvmDevice::open() else {
+            return;
+        };
+        device
+            .verify_api()
+            .expect("an open KVM device must expose the supported API");
     }
 }

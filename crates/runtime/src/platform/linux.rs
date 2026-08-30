@@ -176,10 +176,11 @@ fn observe_kvm() -> KvmObservation {
         }
     };
 
-    // SAFETY: `device` is a live descriptor for `/dev/kvm`. KVM_GET_API_VERSION
-    // takes no pointer argument and returns either the integer API version or
-    // `-1` with errno set.
-    let api_version = unsafe { libc::ioctl(device.as_raw_fd(), KVM_GET_API_VERSION) };
+    // SAFETY: `device` is a live descriptor for `/dev/kvm`. `ioctl` is
+    // variadic even though KVM_GET_API_VERSION is an `_IO` request, so its
+    // unused argument must be an explicit zero rather than an indeterminate
+    // register value. The call returns the API version or `-1` with errno set.
+    let api_version = unsafe { libc::ioctl(device.as_raw_fd(), KVM_GET_API_VERSION, 0) };
     if api_version < 0 {
         return KvmObservation {
             device_present: true,
