@@ -38,7 +38,7 @@ use crate::{AgentVmSmokeReport, DriverRecovery};
 mod dispatch;
 mod recovery;
 
-const QUALIFICATION_OPERATIONS: [RuntimeOperation; 13] = [
+const QUALIFICATION_OPERATIONS: [RuntimeOperation; 14] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -52,6 +52,7 @@ const QUALIFICATION_OPERATIONS: [RuntimeOperation; 13] = [
     RuntimeOperation::Resume,
     RuntimeOperation::Processes,
     RuntimeOperation::Update,
+    RuntimeOperation::Stats,
 ];
 const QUALIFICATION_SCOPE: &str = "linux-kvm-operation-stage-reopen-only-v1";
 
@@ -104,6 +105,7 @@ pub(super) struct QualificationKvmOperationDriver {
     resume_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
     processes_identity: StdMutex<Option<ContainerTarget>>,
     update_identity: StdMutex<Option<DriverUpdateRequest>>,
+    stats_identity: StdMutex<Option<ContainerTarget>>,
     start_calls: AtomicU32,
     kill_calls: AtomicU32,
     delete_calls: AtomicU32,
@@ -115,6 +117,7 @@ pub(super) struct QualificationKvmOperationDriver {
     resume_calls: AtomicU32,
     processes_calls: AtomicU32,
     update_calls: AtomicU32,
+    stats_calls: AtomicU32,
     recovery_calls: AtomicU32,
     rehydrated_created_record: AtomicBool,
     rehydrated_running_record: AtomicBool,
@@ -174,6 +177,7 @@ impl QualificationKvmOperationDriver {
             resume_identity: StdMutex::new(None),
             processes_identity: StdMutex::new(None),
             update_identity: StdMutex::new(None),
+            stats_identity: StdMutex::new(None),
             start_calls: AtomicU32::new(0),
             kill_calls: AtomicU32::new(0),
             delete_calls: AtomicU32::new(0),
@@ -185,6 +189,7 @@ impl QualificationKvmOperationDriver {
             resume_calls: AtomicU32::new(0),
             processes_calls: AtomicU32::new(0),
             update_calls: AtomicU32::new(0),
+            stats_calls: AtomicU32::new(0),
             recovery_calls: AtomicU32::new(0),
             rehydrated_created_record: AtomicBool::new(false),
             rehydrated_running_record: AtomicBool::new(false),
@@ -652,6 +657,18 @@ impl QualificationKvmOperationDriver {
         self.update_calls.load(Ordering::SeqCst)
     }
 
+    pub(super) fn stats_identity(&self) -> std::result::Result<ContainerTarget, String> {
+        self.stats_identity
+            .lock()
+            .map_err(|_| "KVM Stats identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification KVM owner recorded no Stats dispatch".to_string())
+    }
+
+    pub(super) fn stats_calls(&self) -> u32 {
+        self.stats_calls.load(Ordering::SeqCst)
+    }
+
     pub(super) fn recovery_calls(&self) -> u32 {
         self.recovery_calls.load(Ordering::SeqCst)
     }
@@ -932,6 +949,10 @@ impl RuntimeDriver for QualificationKvmOperationDriver {
 
     async fn update(&self, request: DriverUpdateRequest) -> Result<DriverState> {
         self.dispatch_update(request).await
+    }
+
+    async fn stats(&self, target: ContainerTarget) -> Result<ContainerStats> {
+        self.dispatch_stats(target).await
     }
 }
 

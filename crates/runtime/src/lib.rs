@@ -349,11 +349,12 @@ pub use utility_vm_driver::operation_reopen::{
     linux_kvm_pause_reopen_replacement, linux_kvm_processes_reopen_replacement,
     linux_kvm_resume_reopen_replacement, linux_kvm_signal_process_reopen_replacement,
     linux_kvm_start_reopen_replacement, linux_kvm_state_reopen_replacement,
-    linux_kvm_update_reopen_replacement, linux_kvm_wait_process_reopen_replacement,
-    linux_kvm_wait_reopen_replacement, LinuxKvmCreateReopenConfig, LinuxKvmDeleteReopenConfig,
-    LinuxKvmExecReopenConfig, LinuxKvmKillReopenConfig, LinuxKvmPauseReopenConfig,
-    LinuxKvmProcessesReopenConfig, LinuxKvmResumeReopenConfig, LinuxKvmSignalProcessReopenConfig,
-    LinuxKvmStartReopenConfig, LinuxKvmStateReopenConfig, LinuxKvmUpdateReopenConfig,
+    linux_kvm_stats_reopen_replacement, linux_kvm_update_reopen_replacement,
+    linux_kvm_wait_process_reopen_replacement, linux_kvm_wait_reopen_replacement,
+    LinuxKvmCreateReopenConfig, LinuxKvmDeleteReopenConfig, LinuxKvmExecReopenConfig,
+    LinuxKvmKillReopenConfig, LinuxKvmPauseReopenConfig, LinuxKvmProcessesReopenConfig,
+    LinuxKvmResumeReopenConfig, LinuxKvmSignalProcessReopenConfig, LinuxKvmStartReopenConfig,
+    LinuxKvmStateReopenConfig, LinuxKvmStatsReopenConfig, LinuxKvmUpdateReopenConfig,
     LinuxKvmWaitProcessReopenConfig, LinuxKvmWaitReopenConfig,
 };
 pub use utility_vm_soak_report::{

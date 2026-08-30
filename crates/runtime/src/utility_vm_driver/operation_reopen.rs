@@ -35,6 +35,7 @@ mod resume;
 mod signal_process;
 mod start;
 mod state;
+mod stats;
 mod update;
 mod wait;
 mod wait_process;
@@ -52,6 +53,7 @@ pub use signal_process::{
 };
 pub use start::{linux_kvm_start_reopen_replacement, LinuxKvmStartReopenConfig};
 pub use state::{linux_kvm_state_reopen_replacement, LinuxKvmStateReopenConfig};
+pub use stats::{linux_kvm_stats_reopen_replacement, LinuxKvmStatsReopenConfig};
 pub use update::{linux_kvm_update_reopen_replacement, LinuxKvmUpdateReopenConfig};
 pub use wait::{linux_kvm_wait_reopen_replacement, LinuxKvmWaitReopenConfig};
 pub use wait_process::{

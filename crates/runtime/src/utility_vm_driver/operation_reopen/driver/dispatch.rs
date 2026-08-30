@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use a3s_oci_sdk::{ContainerTarget, ErrorCode, ExitStatus, ProcessRecord, Result};
+use a3s_oci_sdk::{ContainerStats, ContainerTarget, ErrorCode, ExitStatus, ProcessRecord, Result};
 
 use super::{qualification_error, QualificationKvmOperationDriver};
 use crate::driver::{
@@ -347,5 +347,25 @@ impl QualificationKvmOperationDriver {
             .client
             .update(request)
             .await
+    }
+
+    pub(super) async fn dispatch_stats(&self, target: ContainerTarget) -> Result<ContainerStats> {
+        {
+            let mut retained = self.stats_identity.lock().map_err(|_| {
+                qualification_error(ErrorCode::Internal, "KVM Stats identity lock was poisoned")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &target => {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        "qualification KVM owner received a changed Stats target",
+                    ));
+                }
+                Some(_) => {}
+                None => *retained = Some(target.clone()),
+            }
+        }
+        self.stats_calls.fetch_add(1, Ordering::SeqCst);
+        self.live_session(&target).await?.client.stats(target).await
     }
 }
