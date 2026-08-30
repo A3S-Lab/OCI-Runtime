@@ -554,6 +554,25 @@ changed requests and stale Host/Guest generations, force-deletes the resumed
 workload, and restores every inventory. The aggregate schema is
 `a3s.oci.linux-kvm-resume-reopen-matrix.v1`.
 
+Processes retains the exact setup Create, Start, and live terminal Exec
+requests plus both nonce-bound readiness markers:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_PROCESSES_REOPEN_REPORT=/absolute/path/to/processes-reopen.json \
+  bash .github/scripts/linux-kvm-processes-reopen.sh
+```
+
+A fresh `HostRuntimeService` and VM owner recreate init and Exec, rebind both
+positive PIDs into their completed setup responses, and verify the replacement
+markers. Processes is read-only and has no durable response journal, so every
+Host/Guest interruption path dispatches the exact target once after reopen,
+including `guest-after-response-write`. Each response must contain exactly init
+and the original Exec target at the retained generation with the replacement
+PIDs. Every path rejects stale Host and Guest generations, force-deletes the
+workload, and restores every inventory. The aggregate schema is
+`a3s.oci.linux-kvm-processes-reopen-matrix.v1`.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -577,7 +596,7 @@ nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
 
 If KVM is unavailable, none of the lifecycle, recovery, operation-reopen, or soak
 scripts downloads or unpacks the Alpine fixture. Lifecycle, recovery, and
-Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume reopen
+Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes reopen
 emit zero-case `unavailable` reports; soak emits `completed_iterations: 0` and
 `fixture_downloaded: false`. CI uploads those reports, but they are not
 `available` hardware results. The driver remains `probe-only` until fresh
@@ -642,7 +661,13 @@ unchanged Resume once; `guest-after-response-write` reapplied the committed
 Resume during recovery and replayed the Host response with zero additional
 API-driven dispatch. The retained aggregate has SHA-256
 `5a1bc69dd639a09fd6bc04b9250dd90dfd48b5d64b1b85b7762f14fac4647b4a`.
-AArch64 hardware evidence and the other 9 workload-operation matrices plus
+Clean revision `9a1a37c` then retained all 9/9 Processes owner replacements.
+Every replacement rebuilt the live init and terminal Exec with rebound PIDs
+before one exact read-only query; `guest-after-response-write` also queried the
+replacement after the first owner delivered a verified two-record inventory.
+The retained aggregate has SHA-256
+`7b0d940c5aa1f68a9c9bbfab925e9a3385ee4ea4560dd17ff86798a1c18e66de`.
+AArch64 hardware evidence and the other 8 workload-operation matrices plus
 Host shutdown remain open; the candidate therefore remains `probe-only`.
 
 ## Experimental CRIU checkpoint and restore gate

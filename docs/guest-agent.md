@@ -788,6 +788,12 @@ positive unique PIDs, init presence, process IDs, and terminal mode; stale
 generations fail at both boundaries. All nine stages passed in 18 fresh VMs on
 August 11, 2026 under
 `a3s.oci.oci-vm-operation-reopen-replacement.v11`.
+Clean revision `9a1a37c` also passed all nine stages on x86_64 Linux KVM on
+August 30, 2026. Every replacement Guest recreated the live init and terminal
+Exec with rebound positive PIDs before one exact read-only query; the final
+stage queried the replacement after the first Guest delivered a verified
+two-record inventory. The aggregate SHA-256 is
+`7b0d940c5aa1f68a9c9bbfab925e9a3385ee4ea4560dd17ff86798a1c18e66de`.
 
 Update crosses the same nine owner handoffs with the complete OCI resource
 profile bound to its OperationId and exact generation. The first eight paths

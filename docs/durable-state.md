@@ -629,6 +629,12 @@ contain exactly the original init and Exec targets at the retained generation
 with the replacement PIDs. Stale Host and Guest generations fail closed, then
 force delete and owner shutdown restore all inventories. All nine Apple
 Silicon stages passed in 18 fresh VMs on August 11, 2026.
+On August 30, 2026, clean revision `9a1a37c` also passed all nine stages on
+x86_64 Linux KVM. Every replacement owner recreated the live init and terminal
+Exec with rebound positive PIDs before one exact Processes query;
+`guest-after-response-write` queried the replacement after the first owner had
+delivered a verified two-record inventory. The retained aggregate has SHA-256
+`7b0d940c5aa1f68a9c9bbfab925e9a3385ee4ea4560dd17ff86798a1c18e66de`.
 
 Real Update recovery uses
 `a3s.oci.oci-vm-operation-reopen-replacement.v12`. Setup commits Create and
