@@ -19,6 +19,7 @@ use crate::executor::namespace::IdmapNamespaceHandles;
 #[derive(Debug, Default)]
 pub(in crate::executor) struct DetachedMountSources {
     sources: BTreeMap<usize, DetachedMountSource>,
+    namespaces: IdmapNamespaceHandles,
 }
 
 #[derive(Debug)]
@@ -31,10 +32,16 @@ impl DetachedMountSources {
     pub(in crate::executor) fn prepare(
         plans: &[MountPlan],
         source_resolver: &BindSourceResolver<'_>,
-        namespaces: &IdmapNamespaceHandles,
+        namespaces: IdmapNamespaceHandles,
     ) -> Result<Self> {
         let mut sources = BTreeMap::new();
         for plan in plans {
+            if plan.ordered_source.is_some() {
+                // Resolve this source after its preceding mount has been
+                // applied to the effective rootfs. Preparing it now would pin
+                // the pre-mount placeholder instead of the ordered source.
+                continue;
+            }
             if plan.idmap.is_none() && !plan.detached_bind {
                 continue;
             }
@@ -100,7 +107,51 @@ impl DetachedMountSources {
                 ));
             }
         }
-        Ok(Self { sources })
+        Ok(Self {
+            sources,
+            namespaces,
+        })
+    }
+
+    pub(in crate::executor) fn prepare_ordered(
+        &mut self,
+        plan: &MountPlan,
+        source: &ResolvedBindSource,
+    ) -> Result<()> {
+        if plan.ordered_source.is_none() || (plan.idmap.is_none() && !plan.detached_bind) {
+            return Err(apply_error(
+                ErrorCode::Internal,
+                plan.index,
+                "ordered detached bind preparation was requested for an incompatible mount",
+            ));
+        }
+        if self.sources.contains_key(&plan.index) {
+            return Err(apply_error(
+                ErrorCode::Internal,
+                plan.index,
+                "duplicate ordered detached mount source",
+            ));
+        }
+        let detached = clone_resolved_mount(plan.index, source, plan.flags & libc::MS_REC != 0)?;
+        if let Some(idmap) = &plan.idmap {
+            apply_idmap_attribute(
+                plan.index,
+                &detached,
+                self.namespaces.namespace_fd(idmap)?,
+                idmap.recursive,
+            )?;
+        }
+        if plan.detached_bind {
+            apply_detached_bind_attributes(plan, &detached)?;
+        }
+        self.sources.insert(
+            plan.index,
+            DetachedMountSource {
+                descriptor: detached,
+                kind: source.kind(),
+            },
+        );
+        Ok(())
     }
 
     pub(in crate::executor) fn contains(&self, index: usize) -> bool {
@@ -730,7 +781,7 @@ mod tests {
         BindSourceResolver, DetachedMountSources,
     };
     use crate::executor::mount::MountPlan;
-    use crate::executor::namespace::IdmapNamespaceHandles;
+    use crate::executor::namespace::{IdMapping, IdmapNamespaceHandles, IdmapPlan};
 
     #[test]
     fn idmapped_mount_syscall_errors_have_stable_types() {
@@ -830,6 +881,7 @@ mod tests {
             recursive_attributes: None,
             idmap: None,
             data: Vec::new(),
+            ordered_source: Some(PathBuf::from("generated-source")),
             oci_cgroup_source: false,
             oci_cgroup_destination: false,
             oci_readonly_option: false,
@@ -837,9 +889,44 @@ mod tests {
 
         let resolver = BindSourceResolver::new(bundle.path(), None);
         let sources =
-            DetachedMountSources::prepare(&[plan], &resolver, &IdmapNamespaceHandles::default())
+            DetachedMountSources::prepare(&[plan], &resolver, IdmapNamespaceHandles::default())
                 .expect("deferred generated bind source");
 
         assert!(!sources.contains(7));
+    }
+
+    #[test]
+    fn defers_idmapped_bind_sources_created_by_earlier_mounts() {
+        let bundle = tempfile::tempdir().expect("temporary bundle");
+        let mappings = vec![IdMapping {
+            container_id: 0,
+            host_id: 1000,
+            size: 1,
+        }];
+        let plan = MountPlan {
+            index: 8,
+            destination: PathBuf::from("/generated-idmap"),
+            source: Some(PathBuf::from("rootfs/generated-source")),
+            filesystem_type: Some("none".into()),
+            flags: libc::MS_BIND | libc::MS_REC,
+            bind: true,
+            remount_bind: false,
+            detached_bind: false,
+            propagation: None,
+            recursive_attributes: None,
+            idmap: Some(IdmapPlan::dedicated(false, mappings.clone(), mappings)),
+            data: Vec::new(),
+            ordered_source: Some(PathBuf::from("generated-source")),
+            oci_cgroup_source: false,
+            oci_cgroup_destination: false,
+            oci_readonly_option: false,
+        };
+
+        let resolver = BindSourceResolver::new(bundle.path(), None);
+        let sources =
+            DetachedMountSources::prepare(&[plan], &resolver, IdmapNamespaceHandles::default())
+                .expect("deferred generated ID-mapped bind source");
+
+        assert!(!sources.contains(8));
     }
 }

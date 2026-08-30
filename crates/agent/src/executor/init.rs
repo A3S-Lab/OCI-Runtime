@@ -63,6 +63,10 @@ impl PreparedContainerRootfs {
     }
 }
 
+fn uses_private_joined_rootfs(plan: &InitPlan) -> bool {
+    plan.namespaces.joined_mount().is_some() && plan.devices.has_node_setup()
+}
+
 pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     let mut arguments = std::env::args_os().skip(1);
     if arguments.next().as_deref() != Some(OsStr::new("container-init")) {
@@ -280,7 +284,7 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
         Ok(process_group) => process_group,
         Err(error) => return reject_before_ready(&mut control, error),
     };
-    let (plan, canonical_bundle, rootfs, host_proc) = match prepare_container_init(
+    let (plan, canonical_bundle, mut rootfs, host_proc) = match prepare_container_init(
         config_snapshot,
         bundle_directory,
         rootfs_scope,
@@ -313,6 +317,17 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
     if let Err(error) = prepared_devices.bind_rootfs(rootfs.access_path()) {
         return reject_before_ready(&mut control, error);
     }
+    if uses_private_joined_rootfs(&plan) {
+        rootfs.file = match plan.devices.prepare_detached_joined_rootfs(
+            rootfs.access_path(),
+            rootfs.file(),
+            &runtime_directory,
+            &prepared_devices,
+        ) {
+            Ok(rootfs) => rootfs,
+            Err(error) => return reject_before_ready(&mut control, error),
+        };
+    }
     let idmap_namespaces = match IdmapNamespaceHandles::prepare(
         plan.mounts.iter().filter_map(|mount| mount.idmap.as_ref()),
     ) {
@@ -320,11 +335,10 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
         Err(error) => return reject_before_ready(&mut control, error),
     };
     let detached_sources =
-        match DetachedMountSources::prepare(&plan.mounts, &source_resolver, &idmap_namespaces) {
+        match DetachedMountSources::prepare(&plan.mounts, &source_resolver, idmap_namespaces) {
             Ok(sources) => sources,
             Err(error) => return reject_before_ready(&mut control, error),
         };
-    drop(idmap_namespaces);
     let hook_state = HookStateTemplate::new(
         plan.oci_version.clone(),
         container_id,
@@ -825,6 +839,10 @@ fn finish_create_environment<'a>(
             &plan.masked_paths,
             plan.root_readonly,
         )?;
+    } else if uses_private_joined_rootfs(plan) {
+        plan.devices.verify_existing_from_root(rootfs_file)?;
+        rootfs::create_required_dev_symlinks_from_root(rootfs_file)?;
+        rootfs::chroot(rootfs_file)?;
     } else {
         plan.devices.verify_existing_from_root(rootfs_file)?;
         // Joining another mount namespace can hide the original bundle path.
@@ -933,7 +951,7 @@ fn enter_rootfs_run_start_hooks_and_exec(
     hook_state: &HookStateTemplate,
     control: &mut UnixStream,
 ) -> Result<()> {
-    if !plan.namespaces.new_mount() {
+    if !plan.namespaces.new_mount() && !uses_private_joined_rootfs(plan) {
         rootfs::chroot(rootfs)?;
     }
     let created = hook_state.encode(

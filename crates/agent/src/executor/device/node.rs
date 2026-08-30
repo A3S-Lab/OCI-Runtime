@@ -187,6 +187,34 @@ impl DeviceNode {
         }
     }
 
+    pub(super) fn prepare_detached_bind_target(
+        &self,
+        rootfs: &Path,
+        prepared: &PreparedDeviceSources,
+    ) -> Result<bool> {
+        let (target, relative) = self.resolve_target(rootfs)?;
+        self.create_placeholder(&target, &relative, prepared)
+    }
+
+    pub(super) fn attach_source_to_staged_root(
+        &self,
+        rootfs: &Path,
+        source: &PreparedDeviceSource,
+        attach: bool,
+        verify_ownership: bool,
+    ) -> Result<()> {
+        let (target, _) = self.resolve_target(rootfs)?;
+        if attach {
+            let PreparedDeviceSource::DetachedMount(source) = source;
+            attach_device_mount(source, &target, &self.path)?;
+        }
+        if verify_ownership {
+            self.verify_at(&target, self.uid, self.gid)
+        } else {
+            self.verify_device_at(&target)
+        }
+    }
+
     pub(super) fn prepare_restore_target(
         &self,
         rootfs: &Path,
@@ -457,8 +485,22 @@ impl DeviceNode {
             return Err(device_error(
                 ErrorCode::FailedPrecondition,
                 format!(
-                    "required OCI device differs in the joined mount namespace: {}",
-                    self.path.display()
+                    "required OCI device differs in the joined mount namespace: {}; observed \
+                     type={:#o} rdev={}:{} mode={:#o} uid={} gid={}, expected type={:#o} \
+                     rdev={}:{} mode={:#o} uid={} gid={}",
+                    self.path.display(),
+                    metadata.file_type,
+                    libc::major(metadata.rdev),
+                    libc::minor(metadata.rdev),
+                    metadata.mode,
+                    metadata.uid,
+                    metadata.gid,
+                    self.file_type(),
+                    self.major,
+                    self.minor,
+                    self.mode,
+                    self.uid,
+                    self.gid
                 ),
             ));
         }

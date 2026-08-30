@@ -1,9 +1,15 @@
+use std::fs::File;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::{ErrorCode, IoMode, OciBundle, ProcessIo, OCI_LINUX_MOUNT_OPTIONS};
 use tempfile::tempdir;
 
-use super::mount::{rewrite_vm_storage_sources, BindSourceResolver, MountTargetKind};
+use super::mount::{
+    self, rewrite_vm_storage_sources, BindSourceResolver, DetachedMountSources, MountTargetKind,
+};
+use super::namespace::IdmapNamespaceHandles;
 use super::plan::InitPlan;
 use crate::vm_attachment::UtilityVmStorageSources;
 
@@ -29,6 +35,33 @@ const MOUNT_CONFIG: &str = r#"{
       "type": "tmpfs",
       "source": "tmpfs",
       "options": ["nosuid", "nodev", "mode=1777", "size=16m"]
+    }
+  ],
+  "linux": {"namespaces": [{"type": "mount"}]}
+}"#;
+
+const ORDERED_BIND_CONFIG: &str = r#"{
+  "ociVersion": "1.3.0",
+  "root": {"path": "rootfs", "readonly": false},
+  "process": {
+    "terminal": false,
+    "user": {"uid": 0, "gid": 0},
+    "args": ["/bin/true"],
+    "cwd": "/",
+    "noNewPrivileges": true
+  },
+  "mounts": [
+    {
+      "destination": "/generated",
+      "type": "tmpfs",
+      "source": "tmpfs",
+      "options": ["nosuid", "nodev", "mode=0700"]
+    },
+    {
+      "destination": "/consumer",
+      "type": "none",
+      "source": "rootfs/generated",
+      "options": ["rbind", "rro"]
     }
   ],
   "linux": {"namespaces": [{"type": "mount"}]}
@@ -763,6 +796,209 @@ fn refuses_to_create_a_mount_target_through_an_escaping_symlink() {
 
     assert_eq!(error.code, ErrorCode::PermissionDenied);
     assert!(!outside.join("created").exists());
+}
+
+#[test]
+fn marks_a_bind_source_produced_by_an_earlier_mount() {
+    let temporary = tempdir().expect("temporary ordered mount bundle");
+    let bundle = bundle_at(temporary.path().to_path_buf(), ORDERED_BIND_CONFIG);
+    let plan = InitPlan::from_bundle(&bundle, &null_io()).expect("ordered mount plan");
+
+    assert_eq!(plan.mounts.len(), 2);
+    assert_eq!(
+        plan.mounts[1].ordered_source.as_deref(),
+        Some(Path::new("generated"))
+    );
+}
+
+#[test]
+fn marks_a_recursive_bind_that_contains_an_earlier_child_mount() {
+    let temporary = tempdir().expect("temporary recursive ordered mount bundle");
+    let config = ORDERED_BIND_CONFIG.replacen(
+        r#""destination": "/generated""#,
+        r#""destination": "/generated/child""#,
+        1,
+    );
+    let bundle = bundle_at(temporary.path().to_path_buf(), &config);
+    let plan = InitPlan::from_bundle(&bundle, &null_io()).expect("recursive ordered mount plan");
+
+    assert_eq!(
+        plan.mounts[1].ordered_source.as_deref(),
+        Some(Path::new("generated"))
+    );
+}
+
+#[test]
+fn marks_a_bind_source_below_an_early_default_filesystem() {
+    let temporary = tempdir().expect("temporary default-filesystem source bundle");
+    let mut config: serde_json::Value =
+        serde_json::from_str(ORDERED_BIND_CONFIG).expect("ordered mount configuration");
+    config["mounts"] = serde_json::json!([{
+        "destination": "/kernel-view",
+        "type": "none",
+        "source": "rootfs/sys/kernel",
+        "options": ["bind", "ro", "nosuid", "nodev"]
+    }]);
+    let config = serde_json::to_string(&config).expect("default-filesystem source config");
+    let bundle = bundle_at(temporary.path().to_path_buf(), &config);
+    let plan = InitPlan::from_bundle(&bundle, &null_io()).expect("default-filesystem source plan");
+
+    assert!(plan
+        .default_filesystems
+        .early_destinations()
+        .contains(&Path::new("/sys")));
+    assert_eq!(
+        plan.mounts[0].ordered_source.as_deref(),
+        Some(Path::new("sys/kernel"))
+    );
+}
+
+#[test]
+fn plans_an_idmapped_bind_source_produced_by_an_earlier_mount() {
+    let temporary = tempdir().expect("temporary ordered ID-mapped mount bundle");
+    let config = ORDERED_BIND_CONFIG.replace(
+        r#""options": ["rbind", "rro"]"#,
+        r#""options": ["rbind", "rro", "idmap"],
+      "uidMappings": [{"containerID": 0, "hostID": 1000, "size": 1}],
+      "gidMappings": [{"containerID": 0, "hostID": 1000, "size": 1}]"#,
+    );
+    let bundle = bundle_at(temporary.path().to_path_buf(), &config);
+    let plan = InitPlan::from_bundle(&bundle, &null_io()).expect("ordered ID-mapped mount plan");
+
+    assert_eq!(
+        plan.mounts[1].ordered_source.as_deref(),
+        Some(Path::new("generated"))
+    );
+    assert!(plan.mounts[1].idmap.is_some());
+}
+
+#[test]
+fn applies_an_ordered_idmapped_bind_after_its_source_mount_exists() {
+    const CAP_SYS_ADMIN: u32 = 21;
+    let effective_capabilities = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("CapEff:\t"))
+                .and_then(|value| u64::from_str_radix(value.trim(), 16).ok())
+        })
+        .unwrap_or_default();
+    if effective_capabilities & (1_u64 << CAP_SYS_ADMIN) == 0 {
+        return;
+    }
+
+    let temporary = tempdir().expect("temporary ordered ID-mapped mount execution");
+    let rootfs = temporary.path().join("rootfs");
+    std::fs::create_dir(&rootfs).expect("ordered ID-mapped rootfs");
+    let config = ORDERED_BIND_CONFIG.replace(
+        r#""options": ["rbind", "rro"]"#,
+        r#""options": ["rbind", "rro", "idmap"],
+      "uidMappings": [
+        {"containerID": 0, "hostID": 1000, "size": 1},
+        {"containerID": 1000, "hostID": 0, "size": 1}
+      ],
+      "gidMappings": [
+        {"containerID": 0, "hostID": 1000, "size": 1},
+        {"containerID": 1000, "hostID": 0, "size": 1}
+      ]"#,
+    );
+    let bundle = bundle_at(temporary.path().to_path_buf(), &config);
+    let plan = InitPlan::from_bundle(&bundle, &null_io()).expect("ordered ID-mapped mount plan");
+    let namespaces =
+        IdmapNamespaceHandles::prepare(plan.mounts.iter().filter_map(|mount| mount.idmap.as_ref()))
+            .expect("ordered ID-mapping namespace");
+    let resolver = BindSourceResolver::new(temporary.path(), None);
+    let mut detached = DetachedMountSources::prepare(&plan.mounts, &resolver, namespaces)
+        .expect("defer ordered ID-mapped source");
+
+    let original_namespace =
+        File::open("/proc/self/ns/mnt").expect("retain original mount namespace");
+    if unsafe { libc::unshare(libc::CLONE_NEWNS) } != 0 {
+        panic!(
+            "create ordered ID-mapped test namespace: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    if unsafe {
+        libc::mount(
+            std::ptr::null(),
+            c"/".as_ptr(),
+            std::ptr::null(),
+            libc::MS_REC | libc::MS_PRIVATE,
+            std::ptr::null(),
+        )
+    } != 0
+    {
+        panic!(
+            "make ordered ID-mapped test namespace private: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    let outcome = mount::apply_all(&plan.mounts, &rootfs, &mut detached, &resolver).map(|()| {
+        let source =
+            std::fs::metadata(rootfs.join("generated")).expect("ordered ID-mapped source metadata");
+        let target =
+            std::fs::metadata(rootfs.join("consumer")).expect("ordered ID-mapped target metadata");
+        (source.uid(), source.gid(), target.uid(), target.gid())
+    });
+    if unsafe { libc::setns(original_namespace.as_raw_fd(), libc::CLONE_NEWNS) } != 0 {
+        panic!(
+            "restore original mount namespace: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+
+    let (source_uid, source_gid, target_uid, target_gid) =
+        outcome.expect("apply ordered ID-mapped bind");
+    assert_eq!((source_uid, source_gid), (0, 0));
+    assert_eq!((target_uid, target_gid), (1000, 1000));
+}
+
+#[tokio::test]
+async fn ordered_bind_source_resolves_from_the_effective_rootfs() {
+    use std::os::unix::fs::symlink;
+
+    use a3s_oci_agent_protocol::GuestPath;
+
+    use super::bundle_scope::BundleDirectoryScope;
+
+    let temporary = tempdir().expect("temporary ordered bind source");
+    let share = temporary.path().join("share");
+    let state = share.join("run");
+    let bundle = share.join("bundle");
+    let underlying = bundle.join("rootfs/generated");
+    let effective = temporary.path().join("effective-rootfs");
+    let generated = effective.join("generated");
+    let external = temporary.path().join("external");
+    std::fs::create_dir_all(&state).expect("runtime state");
+    std::fs::create_dir_all(&underlying).expect("underlying ordered source");
+    std::fs::create_dir_all(&generated).expect("effective ordered source");
+    std::fs::create_dir(&external).expect("external source");
+    std::fs::write(underlying.join("identity"), b"underlying").expect("underlying identity");
+    std::fs::write(generated.join("identity"), b"effective").expect("effective identity");
+
+    let (_, scope) = BundleDirectoryScope::utility_vm(&state)
+        .await
+        .expect("utility VM scope");
+    let pinned = scope
+        .pin(&GuestPath::new(bundle.to_string_lossy()).expect("guest bundle"))
+        .expect("pin guest bundle")
+        .expect("utility VM pin");
+    let resolver = BindSourceResolver::new(&bundle, Some(&pinned));
+    let resolved = resolver
+        .resolve_ordered_source(1, &effective, Path::new("generated"))
+        .expect("resolve current ordered source");
+    assert_eq!(
+        std::fs::read(resolved.path().join("identity")).expect("ordered source identity"),
+        b"effective"
+    );
+
+    symlink(&external, effective.join("linked")).expect("ordered source symlink");
+    let error = resolver
+        .resolve_ordered_source(1, &effective, Path::new("linked"))
+        .expect_err("ordered source symlink must fail closed");
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
 }
 
 #[tokio::test]

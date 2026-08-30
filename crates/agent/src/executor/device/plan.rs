@@ -10,6 +10,7 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 
 use crate::executor::mount::MountPlan;
 use crate::executor::namespace::NamespacePlan;
+use crate::executor::rootfs;
 use crate::OCI_LINUX_DEFAULT_DEVICE_NODES;
 
 use super::access::{self, DeviceAccessBoundary, DeviceAccessPolicy, LoadedDeviceProgram};
@@ -322,6 +323,65 @@ impl DevicePlan {
             bind_console_source(rootfs, console, prepared)?;
         }
         Ok(())
+    }
+
+    pub(in crate::executor) fn prepare_detached_joined_rootfs(
+        &self,
+        rootfs_path: &Path,
+        rootfs_file: &File,
+        runtime_directory: &Path,
+        prepared: &PreparedDeviceSources,
+    ) -> Result<File> {
+        if self.terminal || prepared.console.is_some() {
+            return Err(unsupported(
+                "process.terminal",
+                "a joined mount namespace must supply its existing terminal device",
+            ));
+        }
+        let sources = prepared.sources.as_ref().ok_or_else(|| {
+            device_error(
+                ErrorCode::Internal,
+                "joined mount namespace device sources were not prepared",
+            )
+        })?;
+        if sources.len() != self.nodes.len() {
+            return Err(device_error(
+                ErrorCode::Internal,
+                "prepared joined-mount device source count does not match the OCI device plan",
+            ));
+        }
+        let targets = self
+            .nodes
+            .iter()
+            .map(|node| node.prepare_detached_bind_target(rootfs_path, prepared))
+            .collect::<Result<Vec<_>>>()?;
+        rootfs::create_required_dev_symlinks_from_root(rootfs_file)?;
+        let staging_path = runtime_directory.join("joined-rootfs-staging");
+        rootfs::prepare_detached_rootfs_in_private_mount_namespace(
+            rootfs_file,
+            &staging_path,
+            |staged_rootfs| {
+                for ((node, source), attach) in self.nodes.iter().zip(sources).zip(targets) {
+                    node.attach_source_to_staged_root(
+                        staged_rootfs,
+                        source,
+                        attach,
+                        prepared.verify_ownership,
+                    )?;
+                }
+                let staged_rootfs_file = File::open(staged_rootfs).map_err(|error| {
+                    device_error(
+                        ErrorCode::FailedPrecondition,
+                        format!(
+                            "failed to retain the staged joined rootfs {}: {error}",
+                            staged_rootfs.display()
+                        ),
+                    )
+                })?;
+                self.verify_existing_from_root(&staged_rootfs_file)?;
+                Ok(())
+            },
+        )
     }
 
     /// Recreate only the file mountpoints that CRIU needs before rebuilding

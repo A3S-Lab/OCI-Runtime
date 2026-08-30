@@ -181,6 +181,17 @@ pub(super) fn attach_device_mount(
     let target = path_cstring(target, "OCI device bind target")?;
     let null = std::ptr::null::<libc::c_char>();
     let null_data = std::ptr::null::<libc::c_void>();
+    // Device sources can originate on an unbindable Guest-local runtime
+    // mount. Convert the attached leaf to a private mount so a later recursive
+    // rootfs clone retains it instead of pruning it as unbindable.
+    // SAFETY: the target is the mount attached by this operation and every
+    // pointer is live or null for the duration of mount.
+    if unsafe { libc::mount(null, target.as_ptr(), null, libc::MS_PRIVATE, null_data) } != 0 {
+        return Err(last_os_error(format!(
+            "make prepared OCI device {} mount private",
+            container_path.display()
+        )));
+    }
     // SAFETY: the bind target was created and mounted by this operation.
     if unsafe {
         libc::mount(

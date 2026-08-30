@@ -627,17 +627,10 @@ fn build_bundle(
     if native_idmap_bind_expected {
         let source = format!("{output_name}/{IDMAP_BIND_SOURCE_DIRECTORY}");
         let foreign_readonly_source = format!("{source}/{FOREIGN_READONLY_BIND_SOURCE_FILE}");
-        let source_target = format!("{target_root}/idmap/bind/source");
         let foreign_readonly_target = format!("{target_root}/idmap/bind/foreign-readonly");
         let idmap_bind_target = format!("{target_root}/idmap/bind/nonrecursive");
         let ridmap_bind_target = format!("{target_root}/idmap/bind/recursive");
         mounts.extend([
-            json!({
-                "destination": source_target,
-                "type": "none",
-                "source": source,
-                "options": ["rbind", "rw", "nosuid", "nodev"]
-            }),
             json!({
                 "destination": foreign_readonly_target,
                 "type": "none",
@@ -647,7 +640,7 @@ fn build_bundle(
             json!({
                 "destination": idmap_bind_target,
                 "type": "none",
-                "source": source,
+                "source": recursive_source_in_bundle,
                 "options": ["rbind", "rw", "nosuid", "nodev", "idmap"],
                 "uidMappings": [bind_uid_1000],
                 "gidMappings": [bind_gid_1000]
@@ -655,14 +648,14 @@ fn build_bundle(
             json!({
                 "destination": ridmap_bind_target,
                 "type": "none",
-                "source": source,
+                "source": recursive_source_in_bundle,
                 "options": ["rbind", "rw", "nosuid", "nodev", "ridmap"],
                 "uidMappings": [bind_uid_2000],
                 "gidMappings": [bind_gid_2000]
             }),
         ]);
         native_idmap_bind_paths = Some((
-            source_target,
+            recursive_source.clone(),
             foreign_readonly_target,
             idmap_bind_target,
             ridmap_bind_target,

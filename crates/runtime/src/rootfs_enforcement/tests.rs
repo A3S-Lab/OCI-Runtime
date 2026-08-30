@@ -248,7 +248,7 @@ fn assert_mapping_ranges_do_not_overlap(mappings: &[FixtureIdMapping]) {
 }
 
 #[test]
-fn native_fixture_declares_distinct_idmap_and_ridmap_bind_evidence() {
+fn native_fixture_declares_ordered_idmap_and_ridmap_bind_evidence() {
     let temporary = tempdir().expect("temporary native fixture");
     let bundle_directory = temporary.path().join("bundle");
     std::fs::create_dir_all(bundle_directory.join("rootfs")).expect("fixture rootfs");
@@ -308,6 +308,9 @@ fn native_fixture_declares_distinct_idmap_and_ridmap_bind_evidence() {
         assert!(mount["options"]
             .as_array()
             .is_some_and(|options| options.iter().any(|option| option == mode)));
+        assert!(mount["source"]
+            .as_str()
+            .is_some_and(|source| source.ends_with("/recursive/source")));
         assert_eq!(mount["uidMappings"][0]["containerID"], 100_000);
         assert_eq!(mount["uidMappings"][0]["hostID"], mapped_uid);
         assert_eq!(mount["gidMappings"][0]["containerID"], 200_000);

@@ -1,0 +1,95 @@
+{
+  "ociVersion": "1.3.0",
+  "root": {
+    "path": "rootfs",
+    "readonly": false
+  },
+  "process": {
+    "terminal": false,
+    "user": {
+      "uid": 0,
+      "gid": 0
+    },
+    "args": [
+      "/bin/sh",
+      "-c",
+      "set -eu; trap 'exit 0' TERM; test \"$(/bin/busybox cat /proc/self/personality)\" = 00000008; /bin/busybox awk 'NR == 1 && $1 == 0 && $2 == 0 && $3 == 1 { ok = 1 } END { exit !ok }' /proc/self/uid_map; /bin/busybox awk 'NR == 1 && $1 == 0 && $2 == 0 && $3 == 1 { ok = 1 } END { exit !ok }' /proc/self/gid_map; /bin/busybox awk '$1 == \"monotonic\" && $2 == 3600 && $3 == 0 { ok = 1 } END { exit !ok }' /proc/self/timens_offsets; /bin/busybox awk '$1 == \"boottime\" && $2 == 7200 && $3 == 0 { ok = 1 } END { exit !ok }' /proc/self/timens_offsets; printf 'a3s-oci-create-start-user-time-v1\\n' > /.a3s-oci-create-start-smoke; while :; do /bin/busybox sleep 1; done"
+    ],
+    "env": [
+      "PATH=/bin"
+    ],
+    "cwd": "/",
+    "noNewPrivileges": true
+  },
+  "hostname": "a3s-smoke",
+  "domainname": "runtime.test",
+  "mounts": [
+    {
+      "destination": "/proc",
+      "type": "proc",
+      "source": "proc",
+      "options": [
+        "nosuid",
+        "noexec",
+        "nodev"
+      ]
+    }
+  ],
+  "linux": {
+    "cgroupsPath": "a3s-oci-smoke-a",
+    "personality": {
+      "domain": "LINUX32",
+      "flags": []
+    },
+    "namespaces": [
+      {
+        "type": "uts"
+      },
+      {
+        "type": "mount"
+      },
+      {
+        "type": "ipc"
+      },
+      {
+        "type": "network"
+      },
+      {
+        "type": "cgroup"
+      },
+      {
+        "type": "pid"
+      },
+      {
+        "type": "user"
+      },
+      {
+        "type": "time"
+      }
+    ],
+    "uidMappings": [
+      {
+        "containerID": 0,
+        "hostID": 0,
+        "size": 1
+      }
+    ],
+    "gidMappings": [
+      {
+        "containerID": 0,
+        "hostID": 0,
+        "size": 1
+      }
+    ],
+    "timeOffsets": {
+      "monotonic": {
+        "secs": 3600,
+        "nanosecs": 0
+      },
+      "boottime": {
+        "secs": 7200,
+        "nanosecs": 0
+      }
+    }
+  }
+}

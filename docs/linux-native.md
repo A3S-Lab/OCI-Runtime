@@ -286,6 +286,12 @@ three no-delete interruption boundaries, and all 11 protocol-v10 Host/Guest
 transport fault points. The isolation profile covers reserved and external
 bundles, absolute and symlinked rootfs entries, absolute, traversing, and
 symlinked bind sources, and intermediate magic-link File/Filesystem escapes.
+The Linux KVM fixture deliberately omits the init NUMA policy because the
+pinned KVM kernel returns `ENOSYS` for policy read-back, and its resource
+profile omits swap because that kernel exposes no cgroup-v2 swap controller.
+It retains memory limit/reservation, CPU, cpuset, PIDs, stats, freezer,
+personality, user/time namespace, and rootfs enforcement coverage; native
+Linux and HVF retain the omitted NUMA and swap evidence.
 Each case must restore the
 Unix endpoint and shim-process inventories, leave `run` unchanged, keep the
 bootstrap empty, and remove markers plus token and recovery handoffs. The
@@ -950,8 +956,9 @@ requires:
 6. recursive read-only, nosuid, nodev, noexec, noatime, nodiratime, and
    nosymfollow attributes to hold on both an rbind target and its nested
    submount while the source mounts remain writable and executable;
-7. detached `idmap` and `ridmap` filesystem mounts to expose the exact
-   requested UID/GID ownership;
+7. later detached `idmap` and `ridmap` filesystem mounts to resolve a bind
+   source produced by preceding tmpfs and recursive-bind entries at its exact
+   OCI list position and expose the requested UID/GID ownership;
 8. the original nested bind source to remain owned by `0:0`, non-recursive
    `idmap` to map only the rbind top level to `1000:1000`, and recursive
    `ridmap` to map both the top level and real nested submount to `2000:2000`;

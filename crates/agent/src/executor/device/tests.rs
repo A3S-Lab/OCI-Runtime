@@ -1,3 +1,5 @@
+use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
 use a3s_oci_sdk::oci_spec::runtime::{Linux, LinuxResources};
@@ -13,6 +15,32 @@ use super::{
 use crate::executor::mount;
 use crate::executor::namespace::NamespacePlan;
 use tempfile::tempdir;
+
+fn has_effective_capability(capability: u32) -> bool {
+    let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+        return false;
+    };
+    let Some(mask) = status
+        .lines()
+        .find_map(|line| line.strip_prefix("CapEff:\t"))
+        .and_then(|value| u64::from_str_radix(value.trim(), 16).ok())
+    else {
+        return false;
+    };
+    mask & (1_u64 << capability) != 0
+}
+
+struct TestMount(std::ffi::CString);
+
+impl Drop for TestMount {
+    fn drop(&mut self) {
+        // SAFETY: the test retains the exact NUL-terminated mount path until
+        // this guard is dropped. Lazy detachment also handles failed asserts.
+        unsafe {
+            libc::umount2(self.0.as_ptr(), libc::MNT_DETACH);
+        }
+    }
+}
 
 #[test]
 fn device_source_directory_must_be_a_real_directory() {
@@ -91,6 +119,119 @@ fn cleanup_device_target_removes_exact_placeholder_file() {
     cleanup_device_target_manifest(&manifest).expect("cleanup exact placeholder");
 
     assert!(!path.exists());
+}
+
+#[test]
+fn detached_joined_rootfs_receives_guest_local_default_devices() {
+    const CAP_SYS_ADMIN: u32 = 21;
+    const CAP_MKNOD: u32 = 27;
+    if !has_effective_capability(CAP_SYS_ADMIN) || !has_effective_capability(CAP_MKNOD) {
+        return;
+    }
+
+    let temporary = tempdir().expect("temporary detached-rootfs workspace");
+    let runtime_directory = temporary.path().join("runtime");
+    let device_source_directory = temporary.path().join("sources");
+    let rootfs = temporary.path().join("rootfs");
+    std::fs::create_dir(&runtime_directory).expect("runtime directory");
+    std::fs::create_dir(&device_source_directory).expect("device source directory");
+    std::fs::create_dir(&rootfs).expect("rootfs directory");
+    std::fs::create_dir_all(rootfs.join("dev/pts")).expect("rootfs device directories");
+    std::os::unix::fs::symlink("pts/ptmx", rootfs.join("dev/ptmx")).expect("rootfs ptmx link");
+    let rootfs_path =
+        std::ffi::CString::new(rootfs.as_os_str().as_bytes()).expect("rootfs path without NUL");
+    if unsafe {
+        libc::mount(
+            rootfs_path.as_ptr(),
+            rootfs_path.as_ptr(),
+            std::ptr::null(),
+            libc::MS_BIND,
+            std::ptr::null(),
+        )
+    } != 0
+    {
+        panic!("bind rootfs mount: {}", std::io::Error::last_os_error());
+    }
+    if unsafe {
+        libc::mount(
+            std::ptr::null(),
+            rootfs_path.as_ptr(),
+            std::ptr::null(),
+            libc::MS_SHARED,
+            std::ptr::null(),
+        )
+    } != 0
+    {
+        let error = std::io::Error::last_os_error();
+        unsafe {
+            libc::umount2(rootfs_path.as_ptr(), libc::MNT_DETACH);
+        }
+        panic!("make rootfs mount shared: {error}");
+    }
+    let shared_rootfs = TestMount(rootfs_path);
+
+    let plan = DevicePlan::from_linux(Some(&Linux::default()), &[], false, true)
+        .expect("default device plan");
+    let prepared = plan
+        .prepare_sources(
+            &NamespacePlan::default(),
+            &runtime_directory,
+            &device_source_directory,
+            false,
+            &[],
+        )
+        .expect("prepare guest-local device mounts");
+    prepared
+        .bind_rootfs(&rootfs)
+        .expect("bind device manifest to rootfs");
+    let rootfs_file = std::fs::File::open(&rootfs).expect("open rootfs");
+    let original_root = std::fs::File::open("/").expect("retain original root");
+
+    let original_mount_namespace =
+        std::fs::File::open("/proc/self/ns/mnt").expect("retain original mount namespace");
+    let detached =
+        plan.prepare_detached_joined_rootfs(&rootfs, &rootfs_file, &runtime_directory, &prepared);
+    // Model the init wrapper entering the requested mount namespace while it
+    // retains the complete detached rootfs tree.
+    if unsafe { libc::setns(original_mount_namespace.as_raw_fd(), libc::CLONE_NEWNS) } != 0 {
+        panic!(
+            "restore original mount namespace: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    let detached = detached.expect("prepare detached joined rootfs");
+    plan.verify_existing_from_root(&detached)
+        .expect("verify detached devices after mount namespace entry");
+    crate::executor::rootfs::chroot(&detached).expect("enter detached joined rootfs");
+    let current_root = std::fs::File::open("/").expect("open joined root");
+    plan.verify_existing_from_root(&current_root)
+        .expect("verify devices after mount namespace entry");
+    drop(current_root);
+    drop(detached);
+    let current_root = std::fs::File::open("/").expect("reopen joined root");
+    plan.verify_existing_from_root(&current_root)
+        .expect("verify devices after releasing the detached mount descriptor");
+    drop(current_root);
+    crate::executor::rootfs::chroot(&original_root).expect("restore original root");
+
+    for node in &plan.nodes {
+        let relative = node.path.strip_prefix("/").expect("relative device path");
+        assert!(
+            std::fs::symlink_metadata(rootfs.join(relative))
+                .expect("shared-root placeholder metadata")
+                .file_type()
+                .is_file(),
+            "{} must remain an ordinary shared-root placeholder",
+            node.path.display()
+        );
+    }
+
+    drop(prepared);
+    let manifest = load_device_target_manifest(&runtime_directory)
+        .expect("load joined-root device manifest")
+        .expect("joined-root device manifest");
+    cleanup_device_target_manifest(&manifest).expect("clean joined-root device placeholders");
+    drop(shared_rootfs);
 }
 
 #[test]

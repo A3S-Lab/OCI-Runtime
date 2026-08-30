@@ -307,7 +307,8 @@ impl InitPlan {
                 .and_then(|linux| linux.readonly_paths().as_deref()),
             "linux.readonlyPaths",
         )?;
-        let mounts = mount::plan_all(spec.mounts().as_deref(), &namespaces)?;
+        let mut mounts = mount::plan_all(spec.mounts().as_deref(), &namespaces)?;
+        mount::mark_ordered_bind_sources(&mut mounts, bundle.directory(), &root_path);
         let sysfs_mount_allowed = !namespaces.has_user() || namespaces.new_network();
         let default_filesystems = DefaultFilesystemPlan::from_configured(
             &mounts,
@@ -319,11 +320,13 @@ impl InitPlan {
         if cgroup.uses_control_workload_layout() {
             mount::validate_control_workload_cgroup_mount(&mounts)?;
         }
+        let prepare_device_mounts = namespaces.new_mount()
+            || (namespaces.joined_mount().is_some() && !process_plan.terminal);
         let devices = DevicePlan::from_linux(
             spec.linux().as_ref(),
             &mounts,
             process_plan.terminal,
-            namespaces.new_mount(),
+            prepare_device_mounts,
         )?;
         if !mounts.is_empty() && !namespaces.new_mount() {
             return Err(unsupported(
@@ -331,7 +334,10 @@ impl InitPlan {
                 "the bootstrap executor applies mounts only in a newly created mount namespace",
             ));
         }
-        if devices.has_node_setup() && !namespaces.new_mount() {
+        if devices.has_node_setup()
+            && !namespaces.new_mount()
+            && namespaces.joined_mount().is_none()
+        {
             return Err(unsupported(
                 "linux.devices",
                 "device creation requires a newly created mount namespace",

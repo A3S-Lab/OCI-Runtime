@@ -2,11 +2,11 @@ mod dev_symlink;
 mod mask;
 
 use std::ffi::CString;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, ErrorKind};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
@@ -220,18 +220,25 @@ fn verify_same_rootfs(retained: &File, current: &File, path: &Path) -> Result<()
 }
 
 fn clone_rootfs_mount(rootfs: &File) -> Result<OwnedFd> {
-    let traversal_flags =
-        u32::try_from(libc::AT_EMPTY_PATH | libc::AT_RECURSIVE).map_err(|error| {
-            rootfs_error(
-                ErrorCode::Internal,
-                format!("rootfs open_tree traversal flags do not fit the kernel ABI: {error}"),
-            )
-        })?;
+    let traversal_flags = u32::try_from(libc::AT_RECURSIVE).map_err(|error| {
+        rootfs_error(
+            ErrorCode::Internal,
+            format!("rootfs open_tree traversal flag does not fit the kernel ABI: {error}"),
+        )
+    })?;
     let flags = libc::OPEN_TREE_CLONE | libc::OPEN_TREE_CLOEXEC | traversal_flags;
-    // SAFETY: rootfs is a live directory descriptor, the empty pathname is
-    // NUL-terminated, and AT_EMPTY_PATH selects that exact descriptor.
-    let descriptor =
-        unsafe { libc::syscall(libc::SYS_open_tree, rootfs.as_raw_fd(), c"".as_ptr(), flags) };
+    // SAFETY: rootfs is a live directory descriptor and `.` is a fixed
+    // NUL-terminated relative path confined to that descriptor. Some older
+    // kernels fail to apply AT_RECURSIVE when it is combined with an empty
+    // path, so use the equivalent descriptor-relative directory spelling.
+    let descriptor = unsafe {
+        libc::syscall(
+            libc::SYS_open_tree,
+            rootfs.as_raw_fd(),
+            c".".as_ptr(),
+            flags,
+        )
+    };
     if descriptor < 0 {
         return Err(descriptor_mount_error(
             "clone the descriptor-pinned container rootfs mount",
@@ -248,7 +255,168 @@ fn clone_rootfs_mount(rootfs: &File) -> Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
 }
 
-fn attach_rootfs_mount(detached: &OwnedFd, destination: &File) -> Result<()> {
+/// Assemble a rootfs mount tree without mutating either the Guest's initial
+/// mount namespace or the OCI namespace that the process will join.
+///
+/// Older Linux kernels reject `move_mount` when its destination belongs to an
+/// unattached mount tree. Attach the cloned rootfs at a private staging path,
+/// let the caller install private child mounts there, and recursively clone
+/// the completed tree before entering the requested OCI namespace.
+pub(super) fn prepare_detached_rootfs_in_private_mount_namespace<F>(
+    rootfs: &File,
+    staging_path: &Path,
+    configure: F,
+) -> Result<File>
+where
+    F: FnOnce(&Path) -> Result<()>,
+{
+    let mut builder = fs::DirBuilder::new();
+    builder.mode(0o700);
+    builder.create(staging_path).map_err(|error| {
+        rootfs_error(
+            ErrorCode::Conflict,
+            format!(
+                "failed to create private rootfs staging directory {}: {error}",
+                staging_path.display()
+            ),
+        )
+    })?;
+
+    let mut mounted = false;
+    let prepared = (|| {
+        // Clone while the retained descriptor still belongs to the current
+        // namespace. After unshare it names a mount from the prior namespace,
+        // which older kernels reject as an open_tree source with EINVAL.
+        let detached = clone_rootfs_mount(rootfs)?;
+        unshare_private_mount_namespace()?;
+        let destination = open_staging_directory(staging_path)?;
+        attach_rootfs_mount(&detached, &destination)?;
+        mounted = true;
+        // The detached clone retains the source tree's propagation type. A
+        // shared source would otherwise propagate device child mounts back to
+        // the caller-owned rootfs before the completed tree is cloned. Break
+        // that peer relationship before the first staged mutation.
+        make_mount_tree_private(staging_path)?;
+        configure(staging_path)?;
+        // Seal propagation on child mounts added by the configurator before
+        // recursively cloning the final detached rootfs tree.
+        make_mount_tree_private(staging_path)?;
+        let staged_rootfs = open_staging_directory(staging_path)?;
+        clone_rootfs_mount(&staged_rootfs).map(File::from)
+    })();
+    let cleanup = cleanup_staged_rootfs(staging_path, mounted);
+    match (prepared, cleanup) {
+        (Ok(rootfs), Ok(())) => Ok(rootfs),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Ok(())) => Err(error),
+        (Err(mut error), Err(cleanup)) => {
+            error.message = format!(
+                "{}; private rootfs staging cleanup also failed: {cleanup}",
+                error.message
+            );
+            error.retryable |= cleanup.retryable;
+            Err(error)
+        }
+    }
+}
+
+fn unshare_private_mount_namespace() -> Result<()> {
+    // SAFETY: the container init wrapper is a dedicated single-threaded
+    // process. CLONE_NEWNS creates a temporary staging namespace owned only by
+    // this process; it will enter the configured OCI namespace afterwards.
+    if unsafe { libc::unshare(libc::CLONE_NEWNS) } != 0 {
+        return Err(descriptor_mount_error(
+            "create the private rootfs staging mount namespace",
+            io::Error::last_os_error(),
+        ));
+    }
+    // A cloned namespace retains propagation flags. Make the complete tree
+    // private before attaching anything so no staging mount can propagate.
+    if unsafe {
+        libc::mount(
+            std::ptr::null(),
+            c"/".as_ptr(),
+            std::ptr::null(),
+            libc::MS_REC | libc::MS_PRIVATE,
+            std::ptr::null(),
+        )
+    } != 0
+    {
+        return Err(descriptor_mount_error(
+            "make the rootfs staging mount namespace private",
+            io::Error::last_os_error(),
+        ));
+    }
+    Ok(())
+}
+
+fn open_staging_directory(path: &Path) -> Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|error| {
+            rootfs_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "failed to retain private rootfs staging directory {}: {error}",
+                    path.display()
+                ),
+            )
+        })
+}
+
+fn make_mount_tree_private(path: &Path) -> Result<()> {
+    let path = path_cstring(path)?;
+    // SAFETY: path names the runtime-owned staged rootfs, all other pointers
+    // are null, and propagation changes retain no caller memory.
+    if unsafe {
+        libc::mount(
+            std::ptr::null(),
+            path.as_ptr(),
+            std::ptr::null(),
+            libc::MS_REC | libc::MS_PRIVATE,
+            std::ptr::null(),
+        )
+    } != 0
+    {
+        return Err(descriptor_mount_error(
+            "make the complete staged rootfs mount tree private",
+            io::Error::last_os_error(),
+        ));
+    }
+    Ok(())
+}
+
+fn detach_staged_rootfs(path: &Path) -> Result<()> {
+    let path_cstring = path_cstring(path)?;
+    // SAFETY: the path names the runtime-owned staging mount and remains live
+    // and NUL-terminated for the call.
+    if unsafe { libc::umount2(path_cstring.as_ptr(), libc::MNT_DETACH) } != 0 {
+        return Err(descriptor_mount_error(
+            "detach the private staged rootfs mount",
+            io::Error::last_os_error(),
+        ));
+    }
+    Ok(())
+}
+
+fn cleanup_staged_rootfs(path: &Path, mounted: bool) -> Result<()> {
+    if mounted {
+        detach_staged_rootfs(path)?;
+    }
+    fs::remove_dir(path).map_err(|error| {
+        rootfs_error(
+            ErrorCode::Conflict,
+            format!(
+                "failed to remove private rootfs staging directory {}: {error}",
+                path.display()
+            ),
+        )
+    })
+}
+
+fn attach_rootfs_mount(detached: &impl AsRawFd, destination: &File) -> Result<()> {
     let flags = libc::MOVE_MOUNT_F_EMPTY_PATH | libc::MOVE_MOUNT_T_EMPTY_PATH;
     // SAFETY: both descriptors are live, both paths are empty NUL-terminated
     // strings selected by the EMPTY_PATH flags, and move_mount retains none.

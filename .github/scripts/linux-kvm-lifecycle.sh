@@ -60,6 +60,12 @@ current_case="setup"
 case_report=""
 case_stderr=""
 cleanup() {
+  local status=$?
+  if [[ "$status" -ne 0 && "${A3S_OCI_KEEP_FAILED_WORK:-0}" == "1" ]]; then
+    printf 'preserving failed Linux KVM lifecycle work directory: %s\n' \
+      "$work" >&2
+    return 0
+  fi
   case "$work" in
     "$temporary_root"/a3s-oci-kvm-lifecycle.*)
       rm -rf -- "$work"
@@ -75,11 +81,16 @@ trap cleanup EXIT
 on_error() {
   local status=$?
   trap - ERR
-  printf 'Linux KVM lifecycle case %s failed near line %s\n' \
-    "$current_case" "${BASH_LINENO[0]}" >&2
+  printf 'Linux KVM lifecycle case %s failed with status %s near line %s\n' \
+    "$current_case" "$status" "${BASH_LINENO[0]}" >&2
   if [[ -n "$case_report" && -f "$case_report" ]]; then
-    jq --raw-output '.reason // .bridge.reason // empty' "$case_report" \
-      2>/dev/null >&2 || true
+    jq --compact-output \
+      '{schema_version, status, reason,
+        bridge_status: .bridge.status,
+        bridge_reason: .bridge.reason,
+        bundle_loaded, create_returned_created, wait_timeout_enforced,
+        delete_succeeded, guest_runtime_clean}' \
+      "$case_report" >&2 2>/dev/null || true
   fi
   if [[ -n "$case_stderr" && -s "$case_stderr" ]]; then
     tail -n 30 "$case_stderr" >&2 || true
@@ -198,12 +209,12 @@ bundle_a="$runtime_share/var/lib/a3s-oci-lifecycle/bundle-a"
 bundle_b="$runtime_share/var/lib/a3s-oci-lifecycle/bundle-b"
 scripts/prepare-utility-vm-bundle.sh \
   --alpine-archive "$alpine_archive" \
-  --config fixtures/utility-vm/config.json \
+  --config fixtures/utility-vm/config.linux-kvm.json \
   --bundle "$bundle_a" \
   --cgroups-path a3s-oci-kvm-lifecycle-a
 scripts/prepare-utility-vm-bundle.sh \
   --alpine-archive "$alpine_archive" \
-  --config fixtures/utility-vm/config.json \
+  --config fixtures/utility-vm/config.linux-kvm.json \
   --bundle "$bundle_b" \
   --cgroups-path a3s-oci-kvm-lifecycle-b
 

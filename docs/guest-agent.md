@@ -137,10 +137,15 @@ configured mount in listed order, and uses
 `pivot_root(".", ".")` followed by a detached unmount of the old root. All of
 this succeeds before readiness is reported, so namespace, mount, and rootfs
 isolation are part of the create barrier. When the mount namespace is inherited
-or joined, the wrapper uses `fchdir` plus `chroot` through a rootfs directory
-descriptor retained before namespace entry. Mount entries are rejected on
-that path to prevent changes from escaping into a shared or donor mount
-namespace.
+or joined, ordinary configured mount entries remain rejected so they cannot
+escape into a shared or donor namespace. The usual path uses `fchdir` plus
+`chroot` through a rootfs directory descriptor retained before namespace
+entry. A non-terminal workload that joins a mount namespace and needs the
+default or declared device inventory instead recursively clones that retained
+rootfs in a temporary private mount namespace, makes the staged tree private
+before attaching Guest-local device mounts, clones the completed tree again,
+and enters it before reporting readiness. The caller rootfs and donor mount
+namespace therefore receive neither device mounts nor propagation changes.
 
 The current mount slice:
 
@@ -148,6 +153,11 @@ The current mount slice:
   directory or file target according to the filesystem or bind-source type;
 - interprets relative destinations from `/` and relative bind sources from the
   bundle directory;
+- recognizes bind sources lexically inside the rootfs and opens them from the
+  current effective rootfs at their exact list position with descriptor-relative
+  `openat2`; a source supplied by an earlier configured mount or synthesized
+  `/proc` or `/sys` mount is therefore consumed after that mount exists, with
+  symlinks, magic links, and traversal rejected;
 - supports bind/rbind, common mount flags, all required propagation modes, and
   bounded filesystem-specific option data;
 - remounts bind attributes explicitly and fails the complete create operation
@@ -861,14 +871,18 @@ exact repeated exit
 statuses and per-container markers together with guest-runtime and
 host-process cleanup evidence. Schema v9 then retains a prepared donor and
 qualifies wrong-type rejection plus UTS, mount, IPC, network, cgroup, PID,
-user, and time joins. Both joiner workloads must cross `exec`, remain running
-for a bounded observation window, stop cleanly, and leave the donor unchanged.
+user, and time joins. The mount joiner runs from a recursively cloned private
+rootfs containing its Guest-local default devices; the donor namespace and
+caller rootfs retain their original mount and placeholder inventories. Both
+joiner workloads must cross `exec`, remain running for a bounded observation
+window, stop cleanly, and leave the donor unchanged.
 A separate workload must create every missing directory and file mount
 destination before start, then prove shared rootfs propagation, a distinct
 read-only mount, empty read-only masked file and directory replacements,
 recursive attributes on a bind mount and nested submount, read-only rootfs
-enforcement, exact `idmap` and `ridmap` ownership on detached filesystem
-mounts, normal exit, state removal, and removal of every host-side fixture
+enforcement, and exact `idmap` and `ridmap` ownership on detached filesystem
+mounts whose bind source was produced by preceding tmpfs and recursive-bind
+entries, normal exit, state removal, and removal of every host-side fixture
 artifact. The same workload proves that it is PID 2+ beneath a dedicated
 namespace PID 1 and that PID 1 reaps an adopted child. The native Linux
 schema-v11 report additionally requires bind-source ownership preservation and

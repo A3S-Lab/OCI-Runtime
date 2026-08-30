@@ -7,7 +7,7 @@ mod target;
 use std::ffi::CString;
 use std::fs::File;
 use std::io;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -47,6 +47,7 @@ pub(super) struct MountPlan {
     pub(super) recursive_attributes: Option<attributes::RecursiveMountAttributes>,
     pub(super) idmap: Option<IdmapPlan>,
     pub(super) data: Vec<String>,
+    pub(super) ordered_source: Option<PathBuf>,
     oci_cgroup_source: bool,
     oci_cgroup_destination: bool,
     oci_readonly_option: bool,
@@ -137,6 +138,82 @@ impl<'a> BindSourceResolver<'a> {
             ))
         })
     }
+
+    pub(super) fn resolve_ordered_source(
+        &self,
+        index: usize,
+        effective_rootfs: &Path,
+        relative_source: &Path,
+    ) -> Result<ResolvedBindSource> {
+        if relative_source.as_os_str().is_empty()
+            || relative_source.is_absolute()
+            || relative_source
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(permission_denied(format!(
+                "mounts[{index}].source has an invalid ordered rootfs projection: {}",
+                relative_source.display()
+            )));
+        }
+        let rootfs = File::open(effective_rootfs).map_err(|error| {
+            permission_denied(format!(
+                "failed to retain the effective rootfs for mounts[{index}].source: {error}"
+            ))
+        })?;
+        if !rootfs
+            .metadata()
+            .map_err(|error| {
+                permission_denied(format!(
+                    "failed to inspect the effective rootfs for mounts[{index}].source: {error}"
+                ))
+            })?
+            .is_dir()
+        {
+            return Err(permission_denied(format!(
+                "effective rootfs for mounts[{index}].source is not a directory"
+            )));
+        }
+        let relative = path_cstring(index, "source", relative_source)?;
+        let mut how = std::mem::MaybeUninit::<libc::open_how>::zeroed();
+        // SAFETY: zero is valid for every field of open_how.
+        let how = unsafe { how.assume_init_mut() };
+        how.flags = (libc::O_PATH | libc::O_CLOEXEC) as u64;
+        how.resolve =
+            libc::RESOLVE_BENEATH | libc::RESOLVE_NO_MAGICLINKS | libc::RESOLVE_NO_SYMLINKS;
+        // SAFETY: rootfs and the pathname are live, and how is initialized for
+        // the exact kernel ABI size.
+        let descriptor = unsafe {
+            libc::syscall(
+                libc::SYS_openat2,
+                rootfs.as_raw_fd(),
+                relative.as_ptr(),
+                how as *const libc::open_how,
+                std::mem::size_of::<libc::open_how>(),
+            )
+        };
+        if descriptor < 0 {
+            return Err(permission_denied(format!(
+                "failed to open ordered descriptor-confined mounts[{index}].source {}: {}",
+                relative_source.display(),
+                io::Error::last_os_error()
+            )));
+        }
+        let descriptor = libc::c_int::try_from(descriptor).map_err(|error| {
+            Error::new(
+                ErrorCode::Internal,
+                format!("openat2 returned an invalid mounts[{index}].source descriptor: {error}"),
+            )
+            .for_operation("prepare-container-mounts")
+        })?;
+        // SAFETY: openat2 returned this fresh descriptor exactly once.
+        let descriptor = unsafe { File::from_raw_fd(descriptor) };
+        ResolvedBindSource::from_descriptor(
+            index,
+            effective_rootfs.join(relative_source),
+            descriptor,
+        )
+    }
 }
 
 impl ResolvedBindSource {
@@ -197,6 +274,33 @@ pub(super) fn plan_all(
         .enumerate()
         .map(|(index, mount)| MountPlan::new(index, mount, namespaces))
         .collect()
+}
+
+pub(super) fn mark_ordered_bind_sources(
+    plans: &mut [MountPlan],
+    bundle_directory: &Path,
+    rootfs: &Path,
+) {
+    for plan in plans {
+        if !plan.bind {
+            continue;
+        }
+        let Some(source) = plan.source.as_deref() else {
+            continue;
+        };
+        let source = bind_source_candidate_path(bundle_directory, source);
+        let Ok(relative) = source.strip_prefix(rootfs) else {
+            continue;
+        };
+        if relative.as_os_str().is_empty() {
+            continue;
+        }
+        // Resolve every rootfs-internal source when its mount entry is
+        // applied. This preserves list order for both caller mounts and early
+        // synthesized filesystems such as /proc and /sys, while sources that
+        // are unaffected by an earlier mount retain the same identity.
+        plan.ordered_source = Some(relative.to_path_buf());
+    }
 }
 
 pub(super) fn rewrite_vm_storage_sources(
@@ -564,6 +668,7 @@ impl MountPlan {
             recursive_attributes,
             idmap,
             data,
+            ordered_source: None,
             oci_cgroup_source,
             oci_cgroup_destination,
             oci_readonly_option,
@@ -587,18 +692,33 @@ impl MountPlan {
         detached_sources: &mut DetachedMountSources,
         source_resolver: &BindSourceResolver<'_>,
     ) -> Result<()> {
+        let ordered_bind_source = self
+            .ordered_source
+            .as_deref()
+            .map(|relative_source| {
+                source_resolver.resolve_ordered_source(self.index, rootfs, relative_source)
+            })
+            .transpose()?;
+        if let Some(source) = ordered_bind_source.as_ref() {
+            if self.idmap.is_some() || self.detached_bind {
+                detached_sources.prepare_ordered(self, source)?;
+            }
+        }
         let detached_bind = self.detached_bind && detached_sources.contains(self.index);
         let uses_detached_source = self.idmap.is_some() || detached_bind;
         let bind_source = if self.bind && !uses_detached_source {
-            Some(source_resolver.resolve_required(
-                self.index,
-                self.source.as_deref().ok_or_else(|| {
-                    invalid(format!(
-                        "mounts[{}].source is required for a bind mount",
-                        self.index
-                    ))
-                })?,
-            )?)
+            Some(match ordered_bind_source {
+                Some(source) => source,
+                None => source_resolver.resolve_required(
+                    self.index,
+                    self.source.as_deref().ok_or_else(|| {
+                        invalid(format!(
+                            "mounts[{}].source is required for a bind mount",
+                            self.index
+                        ))
+                    })?,
+                )?,
+            })
         } else {
             None
         };

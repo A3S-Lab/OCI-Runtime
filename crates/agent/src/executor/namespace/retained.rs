@@ -122,7 +122,7 @@ impl RetainedExecutionContext {
                 format!("cannot retain execution context for PID {runtime_pid}"),
             ));
         }
-        let rootfs = if plan.new_mount() {
+        let rootfs = if plan.new_mount() || plan.joined_mount().is_some() {
             open_proc_file(runtime_pid, "root", "container root").await?
         } else {
             original_rootfs

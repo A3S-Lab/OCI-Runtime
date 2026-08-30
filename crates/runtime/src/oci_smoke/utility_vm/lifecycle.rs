@@ -712,10 +712,10 @@ pub(crate) fn resource_profile(platform: HostPlatform) -> Result<LinuxResources,
         },
         "pids": {"limit": 64}
     });
-    // The fixed WHPX utility kernel intentionally has no swap controller.
-    // Preserve swap-limit coverage on HVF while qualifying the common
-    // memory, CPU, cpuset, PID, stats, and freezer surface on Windows.
-    if platform != HostPlatform::Windows {
+    // The fixed KVM and WHPX utility kernels intentionally have no swap
+    // controller. Preserve swap-limit coverage on HVF while qualifying the
+    // common memory, CPU, cpuset, PID, stats, and freezer surface elsewhere.
+    if platform == HostPlatform::Macos {
         profile["memory"]["swap"] = serde_json::json!(1024 * 1024 * 1024_u64);
     }
     serde_json::from_value(profile)
@@ -1203,7 +1203,7 @@ mod tests {
     use super::{resource_profile, terminal_exec_request, UPDATED_MEMORY_LIMIT};
 
     #[test]
-    fn windows_resource_profile_omits_only_the_unavailable_swap_controller() {
+    fn fixed_kvm_and_whpx_profiles_omit_only_the_unavailable_swap_controller() {
         let windows = serde_json::to_value(
             resource_profile(HostPlatform::Windows).expect("Windows resource profile"),
         )
@@ -1212,6 +1212,15 @@ mod tests {
         assert!(windows["memory"].get("swap").is_none());
         assert_eq!(windows["cpu"]["cpus"], "0");
         assert_eq!(windows["pids"]["limit"], 64);
+
+        let linux = serde_json::to_value(
+            resource_profile(HostPlatform::Linux).expect("Linux KVM resource profile"),
+        )
+        .expect("serialize Linux KVM resource profile");
+        assert_eq!(linux["memory"]["limit"], UPDATED_MEMORY_LIMIT);
+        assert!(linux["memory"].get("swap").is_none());
+        assert_eq!(linux["cpu"]["cpus"], "0");
+        assert_eq!(linux["pids"]["limit"], 64);
 
         let macos = serde_json::to_value(
             resource_profile(HostPlatform::Macos).expect("macOS resource profile"),

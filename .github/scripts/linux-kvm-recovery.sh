@@ -57,6 +57,12 @@ work="$(mktemp -d "$temporary_root/a3s-oci-kvm-recovery.XXXXXX")"
 runtime_report="$work/runtime-report.json"
 runtime_stderr="$work/runtime.stderr.log"
 cleanup() {
+  local status=$?
+  if [[ "$status" -ne 0 && "${A3S_OCI_KEEP_FAILED_WORK:-0}" == "1" ]]; then
+    printf 'preserving failed Linux KVM recovery work directory: %s\n' \
+      "$work" >&2
+    return 0
+  fi
   case "$work" in
     "$temporary_root"/a3s-oci-kvm-recovery.*)
       rm -rf -- "$work"
@@ -72,11 +78,12 @@ trap cleanup EXIT
 on_error() {
   local status=$?
   trap - ERR
-  printf 'Linux KVM recovery qualification failed near line %s\n' \
-    "${BASH_LINENO[0]}" >&2
+  printf 'Linux KVM recovery qualification failed with status %s near line %s\n' \
+    "$status" "${BASH_LINENO[0]}" >&2
   if [[ -s "$runtime_report" ]]; then
-    jq --raw-output '.reason // .recovery.reason // empty' "$runtime_report" \
-      2>/dev/null >&2 || true
+    jq --compact-output \
+      '{schema_version, status, reason, recovery}' \
+      "$runtime_report" >&2 2>/dev/null || true
   fi
   if [[ -s "$runtime_stderr" ]]; then
     tail -n 40 "$runtime_stderr" >&2 || true
@@ -167,7 +174,7 @@ rootfs_archive_sha256="$(sha256sum "$alpine_archive" | cut -d ' ' -f 1)"
 bundle="$work/bundle"
 scripts/prepare-utility-vm-bundle.sh \
   --alpine-archive "$alpine_archive" \
-  --config fixtures/utility-vm/config.json \
+  --config fixtures/utility-vm/config.linux-kvm.json \
   --bundle "$bundle" \
   --cgroups-path a3s-oci-kvm-recovery
 evidence_parent="$work/evidence"

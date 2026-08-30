@@ -177,6 +177,7 @@ fn default_mount(index: usize, definition: &Definition, devpts_gid: u32) -> Moun
         recursive_attributes: None,
         idmap: None,
         data,
+        ordered_source: None,
         oci_cgroup_source: false,
         oci_cgroup_destination: false,
         oci_readonly_option: false,
