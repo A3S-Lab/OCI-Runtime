@@ -1,0 +1,172 @@
+use std::sync::atomic::Ordering;
+
+use a3s_oci_core::{DriverKind, IsolationClass};
+use a3s_oci_sdk::oci_spec::runtime::ContainerState;
+use a3s_oci_sdk::{ContainerRecord, ContainerTarget, ErrorCode, OciBundle, Result};
+
+use super::{qualification_error, QualificationKvmOperationDriver};
+use crate::driver::{
+    DriverCreateAttachments, DriverCreateRequest, DriverKillRequest, DriverStartRequest,
+};
+use crate::DriverRecovery;
+
+impl QualificationKvmOperationDriver {
+    pub(super) async fn recover_record(&self, record: &ContainerRecord) -> Result<DriverRecovery> {
+        let recovery_state_supported = matches!(
+            record.state.status(),
+            ContainerState::Creating | ContainerState::Created
+        ) || (*record.state.status() == ContainerState::Running
+            && self.retained_start.is_some())
+            || (*record.state.status() == ContainerState::Stopped
+                && self.retained_start.is_some()
+                && self.retained_kill.is_some()
+                && self.recovery_marker.is_some());
+        if !recovery_state_supported {
+            return Err(qualification_error(
+                ErrorCode::FailedPrecondition,
+                "KVM operation-reopen qualification accepts only its creating, created, retained running, or retained stopped durable state",
+            ));
+        }
+        if self.recovery_calls.fetch_add(1, Ordering::SeqCst) != 0 {
+            return Err(qualification_error(
+                ErrorCode::Conflict,
+                "KVM operation-reopen qualification recovered more than one durable record",
+            ));
+        }
+        let request = self.recovery_request(record).await?;
+        let recovery_bundle = request.bundle.clone();
+        self.recovery.recover(&request.target, record, None).await?;
+        self.recovery.remove(&request.target, None).await?;
+        if *record.state.status() == ContainerState::Creating {
+            return Ok(DriverRecovery::none());
+        }
+        let observed = self.dispatch_create(request).await?;
+        if observed.status() != ContainerState::Created {
+            return Err(qualification_error(
+                ErrorCode::Conflict,
+                "replacement KVM owner did not recreate OCI created state",
+            ));
+        }
+        self.rehydrated_created_record.store(true, Ordering::SeqCst);
+        if *record.state.status() == ContainerState::Created {
+            return DriverRecovery::recreated_created(observed);
+        }
+        let running = self
+            .dispatch_start(self.recovery_start_request(record, recovery_bundle)?)
+            .await?;
+        if running.status() != ContainerState::Running || running.paused() {
+            return Err(qualification_error(
+                ErrorCode::Conflict,
+                "replacement KVM owner did not recreate an active OCI running state",
+            ));
+        }
+        let running_pid = running.pid().filter(|pid| *pid > 0).ok_or_else(|| {
+            qualification_error(
+                ErrorCode::Conflict,
+                "replacement KVM owner recreated running state without a positive PID",
+            )
+        })?;
+        self.rehydrated_running_pid
+            .store(running_pid, Ordering::SeqCst);
+        self.rehydrated_running_record.store(true, Ordering::SeqCst);
+        if *record.state.status() == ContainerState::Running {
+            return DriverRecovery::recreated_running(running);
+        }
+
+        let marker = self.recovery_marker.as_ref().ok_or_else(|| {
+            qualification_error(
+                ErrorCode::FailedPrecondition,
+                "KVM stopped recovery has no workload marker",
+            )
+        })?;
+        super::super::workload_marker::wait_for_replacement_marker(marker)
+            .await
+            .map_err(|reason| qualification_error(ErrorCode::FailedPrecondition, reason))?;
+        let stopped = self
+            .dispatch_kill(self.recovery_kill_request(record)?)
+            .await?;
+        if stopped.status() != ContainerState::Stopped || stopped.pid().is_some() {
+            return Err(qualification_error(
+                ErrorCode::Conflict,
+                "replacement KVM owner did not recreate OCI stopped state",
+            ));
+        }
+        self.rehydrated_stopped_record.store(true, Ordering::SeqCst);
+        Ok(DriverRecovery::observed(stopped))
+    }
+
+    async fn recovery_request(&self, record: &ContainerRecord) -> Result<DriverCreateRequest> {
+        let attachment_digest = self.retained_create.attachments.digest()?;
+        if record.driver != DriverKind::LibkrunKvm
+            || record.isolation != IsolationClass::DedicatedVm
+            || record.state.id() != self.retained_create.id.as_str()
+            || record.config_digest != self.retained_create.bundle.config_digest()
+            || record.attachments_digest.as_deref() != Some(attachment_digest.as_str())
+        {
+            return Err(qualification_error(
+                ErrorCode::FailedPrecondition,
+                "durable KVM Create record differs from the retained qualification request",
+            ));
+        }
+        let target = ContainerTarget::exact(self.retained_create.id.clone(), record.generation);
+        let mut request = DriverCreateRequest {
+            context: self.retained_create.context.clone(),
+            target,
+            bundle: self.retained_create.bundle.clone(),
+            isolation: self.retained_create.isolation.clone(),
+            io: self.retained_create.attachments.process_io().clone(),
+            attachment_contract: self.retained_create.attachments.clone(),
+            tee_launch: None,
+            attachments: DriverCreateAttachments::None,
+        };
+        request.bundle = self.handoff.prepare(&request).await?;
+        Ok(request)
+    }
+
+    fn recovery_start_request(
+        &self,
+        record: &ContainerRecord,
+        bundle: OciBundle,
+    ) -> Result<DriverStartRequest> {
+        let request = self.retained_start.as_ref().ok_or_else(|| {
+            qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM replacement has no retained Start request",
+            )
+        })?;
+        let exact_target = ContainerTarget::exact(request.target.id.clone(), record.generation);
+        if request.target != exact_target || request.target.id != self.retained_create.id {
+            return Err(qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM recovery Start target differs from the durable record",
+            ));
+        }
+        Ok(DriverStartRequest {
+            context: request.context.clone(),
+            target: exact_target,
+            bundle,
+        })
+    }
+
+    fn recovery_kill_request(&self, record: &ContainerRecord) -> Result<DriverKillRequest> {
+        let request = self.retained_kill.as_ref().ok_or_else(|| {
+            qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM replacement has no retained Kill request",
+            )
+        })?;
+        let exact_target = ContainerTarget::exact(request.target.id.clone(), record.generation);
+        if request.target != exact_target || request.target.id != self.retained_create.id {
+            return Err(qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM recovery Kill target differs from the durable record",
+            ));
+        }
+        Ok(DriverKillRequest {
+            context: request.context.clone(),
+            target: exact_target,
+            signal: request.signal,
+            all: request.all,
+        })
+    }
+}

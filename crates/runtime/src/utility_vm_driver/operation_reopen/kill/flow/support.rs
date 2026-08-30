@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use a3s_oci_agent_protocol::AgentTransportOperationStage;
-use a3s_oci_sdk::{ContainerTarget, Error, ErrorCode, OperationId, StartRequest};
+use a3s_oci_sdk::{
+    ContainerTarget, Error, ErrorCode, KillRequest, OperationId, Signal, StartRequest,
+};
 
 pub(super) use super::super::super::workload_marker::{
     path_absent, reset_marker, runtime_marker, wait_for_replacement_marker,
@@ -9,13 +11,17 @@ pub(super) use super::super::super::workload_marker::{
 use crate::transport_cleanup_report::is_retryable_disconnect_operation;
 use crate::OciVmOperationReopenReplacementReport;
 
+pub(super) type KillIdentity = (OperationId, ContainerTarget, Signal, bool);
+
 pub(super) struct FirstOwnerOutcome {
     pub(super) target: ContainerTarget,
     pub(super) mount_root: PathBuf,
     pub(super) marker: PathBuf,
     pub(super) create_identity: (OperationId, ContainerTarget),
     pub(super) start_identity: (OperationId, ContainerTarget),
+    pub(super) kill_identity: KillIdentity,
     pub(super) start: StartRequest,
+    pub(super) kill: KillRequest,
     pub(super) response_delivered: bool,
 }
 
@@ -39,7 +45,7 @@ pub(super) fn record_interruption(
         Ok(())
     } else {
         Err(format!(
-            "first KVM owner returned an unexpected Start transport error at {}: {error}",
+            "first KVM owner returned an unexpected Kill transport error at {}: {error}",
             stage.as_str()
         ))
     }

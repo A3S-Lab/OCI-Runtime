@@ -1,16 +1,15 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use a3s_oci_agent_protocol::GuestAgentService;
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, HostPlatform, IsolationClass,
 };
-use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, AttachmentCapabilities, ContainerRecord, ContainerTarget, CreateRequest, Error,
-    ErrorCode, OciBundle, OperationId, Result, RuntimeOperation, StartRequest,
+    ErrorCode, KillRequest, OciBundle, OperationId, Result, RuntimeOperation, Signal, StartRequest,
     RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
 };
 use tokio::sync::Mutex;
@@ -24,10 +23,12 @@ use crate::agent_session::{
     UtilityVmSession, UtilityVmSessionQualification, VerifiedLinuxUtilityVmConnectOptions,
 };
 use crate::driver::{
-    DriverCreateAttachments, DriverCreateRequest, DriverDeleteRequest, DriverKillRequest,
-    DriverStartRequest, DriverState, OciHookPhase, RuntimeDriver,
+    DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
+    OciHookPhase, RuntimeDriver,
 };
 use crate::{AgentVmSmokeReport, DriverRecovery};
+
+mod recovery;
 
 const QUALIFICATION_OPERATIONS: [RuntimeOperation; 5] = [
     RuntimeOperation::Create,
@@ -55,15 +56,21 @@ pub(super) struct QualificationKvmOperationDriver {
     handoff: BundleHandoffStore,
     retained_create: CreateRequest,
     retained_start: Option<StartRequest>,
+    retained_kill: Option<KillRequest>,
+    recovery_marker: Option<PathBuf>,
     qualification: Option<UtilityVmSessionQualification>,
     session: Mutex<Option<ActiveSession>>,
     completed_report: Mutex<Option<AgentVmSmokeReport>>,
     create_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
     start_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
+    kill_identity: StdMutex<Option<(OperationId, ContainerTarget, Signal, bool)>>,
     start_calls: AtomicU32,
+    kill_calls: AtomicU32,
     recovery_calls: AtomicU32,
     rehydrated_created_record: AtomicBool,
     rehydrated_running_record: AtomicBool,
+    rehydrated_stopped_record: AtomicBool,
+    rehydrated_running_pid: AtomicI32,
 }
 
 impl QualificationKvmOperationDriver {
@@ -86,15 +93,21 @@ impl QualificationKvmOperationDriver {
             ),
             retained_create,
             retained_start: None,
+            retained_kill: None,
+            recovery_marker: None,
             qualification,
             session: Mutex::new(None),
             completed_report: Mutex::new(None),
             create_identity: StdMutex::new(None),
             start_identity: StdMutex::new(None),
+            kill_identity: StdMutex::new(None),
             start_calls: AtomicU32::new(0),
+            kill_calls: AtomicU32::new(0),
             recovery_calls: AtomicU32::new(0),
             rehydrated_created_record: AtomicBool::new(false),
             rehydrated_running_record: AtomicBool::new(false),
+            rehydrated_stopped_record: AtomicBool::new(false),
+            rehydrated_running_pid: AtomicI32::new(0),
         }
     }
 
@@ -106,6 +119,21 @@ impl QualificationKvmOperationDriver {
     ) -> Self {
         let mut driver = Self::new(prepared, console, retained_create, None);
         driver.retained_start = Some(retained_start);
+        driver
+    }
+
+    pub(super) fn with_kill_recovery(
+        prepared: &PreparedUtilityVmLayout,
+        console: PathBuf,
+        retained_create: CreateRequest,
+        retained_start: StartRequest,
+        retained_kill: KillRequest,
+        recovery_marker: PathBuf,
+    ) -> Self {
+        let mut driver =
+            Self::with_start_recovery(prepared, console, retained_create, retained_start);
+        driver.retained_kill = Some(retained_kill);
+        driver.recovery_marker = Some(recovery_marker);
         driver
     }
 
@@ -246,57 +274,34 @@ impl QualificationKvmOperationDriver {
             .await
     }
 
-    async fn recovery_request(&self, record: &ContainerRecord) -> Result<DriverCreateRequest> {
-        let attachment_digest = self.retained_create.attachments.digest()?;
-        if record.driver != DriverKind::LibkrunKvm
-            || record.isolation != IsolationClass::DedicatedVm
-            || record.state.id() != self.retained_create.id.as_str()
-            || record.config_digest != self.retained_create.bundle.config_digest()
-            || record.attachments_digest.as_deref() != Some(attachment_digest.as_str())
+    async fn dispatch_kill(&self, request: DriverKillRequest) -> Result<DriverState> {
+        let identity = (
+            request.context.operation_id.clone(),
+            request.target.clone(),
+            request.signal,
+            request.all,
+        );
         {
-            return Err(qualification_error(
-                ErrorCode::FailedPrecondition,
-                "durable KVM Create record differs from the retained qualification request",
-            ));
+            let mut retained = self.kill_identity.lock().map_err(|_| {
+                qualification_error(ErrorCode::Internal, "KVM kill identity lock was poisoned")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &identity => {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        "qualification KVM owner received a changed Kill identity",
+                    ));
+                }
+                Some(_) => {}
+                None => *retained = Some(identity),
+            }
         }
-        let target = ContainerTarget::exact(self.retained_create.id.clone(), record.generation);
-        let mut request = DriverCreateRequest {
-            context: self.retained_create.context.clone(),
-            target,
-            bundle: self.retained_create.bundle.clone(),
-            isolation: self.retained_create.isolation.clone(),
-            io: self.retained_create.attachments.process_io().clone(),
-            attachment_contract: self.retained_create.attachments.clone(),
-            tee_launch: None,
-            attachments: DriverCreateAttachments::None,
-        };
-        request.bundle = self.handoff.prepare(&request).await?;
-        Ok(request)
-    }
-
-    fn recovery_start_request(
-        &self,
-        record: &ContainerRecord,
-        bundle: OciBundle,
-    ) -> Result<DriverStartRequest> {
-        let request = self.retained_start.as_ref().ok_or_else(|| {
-            qualification_error(
-                ErrorCode::FailedPrecondition,
-                "qualification KVM replacement has no retained Start request",
-            )
-        })?;
-        let exact_target = ContainerTarget::exact(request.target.id.clone(), record.generation);
-        if request.target != exact_target || request.target.id != self.retained_create.id {
-            return Err(qualification_error(
-                ErrorCode::FailedPrecondition,
-                "qualification KVM recovery Start target differs from the durable record",
-            ));
-        }
-        Ok(DriverStartRequest {
-            context: request.context.clone(),
-            target: exact_target,
-            bundle,
-        })
+        self.kill_calls.fetch_add(1, Ordering::SeqCst);
+        self.live_session(&request.target)
+            .await?
+            .client
+            .kill(request)
+            .await
     }
 
     pub(super) async fn shutdown(&self) -> AgentVmSmokeReport {
@@ -366,6 +371,20 @@ impl QualificationKvmOperationDriver {
         self.start_calls.load(Ordering::SeqCst)
     }
 
+    pub(super) fn kill_identity(
+        &self,
+    ) -> std::result::Result<(OperationId, ContainerTarget, Signal, bool), String> {
+        self.kill_identity
+            .lock()
+            .map_err(|_| "KVM kill identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification KVM owner recorded no Kill dispatch".to_string())
+    }
+
+    pub(super) fn kill_calls(&self) -> u32 {
+        self.kill_calls.load(Ordering::SeqCst)
+    }
+
     pub(super) fn recovery_calls(&self) -> u32 {
         self.recovery_calls.load(Ordering::SeqCst)
     }
@@ -376,6 +395,17 @@ impl QualificationKvmOperationDriver {
 
     pub(super) fn rehydrated_running_record(&self) -> bool {
         self.rehydrated_running_record.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn rehydrated_stopped_record(&self) -> bool {
+        self.rehydrated_stopped_record.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn rehydrated_running_pid(&self) -> Option<i32> {
+        match self.rehydrated_running_pid.load(Ordering::SeqCst) {
+            pid if pid > 0 => Some(pid),
+            _ => None,
+        }
     }
 
     async fn live_session(&self, target: &ContainerTarget) -> Result<ActiveSession> {
@@ -456,55 +486,7 @@ impl RuntimeDriver for QualificationKvmOperationDriver {
     }
 
     async fn recover(&self, record: &ContainerRecord) -> Result<DriverRecovery> {
-        let recovery_state_supported = matches!(
-            record.state.status(),
-            ContainerState::Creating | ContainerState::Created
-        ) || (*record.state.status() == ContainerState::Running
-            && self.retained_start.is_some());
-        if !recovery_state_supported {
-            return Err(qualification_error(
-                ErrorCode::FailedPrecondition,
-                "KVM operation-reopen qualification accepts only its creating, created, or retained running durable state",
-            ));
-        }
-        if self.recovery_calls.fetch_add(1, Ordering::SeqCst) != 0 {
-            return Err(qualification_error(
-                ErrorCode::Conflict,
-                "KVM operation-reopen qualification recovered more than one durable record",
-            ));
-        }
-        let request = self.recovery_request(record).await?;
-        let recovery_bundle = request.bundle.clone();
-        self.recovery.recover(&request.target, record, None).await?;
-        self.recovery.remove(&request.target, None).await?;
-        if *record.state.status() == ContainerState::Creating {
-            return Ok(DriverRecovery::none());
-        }
-        let observed = self.dispatch_create(request).await?;
-        if observed.status() != ContainerState::Created {
-            return Err(qualification_error(
-                ErrorCode::Conflict,
-                "replacement KVM owner did not recreate OCI created state",
-            ));
-        }
-        self.rehydrated_created_record.store(true, Ordering::SeqCst);
-        if *record.state.status() == ContainerState::Created {
-            return DriverRecovery::recreated_created(observed);
-        }
-        let running = self
-            .dispatch_start(self.recovery_start_request(record, recovery_bundle)?)
-            .await?;
-        if running.status() != ContainerState::Running
-            || running.paused()
-            || !running.pid().is_some_and(|pid| pid > 0)
-        {
-            return Err(qualification_error(
-                ErrorCode::Conflict,
-                "replacement KVM owner did not recreate an active OCI running state",
-            ));
-        }
-        self.rehydrated_running_record.store(true, Ordering::SeqCst);
-        DriverRecovery::recreated_running(running)
+        self.recover_record(record).await
     }
 
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {
@@ -520,11 +502,7 @@ impl RuntimeDriver for QualificationKvmOperationDriver {
     }
 
     async fn kill(&self, request: DriverKillRequest) -> Result<DriverState> {
-        self.live_session(&request.target)
-            .await?
-            .client
-            .kill(request)
-            .await
+        self.dispatch_kill(request).await
     }
 
     async fn delete(&self, request: DriverDeleteRequest) -> Result<()> {
