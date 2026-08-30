@@ -445,6 +445,28 @@ Every path rejects stale generations at both boundaries, uses stopped-only
 Delete, and restores every inventory. The aggregate schema is
 `a3s.oci.linux-kvm-wait-reopen-matrix.v1`.
 
+Exec retains the exact setup Create and Start requests plus a nonce-bound,
+long-running terminal process and its I/O shape:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_EXEC_REOPEN_REPORT=/absolute/path/to/exec-reopen.json \
+  bash .github/scripts/linux-kvm-exec-reopen.sh
+```
+
+The first eight Host/Guest points retain Running state and a Prepared Exec
+journal. A fresh `HostRuntimeService` and VM owner recreate and start only the
+init process, rebind its positive PID, verify the replacement init marker, and
+dispatch the unchanged terminal Exec once when the API retries. At
+`guest-after-response-write`, the process response is already durable:
+recovery recreates both init and Exec, rebinds both positive PIDs into the
+completed responses, verifies the distinct Exec marker, and lets the Host
+replay without another API-driven Exec dispatch. Every path preserves the
+exact generation, operation, process, process specification, terminal, and I/O
+identity; rejects a changed Host request and stale Host/Guest generations;
+force-deletes the workload; and restores every inventory. The aggregate schema
+is `a3s.oci.linux-kvm-exec-reopen-matrix.v1`.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -468,8 +490,8 @@ nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
 
 If KVM is unavailable, none of the lifecycle, recovery, operation-reopen, or soak
 scripts downloads or unpacks the Alpine fixture. Lifecycle, recovery, and
-Create/State/Start/Kill/Delete/Wait reopen emit zero-case `unavailable` reports;
-soak emits `completed_iterations: 0` and `fixture_downloaded: false`. CI
+Create/State/Start/Kill/Delete/Wait/Exec reopen emit zero-case `unavailable`
+reports; soak emits `completed_iterations: 0` and `fixture_downloaded: false`. CI
 uploads those reports, but they are not `available` hardware results. The
 driver remains `probe-only` until fresh x86_64 and AArch64 KVM hosts retain every required
 available report, including the integrated Guest path-isolation and
@@ -502,9 +524,14 @@ once; `guest-after-response-write` retained the terminal cache and replayed the
 replacement and later Wait calls with zero driver dispatch. The retained
 aggregate has SHA-256
 `9f4c163c2d3116c8b2fae8bb1739b048b43160dd01f32b9163cad4c99c8ada10`.
-AArch64 hardware evidence and the other 14
-workload-operation matrices plus Host shutdown remain open; the candidate
-therefore remains `probe-only`.
+Clean revision `18ecaf1` then retained all 9/9 terminal Exec owner
+replacements. Its first eight paths recovered only the Running init and
+dispatched the exact Exec once; `guest-after-response-write` reconstructed the
+committed Exec, rebound its positive PID, and replayed the Host response with
+zero additional API-driven dispatch. The retained aggregate has SHA-256
+`d07bb4575c2927373f6e8a8957cbde6cfa7a5da3eea8eb072eddeef3d4199b5a`.
+AArch64 hardware evidence and the other 13 workload-operation matrices plus
+Host shutdown remain open; the candidate therefore remains `probe-only`.
 
 ## Experimental CRIU checkpoint and restore gate
 
