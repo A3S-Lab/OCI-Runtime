@@ -1365,7 +1365,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   retained directory instead of the procfs descriptor symlink. A real KVM
   Guest now mounts the share, starts the static Agent, and completes the
   authenticated protocol-v10 bridge rather than failing its first state-path
-  lookup with `EIO`.
+  lookup with `EIO`. The post-probe failure gate also requires the injected
+  pre-entry path to leave no console artifact, matching failed-launch cleanup.
 - Prepare the protected `run` directory for both pre-positioned and
   runtime-owned WHPX bundles inside the serialized Create boundary before the
   first utility-VM launch. Failed Agent-session establishment now also removes
