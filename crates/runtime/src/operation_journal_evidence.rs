@@ -444,7 +444,7 @@ pub(crate) async fn process_exit_cache(
                 path.display()
             )
         })?;
-    if record.target != *target || !record.pid.is_some_and(|pid| pid > 0) {
+    if record.target != *target || record.pid.is_none_or(|pid| pid == 0) {
         return Err(format!(
             "durable process exit cache {} changed its target or positive PID",
             path.display()

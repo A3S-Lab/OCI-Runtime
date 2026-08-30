@@ -122,8 +122,7 @@ impl SeccompPlan {
             return Err(seccomp_error(
                 ErrorCode::ResourceExhausted,
                 format!(
-                    "seccomp policy requires {} stacked filters; maximum is {MAX_FILTERS}",
-                    program_count
+                    "seccomp policy requires {program_count} stacked filters; maximum is {MAX_FILTERS}"
                 ),
             ));
         }

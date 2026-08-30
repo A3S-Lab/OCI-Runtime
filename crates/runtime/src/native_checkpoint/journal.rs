@@ -467,10 +467,7 @@ fn load_record(path: &Path, expected: &OperationId) -> Result<Option<JournalReco
     if record.operation_id() != expected {
         return Err(checkpoint_error(
             ErrorCode::FailedPrecondition,
-            format!(
-                "checkpoint operation journal filename does not match {}",
-                expected
-            ),
+            format!("checkpoint operation journal filename does not match {expected}"),
         ));
     }
     Ok(Some(record))

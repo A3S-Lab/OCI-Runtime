@@ -447,10 +447,7 @@ pub(super) async fn run(
         let fault_crossings = report.fault_crossings;
         append_reason(
             &mut report,
-            format!(
-                "selected transport point crossed {} times instead of once",
-                fault_crossings
-            ),
+            format!("selected transport point crossed {fault_crossings} times instead of once"),
         );
     } else if !report.bridge.is_success() {
         let reason = report

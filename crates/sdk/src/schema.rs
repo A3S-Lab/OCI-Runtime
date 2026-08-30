@@ -163,8 +163,7 @@ impl OciSchemaValidator {
         Err(Error::new(
             ErrorCode::InvalidArgument,
             format!(
-                "OCI {} failed pinned 1.3.0 schema validation ({suffix} violation(s)): {first}",
-                document
+                "OCI {document} failed pinned 1.3.0 schema validation ({suffix} violation(s)): {first}"
             ),
         )
         .for_operation(document.operation()))

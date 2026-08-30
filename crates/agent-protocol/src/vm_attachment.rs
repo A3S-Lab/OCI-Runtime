@@ -364,10 +364,10 @@ impl AgentVmAttachmentManifest {
                 self.schema_version
             )));
         }
-        if !self
+        if self
             .target
             .generation
-            .is_some_and(|generation| generation.0 > 0)
+            .is_none_or(|generation| generation.0 == 0)
         {
             return Err(manifest_error(format!(
                 "utility-VM attachment manifest for {} requires a positive exact generation",

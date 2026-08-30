@@ -77,8 +77,7 @@ impl IntelRdtPlan {
         let total_lines = schemata_writes.iter().map(Vec::len).sum::<usize>();
         if total_lines > OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_LINES {
             return Err(plan_error(format!(
-                "linux.intelRdt contains {total_lines} schemata lines across all ordered writes; maximum is {}",
-                OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_LINES
+                "linux.intelRdt contains {total_lines} schemata lines across all ordered writes; maximum is {OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_LINES}"
             )));
         }
         let total_bytes = schemata_writes
@@ -90,8 +89,7 @@ impl IntelRdtPlan {
             .ok_or_else(|| plan_error("linux.intelRdt schemata size overflow"))?;
         if total_bytes > OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_BYTES {
             return Err(plan_error(format!(
-                "linux.intelRdt schemata exceeds the {}-byte limit",
-                OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_BYTES
+                "linux.intelRdt schemata exceeds the {OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_BYTES}-byte limit"
             )));
         }
 
@@ -565,8 +563,7 @@ fn validate_clos_id(clos_id: &str) -> Result<()> {
         || clos_id.as_bytes().contains(&0)
     {
         return Err(plan_error(format!(
-            "linux.intelRdt.closID must be / or a nonempty safe resctrl directory name of at most {} bytes",
-            OCI_LINUX_INTEL_RDT_MAX_CLOS_ID_BYTES
+            "linux.intelRdt.closID must be / or a nonempty safe resctrl directory name of at most {OCI_LINUX_INTEL_RDT_MAX_CLOS_ID_BYTES} bytes"
         )));
     }
     Ok(())
@@ -596,8 +593,7 @@ fn validate_schema_line(field: &str, line: &str, prefix: Option<&str>) -> Result
         || line.contains('\n')
     {
         return Err(plan_error(format!(
-            "{field} must be one nonempty resctrl schemata line of at most {} bytes",
-            OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_LINE_BYTES
+            "{field} must be one nonempty resctrl schemata line of at most {OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_LINE_BYTES} bytes"
         )));
     }
     if prefix.is_some_and(|prefix| !line.starts_with(&format!("{prefix}:"))) {

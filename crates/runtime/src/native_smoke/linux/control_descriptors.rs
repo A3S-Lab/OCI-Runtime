@@ -106,8 +106,7 @@ impl ControlDescriptorFixture {
             }
             if bytes.len() >= INIT_LOG_CONTENTS.len() || Instant::now() >= deadline {
                 return Err(format!(
-                    "inherited init log contained {:?}, expected {:?}",
-                    bytes, INIT_LOG_CONTENTS
+                    "inherited init log contained {bytes:?}, expected {INIT_LOG_CONTENTS:?}"
                 ));
             }
             sleep(CONTROL_POLL_INTERVAL).await;
