@@ -523,7 +523,12 @@ then durably caches `signal=9, oom_killed=false`. A fully written response
 already has that cache, so Host reopen and later Wait calls replay it without a
 driver or Guest dispatch. Stale generations fail at both Host and Guest
 boundaries. The August 10, 2026 Apple Silicon matrix passed all nine stages in
-18 fresh VMs.
+18 fresh VMs. On August 30, 2026, clean revision `b491195` also passed all nine
+stages on x86_64 Linux KVM. Its first eight paths rebuilt the stopped Guest
+tombstone and dispatched the exact Wait once; `guest-after-response-write`
+retained the terminal cache and replayed replacement and later Wait calls with
+zero driver dispatch. The retained aggregate has SHA-256
+`9f4c163c2d3116c8b2fae8bb1739b048b43160dd01f32b9163cad4c99c8ada10`.
 
 Real terminal Exec recovery now crosses the same nine points under
 `a3s.oci.oci-vm-operation-reopen-replacement.v6`. Before returning success, the

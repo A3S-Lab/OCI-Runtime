@@ -424,6 +424,27 @@ identities and restores every endpoint, process, bootstrap, handoff, share,
 recovery, and marker inventory. The aggregate schema is
 `a3s.oci.linux-kvm-delete-reopen-matrix.v1`.
 
+Wait uses the same exact stopped setup but has no operation identity of its
+own. It resolves the current target to the durable generation and retains a
+15-second timeout:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_WAIT_REOPEN_REPORT=/absolute/path/to/wait-reopen.json \
+  bash .github/scripts/linux-kvm-wait-reopen.sh
+```
+
+The first eight Host/Guest points retain Stopped state without an init exit
+cache. A fresh `HostRuntimeService` and VM owner recreate, start, and kill the
+workload with the unchanged setup identities, verify the replacement marker,
+dispatch the exact resolved Wait once, and durably cache
+`signal=9, oom_killed=false`. At `guest-after-response-write`, that cache is
+already durable: recovery still rebuilds the complete Guest tombstone, but the
+replacement and every later Wait replay without a driver or Guest dispatch.
+Every path rejects stale generations at both boundaries, uses stopped-only
+Delete, and restores every inventory. The aggregate schema is
+`a3s.oci.linux-kvm-wait-reopen-matrix.v1`.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -447,7 +468,7 @@ nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
 
 If KVM is unavailable, none of the lifecycle, recovery, operation-reopen, or soak
 scripts downloads or unpacks the Alpine fixture. Lifecycle, recovery, and
-Create/State/Start/Kill/Delete reopen emit zero-case `unavailable` reports;
+Create/State/Start/Kill/Delete/Wait reopen emit zero-case `unavailable` reports;
 soak emits `completed_iterations: 0` and `fixture_downloaded: false`. CI
 uploads those reports, but they are not `available` hardware results. The
 driver remains `probe-only` until fresh x86_64 and AArch64 KVM hosts retain every required
@@ -475,7 +496,13 @@ once; `guest-after-response-write` started a distinct empty owner and replayed
 the SucceededEmpty journal with zero workload recovery and zero driver Delete
 dispatch. The retained aggregate has SHA-256
 `c55b9284a3800bdeba8ecf6374a3cd33976b6e3a6733b716ca62c84945f18ae9`.
-AArch64 hardware evidence and the other 15
+Clean revision `b491195` then retained all 9/9 Wait owner replacements. Its
+first eight paths rebuilt the Stopped tombstone and dispatched the exact Wait
+once; `guest-after-response-write` retained the terminal cache and replayed the
+replacement and later Wait calls with zero driver dispatch. The retained
+aggregate has SHA-256
+`9f4c163c2d3116c8b2fae8bb1739b048b43160dd01f32b9163cad4c99c8ada10`.
+AArch64 hardware evidence and the other 14
 workload-operation matrices plus Host shutdown remain open; the candidate
 therefore remains `probe-only`.
 
