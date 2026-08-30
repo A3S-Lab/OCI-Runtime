@@ -374,6 +374,14 @@ available report, including the integrated Guest path-isolation and
 operation-stage evidence. Other real-entry Guest negative-isolation profiles
 remain separate promotion gates.
 
+On August 30, 2026, clean x86_64 revision `e7567f9` retained `available`
+17/17 lifecycle, 1/1 owner-death/restart, and 25/25 fresh-generation soak
+reports. Clean revision `c435e26` then retained all 9/9 Create operation-stage
+owner replacements under the scope above, including committed-state
+rehydration at `guest-after-response-write`. AArch64 hardware evidence and the
+other 19 workload-operation matrices plus Host shutdown remain open; the
+candidate therefore remains `probe-only`.
+
 ## Experimental CRIU checkpoint and restore gate
 
 Checkpoint is a separate explicit opt-in from the normal Native Linux
