@@ -37,7 +37,7 @@ use crate::{AgentVmSmokeReport, DriverRecovery};
 mod dispatch;
 mod recovery;
 
-const QUALIFICATION_OPERATIONS: [RuntimeOperation; 10] = [
+const QUALIFICATION_OPERATIONS: [RuntimeOperation; 11] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -48,6 +48,7 @@ const QUALIFICATION_OPERATIONS: [RuntimeOperation; 10] = [
     RuntimeOperation::SignalProcess,
     RuntimeOperation::WaitProcess,
     RuntimeOperation::Pause,
+    RuntimeOperation::Resume,
 ];
 const QUALIFICATION_SCOPE: &str = "linux-kvm-operation-stage-reopen-only-v1";
 
@@ -80,6 +81,7 @@ pub(super) struct QualificationKvmOperationDriver {
     retained_signal_ready_marker: Option<(PathBuf, Vec<u8>)>,
     retained_pause: Option<ContainerOperationRequest>,
     retained_pause_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    retained_resume: Option<ContainerOperationRequest>,
     recovery_exec_is_live: bool,
     recovery_marker: Option<PathBuf>,
     qualification: Option<UtilityVmSessionQualification>,
@@ -94,6 +96,7 @@ pub(super) struct QualificationKvmOperationDriver {
     exec_identity: StdMutex<Option<DriverExecRequest>>,
     signal_process_identity: StdMutex<Option<DriverSignalProcessRequest>>,
     pause_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
+    resume_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
     start_calls: AtomicU32,
     kill_calls: AtomicU32,
     delete_calls: AtomicU32,
@@ -102,6 +105,7 @@ pub(super) struct QualificationKvmOperationDriver {
     exec_calls: AtomicU32,
     signal_process_calls: AtomicU32,
     pause_calls: AtomicU32,
+    resume_calls: AtomicU32,
     recovery_calls: AtomicU32,
     rehydrated_created_record: AtomicBool,
     rehydrated_running_record: AtomicBool,
@@ -109,6 +113,7 @@ pub(super) struct QualificationKvmOperationDriver {
     rehydrated_exec_record: AtomicBool,
     rehydrated_signal_process: AtomicBool,
     rehydrated_paused_record: AtomicBool,
+    rehydrated_resumed_record: AtomicBool,
     rehydrated_running_pid: AtomicI32,
     rehydrated_exec_pid: AtomicI32,
 }
@@ -139,6 +144,7 @@ impl QualificationKvmOperationDriver {
             retained_signal_ready_marker: None,
             retained_pause: None,
             retained_pause_ready_marker: None,
+            retained_resume: None,
             recovery_exec_is_live: true,
             recovery_marker: None,
             qualification,
@@ -153,6 +159,7 @@ impl QualificationKvmOperationDriver {
             exec_identity: StdMutex::new(None),
             signal_process_identity: StdMutex::new(None),
             pause_identity: StdMutex::new(None),
+            resume_identity: StdMutex::new(None),
             start_calls: AtomicU32::new(0),
             kill_calls: AtomicU32::new(0),
             delete_calls: AtomicU32::new(0),
@@ -161,6 +168,7 @@ impl QualificationKvmOperationDriver {
             exec_calls: AtomicU32::new(0),
             signal_process_calls: AtomicU32::new(0),
             pause_calls: AtomicU32::new(0),
+            resume_calls: AtomicU32::new(0),
             recovery_calls: AtomicU32::new(0),
             rehydrated_created_record: AtomicBool::new(false),
             rehydrated_running_record: AtomicBool::new(false),
@@ -168,6 +176,7 @@ impl QualificationKvmOperationDriver {
             rehydrated_exec_record: AtomicBool::new(false),
             rehydrated_signal_process: AtomicBool::new(false),
             rehydrated_paused_record: AtomicBool::new(false),
+            rehydrated_resumed_record: AtomicBool::new(false),
             rehydrated_running_pid: AtomicI32::new(0),
             rehydrated_exec_pid: AtomicI32::new(0),
         }
@@ -302,6 +311,28 @@ impl QualificationKvmOperationDriver {
             Self::with_start_recovery(prepared, console, retained_create, retained_start);
         driver.retained_pause = retained_pause;
         driver.retained_pause_ready_marker = retained_pause_ready_marker;
+        driver
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn with_resume_recovery(
+        prepared: &PreparedUtilityVmLayout,
+        console: PathBuf,
+        retained_create: CreateRequest,
+        retained_start: StartRequest,
+        retained_pause: ContainerOperationRequest,
+        retained_pause_ready_marker: (PathBuf, Vec<u8>),
+        retained_resume: Option<ContainerOperationRequest>,
+    ) -> Self {
+        let mut driver = Self::with_pause_recovery(
+            prepared,
+            console,
+            retained_create,
+            retained_start,
+            Some(retained_pause),
+            Some(retained_pause_ready_marker),
+        );
+        driver.retained_resume = retained_resume;
         driver
     }
 
@@ -551,6 +582,20 @@ impl QualificationKvmOperationDriver {
         self.pause_calls.load(Ordering::SeqCst)
     }
 
+    pub(super) fn resume_identity(
+        &self,
+    ) -> std::result::Result<(OperationId, ContainerTarget), String> {
+        self.resume_identity
+            .lock()
+            .map_err(|_| "KVM Resume identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification KVM owner recorded no Resume dispatch".to_string())
+    }
+
+    pub(super) fn resume_calls(&self) -> u32 {
+        self.resume_calls.load(Ordering::SeqCst)
+    }
+
     pub(super) fn recovery_calls(&self) -> u32 {
         self.recovery_calls.load(Ordering::SeqCst)
     }
@@ -577,6 +622,10 @@ impl QualificationKvmOperationDriver {
 
     pub(super) fn rehydrated_paused_record(&self) -> bool {
         self.rehydrated_paused_record.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn rehydrated_resumed_record(&self) -> bool {
+        self.rehydrated_resumed_record.load(Ordering::SeqCst)
     }
 
     pub(super) fn rehydrated_running_pid(&self) -> Option<i32> {
@@ -659,6 +708,18 @@ impl QualificationKvmOperationDriver {
             .owner
             .client()
             .pause(request)
+            .await
+    }
+
+    pub(super) async fn guest_resume(
+        &self,
+        request: AgentContainerOperationRequest,
+    ) -> Result<a3s_oci_agent_protocol::AgentState> {
+        self.live_session(&request.target)
+            .await?
+            .owner
+            .client()
+            .resume(request)
             .await
     }
 }
@@ -766,6 +827,10 @@ impl RuntimeDriver for QualificationKvmOperationDriver {
 
     async fn pause(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
         self.dispatch_pause(request).await
+    }
+
+    async fn resume(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
+        self.dispatch_resume(request).await
     }
 }
 

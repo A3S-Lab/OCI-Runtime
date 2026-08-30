@@ -57,12 +57,14 @@ impl QualificationKvmOperationDriver {
                 "KVM operation-reopen qualification accepts only its creating, created, retained running, or retained stopped durable state",
             ));
         }
+        let recovery_rebuilds_paused_state =
+            self.retained_pause.is_some() && self.retained_resume.is_none();
         if *record.state.status() == ContainerState::Running
-            && record.is_paused() != self.retained_pause.is_some()
+            && record.is_paused() != recovery_rebuilds_paused_state
         {
             return Err(qualification_error(
                 ErrorCode::FailedPrecondition,
-                "qualification KVM Pause recovery request does not match the durable freezer state",
+                "qualification KVM freezer recovery history does not match the durable state",
             ));
         }
         if self.recovery_calls.fetch_add(1, Ordering::SeqCst) != 0 {
@@ -141,6 +143,27 @@ impl QualificationKvmOperationDriver {
                     ));
                 }
                 self.rehydrated_paused_record.store(true, Ordering::SeqCst);
+                if self.retained_resume.is_some() {
+                    let resumed = self
+                        .dispatch_resume(self.recovery_resume_request(record)?)
+                        .await?;
+                    if resumed.status() != ContainerState::Running
+                        || resumed.paused()
+                        || resumed.pid() != Some(running_pid)
+                    {
+                        return Err(qualification_error(
+                            ErrorCode::Conflict,
+                            format!(
+                                "replacement KVM Guest rebuilt Resume as {} with PID {:?} and paused={}; durable state requires unpaused running PID {running_pid}",
+                                resumed.status(),
+                                resumed.pid(),
+                                resumed.paused()
+                            ),
+                        ));
+                    }
+                    self.rehydrated_resumed_record.store(true, Ordering::SeqCst);
+                    return DriverRecovery::recreated_running(resumed);
+                }
                 return DriverRecovery::recreated_paused_running(paused);
             }
             if self.retained_exec.is_some() {
@@ -376,6 +399,29 @@ impl QualificationKvmOperationDriver {
             return Err(qualification_error(
                 ErrorCode::FailedPrecondition,
                 "qualification KVM recovery Pause target differs from the durable record",
+            ));
+        }
+        Ok(DriverContainerOperationRequest {
+            context: request.context.clone(),
+            target: exact_target,
+        })
+    }
+
+    fn recovery_resume_request(
+        &self,
+        record: &ContainerRecord,
+    ) -> Result<DriverContainerOperationRequest> {
+        let request = self.retained_resume.as_ref().ok_or_else(|| {
+            qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM replacement has no retained Resume request",
+            )
+        })?;
+        let exact_target = ContainerTarget::exact(request.target.id.clone(), record.generation);
+        if request.target != exact_target || request.target.id != self.retained_create.id {
+            return Err(qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM recovery Resume target differs from the durable record",
             ));
         }
         Ok(DriverContainerOperationRequest {

@@ -263,4 +263,32 @@ impl QualificationKvmOperationDriver {
             .pause(request)
             .await
     }
+
+    pub(super) async fn dispatch_resume(
+        &self,
+        request: DriverContainerOperationRequest,
+    ) -> Result<DriverState> {
+        let identity = (request.context.operation_id.clone(), request.target.clone());
+        {
+            let mut retained = self.resume_identity.lock().map_err(|_| {
+                qualification_error(ErrorCode::Internal, "KVM Resume identity lock was poisoned")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &identity => {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        "qualification KVM owner received a changed Resume identity",
+                    ));
+                }
+                Some(_) => {}
+                None => *retained = Some(identity),
+            }
+        }
+        self.resume_calls.fetch_add(1, Ordering::SeqCst);
+        self.live_session(&request.target)
+            .await?
+            .client
+            .resume(request)
+            .await
+    }
 }
