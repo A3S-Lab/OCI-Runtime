@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use a3s_oci_sdk::{ContainerRecord, ContainerTarget, OperationId};
+use a3s_oci_sdk::{ContainerRecord, ContainerTarget, ExitStatus, OperationId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ContainerOperationJournalStatus {
@@ -12,6 +12,56 @@ pub(crate) enum ContainerOperationJournalStatus {
 pub(crate) enum EmptyOperationJournalStatus {
     Prepared,
     SucceededEmpty,
+}
+
+pub(crate) async fn init_exit_cache(
+    state_root: &Path,
+    target: &ContainerTarget,
+) -> Result<Option<ExitStatus>, String> {
+    let path = state_root
+        .join("containers")
+        .join(target.id.as_str())
+        .join("record.json");
+    let contents = tokio::fs::read(&path).await.map_err(|error| {
+        format!(
+            "failed to read durable Wait container record {}: {error}",
+            path.display()
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_slice(&contents).map_err(|error| {
+        format!(
+            "failed to decode durable Wait container record {}: {error}",
+            path.display()
+        )
+    })?;
+    let expected_generation = serde_json::to_value(target.generation)
+        .map_err(|error| format!("failed to encode expected Wait generation: {error}"))?;
+    let identity_matches = value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_str)
+        == Some(crate::state::DURABLE_CONTAINER_SCHEMA_VERSION)
+        && value.get("id").and_then(serde_json::Value::as_str) == Some(target.id.as_str())
+        && value
+            .get("record")
+            .and_then(|record| record.get("generation"))
+            == Some(&expected_generation);
+    if !identity_matches {
+        return Err(format!(
+            "durable Wait container record {} did not match the exact generation",
+            path.display()
+        ));
+    }
+    match value.get("initExitStatus") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(status) => serde_json::from_value(status.clone())
+            .map(Some)
+            .map_err(|error| {
+                format!(
+                    "failed to decode durable init exit cache {}: {error}",
+                    path.display()
+                )
+            }),
+    }
 }
 
 pub(crate) async fn empty_operation_journal_status(

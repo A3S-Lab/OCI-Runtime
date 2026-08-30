@@ -9,12 +9,11 @@ use a3s_oci_sdk::{
     KillRequest, OciBundle, OciRuntimeService, Result, RuntimeClient, RuntimeInfo, Signal,
     StartRequest, StateRequest,
 };
-use clap::Parser;
 use serde_json::json;
 use tempfile::TempDir;
 
 use super::{reject_terminal_bundle, Adapter};
-use crate::{Cli, Command};
+use crate::{try_parse_cli_for_test, Command};
 
 #[derive(Default)]
 struct MockService {
@@ -591,7 +590,7 @@ async fn terminal_bundle_is_rejected_before_runtime_mutation() {
 #[test]
 fn parser_accepts_oci_and_runc_signal_forms() {
     let positional =
-        Cli::try_parse_from(["a3s-oci", "kill", "sample", "KILL"]).expect("positional signal");
+        try_parse_cli_for_test(&["a3s-oci", "kill", "sample", "KILL"]).expect("positional signal");
     assert!(matches!(
         positional.command,
         Command::Kill {
@@ -600,8 +599,9 @@ fn parser_accepts_oci_and_runc_signal_forms() {
             ..
         } if signal == "KILL"
     ));
-    let option = Cli::try_parse_from(["a3s-oci", "kill", "--signal", "TERM", "--all", "sample"])
-        .expect("OCI signal option");
+    let option =
+        try_parse_cli_for_test(&["a3s-oci", "kill", "--signal", "TERM", "--all", "sample"])
+            .expect("OCI signal option");
     assert!(matches!(
         option.command,
         Command::Kill {

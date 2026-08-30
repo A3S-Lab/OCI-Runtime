@@ -27,55 +27,7 @@ pub(super) fn identity_or_expected(
     }
 }
 
-pub(super) async fn init_exit_cache(
-    state_root: &Path,
-    target: &ContainerTarget,
-) -> std::result::Result<Option<ExitStatus>, String> {
-    let path = state_root
-        .join("containers")
-        .join(target.id.as_str())
-        .join("record.json");
-    let contents = tokio::fs::read(&path).await.map_err(|error| {
-        format!(
-            "failed to read durable Wait container record {}: {error}",
-            path.display()
-        )
-    })?;
-    let value: serde_json::Value = serde_json::from_slice(&contents).map_err(|error| {
-        format!(
-            "failed to decode durable Wait container record {}: {error}",
-            path.display()
-        )
-    })?;
-    let expected_generation = serde_json::to_value(target.generation)
-        .map_err(|error| format!("failed to encode expected Wait generation: {error}"))?;
-    let identity_matches = value
-        .get("schemaVersion")
-        .and_then(serde_json::Value::as_str)
-        == Some("a3s.oci.container-record.v1")
-        && value.get("id").and_then(serde_json::Value::as_str) == Some(target.id.as_str())
-        && value
-            .get("record")
-            .and_then(|record| record.get("generation"))
-            == Some(&expected_generation);
-    if !identity_matches {
-        return Err(format!(
-            "durable Wait container record {} did not match the exact generation",
-            path.display()
-        ));
-    }
-    match value.get("initExitStatus") {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(status) => serde_json::from_value(status.clone())
-            .map(Some)
-            .map_err(|error| {
-                format!(
-                    "failed to decode durable init exit cache {}: {error}",
-                    path.display()
-                )
-            }),
-    }
-}
+pub(super) use crate::operation_journal_evidence::init_exit_cache;
 
 pub(super) fn operation_id(value: &str) -> std::result::Result<OperationId, String> {
     OperationId::new(value)

@@ -460,6 +460,35 @@ fn dispatch(
             target_os = "linux",
             any(target_arch = "x86_64", target_arch = "aarch64")
         ))]
+        Command::LinuxKvmWaitReopen {
+            shim,
+            runtime_root,
+            system_image_manifest,
+            bundle,
+            fault_at,
+        } => command_future!({
+            let report = a3s_oci_runtime::linux_kvm_wait_reopen_replacement(
+                a3s_oci_runtime::LinuxKvmWaitReopenConfig {
+                    shim,
+                    runtime_root,
+                    system_image_manifest,
+                    bundle,
+                    stage: fault_at.into(),
+                },
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }),
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
         Command::LinuxKvmSoak {
             shim,
             system_image_manifest,
@@ -1137,13 +1166,12 @@ fn dispatch(
 
 #[cfg(test)]
 mod tests {
+    use super::{run, Cli, Command};
     #[cfg(all(
         target_os = "linux",
         any(target_arch = "x86_64", target_arch = "aarch64")
     ))]
-    use clap::Parser;
-
-    use super::{run, Cli, Command};
+    use crate::try_parse_cli_for_test;
 
     #[test]
     fn command_dispatch_future_stays_heap_bounded() {
@@ -1186,7 +1214,7 @@ mod tests {
     ))]
     #[test]
     fn linux_kvm_kill_reopen_cli_requires_the_complete_exact_input_set() {
-        assert!(Cli::try_parse_from([
+        assert!(try_parse_cli_for_test(&[
             "a3s-oci",
             "linux-kvm-kill-reopen",
             "--shim",
@@ -1200,7 +1228,7 @@ mod tests {
         ])
         .is_err());
 
-        let parsed = Cli::try_parse_from([
+        let parsed = try_parse_cli_for_test(&[
             "a3s-oci",
             "linux-kvm-kill-reopen",
             "--shim",
@@ -1231,7 +1259,7 @@ mod tests {
     ))]
     #[test]
     fn linux_kvm_delete_reopen_cli_requires_the_complete_exact_input_set() {
-        assert!(Cli::try_parse_from([
+        assert!(try_parse_cli_for_test(&[
             "a3s-oci",
             "linux-kvm-delete-reopen",
             "--shim",
@@ -1245,7 +1273,7 @@ mod tests {
         ])
         .is_err());
 
-        let parsed = Cli::try_parse_from([
+        let parsed = try_parse_cli_for_test(&[
             "a3s-oci",
             "linux-kvm-delete-reopen",
             "--shim",
@@ -1261,6 +1289,51 @@ mod tests {
         ])
         .expect("complete Delete qualification command");
         let Command::LinuxKvmDeleteReopen { fault_at, .. } = parsed.command else {
+            panic!("parsed a different command");
+        };
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        assert_eq!(
+            stage,
+            a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
+        );
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[test]
+    fn linux_kvm_wait_reopen_cli_requires_the_complete_exact_input_set() {
+        assert!(try_parse_cli_for_test(&[
+            "a3s-oci",
+            "linux-kvm-wait-reopen",
+            "--shim",
+            "/tmp/shim",
+            "--runtime-root",
+            "/tmp/runtime",
+            "--system-image-manifest",
+            "/tmp/system-image.json",
+            "--bundle",
+            "/tmp/bundle",
+        ])
+        .is_err());
+
+        let parsed = try_parse_cli_for_test(&[
+            "a3s-oci",
+            "linux-kvm-wait-reopen",
+            "--shim",
+            "/tmp/shim",
+            "--runtime-root",
+            "/tmp/runtime",
+            "--system-image-manifest",
+            "/tmp/system-image.json",
+            "--bundle",
+            "/tmp/bundle",
+            "--fault-at",
+            "guest-after-response-write",
+        ])
+        .expect("complete Wait qualification command");
+        let Command::LinuxKvmWaitReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
         let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();

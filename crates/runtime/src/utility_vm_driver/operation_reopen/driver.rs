@@ -3,14 +3,14 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use a3s_oci_agent_protocol::GuestAgentService;
+use a3s_oci_agent_protocol::{AgentWaitRequest, GuestAgentService};
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, HostPlatform, IsolationClass,
 };
 use a3s_oci_sdk::{
     async_trait, AttachmentCapabilities, ContainerRecord, ContainerTarget, CreateRequest,
-    DeleteMode, Error, ErrorCode, KillRequest, OciBundle, OperationId, Result, RuntimeOperation,
-    Signal, StartRequest, RUNTIME_BUNDLE_HANDOFF_EXTENSION,
+    DeleteMode, Error, ErrorCode, ExitStatus, KillRequest, OciBundle, OperationId, Result,
+    RuntimeOperation, Signal, StartRequest, RUNTIME_BUNDLE_HANDOFF_EXTENSION,
     RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
 };
 use tokio::sync::Mutex;
@@ -25,19 +25,20 @@ use crate::agent_session::{
 };
 use crate::driver::{
     DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
-    OciHookPhase, RuntimeDriver,
+    DriverWaitRequest, OciHookPhase, RuntimeDriver,
 };
 use crate::{AgentVmSmokeReport, DriverRecovery};
 
 mod dispatch;
 mod recovery;
 
-const QUALIFICATION_OPERATIONS: [RuntimeOperation; 5] = [
+const QUALIFICATION_OPERATIONS: [RuntimeOperation; 6] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
     RuntimeOperation::Kill,
     RuntimeOperation::Delete,
+    RuntimeOperation::Wait,
 ];
 const QUALIFICATION_SCOPE: &str = "linux-kvm-operation-stage-reopen-only-v1";
 
@@ -67,9 +68,11 @@ pub(super) struct QualificationKvmOperationDriver {
     start_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
     kill_identity: StdMutex<Option<(OperationId, ContainerTarget, Signal, bool)>>,
     delete_identity: StdMutex<Option<(OperationId, ContainerTarget, DeleteMode)>>,
+    wait_identity: StdMutex<Option<(ContainerTarget, Option<u64>)>>,
     start_calls: AtomicU32,
     kill_calls: AtomicU32,
     delete_calls: AtomicU32,
+    wait_calls: AtomicU32,
     recovery_calls: AtomicU32,
     rehydrated_created_record: AtomicBool,
     rehydrated_running_record: AtomicBool,
@@ -106,9 +109,11 @@ impl QualificationKvmOperationDriver {
             start_identity: StdMutex::new(None),
             kill_identity: StdMutex::new(None),
             delete_identity: StdMutex::new(None),
+            wait_identity: StdMutex::new(None),
             start_calls: AtomicU32::new(0),
             kill_calls: AtomicU32::new(0),
             delete_calls: AtomicU32::new(0),
+            wait_calls: AtomicU32::new(0),
             recovery_calls: AtomicU32::new(0),
             rehydrated_created_record: AtomicBool::new(false),
             rehydrated_running_record: AtomicBool::new(false),
@@ -144,6 +149,24 @@ impl QualificationKvmOperationDriver {
     }
 
     pub(super) fn with_delete_recovery(
+        prepared: &PreparedUtilityVmLayout,
+        console: PathBuf,
+        retained_create: CreateRequest,
+        retained_start: StartRequest,
+        retained_kill: KillRequest,
+        recovery_marker: PathBuf,
+    ) -> Self {
+        Self::with_kill_recovery(
+            prepared,
+            console,
+            retained_create,
+            retained_start,
+            retained_kill,
+            recovery_marker,
+        )
+    }
+
+    pub(super) fn with_wait_recovery(
         prepared: &PreparedUtilityVmLayout,
         console: PathBuf,
         retained_create: CreateRequest,
@@ -339,6 +362,20 @@ impl QualificationKvmOperationDriver {
         self.delete_calls.load(Ordering::SeqCst)
     }
 
+    pub(super) fn wait_identity(
+        &self,
+    ) -> std::result::Result<(ContainerTarget, Option<u64>), String> {
+        self.wait_identity
+            .lock()
+            .map_err(|_| "KVM wait identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification KVM owner recorded no Wait dispatch".to_string())
+    }
+
+    pub(super) fn wait_calls(&self) -> u32 {
+        self.wait_calls.load(Ordering::SeqCst)
+    }
+
     pub(super) fn recovery_calls(&self) -> u32 {
         self.recovery_calls.load(Ordering::SeqCst)
     }
@@ -375,6 +412,15 @@ impl QualificationKvmOperationDriver {
                     "qualification KVM owner has no live exact-generation session",
                 )
             })
+    }
+
+    pub(super) async fn guest_wait(&self, request: AgentWaitRequest) -> Result<ExitStatus> {
+        self.live_session(&request.target)
+            .await?
+            .owner
+            .client()
+            .wait(request)
+            .await
     }
 }
 
@@ -461,6 +507,10 @@ impl RuntimeDriver for QualificationKvmOperationDriver {
 
     async fn delete(&self, request: DriverDeleteRequest) -> Result<()> {
         self.dispatch_delete(request).await
+    }
+
+    async fn wait(&self, request: DriverWaitRequest) -> Result<ExitStatus> {
+        self.dispatch_wait(request).await
     }
 }
 

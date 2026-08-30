@@ -26,6 +26,23 @@ struct Cli {
     command: Command,
 }
 
+#[cfg(test)]
+fn try_parse_cli_for_test(args: &[&str]) -> Result<Cli, clap::Error> {
+    // Rust test workers reserve less stack than a Unix main thread. Exercise
+    // the production-sized Clap graph under the same explicit 8 MiB bound.
+    let args = args
+        .iter()
+        .map(|argument| (*argument).to_string())
+        .collect::<Vec<_>>();
+    std::thread::Builder::new()
+        .name("main-sized-cli-parser".to_string())
+        .stack_size(CLI_THREAD_STACK_BYTES)
+        .spawn(move || Cli::try_parse_from(args))
+        .expect("spawn main-sized CLI parser")
+        .join()
+        .expect("main-sized CLI parser must not panic")
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum NativeLinuxCheckpointRestoreCrashPointArg {
@@ -412,6 +429,29 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         bundle: PathBuf,
         /// Exact Host- or Guest-side Delete transition to interrupt.
+        #[arg(long, value_enum)]
+        fault_at: reopen_replacement::FaultStageArg,
+    },
+    /// Qualify all Host/Guest init Wait interruption stages through real KVM owners.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[command(hide = true)]
+    LinuxKvmWaitReopen {
+        /// Absolute isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// New or empty private root for durable state, shares, and consoles.
+        #[arg(long, value_name = "DIR")]
+        runtime_root: PathBuf,
+        /// Absolute immutable Linux KVM utility-VM system-image manifest.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
+        /// Source OCI bundle copied into the protected runtime handoff.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// Exact Host- or Guest-side Wait transition to interrupt.
         #[arg(long, value_enum)]
         fault_at: reopen_replacement::FaultStageArg,
     },
@@ -1041,7 +1081,7 @@ enum CliError {
 // Windows reserves only 1 MiB for the process main thread. Keep Clap parsing,
 // the Tokio runtime, and concrete command futures on an explicitly sized stack
 // that matches the common Unix main-thread reservation.
-#[cfg(target_os = "windows")]
+#[cfg(any(test, target_os = "windows"))]
 const CLI_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
 
 #[cfg(target_os = "windows")]

@@ -1,10 +1,11 @@
 use std::sync::atomic::Ordering;
 
-use a3s_oci_sdk::{ErrorCode, Result};
+use a3s_oci_sdk::{ErrorCode, ExitStatus, Result};
 
 use super::{qualification_error, QualificationKvmOperationDriver};
 use crate::driver::{
     DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
+    DriverWaitRequest,
 };
 
 impl QualificationKvmOperationDriver {
@@ -121,6 +122,31 @@ impl QualificationKvmOperationDriver {
             .await?
             .client
             .delete(request)
+            .await
+    }
+
+    pub(super) async fn dispatch_wait(&self, request: DriverWaitRequest) -> Result<ExitStatus> {
+        let identity = (request.target.clone(), request.timeout_ms);
+        {
+            let mut retained = self.wait_identity.lock().map_err(|_| {
+                qualification_error(ErrorCode::Internal, "KVM wait identity lock was poisoned")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &identity => {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        "qualification KVM owner received a changed Wait identity",
+                    ));
+                }
+                Some(_) => {}
+                None => *retained = Some(identity),
+            }
+        }
+        self.wait_calls.fetch_add(1, Ordering::SeqCst);
+        self.live_session(&request.target)
+            .await?
+            .client
+            .wait(request)
             .await
     }
 }
