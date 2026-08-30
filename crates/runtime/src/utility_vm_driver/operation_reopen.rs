@@ -26,9 +26,11 @@ use crate::transport_cleanup_report::is_retryable_disconnect_operation;
 use crate::{AgentVmSmokeReport, HostRuntimeService, OciVmReopenReplacementReport};
 
 mod driver;
+mod start;
 mod state;
 
 use driver::QualificationKvmOperationDriver;
+pub use start::{linux_kvm_start_reopen_replacement, LinuxKvmStartReopenConfig};
 pub use state::{linux_kvm_state_reopen_replacement, LinuxKvmStateReopenConfig};
 
 const QUALIFICATION_TIMEOUT: Duration = Duration::from_secs(25);

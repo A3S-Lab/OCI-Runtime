@@ -54,7 +54,7 @@ use operation::validate_deadline;
 
 const CONTAINER_RECORD_FILE: &str = "record.json";
 const CONFIG_SNAPSHOT_FILE: &str = "config.json";
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) const DURABLE_OPERATION_SCHEMA_VERSION: &str = OPERATION_SCHEMA_VERSION;
 
 /// Result of preparing an idempotent operation that returns container state.

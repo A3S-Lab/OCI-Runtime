@@ -97,6 +97,8 @@ mod native_recovery_smoke;
 mod native_service;
 mod native_smoke;
 mod oci_smoke;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod operation_journal_evidence;
 mod operation_reopen_replacement_report;
 mod platform;
 mod reopen_replacement_report;
@@ -342,8 +344,9 @@ pub use transport_cleanup_report::{
 ))]
 #[doc(hidden)]
 pub use utility_vm_driver::operation_reopen::{
-    linux_kvm_create_reopen_replacement, linux_kvm_state_reopen_replacement,
-    LinuxKvmCreateReopenConfig, LinuxKvmStateReopenConfig,
+    linux_kvm_create_reopen_replacement, linux_kvm_start_reopen_replacement,
+    linux_kvm_state_reopen_replacement, LinuxKvmCreateReopenConfig, LinuxKvmStartReopenConfig,
+    LinuxKvmStateReopenConfig,
 };
 pub use utility_vm_soak_report::{
     MacosHvfSoakConfig, MacosHvfSoakReport, MACOS_HVF_SOAK_CONCURRENT_CONTAINERS,
