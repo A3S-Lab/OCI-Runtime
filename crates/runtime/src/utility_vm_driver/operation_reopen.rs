@@ -25,12 +25,14 @@ use crate::oci_smoke::utility_vm::transport_fault_cleanup::{
 use crate::transport_cleanup_report::is_retryable_disconnect_operation;
 use crate::{AgentVmSmokeReport, HostRuntimeService, OciVmReopenReplacementReport};
 
+mod delete;
 mod driver;
 mod kill;
 mod start;
 mod state;
 mod workload_marker;
 
+pub use delete::{linux_kvm_delete_reopen_replacement, LinuxKvmDeleteReopenConfig};
 use driver::QualificationKvmOperationDriver;
 pub use kill::{linux_kvm_kill_reopen_replacement, LinuxKvmKillReopenConfig};
 pub use start::{linux_kvm_start_reopen_replacement, LinuxKvmStartReopenConfig};

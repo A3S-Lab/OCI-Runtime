@@ -7,14 +7,11 @@ use a3s_oci_sdk::{ContainerTarget, Error, ErrorCode, OperationId};
 use super::super::{path_exists, remove_marker};
 use super::{QualificationHvfDriver, FAULT_OPERATION};
 use crate::host_cleanup::MacosHostCleanupTracker;
+use crate::operation_journal_evidence::empty_operation_journal_status;
 use crate::transport_cleanup_report::is_retryable_disconnect_operation;
 use crate::OciVmOperationReopenReplacementReport;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DeleteJournalStatus {
-    Prepared,
-    SucceededEmpty,
-}
+pub(super) use crate::operation_journal_evidence::EmptyOperationJournalStatus as DeleteJournalStatus;
 
 pub(super) async fn shutdown_setup_failure(
     service: crate::HostRuntimeService,
@@ -45,54 +42,7 @@ pub(super) async fn delete_journal_status(
     operation_id: &OperationId,
     target: &ContainerTarget,
 ) -> std::result::Result<DeleteJournalStatus, String> {
-    let path = state_root
-        .join("operations")
-        .join(format!("{}.json", operation_id.as_str()));
-    let contents = tokio::fs::read(&path).await.map_err(|error| {
-        format!(
-            "failed to read durable Delete journal {}: {error}",
-            path.display()
-        )
-    })?;
-    let value: serde_json::Value = serde_json::from_slice(&contents).map_err(|error| {
-        format!(
-            "failed to decode durable Delete journal {}: {error}",
-            path.display()
-        )
-    })?;
-    let expected_generation = serde_json::to_value(target.generation)
-        .map_err(|error| format!("failed to encode expected Delete generation: {error}"))?;
-    let identity_matches = value
-        .get("schemaVersion")
-        .and_then(serde_json::Value::as_str)
-        == Some(crate::state::DURABLE_OPERATION_SCHEMA_VERSION)
-        && value.get("operationId").and_then(serde_json::Value::as_str)
-            == Some(operation_id.as_str())
-        && value.get("kind").and_then(serde_json::Value::as_str) == Some("delete")
-        && value.get("containerId").and_then(serde_json::Value::as_str) == Some(target.id.as_str())
-        && value.get("generation") == Some(&expected_generation)
-        && value
-            .get("requestDigest")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|digest| !digest.is_empty());
-    if !identity_matches {
-        return Err(format!(
-            "durable Delete journal {} did not match the exact operation and generation",
-            path.display()
-        ));
-    }
-    match value
-        .get("outcome")
-        .and_then(|outcome| outcome.get("status"))
-        .and_then(serde_json::Value::as_str)
-    {
-        Some("prepared") => Ok(DeleteJournalStatus::Prepared),
-        Some("succeeded-empty") => Ok(DeleteJournalStatus::SucceededEmpty),
-        status => Err(format!(
-            "durable Delete journal {} had unexpected status {status:?}",
-            path.display()
-        )),
-    }
+    empty_operation_journal_status(state_root, operation_id, "delete", target).await
 }
 
 pub(super) fn record_interruption(

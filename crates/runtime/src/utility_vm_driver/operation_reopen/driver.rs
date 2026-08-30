@@ -8,9 +8,10 @@ use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, HostPlatform, IsolationClass,
 };
 use a3s_oci_sdk::{
-    async_trait, AttachmentCapabilities, ContainerRecord, ContainerTarget, CreateRequest, Error,
-    ErrorCode, KillRequest, OciBundle, OperationId, Result, RuntimeOperation, Signal, StartRequest,
-    RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
+    async_trait, AttachmentCapabilities, ContainerRecord, ContainerTarget, CreateRequest,
+    DeleteMode, Error, ErrorCode, KillRequest, OciBundle, OperationId, Result, RuntimeOperation,
+    Signal, StartRequest, RUNTIME_BUNDLE_HANDOFF_EXTENSION,
+    RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
 };
 use tokio::sync::Mutex;
 
@@ -28,6 +29,7 @@ use crate::driver::{
 };
 use crate::{AgentVmSmokeReport, DriverRecovery};
 
+mod dispatch;
 mod recovery;
 
 const QUALIFICATION_OPERATIONS: [RuntimeOperation; 5] = [
@@ -64,8 +66,10 @@ pub(super) struct QualificationKvmOperationDriver {
     create_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
     start_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
     kill_identity: StdMutex<Option<(OperationId, ContainerTarget, Signal, bool)>>,
+    delete_identity: StdMutex<Option<(OperationId, ContainerTarget, DeleteMode)>>,
     start_calls: AtomicU32,
     kill_calls: AtomicU32,
+    delete_calls: AtomicU32,
     recovery_calls: AtomicU32,
     rehydrated_created_record: AtomicBool,
     rehydrated_running_record: AtomicBool,
@@ -101,8 +105,10 @@ impl QualificationKvmOperationDriver {
             create_identity: StdMutex::new(None),
             start_identity: StdMutex::new(None),
             kill_identity: StdMutex::new(None),
+            delete_identity: StdMutex::new(None),
             start_calls: AtomicU32::new(0),
             kill_calls: AtomicU32::new(0),
+            delete_calls: AtomicU32::new(0),
             recovery_calls: AtomicU32::new(0),
             rehydrated_created_record: AtomicBool::new(false),
             rehydrated_running_record: AtomicBool::new(false),
@@ -135,6 +141,24 @@ impl QualificationKvmOperationDriver {
         driver.retained_kill = Some(retained_kill);
         driver.recovery_marker = Some(recovery_marker);
         driver
+    }
+
+    pub(super) fn with_delete_recovery(
+        prepared: &PreparedUtilityVmLayout,
+        console: PathBuf,
+        retained_create: CreateRequest,
+        retained_start: StartRequest,
+        retained_kill: KillRequest,
+        recovery_marker: PathBuf,
+    ) -> Self {
+        Self::with_kill_recovery(
+            prepared,
+            console,
+            retained_create,
+            retained_start,
+            retained_kill,
+            recovery_marker,
+        )
     }
 
     async fn ensure_session(&self, request: &DriverCreateRequest) -> Result<ActiveSession> {
@@ -220,90 +244,6 @@ impl QualificationKvmOperationDriver {
         Ok(active)
     }
 
-    async fn dispatch_create(&self, request: DriverCreateRequest) -> Result<DriverState> {
-        let identity = (request.context.operation_id.clone(), request.target.clone());
-        {
-            let mut retained = self.create_identity.lock().map_err(|_| {
-                qualification_error(ErrorCode::Internal, "KVM create identity lock was poisoned")
-            })?;
-            match retained.as_ref() {
-                Some(existing) if existing != &identity => {
-                    return Err(qualification_error(
-                        ErrorCode::Conflict,
-                        "qualification KVM owner received a changed Create identity",
-                    ));
-                }
-                Some(_) => {}
-                None => *retained = Some(identity),
-            }
-        }
-        let active = self.ensure_session(&request).await?;
-        let guest_bundle = self
-            .handoff
-            .guest_bundle_path(
-                &request.target,
-                request.bundle.directory(),
-                request.attachment_contract.guest_session(),
-            )
-            .await?;
-        active.client.create(request, guest_bundle).await
-    }
-
-    async fn dispatch_start(&self, request: DriverStartRequest) -> Result<DriverState> {
-        let identity = (request.context.operation_id.clone(), request.target.clone());
-        {
-            let mut retained = self.start_identity.lock().map_err(|_| {
-                qualification_error(ErrorCode::Internal, "KVM start identity lock was poisoned")
-            })?;
-            match retained.as_ref() {
-                Some(existing) if existing != &identity => {
-                    return Err(qualification_error(
-                        ErrorCode::Conflict,
-                        "qualification KVM owner received a changed Start identity",
-                    ));
-                }
-                Some(_) => {}
-                None => *retained = Some(identity),
-            }
-        }
-        self.start_calls.fetch_add(1, Ordering::SeqCst);
-        self.live_session(&request.target)
-            .await?
-            .client
-            .start(request)
-            .await
-    }
-
-    async fn dispatch_kill(&self, request: DriverKillRequest) -> Result<DriverState> {
-        let identity = (
-            request.context.operation_id.clone(),
-            request.target.clone(),
-            request.signal,
-            request.all,
-        );
-        {
-            let mut retained = self.kill_identity.lock().map_err(|_| {
-                qualification_error(ErrorCode::Internal, "KVM kill identity lock was poisoned")
-            })?;
-            match retained.as_ref() {
-                Some(existing) if existing != &identity => {
-                    return Err(qualification_error(
-                        ErrorCode::Conflict,
-                        "qualification KVM owner received a changed Kill identity",
-                    ));
-                }
-                Some(_) => {}
-                None => *retained = Some(identity),
-            }
-        }
-        self.kill_calls.fetch_add(1, Ordering::SeqCst);
-        self.live_session(&request.target)
-            .await?
-            .client
-            .kill(request)
-            .await
-    }
-
     pub(super) async fn shutdown(&self) -> AgentVmSmokeReport {
         let active = self.session.lock().await.take();
         if let Some(active) = active {
@@ -383,6 +323,20 @@ impl QualificationKvmOperationDriver {
 
     pub(super) fn kill_calls(&self) -> u32 {
         self.kill_calls.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn delete_identity(
+        &self,
+    ) -> std::result::Result<(OperationId, ContainerTarget, DeleteMode), String> {
+        self.delete_identity
+            .lock()
+            .map_err(|_| "KVM delete identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification KVM owner recorded no Delete dispatch".to_string())
+    }
+
+    pub(super) fn delete_calls(&self) -> u32 {
+        self.delete_calls.load(Ordering::SeqCst)
     }
 
     pub(super) fn recovery_calls(&self) -> u32 {
@@ -506,11 +460,7 @@ impl RuntimeDriver for QualificationKvmOperationDriver {
     }
 
     async fn delete(&self, request: DriverDeleteRequest) -> Result<()> {
-        self.live_session(&request.target)
-            .await?
-            .client
-            .delete(request)
-            .await
+        self.dispatch_delete(request).await
     }
 }
 

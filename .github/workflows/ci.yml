@@ -213,6 +213,13 @@ jobs:
           A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
         run: bash .github/scripts/linux-kvm-kill-reopen.sh
       - if: runner.os == 'Linux'
+        name: Linux KVM Delete operation-stage owner replacement
+        timeout-minutes: 15
+        env:
+          A3S_OCI_LINUX_KVM_DELETE_REOPEN_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-delete-reopen.json
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
+        run: bash .github/scripts/linux-kvm-delete-reopen.sh
+      - if: runner.os == 'Linux'
         name: Linux KVM bounded fresh-generation soak
         timeout-minutes: 45
         env:
@@ -999,6 +1006,7 @@ jobs:
             ${{ runner.temp }}/a3s-oci-linux-kvm-state-reopen.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-start-reopen.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-kill-reopen.json
+            ${{ runner.temp }}/a3s-oci-linux-kvm-delete-reopen.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-soak.json
           if-no-files-found: warn
           retention-days: 14
@@ -1178,6 +1186,12 @@ jobs:
           A3S_OCI_LINUX_KVM_KILL_REOPEN_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-kill-reopen.json
           A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
         run: bash .github/scripts/linux-kvm-kill-reopen.sh
+      - name: Linux KVM Delete operation-stage owner replacement
+        timeout-minutes: 15
+        env:
+          A3S_OCI_LINUX_KVM_DELETE_REOPEN_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-delete-reopen.json
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
+        run: bash .github/scripts/linux-kvm-delete-reopen.sh
       - name: Linux KVM bounded fresh-generation soak
         timeout-minutes: 45
         env:
@@ -1217,6 +1231,7 @@ jobs:
             ${{ runner.temp }}/a3s-oci-linux-kvm-state-reopen.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-start-reopen.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-kill-reopen.json
+            ${{ runner.temp }}/a3s-oci-linux-kvm-delete-reopen.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-soak.json
           if-no-files-found: warn
           retention-days: 14

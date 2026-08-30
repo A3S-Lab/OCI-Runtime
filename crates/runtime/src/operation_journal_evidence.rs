@@ -8,6 +8,69 @@ pub(crate) enum ContainerOperationJournalStatus {
     Succeeded(Box<ContainerRecord>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EmptyOperationJournalStatus {
+    Prepared,
+    SucceededEmpty,
+}
+
+pub(crate) async fn empty_operation_journal_status(
+    state_root: &Path,
+    operation_id: &OperationId,
+    kind: &str,
+    target: &ContainerTarget,
+) -> Result<EmptyOperationJournalStatus, String> {
+    let path = state_root
+        .join("operations")
+        .join(format!("{}.json", operation_id.as_str()));
+    let contents = tokio::fs::read(&path).await.map_err(|error| {
+        format!(
+            "failed to read durable {kind} journal {}: {error}",
+            path.display()
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_slice(&contents).map_err(|error| {
+        format!(
+            "failed to decode durable {kind} journal {}: {error}",
+            path.display()
+        )
+    })?;
+    let expected_generation = serde_json::to_value(target.generation)
+        .map_err(|error| format!("failed to encode expected {kind} generation: {error}"))?;
+    let identity_matches = value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_str)
+        == Some(crate::state::DURABLE_OPERATION_SCHEMA_VERSION)
+        && value.get("operationId").and_then(serde_json::Value::as_str)
+            == Some(operation_id.as_str())
+        && value.get("kind").and_then(serde_json::Value::as_str) == Some(kind)
+        && value.get("containerId").and_then(serde_json::Value::as_str) == Some(target.id.as_str())
+        && value.get("generation") == Some(&expected_generation)
+        && value.get("processId").is_none()
+        && value
+            .get("requestDigest")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|digest| !digest.is_empty());
+    if !identity_matches {
+        return Err(format!(
+            "durable {kind} journal {} did not match the exact operation and generation",
+            path.display()
+        ));
+    }
+    match value
+        .get("outcome")
+        .and_then(|outcome| outcome.get("status"))
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("prepared") => Ok(EmptyOperationJournalStatus::Prepared),
+        Some("succeeded-empty") => Ok(EmptyOperationJournalStatus::SucceededEmpty),
+        status => Err(format!(
+            "durable {kind} journal {} had unexpected status {status:?}",
+            path.display()
+        )),
+    }
+}
+
 pub(crate) async fn container_operation_journal_status(
     state_root: &Path,
     operation_id: &OperationId,

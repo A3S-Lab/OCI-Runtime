@@ -11,6 +11,33 @@ use crate::driver::{
 use crate::DriverRecovery;
 
 impl QualificationKvmOperationDriver {
+    pub(in crate::utility_vm_driver::operation_reopen) async fn launch_replacement_owner_without_workload(
+        &self,
+        target: &ContainerTarget,
+    ) -> Result<()> {
+        if target.id != self.retained_create.id || target.generation.is_none() {
+            return Err(qualification_error(
+                ErrorCode::FailedPrecondition,
+                "completed KVM Delete replacement requires the retained exact-generation target",
+            ));
+        }
+        if self
+            .recovery
+            .load_exit(target, self.retained_create.bundle.config_digest(), None)
+            .await?
+            .is_some()
+        {
+            return Err(qualification_error(
+                ErrorCode::Conflict,
+                "completed KVM Delete recovery report retained a deleted workload",
+            ));
+        }
+        self.recovery.remove(target, None).await?;
+        let request = self.prepared_create_request(target.clone()).await?;
+        self.ensure_session(&request).await?;
+        Ok(())
+    }
+
     pub(super) async fn recover_record(&self, record: &ContainerRecord) -> Result<DriverRecovery> {
         let recovery_state_supported = matches!(
             record.state.status(),
@@ -109,6 +136,13 @@ impl QualificationKvmOperationDriver {
             ));
         }
         let target = ContainerTarget::exact(self.retained_create.id.clone(), record.generation);
+        self.prepared_create_request(target).await
+    }
+
+    async fn prepared_create_request(
+        &self,
+        target: ContainerTarget,
+    ) -> Result<DriverCreateRequest> {
         let mut request = DriverCreateRequest {
             context: self.retained_create.context.clone(),
             target,
