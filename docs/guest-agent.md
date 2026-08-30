@@ -807,6 +807,13 @@ memory limit, live CPU and process counters, and the required memory/PID event
 metrics. Changed resources and stale generations fail at both boundaries. All
 nine stages passed in 18 fresh VMs on August 11, 2026 under
 `a3s.oci.oci-vm-operation-reopen-replacement.v12`.
+Clean revision `aa0f56a` also passed all nine stages on x86_64 Linux KVM on
+August 31, 2026. The first eight replacement Guests received the unchanged
+complete Linux resource request once; the final stage reapplied the committed
+Update during recovery and replayed the Host result with no additional
+API-driven dispatch. Direct Stats verified the 512 MiB limit and live counters
+after every replacement. The aggregate SHA-256 is
+`61e7ccbf5c3181cce6fb0c62d1a36ad576e9860a58bcc54f8cd5bc41a766a052`.
 
 Stats crosses all nine owner handoffs after Create, Start, and that complete
 Update have committed. The replacement Guest always rebuilds init, waits for

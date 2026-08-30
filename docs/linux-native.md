@@ -573,6 +573,26 @@ PIDs. Every path rejects stale Host and Guest generations, force-deletes the
 workload, and restores every inventory. The aggregate schema is
 `a3s.oci.linux-kvm-processes-reopen-matrix.v1`.
 
+Update retains the exact setup Create and Start requests, the nonce-bound init
+readiness marker, and a complete Linux resource profile:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_UPDATE_REOPEN_REPORT=/absolute/path/to/update-reopen.json \
+  bash .github/scripts/linux-kvm-update-reopen.sh
+```
+
+The first eight Host/Guest points retain a Prepared Update journal. A fresh
+`HostRuntimeService` and VM owner recreate init, rebind its positive PID, wait
+for the replacement marker, and dispatch the unchanged request once on API
+retry. At `guest-after-response-write`, the journal is Succeeded but its cgroup
+effect belonged to the dead VM: recovery reapplies the committed request to the
+fresh cgroup before the Host replays without another API-driven dispatch.
+Direct Guest Stats verifies the 512 MiB limit and live counters. Every path
+rejects changed requests and stale Host/Guest generations, force-deletes the
+workload, and restores every inventory. The aggregate schema is
+`a3s.oci.linux-kvm-update-reopen-matrix.v1`.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -596,7 +616,7 @@ nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
 
 If KVM is unavailable, none of the lifecycle, recovery, operation-reopen, or soak
 scripts downloads or unpacks the Alpine fixture. Lifecycle, recovery, and
-Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes reopen
+Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update reopen
 emit zero-case `unavailable` reports; soak emits `completed_iterations: 0` and
 `fixture_downloaded: false`. CI uploads those reports, but they are not
 `available` hardware results. The driver remains `probe-only` until fresh
@@ -667,7 +687,14 @@ before one exact read-only query; `guest-after-response-write` also queried the
 replacement after the first owner delivered a verified two-record inventory.
 The retained aggregate has SHA-256
 `7b0d940c5aa1f68a9c9bbfab925e9a3385ee4ea4560dd17ff86798a1c18e66de`.
-AArch64 hardware evidence and the other 8 workload-operation matrices plus
+Clean revision `aa0f56a` then retained all 9/9 Update owner replacements. Its
+first eight paths dispatched the unchanged complete Linux resource request
+once; `guest-after-response-write` reapplied the committed Update during
+recovery and replayed the Host response with zero additional API-driven
+dispatch. Direct Guest Stats verified the 512 MiB limit and live counters. The
+retained aggregate has SHA-256
+`61e7ccbf5c3181cce6fb0c62d1a36ad576e9860a58bcc54f8cd5bc41a766a052`.
+AArch64 hardware evidence and the other 7 workload-operation matrices plus
 Host shutdown remain open; the candidate therefore remains `probe-only`.
 
 ## Experimental CRIU checkpoint and restore gate

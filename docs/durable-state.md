@@ -650,6 +650,13 @@ the replacement PID without dispatching again. Two fresh Stats responses prove
 the 512 MiB limit and monotonic counters; changed resources and stale
 generations fail closed at both boundaries. All nine Apple Silicon stages
 passed in 18 fresh VMs on August 11, 2026.
+On August 31, 2026, clean revision `aa0f56a` also passed all nine stages on
+x86_64 Linux KVM. The first eight replacement owners dispatched the unchanged
+complete Linux resource request once; `guest-after-response-write` reapplied
+the committed Update during recovery and replayed the Host response without an
+additional API-driven dispatch. Direct Guest Stats verified the 512 MiB limit
+and live counters after every replacement. The retained aggregate has SHA-256
+`61e7ccbf5c3181cce6fb0c62d1a36ad576e9860a58bcc54f8cd5bc41a766a052`.
 
 Real Stats recovery uses
 `a3s.oci.oci-vm-operation-reopen-replacement.v13`. Setup commits Create,
