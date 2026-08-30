@@ -510,7 +510,10 @@ rebuilds the Guest tombstone, and dispatches the unchanged stopped-only Delete
 once. A fully written response instead retains no live record and a
 SucceededEmpty journal, so the replacement owner performs no workload recovery
 or driver Delete. Every path restores both Host and Guest inventories. The
-August 10, 2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs.
+August 10, 2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs. On
+August 30, 2026, clean revision `3227ace` also passed all nine stages on x86_64
+Linux KVM, including the distinct empty-owner replay with zero workload
+recovery and zero driver Delete dispatch at `guest-after-response-write`.
 
 Real init Wait recovery crosses the same nine points under
 `a3s.oci.oci-vm-operation-reopen-replacement.v5`. The first eight interruptions

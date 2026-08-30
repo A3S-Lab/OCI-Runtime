@@ -403,6 +403,27 @@ three operation identities, uses stopped-only Delete, and restores every
 endpoint, process, bootstrap, handoff, share, recovery, and marker inventory.
 The aggregate schema is `a3s.oci.linux-kvm-kill-reopen-matrix.v1`.
 
+Delete retains those exact setup Create, Start, and signal-9 Kill requests,
+then injects the selected point into stopped-only Delete:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_DELETE_REOPEN_REPORT=/absolute/path/to/delete-reopen.json \
+  bash .github/scripts/linux-kvm-delete-reopen.sh
+```
+
+The first eight Host/Guest points retain Stopped state and a Prepared Delete
+journal. A fresh `HostRuntimeService` and VM owner recreate, start, and kill
+the workload with the unchanged setup identities, verify the replacement
+marker, and dispatch the original stopped-only Delete once. At
+`guest-after-response-write`, durable state is already empty and the journal
+is SucceededEmpty: a distinct replacement owner starts with no workload,
+performs no recovery or driver Delete dispatch, and lets the Host replay the
+completed journal. Every path preserves the generation and all four operation
+identities and restores every endpoint, process, bootstrap, handoff, share,
+recovery, and marker inventory. The aggregate schema is
+`a3s.oci.linux-kvm-delete-reopen-matrix.v1`.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -426,10 +447,10 @@ nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
 
 If KVM is unavailable, none of the lifecycle, recovery, operation-reopen, or soak
 scripts downloads or unpacks the Alpine fixture. Lifecycle, recovery, and
-Create/State/Start/Kill reopen emit zero-case `unavailable` reports; soak emits
-`completed_iterations: 0` and `fixture_downloaded: false`. CI uploads those
-reports, but they are not `available` hardware results. The driver remains
-`probe-only` until fresh x86_64 and AArch64 KVM hosts retain every required
+Create/State/Start/Kill/Delete reopen emit zero-case `unavailable` reports;
+soak emits `completed_iterations: 0` and `fixture_downloaded: false`. CI
+uploads those reports, but they are not `available` hardware results. The
+driver remains `probe-only` until fresh x86_64 and AArch64 KVM hosts retain every required
 available report, including the integrated Guest path-isolation and
 operation-stage evidence. Other real-entry Guest negative-isolation profiles
 remain separate promotion gates.
@@ -448,7 +469,13 @@ Kill owner replacements, including Stopped tombstone reconstruction and
 journal replay without a second driver dispatch at
 `guest-after-response-write`; the retained aggregate has SHA-256
 `cf306380c87fb004a1ab6cb139b7e5df0588d529394eb708581873fa9bdac808`.
-AArch64 hardware evidence and the other 16
+Clean revision `3227ace` then retained all 9/9 Delete owner replacements. Its
+first eight paths reconstructed the Stopped tombstone and dispatched Delete
+once; `guest-after-response-write` started a distinct empty owner and replayed
+the SucceededEmpty journal with zero workload recovery and zero driver Delete
+dispatch. The retained aggregate has SHA-256
+`c55b9284a3800bdeba8ecf6374a3cd33976b6e3a6733b716ca62c84945f18ae9`.
+AArch64 hardware evidence and the other 15
 workload-operation matrices plus Host shutdown remain open; the candidate
 therefore remains `probe-only`.
 
