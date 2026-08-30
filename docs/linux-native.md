@@ -383,6 +383,26 @@ and restores every endpoint, process, bootstrap, handoff, share, recovery, and
 marker inventory. The aggregate schema is
 `a3s.oci.linux-kvm-start-reopen-matrix.v1`.
 
+Kill retains the exact setup Create, Start, and signal-9 Kill requests:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_KILL_REOPEN_REPORT=/absolute/path/to/kill-reopen.json \
+  bash .github/scripts/linux-kvm-kill-reopen.sh
+```
+
+The first eight Host/Guest points retain Running state and a Prepared Kill
+journal. A fresh `HostRuntimeService` and VM owner recreate and start the
+workload, rebind its positive PID, repair the completed Create and Start
+responses, verify the exact replacement marker, and dispatch the unchanged
+SIGKILL once. At `guest-after-response-write`, durable state is already
+Stopped: recovery recreates, starts, and kills the workload to reconstruct the
+Guest tombstone, and the API retry returns the completed Kill journal without
+another driver dispatch. Every path preserves the original generation and all
+three operation identities, uses stopped-only Delete, and restores every
+endpoint, process, bootstrap, handoff, share, recovery, and marker inventory.
+The aggregate schema is `a3s.oci.linux-kvm-kill-reopen-matrix.v1`.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -406,7 +426,7 @@ nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
 
 If KVM is unavailable, none of the lifecycle, recovery, operation-reopen, or soak
 scripts downloads or unpacks the Alpine fixture. Lifecycle, recovery, and
-Create/State/Start reopen emit zero-case `unavailable` reports; soak emits
+Create/State/Start/Kill reopen emit zero-case `unavailable` reports; soak emits
 `completed_iterations: 0` and `fixture_downloaded: false`. CI uploads those
 reports, but they are not `available` hardware results. The driver remains
 `probe-only` until fresh x86_64 and AArch64 KVM hosts retain every required
@@ -423,7 +443,12 @@ retained all 9/9 State owner replacements, including exact response delivery
 and disconnect probing at `guest-after-response-write`. Clean revision
 `3bbdeda` then retained all 9/9 Start owner replacements, including Running
 reconstruction and journal replay without a second API-driven dispatch at
-`guest-after-response-write`. AArch64 hardware evidence and the other 17
+`guest-after-response-write`. Clean revision `336bd5e` then retained all 9/9
+Kill owner replacements, including Stopped tombstone reconstruction and
+journal replay without a second driver dispatch at
+`guest-after-response-write`; the retained aggregate has SHA-256
+`cf306380c87fb004a1ab6cb139b7e5df0588d529394eb708581873fa9bdac808`.
+AArch64 hardware evidence and the other 16
 workload-operation matrices plus Host shutdown remain open; the candidate
 therefore remains `probe-only`.
 

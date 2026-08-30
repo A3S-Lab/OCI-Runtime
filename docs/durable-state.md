@@ -497,7 +497,10 @@ starts, and kills the replacement workload to reconstruct the Guest tombstone,
 then replays the completed durable Kill journal without another API-driven
 driver dispatch. Every path verifies the replacement marker before Kill, uses
 stopped-only Delete, and restores both Host and Guest inventories. The August
-10, 2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs.
+10, 2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs. On August
+30, 2026, clean revision `336bd5e` also passed all nine stages on x86_64 Linux
+KVM, including Stopped tombstone reconstruction and completed-journal replay
+without another driver dispatch at `guest-after-response-write`.
 
 Real Delete recovery crosses the same nine points under
 `a3s.oci.oci-vm-operation-reopen-replacement.v4`. The first eight interruptions
