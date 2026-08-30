@@ -482,7 +482,10 @@ responses. Replaying Start returns that repaired durable response without a
 second API-driven dispatch. Every path removes any first-owner marker before
 replacement, verifies the replacement workload's exact marker, force-deletes
 the generation, and restores both Host and Guest inventories. The August 10,
-2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs.
+2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs. On August 30,
+2026, clean revision `3bbdeda` also passed all nine stages on x86_64 Linux KVM,
+including Running reconstruction and durable replay without another
+API-driven Start dispatch at `guest-after-response-write`.
 
 Real Kill recovery now crosses all nine points under
 `a3s.oci.oci-vm-operation-reopen-replacement.v3`. The first eight interruptions

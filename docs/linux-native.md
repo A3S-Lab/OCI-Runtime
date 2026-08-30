@@ -362,6 +362,27 @@ restore every endpoint, process, bootstrap, handoff, share, recovery, and
 marker inventory. Guest-side points retain nonce-bound console evidence. The
 aggregate schema is `a3s.oci.linux-kvm-state-reopen-matrix.v1`.
 
+Start extends the same qualification-only setup with an exact retained Start
+request:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_START_REOPEN_REPORT=/absolute/path/to/start-reopen.json \
+  bash .github/scripts/linux-kvm-start-reopen.sh
+```
+
+The first eight Host/Guest points retain Created state and return a retryable
+interruption. A fresh `HostRuntimeService` and VM owner recreate the setup
+Create and dispatch the unchanged Start once. At
+`guest-after-response-write`, durable state is already Running: replacement
+recovery recreates and starts the workload, rebinds its positive PID, repairs
+the completed Create response and Running record, and lets the API retry replay
+Start without another driver dispatch. Every path removes the first-owner marker,
+requires the exact nonce-bound replacement marker, force-deletes the workload,
+and restores every endpoint, process, bootstrap, handoff, share, recovery, and
+marker inventory. The aggregate schema is
+`a3s.oci.linux-kvm-start-reopen-matrix.v1`.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -385,7 +406,7 @@ nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
 
 If KVM is unavailable, none of the lifecycle, recovery, operation-reopen, or soak
 scripts downloads or unpacks the Alpine fixture. Lifecycle, recovery, and
-Create/State reopen emit zero-case `unavailable` reports; soak emits
+Create/State/Start reopen emit zero-case `unavailable` reports; soak emits
 `completed_iterations: 0` and `fixture_downloaded: false`. CI uploads those
 reports, but they are not `available` hardware results. The driver remains
 `probe-only` until fresh x86_64 and AArch64 KVM hosts retain every required
@@ -399,10 +420,12 @@ reports. Clean revision `c435e26` then retained all 9/9 Create operation-stage
 owner replacements under the scope above, including committed-state
 rehydration at `guest-after-response-write`. Clean revision `d0c29e2` then
 retained all 9/9 State owner replacements, including exact response delivery
-and disconnect probing at `guest-after-response-write`. AArch64 hardware
-evidence and the other 18 workload-operation matrices plus Host shutdown
-remain open; the
-candidate therefore remains `probe-only`.
+and disconnect probing at `guest-after-response-write`. Clean revision
+`3bbdeda` then retained all 9/9 Start owner replacements, including Running
+reconstruction and journal replay without a second API-driven dispatch at
+`guest-after-response-write`. AArch64 hardware evidence and the other 17
+workload-operation matrices plus Host shutdown remain open; the candidate
+therefore remains `probe-only`.
 
 ## Experimental CRIU checkpoint and restore gate
 
