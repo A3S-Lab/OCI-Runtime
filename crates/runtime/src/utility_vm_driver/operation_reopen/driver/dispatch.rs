@@ -8,8 +8,9 @@ use super::{qualification_error, QualificationKvmOperationDriver};
 use crate::driver::{
     DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateRequest,
     DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
-    DriverReadOutputRequest, DriverSignalProcessRequest, DriverStartRequest, DriverState,
-    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
+    DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest,
+    DriverState, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
+    DriverWriteStdinRequest,
 };
 
 impl QualificationKvmOperationDriver {
@@ -459,6 +460,30 @@ impl QualificationKvmOperationDriver {
             .await?
             .client
             .close_stdin(request)
+            .await
+    }
+
+    pub(super) async fn dispatch_resize(&self, request: DriverResizeRequest) -> Result<()> {
+        {
+            let mut retained = self.resize_identity.lock().map_err(|_| {
+                qualification_error(ErrorCode::Internal, "KVM Resize identity lock was poisoned")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &request => {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        "qualification KVM owner received a changed Resize request",
+                    ));
+                }
+                Some(_) => {}
+                None => *retained = Some(request.clone()),
+            }
+        }
+        self.resize_calls.fetch_add(1, Ordering::SeqCst);
+        self.live_session(&request.target.container)
+            .await?
+            .client
+            .resize(request)
             .await
     }
 }

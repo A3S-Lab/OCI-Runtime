@@ -1,14 +1,9 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use a3s_oci_agent_protocol::{
-    AgentCloseStdinRequest, AgentContainerOperationRequest, AgentExecRequest, AgentProcess,
-    AgentProcessesRequest, AgentReadOutputRequest, AgentSignalProcessRequest, AgentStatsRequest,
-    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest,
-    GuestAgentService,
-};
+use a3s_oci_agent_protocol::GuestAgentService;
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, HostPlatform, IsolationClass,
 };
@@ -16,8 +11,8 @@ use a3s_oci_sdk::{
     async_trait, AttachmentCapabilities, CloseStdinRequest, ContainerOperationRequest,
     ContainerRecord, ContainerStats, ContainerTarget, CreateRequest, DeleteMode, Error, ErrorCode,
     ExecRequest, ExitStatus, KillRequest, OciBundle, OperationId, OutputChunk, ProcessRecord,
-    ProcessTarget, Result, RuntimeOperation, Signal, SignalProcessRequest, StartRequest,
-    UpdateRequest, WriteStdinRequest, RUNTIME_BUNDLE_HANDOFF_EXTENSION,
+    ProcessTarget, ResizeRequest, Result, RuntimeOperation, Signal, SignalProcessRequest,
+    StartRequest, UpdateRequest, WriteStdinRequest, RUNTIME_BUNDLE_HANDOFF_EXTENSION,
     RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
 };
 use tokio::sync::Mutex;
@@ -33,16 +28,18 @@ use crate::agent_session::{
 use crate::driver::{
     DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateRequest,
     DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
-    DriverReadOutputRequest, DriverSignalProcessRequest, DriverStartRequest, DriverState,
-    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
-    OciHookPhase, RuntimeDriver,
+    DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest,
+    DriverState, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
+    DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
 };
 use crate::{AgentVmSmokeReport, DriverRecovery};
 
 mod dispatch;
+mod evidence;
+mod guest;
 mod recovery;
 
-const QUALIFICATION_OPERATIONS: [RuntimeOperation; 17] = [
+const QUALIFICATION_OPERATIONS: [RuntimeOperation; 18] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -60,6 +57,7 @@ const QUALIFICATION_OPERATIONS: [RuntimeOperation; 17] = [
     RuntimeOperation::ReadOutput,
     RuntimeOperation::WriteStdin,
     RuntimeOperation::CloseStdin,
+    RuntimeOperation::Resize,
 ];
 const QUALIFICATION_SCOPE: &str = "linux-kvm-operation-stage-reopen-only-v1";
 
@@ -94,6 +92,8 @@ pub(super) struct QualificationKvmOperationDriver {
     retained_write_ready_marker: Option<(PathBuf, Vec<u8>)>,
     retained_close_stdin: Option<CloseStdinRequest>,
     retained_close_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    retained_resize: Option<ResizeRequest>,
+    retained_resize_ready_marker: Option<(PathBuf, Vec<u8>)>,
     retained_pause: Option<ContainerOperationRequest>,
     retained_pause_ready_marker: Option<(PathBuf, Vec<u8>)>,
     retained_resume: Option<ContainerOperationRequest>,
@@ -120,6 +120,7 @@ pub(super) struct QualificationKvmOperationDriver {
     read_output_identity: StdMutex<Option<DriverReadOutputRequest>>,
     write_stdin_identity: StdMutex<Option<DriverWriteStdinRequest>>,
     close_stdin_identity: StdMutex<Option<DriverCloseStdinRequest>>,
+    resize_identity: StdMutex<Option<DriverResizeRequest>>,
     start_calls: AtomicU32,
     kill_calls: AtomicU32,
     delete_calls: AtomicU32,
@@ -135,6 +136,7 @@ pub(super) struct QualificationKvmOperationDriver {
     read_output_calls: AtomicU32,
     write_stdin_calls: AtomicU32,
     close_stdin_calls: AtomicU32,
+    resize_calls: AtomicU32,
     recovery_calls: AtomicU32,
     rehydrated_created_record: AtomicBool,
     rehydrated_running_record: AtomicBool,
@@ -143,6 +145,7 @@ pub(super) struct QualificationKvmOperationDriver {
     rehydrated_signal_process: AtomicBool,
     rehydrated_write_stdin: AtomicBool,
     rehydrated_close_stdin: AtomicBool,
+    rehydrated_resize: AtomicBool,
     rehydrated_paused_record: AtomicBool,
     rehydrated_resumed_record: AtomicBool,
     rehydrated_update: AtomicBool,
@@ -178,6 +181,8 @@ impl QualificationKvmOperationDriver {
             retained_write_ready_marker: None,
             retained_close_stdin: None,
             retained_close_ready_marker: None,
+            retained_resize: None,
+            retained_resize_ready_marker: None,
             retained_pause: None,
             retained_pause_ready_marker: None,
             retained_resume: None,
@@ -204,6 +209,7 @@ impl QualificationKvmOperationDriver {
             read_output_identity: StdMutex::new(None),
             write_stdin_identity: StdMutex::new(None),
             close_stdin_identity: StdMutex::new(None),
+            resize_identity: StdMutex::new(None),
             start_calls: AtomicU32::new(0),
             kill_calls: AtomicU32::new(0),
             delete_calls: AtomicU32::new(0),
@@ -219,6 +225,7 @@ impl QualificationKvmOperationDriver {
             read_output_calls: AtomicU32::new(0),
             write_stdin_calls: AtomicU32::new(0),
             close_stdin_calls: AtomicU32::new(0),
+            resize_calls: AtomicU32::new(0),
             recovery_calls: AtomicU32::new(0),
             rehydrated_created_record: AtomicBool::new(false),
             rehydrated_running_record: AtomicBool::new(false),
@@ -227,6 +234,7 @@ impl QualificationKvmOperationDriver {
             rehydrated_signal_process: AtomicBool::new(false),
             rehydrated_write_stdin: AtomicBool::new(false),
             rehydrated_close_stdin: AtomicBool::new(false),
+            rehydrated_resize: AtomicBool::new(false),
             rehydrated_paused_record: AtomicBool::new(false),
             rehydrated_resumed_record: AtomicBool::new(false),
             rehydrated_update: AtomicBool::new(false),
@@ -385,6 +393,27 @@ impl QualificationKvmOperationDriver {
         );
         driver.retained_close_stdin = retained_close_stdin;
         driver.retained_close_ready_marker = retained_close_ready_marker;
+        driver
+    }
+
+    pub(super) fn with_resize_recovery(
+        prepared: &PreparedUtilityVmLayout,
+        console: PathBuf,
+        retained_create: CreateRequest,
+        retained_start: StartRequest,
+        retained_exec: ExecRequest,
+        retained_resize: Option<ResizeRequest>,
+        retained_resize_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    ) -> Self {
+        let mut driver = Self::with_exec_recovery(
+            prepared,
+            console,
+            retained_create,
+            retained_start,
+            Some(retained_exec),
+        );
+        driver.retained_resize = retained_resize;
+        driver.retained_resize_ready_marker = retained_resize_ready_marker;
         driver
     }
 
@@ -571,420 +600,6 @@ impl QualificationKvmOperationDriver {
             .await
             .map_err(|error| format!("failed to resolve KVM runtime share: {error}"))
     }
-
-    pub(super) fn create_identity(
-        &self,
-    ) -> std::result::Result<(OperationId, ContainerTarget), String> {
-        self.create_identity
-            .lock()
-            .map_err(|_| "KVM create identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification KVM owner recorded no Create dispatch".to_string())
-    }
-
-    pub(super) fn start_identity(
-        &self,
-    ) -> std::result::Result<(OperationId, ContainerTarget), String> {
-        self.start_identity
-            .lock()
-            .map_err(|_| "KVM start identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification KVM owner recorded no Start dispatch".to_string())
-    }
-
-    pub(super) fn start_calls(&self) -> u32 {
-        self.start_calls.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn kill_identity(
-        &self,
-    ) -> std::result::Result<(OperationId, ContainerTarget, Signal, bool), String> {
-        self.kill_identity
-            .lock()
-            .map_err(|_| "KVM kill identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification KVM owner recorded no Kill dispatch".to_string())
-    }
-
-    pub(super) fn kill_calls(&self) -> u32 {
-        self.kill_calls.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn delete_identity(
-        &self,
-    ) -> std::result::Result<(OperationId, ContainerTarget, DeleteMode), String> {
-        self.delete_identity
-            .lock()
-            .map_err(|_| "KVM delete identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification KVM owner recorded no Delete dispatch".to_string())
-    }
-
-    pub(super) fn delete_calls(&self) -> u32 {
-        self.delete_calls.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn wait_identity(
-        &self,
-    ) -> std::result::Result<(ContainerTarget, Option<u64>), String> {
-        self.wait_identity
-            .lock()
-            .map_err(|_| "KVM wait identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification KVM owner recorded no Wait dispatch".to_string())
-    }
-
-    pub(super) fn wait_calls(&self) -> u32 {
-        self.wait_calls.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn wait_process_identity(
-        &self,
-    ) -> std::result::Result<(ProcessTarget, Option<u64>), String> {
-        self.wait_process_identity
-            .lock()
-            .map_err(|_| "KVM WaitProcess identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification KVM owner recorded no WaitProcess dispatch".to_string())
-    }
-
-    pub(super) fn wait_process_calls(&self) -> u32 {
-        self.wait_process_calls.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn exec_identity(&self) -> std::result::Result<DriverExecRequest, String> {
-        self.exec_identity
-            .lock()
-            .map_err(|_| "KVM exec identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification KVM owner recorded no Exec dispatch".to_string())
-    }
-
-    pub(super) fn exec_calls(&self) -> u32 {
-        self.exec_calls.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn signal_process_identity(
-        &self,
-    ) -> std::result::Result<DriverSignalProcessRequest, String> {
-        self.signal_process_identity
-            .lock()
-            .map_err(|_| "KVM SignalProcess identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification KVM owner recorded no SignalProcess dispatch".to_string())
-    }
-
-    pub(super) fn signal_process_calls(&self) -> u32 {
-        self.signal_process_calls.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn pause_identity(
-        &self,
-    ) -> std::result::Result<(OperationId, ContainerTarget), String> {
-        self.pause_identity
-            .lock()
-            .map_err(|_| "KVM Pause identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification KVM owner recorded no Pause dispatch".to_string())
-    }
-
-    pub(super) fn pause_calls(&self) -> u32 {
-        self.pause_calls.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn resume_identity(
-        &self,
-    ) -> std::result::Result<(OperationId, ContainerTarget), String> {
-        self.resume_identity
-            .lock()
-            .map_err(|_| "KVM Resume identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification KVM owner recorded no Resume dispatch".to_string())
-    }
-
-    pub(super) fn resume_calls(&self) -> u32 {
-        self.resume_calls.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn processes_identity(&self) -> std::result::Result<ContainerTarget, String> {
-        self.processes_identity
-            .lock()
-            .map_err(|_| "KVM Processes identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification KVM owner recorded no Processes dispatch".to_string())
-    }
-
-    pub(super) fn processes_calls(&self) -> u32 {
-        self.processes_calls.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn update_identity(&self) -> std::result::Result<DriverUpdateRequest, String> {
-        self.update_identity
-            .lock()
-            .map_err(|_| "KVM Update identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification KVM owner recorded no Update dispatch".to_string())
-    }
-
-    pub(super) fn update_calls(&self) -> u32 {
-        self.update_calls.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn stats_identity(&self) -> std::result::Result<ContainerTarget, String> {
-        self.stats_identity
-            .lock()
-            .map_err(|_| "KVM Stats identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification KVM owner recorded no Stats dispatch".to_string())
-    }
-
-    pub(super) fn stats_calls(&self) -> u32 {
-        self.stats_calls.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn read_output_identity(
-        &self,
-    ) -> std::result::Result<DriverReadOutputRequest, String> {
-        self.read_output_identity
-            .lock()
-            .map_err(|_| "KVM ReadOutput identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification KVM owner recorded no ReadOutput dispatch".to_string())
-    }
-
-    pub(super) fn read_output_calls(&self) -> u32 {
-        self.read_output_calls.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn write_stdin_identity(
-        &self,
-    ) -> std::result::Result<DriverWriteStdinRequest, String> {
-        self.write_stdin_identity
-            .lock()
-            .map_err(|_| "KVM WriteStdin identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification KVM owner recorded no WriteStdin dispatch".to_string())
-    }
-
-    pub(super) fn write_stdin_calls(&self) -> u32 {
-        self.write_stdin_calls.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn close_stdin_identity(
-        &self,
-    ) -> std::result::Result<DriverCloseStdinRequest, String> {
-        self.close_stdin_identity
-            .lock()
-            .map_err(|_| "KVM CloseStdin identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification KVM owner recorded no CloseStdin dispatch".to_string())
-    }
-
-    pub(super) fn close_stdin_calls(&self) -> u32 {
-        self.close_stdin_calls.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn recovery_calls(&self) -> u32 {
-        self.recovery_calls.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn rehydrated_created_record(&self) -> bool {
-        self.rehydrated_created_record.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn rehydrated_running_record(&self) -> bool {
-        self.rehydrated_running_record.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn rehydrated_stopped_record(&self) -> bool {
-        self.rehydrated_stopped_record.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn rehydrated_exec_record(&self) -> bool {
-        self.rehydrated_exec_record.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn rehydrated_signal_process(&self) -> bool {
-        self.rehydrated_signal_process.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn rehydrated_write_stdin(&self) -> bool {
-        self.rehydrated_write_stdin.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn rehydrated_close_stdin(&self) -> bool {
-        self.rehydrated_close_stdin.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn rehydrated_paused_record(&self) -> bool {
-        self.rehydrated_paused_record.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn rehydrated_resumed_record(&self) -> bool {
-        self.rehydrated_resumed_record.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn rehydrated_update(&self) -> bool {
-        self.rehydrated_update.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn rehydrated_running_pid(&self) -> Option<i32> {
-        match self.rehydrated_running_pid.load(Ordering::SeqCst) {
-            pid if pid > 0 => Some(pid),
-            _ => None,
-        }
-    }
-
-    pub(super) fn rehydrated_exec_pid(&self) -> Option<i32> {
-        match self.rehydrated_exec_pid.load(Ordering::SeqCst) {
-            pid if pid > 0 => Some(pid),
-            _ => None,
-        }
-    }
-
-    async fn live_session(&self, target: &ContainerTarget) -> Result<ActiveSession> {
-        self.session
-            .lock()
-            .await
-            .as_ref()
-            .filter(|active| &active.target == target)
-            .cloned()
-            .ok_or_else(|| {
-                qualification_error(
-                    ErrorCode::NotFound,
-                    "qualification KVM owner has no live exact-generation session",
-                )
-            })
-    }
-
-    pub(super) async fn guest_wait(&self, request: AgentWaitRequest) -> Result<ExitStatus> {
-        self.live_session(&request.target)
-            .await?
-            .owner
-            .client()
-            .wait(request)
-            .await
-    }
-
-    pub(super) async fn guest_exec(&self, request: AgentExecRequest) -> Result<AgentProcess> {
-        self.live_session(&request.target.container)
-            .await?
-            .owner
-            .client()
-            .exec(request)
-            .await
-    }
-
-    pub(super) async fn guest_signal_process(
-        &self,
-        request: AgentSignalProcessRequest,
-    ) -> Result<()> {
-        self.live_session(&request.target.container)
-            .await?
-            .owner
-            .client()
-            .signal_process(request)
-            .await
-    }
-
-    pub(super) async fn guest_wait_process(
-        &self,
-        request: AgentWaitProcessRequest,
-    ) -> Result<ExitStatus> {
-        self.live_session(&request.target.container)
-            .await?
-            .owner
-            .client()
-            .wait_process(request)
-            .await
-    }
-
-    pub(super) async fn guest_pause(
-        &self,
-        request: AgentContainerOperationRequest,
-    ) -> Result<a3s_oci_agent_protocol::AgentState> {
-        self.live_session(&request.target)
-            .await?
-            .owner
-            .client()
-            .pause(request)
-            .await
-    }
-
-    pub(super) async fn guest_resume(
-        &self,
-        request: AgentContainerOperationRequest,
-    ) -> Result<a3s_oci_agent_protocol::AgentState> {
-        self.live_session(&request.target)
-            .await?
-            .owner
-            .client()
-            .resume(request)
-            .await
-    }
-
-    pub(super) async fn guest_processes(
-        &self,
-        request: AgentProcessesRequest,
-    ) -> Result<Vec<ProcessRecord>> {
-        self.live_session(&request.target)
-            .await?
-            .owner
-            .client()
-            .processes(request)
-            .await
-    }
-
-    pub(super) async fn guest_update(
-        &self,
-        request: AgentUpdateRequest,
-    ) -> Result<a3s_oci_agent_protocol::AgentState> {
-        self.live_session(&request.target)
-            .await?
-            .owner
-            .client()
-            .update(request)
-            .await
-    }
-
-    pub(super) async fn guest_stats(&self, request: AgentStatsRequest) -> Result<ContainerStats> {
-        self.live_session(&request.target)
-            .await?
-            .owner
-            .client()
-            .stats(request)
-            .await
-    }
-
-    pub(super) async fn guest_read_output(
-        &self,
-        request: AgentReadOutputRequest,
-    ) -> Result<Vec<OutputChunk>> {
-        self.live_session(&request.process.container)
-            .await?
-            .owner
-            .client()
-            .read_output(request)
-            .await
-    }
-
-    pub(super) async fn guest_write_stdin(&self, request: AgentWriteStdinRequest) -> Result<()> {
-        self.live_session(&request.process.container)
-            .await?
-            .owner
-            .client()
-            .write_stdin(request)
-            .await
-    }
-
-    pub(super) async fn guest_close_stdin(&self, request: AgentCloseStdinRequest) -> Result<()> {
-        self.live_session(&request.process.container)
-            .await?
-            .owner
-            .client()
-            .close_stdin(request)
-            .await
-    }
 }
 
 #[async_trait]
@@ -1118,6 +733,10 @@ impl RuntimeDriver for QualificationKvmOperationDriver {
 
     async fn close_stdin(&self, request: DriverCloseStdinRequest) -> Result<()> {
         self.dispatch_close_stdin(request).await
+    }
+
+    async fn resize(&self, request: DriverResizeRequest) -> Result<()> {
+        self.dispatch_resize(request).await
     }
 }
 

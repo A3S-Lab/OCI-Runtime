@@ -708,6 +708,29 @@ enum Command {
         #[arg(long, value_enum)]
         fault_at: reopen_replacement::FaultStageArg,
     },
+    /// Qualify all Host/Guest Resize interruptions through real KVM owners.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[command(hide = true)]
+    LinuxKvmResizeReopen {
+        /// Absolute isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// New or empty private root for durable state, shares, and consoles.
+        #[arg(long, value_name = "DIR")]
+        runtime_root: PathBuf,
+        /// Absolute immutable Linux KVM utility-VM system-image manifest.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
+        /// Source OCI bundle copied into the protected runtime handoff.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// Exact Host- or Guest-side Resize transition to interrupt.
+        #[arg(long, value_enum)]
+        fault_at: reopen_replacement::FaultStageArg,
+    },
     /// Run a bounded fresh-generation KVM soak through the qualification owner.
     #[cfg(all(
         target_os = "linux",

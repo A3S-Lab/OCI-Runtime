@@ -3,14 +3,15 @@ use std::sync::atomic::Ordering;
 use a3s_oci_core::{DriverKind, IsolationClass};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerRecord, ContainerTarget, ErrorCode, OciBundle, ProcessRecord, ProcessTarget, Result,
+    ContainerRecord, ContainerTarget, ErrorCode, OciBundle, ProcessRecord, ProcessTarget,
+    ResizeRequest, Result,
 };
 
 use super::{qualification_error, QualificationKvmOperationDriver};
 use crate::driver::{
     DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateAttachments,
-    DriverCreateRequest, DriverExecRequest, DriverKillRequest, DriverSignalProcessRequest,
-    DriverStartRequest, DriverUpdateRequest, DriverWriteStdinRequest,
+    DriverCreateRequest, DriverExecRequest, DriverKillRequest, DriverResizeRequest,
+    DriverSignalProcessRequest, DriverStartRequest, DriverUpdateRequest, DriverWriteStdinRequest,
 };
 use crate::DriverRecovery;
 
@@ -271,6 +272,25 @@ impl QualificationKvmOperationDriver {
                     let request = self.recovery_close_stdin_request(record)?;
                     self.dispatch_close_stdin(request).await?;
                     self.rehydrated_close_stdin.store(true, Ordering::SeqCst);
+                }
+                if self.retained_resize.is_some() {
+                    let (marker, expected) =
+                        self.retained_resize_ready_marker.as_ref().ok_or_else(|| {
+                            qualification_error(
+                                ErrorCode::FailedPrecondition,
+                                "KVM Resize recovery has no Exec readiness marker",
+                            )
+                        })?;
+                    super::super::exec::wait_for_exact_marker(
+                        marker,
+                        expected,
+                        "replacement KVM resizable terminal Exec readiness",
+                    )
+                    .await
+                    .map_err(|reason| qualification_error(ErrorCode::FailedPrecondition, reason))?;
+                    let request = self.recovery_resize_request(record)?;
+                    self.dispatch_resize(request).await?;
+                    self.rehydrated_resize.store(true, Ordering::SeqCst);
                 }
                 if self.recovery_exec_is_live {
                     return DriverRecovery::recreated_running_with_processes(
@@ -536,6 +556,44 @@ impl QualificationKvmOperationDriver {
                 container: exact_container,
                 process_id: request.process.process_id.clone(),
             },
+        })
+    }
+
+    fn recovery_resize_request(&self, record: &ContainerRecord) -> Result<DriverResizeRequest> {
+        let request: &ResizeRequest = self.retained_resize.as_ref().ok_or_else(|| {
+            qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM replacement has no retained Resize request",
+            )
+        })?;
+        let exact_container =
+            ContainerTarget::exact(request.process.container.id.clone(), record.generation);
+        let expected_process_id = self
+            .retained_exec
+            .as_ref()
+            .map(|exec| &exec.process_id)
+            .ok_or_else(|| {
+                qualification_error(
+                    ErrorCode::FailedPrecondition,
+                    "KVM Resize recovery has no retained Exec request",
+                )
+            })?;
+        if request.process.container != exact_container
+            || request.process.container.id != self.retained_create.id
+            || &request.process.process_id != expected_process_id
+        {
+            return Err(qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM recovery Resize target differs from the durable Exec process",
+            ));
+        }
+        Ok(DriverResizeRequest {
+            context: request.context.clone(),
+            target: ProcessTarget {
+                container: exact_container,
+                process_id: request.process.process_id.clone(),
+            },
+            size: request.size,
         })
     }
 
