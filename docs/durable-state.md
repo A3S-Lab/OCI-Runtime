@@ -704,6 +704,14 @@ before Host service open completes. The API retry then returns from the
 durable journal without another driver dispatch. Changed Host and Guest
 payloads and stale generations fail closed. All nine Apple Silicon stages
 passed in 18 fresh VMs on August 11, 2026.
+On August 31, 2026, clean revision `17b307d` also passed all nine stages on
+x86_64 Linux KVM. The first eight replacement owners dispatched the exact
+bytes once from the Prepared Host journal. At `guest-after-response-write`,
+recovery rehydrated the committed write into the rebuilt pipe-backed Exec and
+the API retry performed no additional dispatch. Every path verified changed
+request rejection, stale Host and Guest fences, the exact effect marker, and
+complete cleanup. The retained aggregate has SHA-256
+`a96eeace7f59f164d9fc4e1ef4ce3f48b9efa568f1eeeb2af58e54c05c9fe889`.
 
 Real CloseStdin recovery uses
 `a3s.oci.oci-vm-operation-reopen-replacement.v16`. Recovery rebuilds the same

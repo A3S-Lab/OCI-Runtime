@@ -857,6 +857,14 @@ the same operation ID, and the rebuilt Exec must write the exact line to its
 effect marker. Stale generations fail at both boundaries. All nine stages
 passed in 18 fresh VMs on August 11, 2026 under
 `a3s.oci.oci-vm-operation-reopen-replacement.v15`.
+Clean revision `17b307d` also passed all nine stages on x86_64 Linux KVM on
+August 31, 2026. The first eight replacement Guests received the exact write
+once when the Prepared Host journal resumed. The final stage rehydrated the
+committed bytes before Host service open completed, so the API retry did not
+dispatch again. All paths verified the exact nonce-bound effect, changed-byte
+rejection, stale Host and Guest fences, and complete cleanup. The aggregate
+SHA-256 is
+`a96eeace7f59f164d9fc4e1ef4ce3f48b9efa568f1eeeb2af58e54c05c9fe889`.
 
 CloseStdin and Resize retain the same Host-first commit boundary under schemas
 v16 and v17. File upload and Filesystem MakeDir use v18 and v19 with exact v3
