@@ -876,6 +876,13 @@ The August 15, 2026 Apple Silicon rerun passed this point for all 14 journaled
 mutations. File and Filesystem also passed every Host/Guest transport stage,
 18/18 paths, with permanent Host changed-request fencing and complete device
 placeholder cleanup between owners.
+Clean revision `31d35c3` passed all nine CloseStdin stages on x86_64 Linux
+KVM on August 31, 2026. The first eight replacement Guests observed EOF once
+when the Prepared Host journal resumed. The final stage closed the rebuilt
+Exec input during recovery, so the API retry did not dispatch again. All paths
+verified the nonce-bound EOF effect, changed-process rejection, stale Host and
+Guest fences, and complete cleanup. The aggregate SHA-256 is
+`dc1743b4c6f53360b40dd9ebcb39b05832322555bfb6d6c0e55f750090c6ba33`.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount

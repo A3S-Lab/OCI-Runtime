@@ -649,6 +649,25 @@ bytes and stale Host and Guest generations, verifies the exact nonce-bound
 effect marker, force-deletes the workload, and restores every inventory. The
 aggregate schema is `a3s.oci.linux-kvm-write-stdin-reopen-matrix.v1`.
 
+CloseStdin retains the exact setup Create, Start, and committed non-terminal
+pipe-backed Exec requests plus init, Exec, and EOF-effect markers:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_CLOSE_STDIN_REOPEN_REPORT=/absolute/path/to/close-stdin-reopen.json \
+  bash .github/scripts/linux-kvm-close-stdin-reopen.sh
+```
+
+A fresh `HostRuntimeService` and VM owner recreate init and Exec and rebind all
+completed setup responses. The first eight paths close the replacement input
+once when the Prepared Host journal resumes. At
+`guest-after-response-write`, driver recovery closes the rebuilt Exec input
+before Host service open completes and the API retry returns without an
+additional dispatch. Every path rejects a changed process target and stale
+Host and Guest generations, verifies the exact nonce-bound EOF effect marker,
+force-deletes the workload, and restores every inventory. The aggregate schema
+is `a3s.oci.linux-kvm-close-stdin-reopen-matrix.v1`.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -673,7 +692,7 @@ nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
 If KVM is unavailable, none of the lifecycle, recovery, operation-reopen, or soak
 scripts downloads or unpacks the Alpine fixture. Lifecycle, recovery, and
 Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume,
-Processes/Update/Stats/ReadOutput/WriteStdin reopen emit zero-case
+Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin reopen emit zero-case
 `unavailable` reports; soak emits
 `completed_iterations: 0` and
 `fixture_downloaded: false`. CI uploads those reports, but they are not
@@ -771,7 +790,14 @@ committed write and the API retry performed no additional dispatch. Every path
 verified the exact effect marker, changed-request rejection, both stale
 generation fences, and complete cleanup. The retained aggregate has SHA-256
 `a96eeace7f59f164d9fc4e1ef4ce3f48b9efa568f1eeeb2af58e54c05c9fe889`.
-AArch64 hardware evidence and the other 4 workload-operation matrices plus
+Clean revision `31d35c3` then retained all 9/9 CloseStdin owner replacements.
+The first eight paths dispatched the unchanged EOF once from the Prepared Host
+journal. At `guest-after-response-write`, recovery closed the rebuilt Exec
+input and the API retry performed no additional dispatch. Every path verified
+the exact EOF marker, changed-process rejection, both stale generation fences,
+and complete cleanup. The retained aggregate has SHA-256
+`dc1743b4c6f53360b40dd9ebcb39b05832322555bfb6d6c0e55f750090c6ba33`.
+AArch64 hardware evidence and the other 3 workload-operation matrices plus
 Host shutdown remain open; the candidate therefore remains `probe-only`.
 
 ## Experimental CRIU checkpoint and restore gate

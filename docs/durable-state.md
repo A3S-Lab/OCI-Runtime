@@ -721,6 +721,14 @@ recovery closes the fresh Exec input before Host service open completes and
 the retry returns without another driver dispatch. Changed process targets and
 stale generations fail closed. All nine Apple Silicon stages passed in 18
 fresh VMs on August 11, 2026.
+On August 31, 2026, clean revision `31d35c3` also passed all nine stages on
+x86_64 Linux KVM. The first eight replacement owners dispatched the exact EOF
+once from the Prepared Host journal. At `guest-after-response-write`,
+recovery closed the rebuilt pipe-backed Exec before Host service open
+completed, and the API retry performed no additional dispatch. Every path
+verified changed-process rejection, stale Host and Guest fences, the exact EOF
+effect marker, and complete cleanup. The retained aggregate has SHA-256
+`dc1743b4c6f53360b40dd9ebcb39b05832322555bfb6d6c0e55f750090c6ba33`.
 
 Real Resize recovery uses
 `a3s.oci.oci-vm-operation-reopen-replacement.v17`. Recovery rebuilds the same
