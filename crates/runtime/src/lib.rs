@@ -344,14 +344,15 @@ pub use transport_cleanup_report::{
 ))]
 #[doc(hidden)]
 pub use utility_vm_driver::operation_reopen::{
-    linux_kvm_create_reopen_replacement, linux_kvm_delete_reopen_replacement,
-    linux_kvm_exec_reopen_replacement, linux_kvm_kill_reopen_replacement,
-    linux_kvm_pause_reopen_replacement, linux_kvm_processes_reopen_replacement,
-    linux_kvm_read_output_reopen_replacement, linux_kvm_resume_reopen_replacement,
-    linux_kvm_signal_process_reopen_replacement, linux_kvm_start_reopen_replacement,
-    linux_kvm_state_reopen_replacement, linux_kvm_stats_reopen_replacement,
-    linux_kvm_update_reopen_replacement, linux_kvm_wait_process_reopen_replacement,
-    linux_kvm_wait_reopen_replacement, linux_kvm_write_stdin_reopen_replacement,
+    linux_kvm_close_stdin_reopen_replacement, linux_kvm_create_reopen_replacement,
+    linux_kvm_delete_reopen_replacement, linux_kvm_exec_reopen_replacement,
+    linux_kvm_kill_reopen_replacement, linux_kvm_pause_reopen_replacement,
+    linux_kvm_processes_reopen_replacement, linux_kvm_read_output_reopen_replacement,
+    linux_kvm_resume_reopen_replacement, linux_kvm_signal_process_reopen_replacement,
+    linux_kvm_start_reopen_replacement, linux_kvm_state_reopen_replacement,
+    linux_kvm_stats_reopen_replacement, linux_kvm_update_reopen_replacement,
+    linux_kvm_wait_process_reopen_replacement, linux_kvm_wait_reopen_replacement,
+    linux_kvm_write_stdin_reopen_replacement, LinuxKvmCloseStdinReopenConfig,
     LinuxKvmCreateReopenConfig, LinuxKvmDeleteReopenConfig, LinuxKvmExecReopenConfig,
     LinuxKvmKillReopenConfig, LinuxKvmPauseReopenConfig, LinuxKvmProcessesReopenConfig,
     LinuxKvmReadOutputReopenConfig, LinuxKvmResumeReopenConfig, LinuxKvmSignalProcessReopenConfig,

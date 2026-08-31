@@ -4,19 +4,21 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use a3s_oci_agent_protocol::{
-    AgentContainerOperationRequest, AgentExecRequest, AgentProcess, AgentProcessesRequest,
-    AgentReadOutputRequest, AgentSignalProcessRequest, AgentStatsRequest, AgentUpdateRequest,
-    AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest, GuestAgentService,
+    AgentCloseStdinRequest, AgentContainerOperationRequest, AgentExecRequest, AgentProcess,
+    AgentProcessesRequest, AgentReadOutputRequest, AgentSignalProcessRequest, AgentStatsRequest,
+    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest,
+    GuestAgentService,
 };
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, HostPlatform, IsolationClass,
 };
 use a3s_oci_sdk::{
-    async_trait, AttachmentCapabilities, ContainerOperationRequest, ContainerRecord,
-    ContainerStats, ContainerTarget, CreateRequest, DeleteMode, Error, ErrorCode, ExecRequest,
-    ExitStatus, KillRequest, OciBundle, OperationId, OutputChunk, ProcessRecord, ProcessTarget,
-    Result, RuntimeOperation, Signal, SignalProcessRequest, StartRequest, UpdateRequest,
-    WriteStdinRequest, RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
+    async_trait, AttachmentCapabilities, CloseStdinRequest, ContainerOperationRequest,
+    ContainerRecord, ContainerStats, ContainerTarget, CreateRequest, DeleteMode, Error, ErrorCode,
+    ExecRequest, ExitStatus, KillRequest, OciBundle, OperationId, OutputChunk, ProcessRecord,
+    ProcessTarget, Result, RuntimeOperation, Signal, SignalProcessRequest, StartRequest,
+    UpdateRequest, WriteStdinRequest, RUNTIME_BUNDLE_HANDOFF_EXTENSION,
+    RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
 };
 use tokio::sync::Mutex;
 
@@ -29,17 +31,18 @@ use crate::agent_session::{
     UtilityVmSession, UtilityVmSessionQualification, VerifiedLinuxUtilityVmConnectOptions,
 };
 use crate::driver::{
-    DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverSignalProcessRequest,
-    DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
-    DriverWaitRequest, DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
+    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateRequest,
+    DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
+    DriverReadOutputRequest, DriverSignalProcessRequest, DriverStartRequest, DriverState,
+    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
+    OciHookPhase, RuntimeDriver,
 };
 use crate::{AgentVmSmokeReport, DriverRecovery};
 
 mod dispatch;
 mod recovery;
 
-const QUALIFICATION_OPERATIONS: [RuntimeOperation; 16] = [
+const QUALIFICATION_OPERATIONS: [RuntimeOperation; 17] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -56,6 +59,7 @@ const QUALIFICATION_OPERATIONS: [RuntimeOperation; 16] = [
     RuntimeOperation::Stats,
     RuntimeOperation::ReadOutput,
     RuntimeOperation::WriteStdin,
+    RuntimeOperation::CloseStdin,
 ];
 const QUALIFICATION_SCOPE: &str = "linux-kvm-operation-stage-reopen-only-v1";
 
@@ -88,6 +92,8 @@ pub(super) struct QualificationKvmOperationDriver {
     retained_signal_ready_marker: Option<(PathBuf, Vec<u8>)>,
     retained_write_stdin: Option<WriteStdinRequest>,
     retained_write_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    retained_close_stdin: Option<CloseStdinRequest>,
+    retained_close_ready_marker: Option<(PathBuf, Vec<u8>)>,
     retained_pause: Option<ContainerOperationRequest>,
     retained_pause_ready_marker: Option<(PathBuf, Vec<u8>)>,
     retained_resume: Option<ContainerOperationRequest>,
@@ -113,6 +119,7 @@ pub(super) struct QualificationKvmOperationDriver {
     stats_identity: StdMutex<Option<ContainerTarget>>,
     read_output_identity: StdMutex<Option<DriverReadOutputRequest>>,
     write_stdin_identity: StdMutex<Option<DriverWriteStdinRequest>>,
+    close_stdin_identity: StdMutex<Option<DriverCloseStdinRequest>>,
     start_calls: AtomicU32,
     kill_calls: AtomicU32,
     delete_calls: AtomicU32,
@@ -127,6 +134,7 @@ pub(super) struct QualificationKvmOperationDriver {
     stats_calls: AtomicU32,
     read_output_calls: AtomicU32,
     write_stdin_calls: AtomicU32,
+    close_stdin_calls: AtomicU32,
     recovery_calls: AtomicU32,
     rehydrated_created_record: AtomicBool,
     rehydrated_running_record: AtomicBool,
@@ -134,6 +142,7 @@ pub(super) struct QualificationKvmOperationDriver {
     rehydrated_exec_record: AtomicBool,
     rehydrated_signal_process: AtomicBool,
     rehydrated_write_stdin: AtomicBool,
+    rehydrated_close_stdin: AtomicBool,
     rehydrated_paused_record: AtomicBool,
     rehydrated_resumed_record: AtomicBool,
     rehydrated_update: AtomicBool,
@@ -167,6 +176,8 @@ impl QualificationKvmOperationDriver {
             retained_signal_ready_marker: None,
             retained_write_stdin: None,
             retained_write_ready_marker: None,
+            retained_close_stdin: None,
+            retained_close_ready_marker: None,
             retained_pause: None,
             retained_pause_ready_marker: None,
             retained_resume: None,
@@ -192,6 +203,7 @@ impl QualificationKvmOperationDriver {
             stats_identity: StdMutex::new(None),
             read_output_identity: StdMutex::new(None),
             write_stdin_identity: StdMutex::new(None),
+            close_stdin_identity: StdMutex::new(None),
             start_calls: AtomicU32::new(0),
             kill_calls: AtomicU32::new(0),
             delete_calls: AtomicU32::new(0),
@@ -206,6 +218,7 @@ impl QualificationKvmOperationDriver {
             stats_calls: AtomicU32::new(0),
             read_output_calls: AtomicU32::new(0),
             write_stdin_calls: AtomicU32::new(0),
+            close_stdin_calls: AtomicU32::new(0),
             recovery_calls: AtomicU32::new(0),
             rehydrated_created_record: AtomicBool::new(false),
             rehydrated_running_record: AtomicBool::new(false),
@@ -213,6 +226,7 @@ impl QualificationKvmOperationDriver {
             rehydrated_exec_record: AtomicBool::new(false),
             rehydrated_signal_process: AtomicBool::new(false),
             rehydrated_write_stdin: AtomicBool::new(false),
+            rehydrated_close_stdin: AtomicBool::new(false),
             rehydrated_paused_record: AtomicBool::new(false),
             rehydrated_resumed_record: AtomicBool::new(false),
             rehydrated_update: AtomicBool::new(false),
@@ -350,6 +364,27 @@ impl QualificationKvmOperationDriver {
         );
         driver.retained_write_stdin = retained_write_stdin;
         driver.retained_write_ready_marker = retained_write_ready_marker;
+        driver
+    }
+
+    pub(super) fn with_close_stdin_recovery(
+        prepared: &PreparedUtilityVmLayout,
+        console: PathBuf,
+        retained_create: CreateRequest,
+        retained_start: StartRequest,
+        retained_exec: ExecRequest,
+        retained_close_stdin: Option<CloseStdinRequest>,
+        retained_close_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    ) -> Self {
+        let mut driver = Self::with_exec_recovery(
+            prepared,
+            console,
+            retained_create,
+            retained_start,
+            Some(retained_exec),
+        );
+        driver.retained_close_stdin = retained_close_stdin;
+        driver.retained_close_ready_marker = retained_close_ready_marker;
         driver
     }
 
@@ -735,6 +770,20 @@ impl QualificationKvmOperationDriver {
         self.write_stdin_calls.load(Ordering::SeqCst)
     }
 
+    pub(super) fn close_stdin_identity(
+        &self,
+    ) -> std::result::Result<DriverCloseStdinRequest, String> {
+        self.close_stdin_identity
+            .lock()
+            .map_err(|_| "KVM CloseStdin identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification KVM owner recorded no CloseStdin dispatch".to_string())
+    }
+
+    pub(super) fn close_stdin_calls(&self) -> u32 {
+        self.close_stdin_calls.load(Ordering::SeqCst)
+    }
+
     pub(super) fn recovery_calls(&self) -> u32 {
         self.recovery_calls.load(Ordering::SeqCst)
     }
@@ -761,6 +810,10 @@ impl QualificationKvmOperationDriver {
 
     pub(super) fn rehydrated_write_stdin(&self) -> bool {
         self.rehydrated_write_stdin.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn rehydrated_close_stdin(&self) -> bool {
+        self.rehydrated_close_stdin.load(Ordering::SeqCst)
     }
 
     pub(super) fn rehydrated_paused_record(&self) -> bool {
@@ -923,6 +976,15 @@ impl QualificationKvmOperationDriver {
             .write_stdin(request)
             .await
     }
+
+    pub(super) async fn guest_close_stdin(&self, request: AgentCloseStdinRequest) -> Result<()> {
+        self.live_session(&request.process.container)
+            .await?
+            .owner
+            .client()
+            .close_stdin(request)
+            .await
+    }
 }
 
 #[async_trait]
@@ -1052,6 +1114,10 @@ impl RuntimeDriver for QualificationKvmOperationDriver {
 
     async fn write_stdin(&self, request: DriverWriteStdinRequest) -> Result<()> {
         self.dispatch_write_stdin(request).await
+    }
+
+    async fn close_stdin(&self, request: DriverCloseStdinRequest) -> Result<()> {
+        self.dispatch_close_stdin(request).await
     }
 }
 

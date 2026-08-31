@@ -8,9 +8,9 @@ use a3s_oci_sdk::{
 
 use super::{qualification_error, QualificationKvmOperationDriver};
 use crate::driver::{
-    DriverContainerOperationRequest, DriverCreateAttachments, DriverCreateRequest,
-    DriverExecRequest, DriverKillRequest, DriverSignalProcessRequest, DriverStartRequest,
-    DriverUpdateRequest, DriverWriteStdinRequest,
+    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateAttachments,
+    DriverCreateRequest, DriverExecRequest, DriverKillRequest, DriverSignalProcessRequest,
+    DriverStartRequest, DriverUpdateRequest, DriverWriteStdinRequest,
 };
 use crate::DriverRecovery;
 
@@ -253,6 +253,25 @@ impl QualificationKvmOperationDriver {
                     self.dispatch_write_stdin(request).await?;
                     self.rehydrated_write_stdin.store(true, Ordering::SeqCst);
                 }
+                if self.retained_close_stdin.is_some() {
+                    let (marker, expected) =
+                        self.retained_close_ready_marker.as_ref().ok_or_else(|| {
+                            qualification_error(
+                                ErrorCode::FailedPrecondition,
+                                "KVM CloseStdin recovery has no Exec readiness marker",
+                            )
+                        })?;
+                    super::super::exec::wait_for_exact_marker(
+                        marker,
+                        expected,
+                        "replacement KVM stdin-close Exec readiness",
+                    )
+                    .await
+                    .map_err(|reason| qualification_error(ErrorCode::FailedPrecondition, reason))?;
+                    let request = self.recovery_close_stdin_request(record)?;
+                    self.dispatch_close_stdin(request).await?;
+                    self.rehydrated_close_stdin.store(true, Ordering::SeqCst);
+                }
                 if self.recovery_exec_is_live {
                     return DriverRecovery::recreated_running_with_processes(
                         running,
@@ -477,6 +496,46 @@ impl QualificationKvmOperationDriver {
                 process_id: request.process.process_id.clone(),
             },
             data: request.data.clone(),
+        })
+    }
+
+    fn recovery_close_stdin_request(
+        &self,
+        record: &ContainerRecord,
+    ) -> Result<DriverCloseStdinRequest> {
+        let request = self.retained_close_stdin.as_ref().ok_or_else(|| {
+            qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM replacement has no retained CloseStdin request",
+            )
+        })?;
+        let exact_container =
+            ContainerTarget::exact(request.process.container.id.clone(), record.generation);
+        let expected_process_id = self
+            .retained_exec
+            .as_ref()
+            .map(|exec| &exec.process_id)
+            .ok_or_else(|| {
+                qualification_error(
+                    ErrorCode::FailedPrecondition,
+                    "KVM CloseStdin recovery has no retained Exec request",
+                )
+            })?;
+        if request.process.container != exact_container
+            || request.process.container.id != self.retained_create.id
+            || &request.process.process_id != expected_process_id
+        {
+            return Err(qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM recovery CloseStdin target differs from the durable Exec process",
+            ));
+        }
+        Ok(DriverCloseStdinRequest {
+            context: request.context.clone(),
+            target: ProcessTarget {
+                container: exact_container,
+                process_id: request.process.process_id.clone(),
+            },
         })
     }
 

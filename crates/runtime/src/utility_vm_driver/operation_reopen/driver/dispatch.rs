@@ -6,10 +6,10 @@ use a3s_oci_sdk::{
 
 use super::{qualification_error, QualificationKvmOperationDriver};
 use crate::driver::{
-    DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverSignalProcessRequest,
-    DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
-    DriverWaitRequest, DriverWriteStdinRequest,
+    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateRequest,
+    DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
+    DriverReadOutputRequest, DriverSignalProcessRequest, DriverStartRequest, DriverState,
+    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
 };
 
 impl QualificationKvmOperationDriver {
@@ -429,6 +429,36 @@ impl QualificationKvmOperationDriver {
             .await?
             .client
             .write_stdin(request)
+            .await
+    }
+
+    pub(super) async fn dispatch_close_stdin(
+        &self,
+        request: DriverCloseStdinRequest,
+    ) -> Result<()> {
+        {
+            let mut retained = self.close_stdin_identity.lock().map_err(|_| {
+                qualification_error(
+                    ErrorCode::Internal,
+                    "KVM CloseStdin identity lock was poisoned",
+                )
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &request => {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        "qualification KVM owner received a changed CloseStdin request",
+                    ));
+                }
+                Some(_) => {}
+                None => *retained = Some(request.clone()),
+            }
+        }
+        self.close_stdin_calls.fetch_add(1, Ordering::SeqCst);
+        self.live_session(&request.target.container)
+            .await?
+            .client
+            .close_stdin(request)
             .await
     }
 }
