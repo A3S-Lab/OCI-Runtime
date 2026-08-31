@@ -58,9 +58,9 @@ pub(super) fn send_descriptor_frame(
     message.msg_iov = &mut payload_vector;
     message.msg_iovlen = 1;
     if control_bytes != 0 {
-        // SAFETY: DeviceMountControlBuffer is aligned for cmsghdr and its byte
-        // member spans the complete fixed control buffer.
-        message.msg_control = unsafe { std::ptr::addr_of_mut!(control.bytes).cast() };
+        // DeviceMountControlBuffer is aligned for cmsghdr and the union storage
+        // spans the complete fixed control buffer.
+        message.msg_control = std::ptr::addr_of_mut!(control).cast();
     }
     // libc models these fields as size_t for glibc and socklen_t for musl.
     // The frame is statically bounded to six descriptors, so it fits both
@@ -140,9 +140,9 @@ pub(super) fn receive_descriptor_frame(
     let mut message: libc::msghdr = unsafe { zeroed() };
     message.msg_iov = &mut payload_vector;
     message.msg_iovlen = 1;
-    // SAFETY: DeviceMountControlBuffer is aligned for cmsghdr and its byte
-    // member spans the complete fixed control buffer.
-    message.msg_control = unsafe { std::ptr::addr_of_mut!(control.bytes).cast() };
+    // DeviceMountControlBuffer is aligned for cmsghdr and the union storage
+    // spans the complete fixed control buffer.
+    message.msg_control = std::ptr::addr_of_mut!(control).cast();
     message.msg_controllen = DEVICE_MOUNT_CONTROL_BYTES as _;
 
     let received = loop {
