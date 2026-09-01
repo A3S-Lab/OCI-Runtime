@@ -903,6 +903,18 @@ fn applies_an_ordered_idmapped_bind_after_its_source_mount_exists() {
         {"containerID": 1000, "hostID": 0, "size": 1}
       ]"#,
     );
+    let config = config.replace(
+        r#"    {
+      "destination": "/consumer","#,
+        r#"    {
+      "destination": "/generated/child",
+      "type": "tmpfs",
+      "source": "tmpfs",
+      "options": ["nosuid", "nodev", "mode=0700"]
+    },
+    {
+      "destination": "/consumer","#,
+    );
     let bundle = bundle_at(temporary.path().to_path_buf(), &config);
     let plan = InitPlan::from_bundle(&bundle, &null_io()).expect("ordered ID-mapped mount plan");
     let namespaces =
@@ -940,7 +952,16 @@ fn applies_an_ordered_idmapped_bind_after_its_source_mount_exists() {
             std::fs::metadata(rootfs.join("generated")).expect("ordered ID-mapped source metadata");
         let target =
             std::fs::metadata(rootfs.join("consumer")).expect("ordered ID-mapped target metadata");
-        (source.uid(), source.gid(), target.uid(), target.gid())
+        let child = std::fs::metadata(rootfs.join("consumer/child"))
+            .expect("ordered ID-mapped child metadata");
+        (
+            source.uid(),
+            source.gid(),
+            target.uid(),
+            target.gid(),
+            child.uid(),
+            child.gid(),
+        )
     });
     if unsafe { libc::setns(original_namespace.as_raw_fd(), libc::CLONE_NEWNS) } != 0 {
         panic!(
@@ -949,10 +970,11 @@ fn applies_an_ordered_idmapped_bind_after_its_source_mount_exists() {
         );
     }
 
-    let (source_uid, source_gid, target_uid, target_gid) =
+    let (source_uid, source_gid, target_uid, target_gid, child_uid, child_gid) =
         outcome.expect("apply ordered ID-mapped bind");
     assert_eq!((source_uid, source_gid), (0, 0));
     assert_eq!((target_uid, target_gid), (1000, 1000));
+    assert_eq!((child_uid, child_gid), (0, 0));
 }
 
 #[tokio::test]

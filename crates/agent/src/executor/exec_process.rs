@@ -196,6 +196,13 @@ impl ExecProcess {
                     "exec helper requested an unexpected user mapping",
                 ));
             }
+            Ok(Ok(InitOutcome::OrderedIdmapRequired { .. })) => {
+                terminate(&mut child).await;
+                return Err(exec_error(
+                    ErrorCode::PermissionDenied,
+                    "exec helper requested an unexpected ordered ID-mapped mount",
+                ));
+            }
             Ok(Ok(InitOutcome::CreateHooksReady { .. })) => {
                 terminate(&mut child).await;
                 return Err(exec_error(

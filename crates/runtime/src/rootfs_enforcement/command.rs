@@ -56,13 +56,23 @@ pub(super) fn enforcement_command(
              if printf 'forbidden\\n' > '{foreign_readonly}' 2>/dev/null; then \
                exit 46; fi; \
              printf 'foreign-readonly-bind-enforced\\n' >> \"$evidence\"; \
-             test \"$(/bin/busybox stat -c '%u:%g' '{idmap}')\" = '1000:1000'; \
-             test \"$(/bin/busybox stat -c '%u:%g' '{idmap_child}')\" = '0:0'; \
+             failure_step=idmap-nonrecursive-root; \
+             failure_detail=\"$(/bin/busybox stat -c '%u:%g' '{idmap}' 2>&1 || true)\"; \
+             test \"$failure_detail\" = '1000:1000'; \
+             failure_step=idmap-nonrecursive-child; \
+             failure_detail=\"$(/bin/busybox stat -c '%u:%g' '{idmap_child}' 2>&1 || true)\"; \
+             test \"$failure_detail\" = '0:0'; \
+             failure_step=idmap-nonrecursive-mount; failure_detail=missing; \
              /bin/busybox awk '$5 == \"{idmap_child}\" {{ ok = 1 }} \
                END {{ exit !ok }}' /proc/self/mountinfo; \
              printf 'idmap-nonrecursive-enforced\\n' >> \"$evidence\"; \
-             test \"$(/bin/busybox stat -c '%u:%g' '{ridmap}')\" = '2000:2000'; \
-             test \"$(/bin/busybox stat -c '%u:%g' '{ridmap_child}')\" = '2000:2000'; \
+             failure_step=ridmap-recursive-root; \
+             failure_detail=\"$(/bin/busybox stat -c '%u:%g' '{ridmap}' 2>&1 || true)\"; \
+             test \"$failure_detail\" = '2000:2000'; \
+             failure_step=ridmap-recursive-child; \
+             failure_detail=\"$(/bin/busybox stat -c '%u:%g' '{ridmap_child}' 2>&1 || true)\"; \
+             test \"$failure_detail\" = '2000:2000'; \
+             failure_step=ridmap-recursive-mount; failure_detail=missing; \
              /bin/busybox awk '$5 == \"{ridmap_child}\" {{ ok = 1 }} \
                END {{ exit !ok }}' /proc/self/mountinfo; \
              printf 'ridmap-recursive-enforced\\n' >> \"$evidence\"; ",

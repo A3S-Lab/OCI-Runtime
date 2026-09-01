@@ -1,13 +1,16 @@
-use std::os::fd::OwnedFd;
+use std::io::Write;
+use std::net::Shutdown;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream as StdUnixStream;
 
 use a3s_oci_sdk::{Error, ErrorCode};
 
 use super::super::capability::{CapabilitySet, CapabilityWarning};
 use super::{
-    acknowledge_user_mapping, read_outcome, read_start_result, request_user_mapping,
+    acknowledge_ordered_idmap, acknowledge_user_mapping, read_outcome, read_start_result,
+    receive_ordered_idmap_descriptors, request_ordered_idmap, request_user_mapping,
     send_device_mounts, write_capability_warning, write_create_hooks_ready, write_ready,
-    write_rejection, InitOutcome,
+    write_rejection, InitOutcome, ORDERED_IDMAP_REQUIRED_BYTE,
 };
 
 #[tokio::test(flavor = "current_thread")]
@@ -31,6 +34,65 @@ async fn user_mapping_handshake_blocks_until_the_parent_acknowledges() {
         .await
         .expect("acknowledge mappings");
     child.await.expect("mapping child");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ordered_idmap_handshake_transfers_bounded_descriptors_and_index() {
+    let (mut child, parent) = StdUnixStream::pair().expect("create control socket pair");
+    parent
+        .set_nonblocking(true)
+        .expect("make control parent nonblocking");
+    let mount = std::fs::File::open("/dev/null").expect("mount descriptor fixture");
+    let user_namespace = std::fs::File::open("/dev/null").expect("user namespace fixture");
+    let child = tokio::task::spawn_blocking(move || {
+        request_ordered_idmap(
+            &mut child,
+            41,
+            mount.as_raw_fd(),
+            user_namespace.as_raw_fd(),
+        )
+        .expect("ordered ID-map handshake");
+    });
+    let mut parent = tokio::net::UnixStream::from_std(parent).expect("register control parent");
+
+    assert_eq!(
+        read_outcome(&mut parent)
+            .await
+            .expect("read ordered ID-map request"),
+        InitOutcome::OrderedIdmapRequired { mount_index: 41 }
+    );
+    let (mount, user_namespace) = receive_ordered_idmap_descriptors(&parent)
+        .await
+        .expect("receive ordered ID-map descriptors");
+    for descriptor in [mount, user_namespace] {
+        let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFD) };
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
+    }
+    acknowledge_ordered_idmap(&mut parent)
+        .await
+        .expect("acknowledge ordered ID-map");
+    child.await.expect("ordered ID-map child");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ordered_idmap_request_rejects_a_truncated_mount_index() {
+    let (mut child, parent) = StdUnixStream::pair().expect("create control socket pair");
+    child
+        .write_all(&[ORDERED_IDMAP_REQUIRED_BYTE, 0, 0])
+        .expect("send truncated ordered ID-map request");
+    child
+        .shutdown(Shutdown::Write)
+        .expect("finish truncated request");
+    parent
+        .set_nonblocking(true)
+        .expect("make control parent nonblocking");
+    let mut parent = tokio::net::UnixStream::from_std(parent).expect("register control parent");
+
+    let error = read_outcome(&mut parent)
+        .await
+        .expect_err("truncated ordered ID-map request must fail");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(error.message.contains("mount index was truncated"));
 }
 
 #[tokio::test(flavor = "current_thread")]
