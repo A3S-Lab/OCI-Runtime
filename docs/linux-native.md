@@ -1706,9 +1706,20 @@ qualify inherited stdio descriptors, terminal console sockets, `LISTEN_FDS`,
 broader upstream suites, or other platforms. The reports are archived and
 later covered by the release checksum and signed provenance.
 
-This closes the reproducible package-to-Native-matrix wiring. Actual tag
-artifacts still need retained runs, and A3S Box product startup and its
-cross-language Sandbox SDK suites remain separate W1 exit gates.
+This closes the reproducible package-to-Native-matrix wiring. Actual Runtime
+tag artifacts still need retained runs. The separate A3S Box consumer gate is
+also closed: Box main commit
+`d6861de302e6e165a2fdc473b2d399bb0692048e` built and checksummed a
+release-layout archive, installed it through the public installer, confined
+all five product executables to that install root, and ran the complete Rust,
+Python, TypeScript, and Go Sandbox suites against Runtime commit
+`438e4b7936cd08d408160fe9341a21786f60cd26`. The same installed product passed
+with `/dev/kvm` absent and with a mode-000 wrong-type path on
+[x86_64](https://github.com/A3S-Lab/Box/actions/runs/33497670646/job/99823489427)
+and
+[aarch64](https://github.com/A3S-Lab/Box/actions/runs/33497670646/job/99823489043)
+in the complete Box
+[main run](https://github.com/A3S-Lab/Box/actions/runs/33497670646).
 
 ## Remaining promotion gates
 
@@ -1735,9 +1746,7 @@ following pass:
   native lifecycle churn gate;
 - Native Linux CRIU wider checkpoint namespace and descriptor profiles,
   cross-driver compatibility, retained tagged x86_64/aarch64 qualification,
-  upgrade compatibility, and release soak;
-- the complete A3S Box Rust, Python, and TypeScript Sandbox SDK suites on
-  x86_64 and aarch64 without KVM.
+  upgrade compatibility, and release soak.
 
 Only a caller that deliberately constructs `open_experimental` can use the
 current lifecycle slice. Checkpoint and restore additionally require the
