@@ -1987,8 +1987,16 @@ and recovery suites in the Windows guest and on native Linux.
 - [ ] Run the full Sandbox SDK suite with `/dev/kvm` absent and inaccessible.
 - [x] Fail explicit dedicated-VM requests before runtime state or driver
   mutation.
-- [ ] Reject unavailable dedicated-VM selection in A3S Box before image
-  mutation.
+- [x] Reject unavailable dedicated-VM selection in A3S Box before image
+  mutation. A3S Box PR
+  [#221](https://github.com/A3S-Lab/Box/pull/221) added route-identical
+  isolation preflight before named-volume creation, image-cache access, image
+  pulls, container records, reservations, providers, or runtime mutation. Its
+  focused tests prove unavailable dedicated-VM selection fails closed without
+  fallback and reject probe-only drivers without product mutation. Box main
+  commit `332ab93896a7293cda6f788103ca8f5559566f2d` passed the complete
+  [required CI gate](https://github.com/A3S-Lab/Box/actions/runs/33466602542)
+  on x86_64 and aarch64.
 
 Exit gate: A3S Box Sandbox and its Rust, Python, TypeScript, and Go SDK tests
 pass on supported x86_64 and aarch64 Linux hosts without KVM.
