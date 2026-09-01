@@ -5,6 +5,7 @@ use std::io;
 use std::mem::size_of;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::net::UnixStream;
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
@@ -20,6 +21,7 @@ use crate::executor::namespace::IdmapNamespaceHandles;
 pub(in crate::executor) struct DetachedMountSources {
     sources: BTreeMap<usize, DetachedMountSource>,
     namespaces: IdmapNamespaceHandles,
+    ordered_idmap_control: Option<UnixStream>,
 }
 
 #[derive(Debug)]
@@ -110,7 +112,22 @@ impl DetachedMountSources {
         Ok(Self {
             sources,
             namespaces,
+            ordered_idmap_control: None,
         })
+    }
+
+    pub(in crate::executor) fn set_ordered_idmap_control(
+        &mut self,
+        control: UnixStream,
+    ) -> Result<()> {
+        if self.ordered_idmap_control.replace(control).is_some() {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "ordered ID-mapped mount control was already configured",
+            )
+            .for_operation("prepare-container-mounts"));
+        }
+        Ok(())
     }
 
     pub(in crate::executor) fn prepare_ordered(
@@ -134,12 +151,17 @@ impl DetachedMountSources {
         }
         let detached = clone_resolved_mount(plan.index, source, plan.flags & libc::MS_REC != 0)?;
         if let Some(idmap) = &plan.idmap {
-            apply_idmap_attribute(
-                plan.index,
-                &detached,
-                self.namespaces.namespace_fd(idmap)?,
-                idmap.recursive,
-            )?;
+            let namespace = self.namespaces.namespace_fd(idmap)?;
+            if let Some(control) = self.ordered_idmap_control.as_mut() {
+                crate::executor::control::request_ordered_idmap(
+                    control,
+                    plan.index,
+                    detached.as_raw_fd(),
+                    namespace,
+                )?;
+            } else {
+                apply_idmap_attribute(plan.index, &detached, namespace, idmap.recursive)?;
+            }
         }
         if plan.detached_bind {
             apply_detached_bind_attributes(plan, &detached)?;
@@ -206,6 +228,65 @@ impl DetachedMountSources {
             .for_operation("prepare-container-mounts"))
         }
     }
+}
+
+pub(in crate::executor) fn apply_ordered_idmap_from_parent(
+    plan: &MountPlan,
+    mount: &OwnedFd,
+    user_namespace: &OwnedFd,
+) -> Result<()> {
+    if plan.ordered_source.is_none() {
+        return Err(apply_error(
+            ErrorCode::PermissionDenied,
+            plan.index,
+            "parent ID-map request does not identify an ordered mount source",
+        ));
+    }
+    let idmap = plan.idmap.as_ref().ok_or_else(|| {
+        apply_error(
+            ErrorCode::PermissionDenied,
+            plan.index,
+            "parent ID-map request does not identify an ID-mapped mount",
+        )
+    })?;
+    // SAFETY: F_GETFL only inspects descriptor flags.
+    let mount_flags = unsafe { libc::fcntl(mount.as_raw_fd(), libc::F_GETFL) };
+    if mount_flags < 0 || mount_flags & libc::O_PATH != libc::O_PATH {
+        return Err(apply_error(
+            ErrorCode::PermissionDenied,
+            plan.index,
+            "parent ID-map request did not carry an O_PATH mount descriptor",
+        ));
+    }
+    // SAFETY: NS_GET_NSTYPE reads namespace metadata from a live descriptor
+    // and does not require a third ioctl argument.
+    let namespace_type = unsafe { libc::ioctl(user_namespace.as_raw_fd(), libc::NS_GET_NSTYPE) };
+    if namespace_type < 0 {
+        return Err(apply_error(
+            ErrorCode::PermissionDenied,
+            plan.index,
+            format!(
+                "parent ID-map request carried an invalid user namespace descriptor: {}",
+                io::Error::last_os_error()
+            ),
+        ));
+    }
+    if namespace_type != libc::CLONE_NEWUSER {
+        return Err(apply_error(
+            ErrorCode::PermissionDenied,
+            plan.index,
+            format!(
+                "parent ID-map request carried namespace type {namespace_type:#x}, expected a \
+                 user namespace"
+            ),
+        ));
+    }
+    apply_idmap_attribute(
+        plan.index,
+        mount,
+        user_namespace.as_raw_fd(),
+        idmap.recursive,
+    )
 }
 
 pub(super) fn attach_descriptor_bind(
@@ -772,13 +853,15 @@ fn apply_error(code: ErrorCode, index: usize, message: impl Into<String>) -> Err
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::os::fd::OwnedFd;
+    use std::os::unix::fs::OpenOptionsExt;
     use std::path::PathBuf;
 
     use a3s_oci_sdk::ErrorCode;
 
     use super::{
-        bind_mount_attributes, classify_errno, filesystem_mount_attributes, same_bind_identity,
-        BindSourceResolver, DetachedMountSources,
+        apply_ordered_idmap_from_parent, bind_mount_attributes, classify_errno,
+        filesystem_mount_attributes, same_bind_identity, BindSourceResolver, DetachedMountSources,
     };
     use crate::executor::mount::MountPlan;
     use crate::executor::namespace::{IdMapping, IdmapNamespaceHandles, IdmapPlan};
@@ -898,12 +981,66 @@ mod tests {
     #[test]
     fn defers_idmapped_bind_sources_created_by_earlier_mounts() {
         let bundle = tempfile::tempdir().expect("temporary bundle");
+        let plan = ordered_idmap_plan();
+
+        let resolver = BindSourceResolver::new(bundle.path(), None);
+        let sources =
+            DetachedMountSources::prepare(&[plan], &resolver, IdmapNamespaceHandles::default())
+                .expect("deferred generated ID-mapped bind source");
+
+        assert!(!sources.contains(8));
+    }
+
+    #[test]
+    fn parent_ordered_idmap_rejects_untrusted_plan_and_descriptor_shapes() {
+        let mount: OwnedFd = fs::File::open("/dev/null")
+            .expect("ordinary descriptor fixture")
+            .into();
+        let user_namespace: OwnedFd = fs::File::open("/proc/self/ns/user")
+            .expect("user namespace fixture")
+            .into();
+
+        let mut unordered = ordered_idmap_plan();
+        unordered.ordered_source = None;
+        let error = apply_ordered_idmap_from_parent(&unordered, &mount, &user_namespace)
+            .expect_err("unordered mount request must fail");
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert!(error.message.contains("ordered mount source"));
+
+        let mut unmapped = ordered_idmap_plan();
+        unmapped.idmap = None;
+        let error = apply_ordered_idmap_from_parent(&unmapped, &mount, &user_namespace)
+            .expect_err("unmapped mount request must fail");
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert!(error.message.contains("ID-mapped mount"));
+
+        let error = apply_ordered_idmap_from_parent(&ordered_idmap_plan(), &mount, &user_namespace)
+            .expect_err("ordinary descriptor must fail");
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert!(error.message.contains("O_PATH mount descriptor"));
+
+        let mount: OwnedFd = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_PATH)
+            .open("/dev/null")
+            .expect("O_PATH descriptor fixture")
+            .into();
+        let not_namespace: OwnedFd = fs::File::open("/dev/null")
+            .expect("non-namespace descriptor fixture")
+            .into();
+        let error = apply_ordered_idmap_from_parent(&ordered_idmap_plan(), &mount, &not_namespace)
+            .expect_err("non-namespace descriptor must fail");
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert!(error.message.contains("namespace descriptor"));
+    }
+
+    fn ordered_idmap_plan() -> MountPlan {
         let mappings = vec![IdMapping {
             container_id: 0,
             host_id: 1000,
             size: 1,
         }];
-        let plan = MountPlan {
+        MountPlan {
             index: 8,
             destination: PathBuf::from("/generated-idmap"),
             source: Some(PathBuf::from("rootfs/generated-source")),
@@ -920,13 +1057,6 @@ mod tests {
             oci_cgroup_source: false,
             oci_cgroup_destination: false,
             oci_readonly_option: false,
-        };
-
-        let resolver = BindSourceResolver::new(bundle.path(), None);
-        let sources =
-            DetachedMountSources::prepare(&[plan], &resolver, IdmapNamespaceHandles::default())
-                .expect("deferred generated ID-mapped bind source");
-
-        assert!(!sources.contains(8));
+        }
     }
 }

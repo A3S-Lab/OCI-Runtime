@@ -275,6 +275,18 @@ fn native_fixture_declares_ordered_idmap_and_ridmap_bind_evidence() {
         serde_json::json!([{"containerID": 0, "hostID": 200_000, "size": 65_536}])
     );
 
+    let ordered_source = mounts
+        .iter()
+        .find(|mount| {
+            mount["destination"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("/recursive/source"))
+        })
+        .expect("ordered ID-map source mount");
+    assert!(ordered_source["options"]
+        .as_array()
+        .is_some_and(|options| options.iter().any(|option| option == "mode=0755")));
+
     for (destination, mapped_uid, mapped_gid) in [
         ("/idmap/filesystem/nonrecursive", 101_000, 201_000),
         ("/idmap/filesystem/recursive", 102_000, 202_000),
@@ -311,11 +323,16 @@ fn native_fixture_declares_ordered_idmap_and_ridmap_bind_evidence() {
         assert!(mount["source"]
             .as_str()
             .is_some_and(|source| source.ends_with("/recursive/source")));
-        assert_eq!(mount["uidMappings"][0]["containerID"], 100_000);
+        assert_eq!(mount["uidMappings"][0]["containerID"], 0);
         assert_eq!(mount["uidMappings"][0]["hostID"], mapped_uid);
-        assert_eq!(mount["gidMappings"][0]["containerID"], 200_000);
+        assert_eq!(mount["gidMappings"][0]["containerID"], 0);
         assert_eq!(mount["gidMappings"][0]["hostID"], mapped_gid);
     }
+    assert!(!mounts.iter().any(|mount| {
+        mount["destination"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("/idmap/bind/source"))
+    }));
 
     let command = config["process"]["args"][2]
         .as_str()

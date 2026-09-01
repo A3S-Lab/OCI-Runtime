@@ -19,7 +19,7 @@ use super::PinnedBundleDirectory;
 use crate::vm_attachment::UtilityVmStorageSources;
 
 pub(super) use default_filesystem::DefaultFilesystemPlan;
-pub(super) use idmap::DetachedMountSources;
+pub(super) use idmap::{apply_ordered_idmap_from_parent, DetachedMountSources};
 pub(super) use scope::{validate_bundle_scoped_sources, validate_bundle_source_syntax};
 
 const MAX_MOUNTS: usize = 1_024;

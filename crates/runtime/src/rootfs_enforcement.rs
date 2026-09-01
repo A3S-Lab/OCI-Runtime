@@ -198,7 +198,6 @@ impl RootfsEnforcementFixture {
             return Ok(common_targets_created);
         }
         Ok(common_targets_created
-            && real_directory(&self.target_directory.join("idmap/bind/source")).await?
             && real_file(&self.target_directory.join("idmap/bind/foreign-readonly")).await?
             && real_directory(&self.target_directory.join("idmap/bind/nonrecursive")).await?
             && real_directory(&self.target_directory.join("idmap/bind/recursive")).await?)
@@ -370,8 +369,6 @@ impl EnforcementIdMappings {
             )
         };
 
-        let root_uid = translate_fixture_id(&uids, 0, "UID")?;
-        let root_gid = translate_fixture_id(&gids, 0, "GID")?;
         // The workload observes both IDs through stat(2), so the container
         // user mapping must make the complete qualification range visible.
         translate_fixture_id(&uids, IDMAP_VISIBLE_ID_RANGE - 1, "UID")?;
@@ -394,16 +391,17 @@ impl EnforcementIdMappings {
                 uid: single_mapping(0, uid_2000),
                 gid: single_mapping(0, gid_2000),
             },
-            // Native bind sources are owned by the host IDs representing
-            // container root. Shift those exact source IDs to the host IDs
-            // representing container 1000/2000.
+            // These ordered bind sources are tmpfs mounts created inside the
+            // container user namespace, so their filesystem-root ID is zero.
+            // Shift that source ID to the host IDs representing container
+            // 1000/2000 without changing the source mount's ownership.
             bind_1000: MountIdMappingPair {
-                uid: single_mapping(root_uid, uid_1000),
-                gid: single_mapping(root_gid, gid_1000),
+                uid: single_mapping(0, uid_1000),
+                gid: single_mapping(0, gid_1000),
             },
             bind_2000: MountIdMappingPair {
-                uid: single_mapping(root_uid, uid_2000),
-                gid: single_mapping(root_gid, gid_2000),
+                uid: single_mapping(0, uid_2000),
+                gid: single_mapping(0, gid_2000),
             },
         })
     }
@@ -580,7 +578,7 @@ fn build_bundle(
             "destination": recursive_source,
             "type": "tmpfs",
             "source": "tmpfs",
-            "options": ["rw", "nosuid", "nodev", "mode=0700", "size=64k"]
+            "options": ["rw", "nosuid", "nodev", "mode=0755", "size=64k"]
         },
         {
             "destination": recursive_source_child,

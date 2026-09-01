@@ -1,5 +1,5 @@
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream as StdUnixStream;
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
@@ -14,6 +14,9 @@ const CREATE_HOOKS_READY_BYTE: u8 = 0xC1;
 pub(super) const CREATE_CONTINUE_BYTE: u8 = 0xC2;
 const USER_MAPPING_REQUIRED_BYTE: u8 = 0xB1;
 const USER_MAPPING_APPLIED_BYTE: u8 = 0xB2;
+const ORDERED_IDMAP_REQUIRED_BYTE: u8 = 0xB3;
+const ORDERED_IDMAP_DESCRIPTORS_BYTE: u8 = 0xB4;
+const ORDERED_IDMAP_APPLIED_BYTE: u8 = 0xB5;
 const REJECTED_BYTE: u8 = 0xE1;
 const DEVICE_MOUNTS_BYTE: u8 = 0xD1;
 const CAPABILITY_WARNING_BYTE: u8 = 0xD2;
@@ -24,6 +27,9 @@ const MAX_CAPABILITY_WARNINGS: usize = a3s_oci_sdk::OCI_LINUX_CAPABILITY_NAMES.l
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum InitOutcome {
     UserMappingRequired,
+    OrderedIdmapRequired {
+        mount_index: usize,
+    },
     CreateHooksReady {
         pid: i32,
         namespace_init_pid: Option<i32>,
@@ -33,6 +39,111 @@ pub(super) enum InitOutcome {
         namespace_init_pid: Option<i32>,
     },
     Rejected(Error),
+}
+
+pub(super) fn request_ordered_idmap(
+    stream: &mut StdUnixStream,
+    mount_index: usize,
+    mount: RawFd,
+    user_namespace: RawFd,
+) -> Result<()> {
+    let mount_index = u32::try_from(mount_index).map_err(|error| {
+        control_error(
+            ErrorCode::ResourceExhausted,
+            format!("ordered ID-mapped mount index does not fit the control protocol: {error}"),
+        )
+    })?;
+    stream
+        .write_all(&[ORDERED_IDMAP_REQUIRED_BYTE])
+        .and_then(|()| stream.write_all(&mount_index.to_be_bytes()))
+        .map_err(|error| {
+            control_error(
+                ErrorCode::Unavailable,
+                format!("failed to request ordered ID-mapped mount preparation: {error}"),
+            )
+        })?;
+    super::device_mount_transport::send_descriptor_frame(
+        stream.as_raw_fd(),
+        ORDERED_IDMAP_DESCRIPTORS_BYTE,
+        &[mount, user_namespace],
+    )
+    .map_err(|error| {
+        control_error(
+            ErrorCode::Unavailable,
+            format!("failed to send ordered ID-mapped mount descriptors: {error}"),
+        )
+    })?;
+    let mut acknowledgement = [0_u8; 1];
+    stream.read_exact(&mut acknowledgement).map_err(|error| {
+        control_error(
+            ErrorCode::Unavailable,
+            format!("ordered ID-mapped mount acknowledgement failed: {error}"),
+        )
+    })?;
+    if acknowledgement[0] == ORDERED_IDMAP_APPLIED_BYTE {
+        Ok(())
+    } else {
+        Err(control_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "ordered ID-mapped mount returned unknown acknowledgement byte {:#04x}",
+                acknowledgement[0]
+            ),
+        ))
+    }
+}
+
+pub(super) async fn receive_ordered_idmap_descriptors(
+    stream: &UnixStream,
+) -> Result<(OwnedFd, OwnedFd)> {
+    let descriptors = stream
+        .async_io(tokio::io::Interest::READABLE, || {
+            super::device_mount_transport::receive_descriptor_frame(
+                stream.as_raw_fd(),
+                ORDERED_IDMAP_DESCRIPTORS_BYTE,
+                2,
+            )
+        })
+        .await
+        .map_err(|error| {
+            let code = if error.kind() == std::io::ErrorKind::InvalidData {
+                ErrorCode::PermissionDenied
+            } else {
+                ErrorCode::Unavailable
+            };
+            control_error(
+                code,
+                format!("failed to receive ordered ID-mapped mount descriptors: {error}"),
+            )
+        })?;
+    let mut descriptors = descriptors.into_iter();
+    let mount = descriptors.next().ok_or_else(|| {
+        control_error(
+            ErrorCode::Internal,
+            "ordered ID-mapped mount descriptor frame lost its mount descriptor",
+        )
+    })?;
+    let user_namespace = descriptors.next().ok_or_else(|| {
+        control_error(
+            ErrorCode::Internal,
+            "ordered ID-mapped mount descriptor frame lost its user namespace descriptor",
+        )
+    })?;
+    Ok((mount, user_namespace))
+}
+
+pub(super) async fn acknowledge_ordered_idmap(stream: &mut UnixStream) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    stream
+        .write_all(&[ORDERED_IDMAP_APPLIED_BYTE])
+        .await
+        .map_err(|error| {
+            control_error(
+                ErrorCode::Unavailable,
+                format!("failed to acknowledge ordered ID-mapped mount: {error}"),
+            )
+        })
 }
 
 pub(super) fn receive_device_mounts(
@@ -264,6 +375,21 @@ pub(super) async fn read_outcome(stream: &mut UnixStream) -> Result<InitOutcome>
         })?;
     match discriminator[0] {
         USER_MAPPING_REQUIRED_BYTE => Ok(InitOutcome::UserMappingRequired),
+        ORDERED_IDMAP_REQUIRED_BYTE => {
+            let mut encoded_index = [0_u8; size_of::<u32>()];
+            stream
+                .read_exact(&mut encoded_index)
+                .await
+                .map_err(|read| {
+                    control_error(
+                        ErrorCode::FailedPrecondition,
+                        format!("ordered ID-mapped mount index was truncated: {read}"),
+                    )
+                })?;
+            Ok(InitOutcome::OrderedIdmapRequired {
+                mount_index: u32::from_be_bytes(encoded_index) as usize,
+            })
+        }
         CREATE_HOOKS_READY_BYTE => {
             read_ready_pids(stream)
                 .await

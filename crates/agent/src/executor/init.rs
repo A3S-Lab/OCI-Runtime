@@ -334,11 +334,34 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
         Ok(namespaces) => namespaces,
         Err(error) => return reject_before_ready(&mut control, error),
     };
-    let detached_sources =
+    let mut detached_sources =
         match DetachedMountSources::prepare(&plan.mounts, &source_resolver, idmap_namespaces) {
             Ok(sources) => sources,
             Err(error) => return reject_before_ready(&mut control, error),
         };
+    if plan
+        .mounts
+        .iter()
+        .any(|mount| mount.ordered_source.is_some() && mount.idmap.is_some())
+    {
+        let ordered_idmap_control = match control.try_clone() {
+            Ok(control) => control,
+            Err(error) => {
+                return reject_before_ready(
+                    &mut control,
+                    init_error(
+                        ErrorCode::Internal,
+                        format!(
+                            "failed to retain ordered ID-mapped mount control channel: {error}"
+                        ),
+                    ),
+                );
+            }
+        };
+        if let Err(error) = detached_sources.set_ordered_idmap_control(ordered_idmap_control) {
+            return reject_before_ready(&mut control, error);
+        }
+    }
     let hook_state = HookStateTemplate::new(
         plan.oci_version.clone(),
         container_id,

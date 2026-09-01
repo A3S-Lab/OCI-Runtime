@@ -24,13 +24,15 @@ use super::bundle_scope::{PinnedBundleDirectory, UTILITY_VM_BUNDLE_FD, UTILITY_V
 use super::capability::{report_capability_warnings, CapabilityPlan};
 use super::cgroup::{self, CgroupHandle, CgroupManager};
 use super::control::{
-    acknowledge_user_mapping, continue_create, read_outcome, read_start_result, send_device_mounts,
-    InitOutcome, START_BYTE,
+    acknowledge_ordered_idmap, acknowledge_user_mapping, continue_create, read_outcome,
+    read_start_result, receive_ordered_idmap_descriptors, send_device_mounts, InitOutcome,
+    START_BYTE,
 };
 use super::hook::{HookPhase, HookSet, HookStateTemplate};
 use super::inherited_descriptor::InheritedDescriptorPlan;
 use super::intel_rdt::{IntelRdtHandle, IntelRdtRecovery};
 use super::io::ProcessIoHandle;
+use super::mount;
 use super::namespace::{self, RetainedExecutionContext, UserMappingRuntime};
 use super::network_device::NetworkDeviceLease;
 use super::pid;
@@ -306,6 +308,12 @@ impl PreparedProcess {
         drop(rootless_device_mounts);
         let mut user_mapping_installed = false;
         let mut create_hooks_ready = None;
+        let ordered_idmap_mounts = plan
+            .mounts
+            .iter()
+            .filter(|mount| mount.ordered_source.is_some() && mount.idmap.is_some())
+            .collect::<Vec<_>>();
+        let mut ordered_idmaps_applied = 0_usize;
         let (runtime_pid, namespace_init_pid) = loop {
             match timeout(INIT_READY_TIMEOUT, read_outcome(&mut control)).await {
                 Ok(Ok(InitOutcome::UserMappingRequired)) => {
@@ -364,12 +372,81 @@ impl PreparedProcess {
                     }
                     user_mapping_installed = true;
                 }
+                Ok(Ok(InitOutcome::OrderedIdmapRequired { mount_index })) => {
+                    let expected = ordered_idmap_mounts.get(ordered_idmaps_applied).copied();
+                    if create_hooks_ready.is_some()
+                        || (plan.namespaces.new_user() && !user_mapping_installed)
+                        || expected.map(|mount| mount.index) != Some(mount_index)
+                    {
+                        let expected_index = expected.map(|mount| mount.index);
+                        let error = process_error(
+                            ErrorCode::PermissionDenied,
+                            format!(
+                                "container init requested ordered ID-map for mount index \
+                                 {mount_index}; expected {expected_index:?}"
+                            ),
+                        );
+                        return Err(
+                            cleanup_uncommitted_create(&mut child, &mut cgroup, error).await
+                        );
+                    }
+                    let descriptors = match timeout(
+                        INIT_READY_TIMEOUT,
+                        receive_ordered_idmap_descriptors(&control),
+                    )
+                    .await
+                    {
+                        Ok(Ok(descriptors)) => descriptors,
+                        Ok(Err(error)) => {
+                            return Err(
+                                cleanup_uncommitted_create(&mut child, &mut cgroup, error).await
+                            );
+                        }
+                        Err(_) => {
+                            let error = process_error(
+                                ErrorCode::DeadlineExceeded,
+                                format!(
+                                    "timed out receiving descriptors for ordered ID-mapped \
+                                         mount {mount_index}"
+                                ),
+                            );
+                            return Err(
+                                cleanup_uncommitted_create(&mut child, &mut cgroup, error).await
+                            );
+                        }
+                    };
+                    let Some(expected) = expected else {
+                        let error = process_error(
+                            ErrorCode::Internal,
+                            "validated ordered ID-map request lost its mount plan",
+                        );
+                        return Err(
+                            cleanup_uncommitted_create(&mut child, &mut cgroup, error).await
+                        );
+                    };
+                    if let Err(error) = mount::apply_ordered_idmap_from_parent(
+                        expected,
+                        &descriptors.0,
+                        &descriptors.1,
+                    ) {
+                        return Err(
+                            cleanup_uncommitted_create(&mut child, &mut cgroup, error).await
+                        );
+                    }
+                    ordered_idmaps_applied += 1;
+                    if let Err(error) = acknowledge_ordered_idmap(&mut control).await {
+                        return Err(
+                            cleanup_uncommitted_create(&mut child, &mut cgroup, error).await
+                        );
+                    }
+                }
                 Ok(Ok(InitOutcome::CreateHooksReady {
                     pid: runtime_pid,
                     namespace_init_pid,
                 })) => {
                     if create_hooks_ready.is_some()
                         || (plan.namespaces.new_user() && !user_mapping_installed)
+                        || ordered_idmaps_applied != ordered_idmap_mounts.len()
                     {
                         let error = process_error(
                             ErrorCode::PermissionDenied,
