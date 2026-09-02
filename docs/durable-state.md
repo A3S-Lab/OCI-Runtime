@@ -146,6 +146,16 @@ stopped tombstone, and keeps the session root until the final tombstone
 cleanup. Production drivers do not expose this profile until real-host restart
 and leak qualification is retained.
 
+The session admission fence is deliberately fail-closed across an owner
+process replacement. A persisted `.guest-sessions/<id>/` root is considered
+owned only while the replacement process has an in-memory reusable owner or an
+in-flight admission established before bundle handoff. If neither proof is
+present, a new create is rejected before consuming the caller's handoff,
+including when the stale root belongs to an older session generation. Recovery
+or exact tombstone cleanup must retire the root first. This prevents a second
+utility VM from silently reusing a logical session identity while the previous
+VM may still be alive.
+
 Start, kill, pause, resume, update, delete, File upload, Filesystem
 mkdir/move/remove, checkpoint, restore, and TEE attestation use the same global journal and
 request fingerprinting. Mutations of an existing container claim its exact

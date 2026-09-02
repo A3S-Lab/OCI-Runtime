@@ -11,6 +11,12 @@ use super::{AgentDriverClient, UtilityVmOwner};
 pub(super) struct UtilityVmRegistry {
     pub(super) attachments: BTreeMap<ContainerId, UtilityVmAttachment>,
     pub(super) reusable: BTreeMap<GuestSessionId, ReusableGuestSession>,
+    /// Create requests that have passed the durable session-root preflight
+    /// and are currently transferring their bundle into the exact session
+    /// share.  This is intentionally process-local: if the owner exits before
+    /// the request reaches `create`, a replacement must treat the persisted
+    /// session root as orphaned instead of silently launching another guest.
+    pub(super) pending: BTreeMap<ContainerId, PendingGuestSessionAdmission>,
 }
 
 impl UtilityVmRegistry {
@@ -78,6 +84,12 @@ pub(super) struct UtilityVmContainer {
     pub(super) target: ContainerTarget,
     pub(super) guest_session: Option<GuestSessionAttachment>,
     pub(super) guest: Arc<UtilityVmGuest>,
+}
+
+#[derive(Clone)]
+pub(super) struct PendingGuestSessionAdmission {
+    pub(super) target: ContainerTarget,
+    pub(super) attachment: GuestSessionAttachment,
 }
 
 pub(super) struct UtilityVmGuest {
