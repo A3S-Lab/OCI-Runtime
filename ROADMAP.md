@@ -1983,8 +1983,24 @@ and recovery suites in the Windows guest and on native Linux.
   distinct process, commit only a stopped tombstone, refuse invented wait
   evidence, and prove stopped-only delete plus complete transient cleanup.
   Live process-session reattachment remains an R6 gate.
-- [ ] Prove packaged installation and A3S Box product startup without KVM.
-- [ ] Run the full Sandbox SDK suite with `/dev/kvm` absent and inaccessible.
+- [x] Prove packaged installation and A3S Box product startup without KVM.
+  A3S Box main commit `d6861de302e6e165a2fdc473b2d399bb0692048e`
+  built a checksummed release-layout archive, installed it through the public
+  installer, verified the installed binary and libkrun loader layout, and
+  started `a3s-box info` against pinned Runtime commit
+  `438e4b7936cd08d408160fe9341a21786f60cd26` without resolving any product
+  executable outside the install root.
+- [x] Run the full Sandbox SDK suite with `/dev/kvm` absent and inaccessible.
+  The same installed product passed the complete Rust, Python, TypeScript, and
+  Go Sandbox suites twice on both
+  [x86_64](https://github.com/A3S-Lab/Box/actions/runs/33497670646/job/99823489427)
+  and
+  [aarch64](https://github.com/A3S-Lab/Box/actions/runs/33497670646/job/99823489043):
+  first with `/dev/kvm` absent and then with a mode-000 wrong-type path.
+  Each phase also proved replacement-owner restart, exact-generation cleanup,
+  and no invented exit status. The complete Box
+  [main run](https://github.com/A3S-Lab/Box/actions/runs/33497670646) passed;
+  published tag artifacts remain a separate release gate.
 - [x] Fail explicit dedicated-VM requests before runtime state or driver
   mutation.
 - [x] Reject unavailable dedicated-VM selection in A3S Box before image
