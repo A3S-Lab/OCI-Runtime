@@ -395,6 +395,27 @@ also returned `available`. Their summary SHA-256 values are
 This current-host regression does not replace the Roadmap's remaining
 newly-provisioned fresh-host release-promotion run.
 
+On September 3, 2026, the same clean current-main revision
+`28df6259c2cbb703b37fc8670ed224d1b34531e4` passed a full local Windows 10 Pro
+23H2 (build 22631.4890, AMD64) run against the pinned system image. The
+`a3s.oci.windows-whpx-soak.v2` report completed all 56 operation samples:
+25 serial lifecycles, three multi-container runs, three lifecycle-fault
+boundaries, six parallel runs, five workload profiles, ten typed negative
+cases, and four owner-kill points. All 51 VM reports retained equal
+in-process handle inventories (`120 -> 120`), the start and final process
+inventories were empty, the maximum owner-to-shim exit time was 4092 ms, and
+the bounded host working-set and log-growth checks passed. The summary and
+operation-table SHA-256 values are
+`e0c4a61906548c3a7d28e021621fced204b9b29e835d94cb97c092ec4b3b1824` and
+`362262d1b87ebcd42e78b0b18c101d2030196f814eef3384fbf0b8c91d0f2f45`.
+Separately scoped direct-driver and owner-death/reopen reports also passed;
+their SHA-256 values are
+`4da8fa077fe90954c9c65aeeab30bece6a64322376c7ab4ba48d4bf62dd426e8` and
+`348b18bbab35c0e202621b21ae1352002b6dab321b4bf818992761c335064b71`.
+This is an observation on the existing development host, not a newly
+provisioned release host, and it does not close the remaining fresh-host
+operation-stage or package-promotion gates.
+
 The August 1, 2026 direct-driver qualification ran from clean commit
 `7bb09dff81b5445e275c31faff6592ad4c32a45f` and emitted
 `a3s.oci.whpx-driver-smoke-run.v1`. From 12:50:37Z through 12:51:08Z it built
