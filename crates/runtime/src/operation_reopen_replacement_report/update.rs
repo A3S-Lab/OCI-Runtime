@@ -1,14 +1,29 @@
-use a3s_oci_agent_protocol::{
-    AgentOperation, AgentTransportFaultPoint, AgentTransportOperationStage,
-    AGENT_PROTOCOL_VERSION_MAX,
-};
+use a3s_oci_agent_protocol::{AgentOperation, AgentTransportOperationStage};
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
+use a3s_oci_agent_protocol::{AgentTransportFaultPoint, AGENT_PROTOCOL_VERSION_MAX};
 #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 use a3s_oci_core::CapabilityStatus;
 use a3s_oci_core::HostPlatform;
 
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
+use super::QUALIFICATION_FAULT_OPERATION;
 use super::{
     OciVmOperationReopenReplacementReport,
-    OCI_VM_OPERATION_REOPEN_REPLACEMENT_UPDATE_SCHEMA_VERSION, QUALIFICATION_FAULT_OPERATION,
+    OCI_VM_OPERATION_REOPEN_REPLACEMENT_UPDATE_SCHEMA_VERSION,
 };
 
 impl OciVmOperationReopenReplacementReport {
@@ -42,6 +57,14 @@ impl OciVmOperationReopenReplacementReport {
         report
     }
 
+    #[cfg(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    ))]
     pub(super) fn update_evidence_succeeded(&self) -> bool {
         let expected_point = AgentTransportFaultPoint::Operation {
             protocol_version: AGENT_PROTOCOL_VERSION_MAX,
@@ -219,6 +242,20 @@ impl OciVmOperationReopenReplacementReport {
             && self.first_vm.is_success()
             && self.replacement_vm.is_success()
             && self.reason.is_none()
+    }
+
+    /// Unsupported targets must compile the report model, but cannot claim
+    /// utility-VM evidence whose qualification helpers are not built.
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    )))]
+    pub(super) const fn update_evidence_succeeded(&self) -> bool {
+        false
     }
 }
 
