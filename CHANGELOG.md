@@ -1363,6 +1363,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Make malformed mutation and reusable guest-session state fail closed with
+  typed errors instead of invariant panics. File uploads and filesystem
+  mutations now validate their operation context explicitly; utility-VM
+  session admission validates the exact generation before launching a Guest,
+  and marker cleanup derives only verified ancestor paths. Regression tests
+  cover missing mutation context and escaped or incomplete session roots.
 - Fixed multi-driver optional-operation routing. Service-level gates now reject
   only when no registered driver implements an operation; each request is then
   checked against the driver recorded for its exact durable generation, and

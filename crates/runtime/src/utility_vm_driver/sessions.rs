@@ -108,14 +108,10 @@ impl ReusableGuestSession {
         attachment: GuestSessionAttachment,
         guest: Arc<UtilityVmGuest>,
         target: &ContainerTarget,
+        generation: Generation,
     ) -> Self {
         let mut members = BTreeMap::new();
-        members.insert(
-            target.id.clone(),
-            target
-                .generation
-                .expect("utility-VM session admission requires an exact generation"),
-        );
+        members.insert(target.id.clone(), generation);
         Self {
             attachment,
             guest,

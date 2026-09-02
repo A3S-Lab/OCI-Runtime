@@ -399,6 +399,14 @@ completed process a second time. The on-disk journal remains authoritative
 across Host replacement, so this coordination layer does not change recovery
 or cross-process identity semantics.
 
+Mutation requests and reusable Guest-session cleanup also fail closed when
+their identity contract is malformed. Uploads and filesystem mutations must
+carry an operation context, reusable-session admission must carry one exact
+container generation before a Guest is launched, and marker cleanup derives
+its parent directories only after verifying the runtime-owned path layout.
+These checks return typed errors and leave the durable journal and Guest
+ownership state untouched.
+
 Init and exec stdin use separate durable sequences. Before each FIFO chunk is
 sent, the shim stores the next sequence and exact bytes; it clears that pending
 entry only after the Runtime accepts the matching SDK operation. A replacement

@@ -141,7 +141,8 @@ pub(super) async fn remove_if_empty(
     session_root: &Path,
     attachment: &GuestSessionAttachment,
 ) -> Result<bool> {
-    validate_root_identity(runtime_share_root, session_root, attachment)?;
+    let (session_id_root, reusable_root) =
+        validate_root_identity(runtime_share_root, session_root, attachment)?;
     validate(session_root, attachment).await?;
     let mut entries = tokio::fs::read_dir(session_root).await.map_err(|error| {
         session_error(
@@ -172,14 +173,6 @@ pub(super) async fn remove_if_empty(
     remove_private_file_if_present(&session_root.join(MARKER_FILE)).await?;
     sync_directory(session_root).await?;
 
-    let session_id_root = session_root
-        .parent()
-        .expect("validated session root has an identity parent")
-        .to_path_buf();
-    let reusable_root = session_id_root
-        .parent()
-        .expect("validated session identity has a namespace parent")
-        .to_path_buf();
     remove_directory_if_empty(session_root).await?;
     remove_directory_if_empty(&session_id_root).await?;
     remove_directory_if_empty(&reusable_root).await?;
@@ -254,7 +247,7 @@ fn validate_root_identity(
     runtime_share_root: &Path,
     session_root: &Path,
     attachment: &GuestSessionAttachment,
-) -> Result<()> {
+) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
     let expected_generation = attachment.generation().get().to_string();
     let Some(session_id_root) = session_root.parent() else {
         return Err(invalid_root(session_root));
@@ -272,7 +265,7 @@ fn validate_root_identity(
     {
         return Err(invalid_root(session_root));
     }
-    Ok(())
+    Ok((session_id_root.to_path_buf(), reusable_root.to_path_buf()))
 }
 
 fn invalid_root(path: &Path) -> Error {
@@ -327,4 +320,49 @@ async fn sync_directory(path: &Path) -> Result<()> {
 
 fn session_error(code: ErrorCode, message: impl Into<String>) -> Error {
     Error::new(code, message).for_operation("manage-utility-vm-guest-session")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{validate_root_identity, REUSABLE_GUEST_SESSION_DIRECTORY};
+    use a3s_oci_sdk::GuestSessionAttachment;
+
+    fn attachment() -> GuestSessionAttachment {
+        serde_json::from_value(serde_json::json!({
+            "id": "marker-session",
+            "generation": 7,
+            "trustDomain": "marker-domain",
+            "isolation": "shared-guest-kernel",
+            "capacity": 2,
+            "reset": "destroy-on-empty",
+            "ownership": "runtime"
+        }))
+        .expect("valid guest-session attachment")
+    }
+
+    #[test]
+    fn root_identity_returns_verified_cleanup_ancestors() {
+        let root = Path::new("/run/a3s");
+        let session = root
+            .join(REUSABLE_GUEST_SESSION_DIRECTORY)
+            .join("marker-session")
+            .join("7");
+        let (session_id_root, reusable_root) =
+            validate_root_identity(root, &session, &attachment()).expect("valid root identity");
+        assert_eq!(
+            session_id_root,
+            root.join(REUSABLE_GUEST_SESSION_DIRECTORY)
+                .join("marker-session")
+        );
+        assert_eq!(reusable_root, root.join(REUSABLE_GUEST_SESSION_DIRECTORY));
+    }
+
+    #[test]
+    fn root_identity_rejects_paths_without_verified_ancestors() {
+        let error = validate_root_identity(Path::new("/run/a3s"), Path::new("7"), &attachment())
+            .expect_err("malformed root must fail closed");
+        assert!(error.message.contains("escaped"));
+    }
 }
