@@ -997,7 +997,9 @@ fn exec_configured_process(
         )
     })?;
     let args = cstring_vector(&plan.args, "process.args")?;
-    let environment = cstring_vector(&plan.environment, "process.env")?;
+    let mut process_environment = plan.environment.clone();
+    super::secret_env::materialize(&mut process_environment)?;
+    let environment = cstring_vector(&process_environment, "process.env")?;
     if args.is_empty() {
         return Err(init_error(
             ErrorCode::InvalidArgument,

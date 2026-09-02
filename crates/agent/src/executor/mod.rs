@@ -57,6 +57,7 @@ mod seccomp;
 mod seccomp_bpf_tests;
 #[cfg(test)]
 mod seccomp_tests;
+mod secret_env;
 mod state;
 mod sysctl;
 mod terminal;
