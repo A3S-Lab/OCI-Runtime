@@ -27,6 +27,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Fixed concurrent retries of the same durable operation in the Host Service.
+  A per-operation single-flight gate now keeps duplicate callers from
+  dispatching a second driver request after the first caller acknowledges its
+  guest replay record. The regression covers WriteStdin and the real
+  containerd runtime-v2 qualification path.
 - Added the OAR-03 explicit rootful Native Linux CRIU checkpoint and restore
   backend without changing default capability advertisement. The opt-in
   constructor binds one exact root-owned CRIU executable and advertises both

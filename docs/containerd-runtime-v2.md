@@ -390,6 +390,15 @@ The host Runtime writes canonical fingerprints as durable operation schema v2
 while continuing to load and validate schema-v1 journals with their original
 encoding.
 
+The Host Service also applies a short-lived in-process single-flight gate to
+every journaled mutation. Concurrent requests that carry the same operation ID
+join the first caller before any driver dispatch; only the caller that owns the
+durable claim can acknowledge the guest replay record. A waiting duplicate
+therefore replays the committed Host outcome instead of reaching an already
+completed process a second time. The on-disk journal remains authoritative
+across Host replacement, so this coordination layer does not change recovery
+or cross-process identity semantics.
+
 Init and exec stdin use separate durable sequences. Before each FIFO chunk is
 sent, the shim stores the next sequence and exact bytes; it clears that pending
 entry only after the Runtime accepts the matching SDK operation. A replacement
