@@ -45,6 +45,8 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 use super::HostRuntimeService;
+use crate::fault::testing::RecordingFaultInjector;
+use crate::fault::{DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint};
 #[cfg(target_os = "linux")]
 use crate::DriverCreateAttachments;
 use crate::{
@@ -4422,6 +4424,274 @@ async fn negotiates_versioned_capabilities_for_the_selected_driver_and_artifact(
         .expect_err("shared driver did not qualify wait");
     assert_eq!(error.code, ErrorCode::Unsupported);
     assert_eq!(error.operation.as_deref(), Some("negotiate-runtime"));
+}
+
+#[tokio::test]
+async fn routes_optional_operations_by_durable_driver() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+
+    let dedicated = Arc::new(RecordingDriver::with_control_operations());
+    let mut shared_without_optional_operations = RecordingDriver::shared_guest_supported();
+    shared_without_optional_operations
+        .operations
+        .retain(|operation| *operation != RuntimeOperation::Wait);
+    let shared = Arc::new(shared_without_optional_operations);
+    let service = HostRuntimeService::open_with_drivers(
+        temporary.path().join("multi-driver-state"),
+        vec![
+            Arc::clone(&dedicated) as Arc<dyn RuntimeDriver>,
+            Arc::clone(&shared) as Arc<dyn RuntimeDriver>,
+        ],
+    )
+    .await
+    .expect("open multi-driver service");
+
+    let mut dedicated_request = create_request(&bundle_directory, "optional-dedicated-create");
+    dedicated_request.id = container_id("optional-dedicated");
+    let dedicated_record = service
+        .create(dedicated_request)
+        .await
+        .expect("create dedicated container");
+    let dedicated_target = ContainerTarget::exact(
+        container_id("optional-dedicated"),
+        dedicated_record.generation,
+    );
+
+    let mut shared_request = bind_guest_session(
+        create_request(&bundle_directory, "optional-shared-create"),
+        "optional-domain",
+        "optional-session",
+    );
+    shared_request.id = container_id("optional-shared");
+    let shared_record = service
+        .create(shared_request)
+        .await
+        .expect("create shared container");
+    let shared_target =
+        ContainerTarget::exact(container_id("optional-shared"), shared_record.generation);
+
+    service
+        .start(StartRequest {
+            context: OperationContext::new(operation_id("optional-dedicated-start")),
+            target: dedicated_target.clone(),
+        })
+        .await
+        .expect("start dedicated container");
+    service
+        .start(StartRequest {
+            context: OperationContext::new(operation_id("optional-shared-start")),
+            target: shared_target.clone(),
+        })
+        .await
+        .expect("start shared container");
+
+    let paused = service
+        .pause(ContainerOperationRequest {
+            context: OperationContext::new(operation_id("optional-dedicated-pause")),
+            target: dedicated_target.clone(),
+        })
+        .await
+        .expect("pause operation supported by the selected dedicated driver");
+    assert!(paused.is_paused());
+    service
+        .resume(ContainerOperationRequest {
+            context: OperationContext::new(operation_id("optional-dedicated-resume")),
+            target: dedicated_target.clone(),
+        })
+        .await
+        .expect("resume operation supported by the selected dedicated driver");
+
+    let unsupported_pause = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("optional-shared-pause")),
+        target: shared_target.clone(),
+    };
+    let error = service
+        .pause(unsupported_pause.clone())
+        .await
+        .expect_err("an unsupported selected driver must reject pause");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert_eq!(error.operation.as_deref(), Some("pause"));
+    assert!(
+        !tokio::fs::try_exists(
+            temporary
+                .path()
+                .join("multi-driver-state/operations/optional-shared-pause.json")
+        )
+        .await
+        .expect("inspect unsupported operation journal"),
+        "a new unsupported target must fail before creating a durable journal"
+    );
+    assert_eq!(
+        service
+            .pause(unsupported_pause)
+            .await
+            .expect_err("unsupported pause must remain deterministic"),
+        error
+    );
+
+    // A rejected target must not leave a claim that blocks the next mutation.
+    service
+        .kill(KillRequest {
+            context: OperationContext::new(operation_id("optional-shared-kill")),
+            target: shared_target.clone(),
+            signal: Signal::new(15).expect("signal"),
+            all: true,
+        })
+        .await
+        .expect("kill after unsupported pause");
+
+    let shared_wait_error = service
+        .wait(WaitRequest {
+            target: shared_target,
+            timeout_ms: Some(0),
+        })
+        .await
+        .expect_err("wait must be checked against the selected shared driver");
+    assert_eq!(shared_wait_error.code, ErrorCode::Unsupported);
+    assert_eq!(shared_wait_error.operation.as_deref(), Some("wait"));
+
+    service
+        .kill(KillRequest {
+            context: OperationContext::new(operation_id("optional-dedicated-kill")),
+            target: dedicated_target.clone(),
+            signal: Signal::new(15).expect("signal"),
+            all: true,
+        })
+        .await
+        .expect("stop dedicated container");
+    service
+        .wait(WaitRequest {
+            target: dedicated_target,
+            timeout_ms: Some(0),
+        })
+        .await
+        .expect("wait operation supported by the selected dedicated driver");
+
+    assert_eq!(
+        dedicated
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Pause(_)))
+            .count(),
+        1,
+        "dedicated pause must reach its selected driver"
+    );
+    assert_eq!(
+        dedicated
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Wait(_)))
+            .count(),
+        1,
+        "dedicated wait must reach its selected driver"
+    );
+    assert!(
+        shared
+            .calls()
+            .iter()
+            .all(|call| !matches!(call, DriverCall::Pause(_) | DriverCall::Wait(_))),
+        "unsupported shared operations must not reach the driver"
+    );
+}
+
+#[tokio::test]
+async fn recovered_optional_operation_capability_drift_fails_terminally() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let state_root = temporary.path().join("capability-drift-state");
+
+    let original_driver = Arc::new(RecordingDriver::with_control_operations());
+    let setup = HostRuntimeService::open(
+        &state_root,
+        Arc::clone(&original_driver) as Arc<dyn RuntimeDriver>,
+    )
+    .await
+    .expect("open setup runtime");
+    let mut create = create_request(&bundle_directory, "capability-drift-create");
+    create.id = container_id("capability-drift");
+    let created = setup.create(create).await.expect("create container");
+    let target = ContainerTarget::exact(container_id("capability-drift"), created.generation);
+    setup
+        .start(StartRequest {
+            context: OperationContext::new(operation_id("capability-drift-start")),
+            target: target.clone(),
+        })
+        .await
+        .expect("start container");
+    drop(setup);
+
+    let point = FaultPoint::DriverBoundary {
+        operation: DriverOperation::Pause,
+        stage: DriverBoundaryStage::BeforeCall,
+    };
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let faults: Arc<dyn FaultInjector> = injector.clone();
+    let faulted = HostRuntimeService::open_with_fault_injector(
+        &state_root,
+        Arc::clone(&original_driver) as Arc<dyn RuntimeDriver>,
+        faults,
+    )
+    .await
+    .expect("open faulted runtime");
+    let pause = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("capability-drift-pause")),
+        target: target.clone(),
+    };
+    let injected = faulted
+        .pause(pause.clone())
+        .await
+        .expect_err("fault must leave a recoverable pause intent");
+    assert_eq!(injected.code, ErrorCode::Unavailable);
+    assert_eq!(injected.operation.as_deref(), Some("fault-injection"));
+    assert!(injected.retryable);
+    assert!(injector.fired());
+    drop(faulted);
+
+    // Simulate a restart where the recorded driver still owns the isolation
+    // class but no longer advertises the optional pause operation. There is no
+    // other driver that can satisfy the service-wide capability gate.
+    let drifted_driver = Arc::new(RecordingDriver::supported());
+    let recovered = HostRuntimeService::open(
+        &state_root,
+        Arc::clone(&drifted_driver) as Arc<dyn RuntimeDriver>,
+    )
+    .await
+    .expect("reopen with drifted capability");
+    let unsupported = recovered
+        .pause(pause.clone())
+        .await
+        .expect_err("recovered optional operation must fail closed");
+    assert_eq!(unsupported.code, ErrorCode::Unsupported);
+    assert_eq!(unsupported.operation.as_deref(), Some("pause"));
+    assert_eq!(
+        recovered
+            .pause(pause)
+            .await
+            .expect_err("terminal capability failure must replay"),
+        unsupported
+    );
+    assert!(
+        drifted_driver
+            .calls()
+            .iter()
+            .all(|call| !matches!(call, DriverCall::Pause(_))),
+        "a drifted optional operation must never reach the driver"
+    );
+
+    // The terminal failure must release the recovered claim so another
+    // lifecycle mutation can proceed.
+    recovered
+        .kill(KillRequest {
+            context: OperationContext::new(operation_id("capability-drift-kill")),
+            target,
+            signal: Signal::new(15).expect("signal"),
+            all: true,
+        })
+        .await
+        .expect("kill after terminal capability failure");
 }
 
 #[cfg(any(unix, windows))]

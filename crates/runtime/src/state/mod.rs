@@ -603,6 +603,18 @@ impl DurableStateStore {
         Ok(stored.record)
     }
 
+    /// Check whether an operation journal already exists without changing it.
+    ///
+    /// The Host uses this narrow lookup to preserve idempotent replay while
+    /// preflighting a newly submitted request against its selected driver.
+    pub(crate) async fn operation_exists(&self, operation_id: &OperationId) -> Result<bool> {
+        let _guard = self.gate.lock().await;
+        Ok(self
+            .load_operation_if_present(operation_id)
+            .await?
+            .is_some())
+    }
+
     /// Reconstruct the immutable bundle from the durable config snapshot.
     pub(crate) async fn bundle(&self, target: &ContainerTarget) -> Result<OciBundle> {
         let _guard = self.gate.lock().await;

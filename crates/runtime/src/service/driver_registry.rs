@@ -40,6 +40,7 @@ impl RegisteredDriver {
         &self.attachments
     }
 
+    /// Check an operation after the durable target has selected this driver.
     pub(super) fn ensure_operation(
         &self,
         operation: RuntimeOperation,
@@ -337,10 +338,15 @@ impl DriverRegistry {
         Ok(())
     }
 
+    /// Return the safe operation intersection used by legacy flat discovery.
+    ///
+    /// Request routing must use [`Self::any_driver_supports`] and then check
+    /// the driver selected by the durable container record.
     pub(super) const fn operations(&self) -> &BTreeSet<RuntimeOperation> {
         &self.operations
     }
 
+    /// Whether at least one registered driver implements an operation.
     pub(super) fn any_driver_supports(&self, operation: RuntimeOperation) -> bool {
         self.entries
             .iter()

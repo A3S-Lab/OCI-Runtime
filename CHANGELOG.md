@@ -1358,6 +1358,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Fixed multi-driver optional-operation routing. Service-level gates now reject
+  only when no registered driver implements an operation; each request is then
+  checked against the driver recorded for its exact durable generation, and
+  newly unsupported durable requests fail before journaling while recovered
+  unsupported intents become terminal failures and release their claims. The
+  legacy flat capability fields remain the safe intersection while negotiated
+  per-driver operations can execute normally.
 - Make Linux KVM probing and real entry deterministic on variadic libc ABIs by
   passing the unused `KVM_GET_API_VERSION` ioctl argument as an explicit zero.
   Also expose each descriptor-pinned writable virtio-fs share through
