@@ -296,6 +296,12 @@ generation, or a newer generation while members remain fails with no VM
 replacement. A newer generation may replace an empty retained incarnation
 only after the old owner and root are reaped.
 
+An owner replacement cannot infer that a persisted session root is an empty
+pool. When no in-process owner or handoff admission proof exists, the runtime
+rejects the create before consuming the caller bundle, even if the root is
+from an older generation. The exact recovered tombstones or an explicit
+cleanup must retire that root before a new guest can be launched.
+
 Deleting a non-final member removes only its exact bundle. `DestroyOnEmpty`
 reaps the owner and session root after the last member;
 `RetainWithinTrustDomain` keeps the empty owner available only for the

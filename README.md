@@ -319,6 +319,11 @@ attachment profiles until the corresponding real-host restart, cleanup, and
 soak evidence is retained and their cumulative storage/network transports are
 implemented.
 
+Session admission also fails closed across an owner replacement: a persisted
+`.guest-sessions/<id>/` root cannot be treated as an empty pool without an
+in-process owner or an active handoff admission, so a second VM cannot silently
+reuse the logical identity while the previous VM may still exist.
+
 OCI 1.3 `linux.resources.hugepageLimits` is also implemented by the shared
 executor. The SDK preserves the complete normative `uint64` range, while the
 executor validates each canonical page-size name against the live cgroup-v2

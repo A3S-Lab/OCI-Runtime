@@ -46,11 +46,11 @@ pub(crate) mod tests;
 
 pub(crate) use delegate::delegate_utility_vm_runtime_driver;
 use handoff::BundleHandoffStore;
-use layout::require_exact_generation;
+use layout::{existing_reusable_guest_session_identity_root, require_exact_generation};
 use recovery::RecoveryStore;
 use sessions::{
-    ReusableGuestSession, UtilityVmAttachment, UtilityVmContainer, UtilityVmGuest,
-    UtilityVmRegistry,
+    PendingGuestSessionAdmission, ReusableGuestSession, UtilityVmAttachment, UtilityVmContainer,
+    UtilityVmGuest, UtilityVmRegistry,
 };
 
 /// Platform-neutral lifecycle for dedicated and explicitly bound reusable utility VMs.
@@ -127,7 +127,14 @@ impl UtilityVmRuntimeDriver {
 
     /// Close every live guest connection and reap each driver-owned VM once.
     pub async fn shutdown(&self) -> Result<()> {
-        let guests = self.sessions.lock().await.live_guests();
+        let guests = {
+            let mut sessions = self.sessions.lock().await;
+            // A graceful owner shutdown invalidates any in-flight admission;
+            // a later owner must not inherit an ephemeral permission to use
+            // a persisted session root.
+            sessions.pending.clear();
+            sessions.live_guests()
+        };
         let mut shutdowns = JoinSet::new();
         for guest in guests {
             shutdowns.spawn(async move {
@@ -218,7 +225,27 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
             Some(gate) => Some(gate.lock().await),
             None => None,
         };
-        self.handoff.prepare(request).await
+        if let Some(session) = request.attachment_contract.guest_session() {
+            self.preflight_session_admission(&request.target, session)
+                .await?;
+            // Record the admission before touching the filesystem.  The
+            // marker is intentionally process-local; if this owner exits
+            // during the handoff, a replacement will reject the persisted
+            // session root instead of launching a second guest under the
+            // same logical identity.
+            self.remember_pending_session(&request.target, session)
+                .await?;
+        }
+        match self.handoff.prepare(request).await {
+            Ok(bundle) => Ok(bundle),
+            Err(error) if error.retryable => Err(error),
+            Err(error) => {
+                if let Some(session) = request.attachment_contract.guest_session() {
+                    self.clear_pending_session(&request.target, session).await;
+                }
+                Err(error)
+            }
+        }
     }
 
     async fn recover(&self, record: &ContainerRecord) -> Result<crate::DriverRecovery> {
@@ -368,6 +395,9 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
             Ok(existing) => existing,
             Err(mut error) => {
                 if !error.retryable {
+                    if let Some(binding) = guest_session.as_ref() {
+                        self.clear_pending_session(&target, binding).await;
+                    }
                     let remove_session = match guest_session.as_ref() {
                         Some(binding) => self.session_root_is_unowned(binding).await,
                         None => true,
@@ -387,7 +417,12 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
             }
         };
         let container = match existing {
-            Some(container) => container,
+            Some(container) => {
+                if let Some(binding) = guest_session.as_ref() {
+                    self.clear_pending_session(&target, binding).await;
+                }
+                container
+            }
             None => match self
                 .admit_new_container(
                     &target,
@@ -400,6 +435,9 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
                 Ok(container) => container,
                 Err(error) if error.retryable => return Err(error),
                 Err(mut error) => {
+                    if let Some(binding) = guest_session.as_ref() {
+                        self.clear_pending_session(&target, binding).await;
+                    }
                     let remove_session = match guest_session.as_ref() {
                         Some(binding) => self.session_root_is_unowned(binding).await,
                         None => true,
@@ -418,6 +456,9 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
                 }
             },
         };
+        if let Some(binding) = guest_session.as_ref() {
+            self.clear_pending_session(&target, binding).await;
+        }
         match container
             .guest
             .client
@@ -793,6 +834,18 @@ fn session_conflict(
             requested.id(),
             requested.generation(),
             retained.generation()
+        ),
+    )
+    .for_operation("utility-vm-create")
+}
+
+fn orphaned_session_error(binding: &GuestSessionAttachment, root: &Path) -> Error {
+    Error::new(
+        ErrorCode::Conflict,
+        format!(
+            "reusable guest session {} has an unowned persisted root {}; refusing to launch another guest until the previous incarnation is recovered or deleted",
+            binding.id(),
+            root.display()
         ),
     )
     .for_operation("utility-vm-create")

@@ -496,6 +496,27 @@ pub(super) async fn existing_reusable_guest_session_root(
     runtime_share_root: &Path,
     session: &GuestSessionAttachment,
 ) -> Result<Option<PathBuf>> {
+    let Some(session_id_root) =
+        existing_reusable_guest_session_identity_root(runtime_share_root, session).await?
+    else {
+        return Ok(None);
+    };
+    existing_private_child(
+        &session_id_root,
+        &session.generation().get().to_string(),
+        "utility-VM reusable-session generation directory",
+    )
+    .await
+}
+
+/// Resolve the protected directory for a logical reusable-session identity,
+/// without selecting an incarnation.  A replacement owner uses this to
+/// detect any stale generation root before it can launch a new VM under the
+/// same caller-issued identity.
+pub(super) async fn existing_reusable_guest_session_identity_root(
+    runtime_share_root: &Path,
+    session: &GuestSessionAttachment,
+) -> Result<Option<PathBuf>> {
     let Some(session_root) = existing_private_child(
         runtime_share_root,
         REUSABLE_GUEST_SESSION_DIRECTORY,
@@ -505,19 +526,10 @@ pub(super) async fn existing_reusable_guest_session_root(
     else {
         return Ok(None);
     };
-    let Some(session_id) = existing_private_child(
+    existing_private_child(
         &session_root,
         session.id().as_str(),
         "utility-VM reusable-session identity directory",
-    )
-    .await?
-    else {
-        return Ok(None);
-    };
-    existing_private_child(
-        &session_id,
-        &session.generation().get().to_string(),
-        "utility-VM reusable-session generation directory",
     )
     .await
 }

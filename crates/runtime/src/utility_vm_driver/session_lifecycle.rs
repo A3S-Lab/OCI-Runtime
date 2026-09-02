@@ -23,6 +23,113 @@ impl UtilityVmRuntimeDriver {
         gate
     }
 
+    /// Ensure a reusable-session identity is either owned by this process or
+    /// has no persisted incarnation at all.  Session roots outlive the
+    /// process that launched a VM, so treating an unowned root as an empty
+    /// pool could start a second guest while the original guest is still
+    /// alive.  The only exception is a request recorded in `pending`, which
+    /// is the handoff window established by `prepare_create_bundle`.
+    pub(super) async fn preflight_session_admission(
+        &self,
+        target: &ContainerTarget,
+        binding: &GuestSessionAttachment,
+    ) -> Result<()> {
+        require_exact_generation(target, "preflight-utility-vm-guest-session")?;
+
+        let (retained, pending) = {
+            let sessions = self.sessions.lock().await;
+            let retained = sessions
+                .reusable
+                .get(binding.id())
+                .map(|session| session.attachment.clone());
+            let pending = sessions
+                .pending
+                .values()
+                .filter(|entry| entry.attachment.id() == binding.id())
+                .cloned()
+                .collect::<Vec<_>>();
+            (retained, pending)
+        };
+
+        // An in-process owner is authoritative; the normal admission path
+        // performs the finer generation, trust, capacity, and reset checks.
+        if retained.is_some() {
+            return Ok(());
+        }
+
+        if let Some(pending) = pending
+            .iter()
+            .find(|pending| pending.attachment != *binding)
+        {
+            return Err(session_conflict(
+                binding,
+                &pending.attachment,
+                "another create request is transferring a different ownership contract",
+            ));
+        }
+        if !pending.is_empty() {
+            return Ok(());
+        }
+
+        if let Some(root) =
+            existing_reusable_guest_session_identity_root(&self.runtime_share_root, binding).await?
+        {
+            return Err(orphaned_session_error(binding, &root));
+        }
+        Ok(())
+    }
+
+    pub(super) async fn remember_pending_session(
+        &self,
+        target: &ContainerTarget,
+        binding: &GuestSessionAttachment,
+    ) -> Result<()> {
+        let mut sessions = self.sessions.lock().await;
+        if let Some(existing) = sessions.pending.values().find(|existing| {
+            existing.attachment.id() == binding.id() && existing.attachment != *binding
+        }) {
+            return Err(session_conflict(
+                binding,
+                &existing.attachment,
+                "another create request is transferring a different ownership contract",
+            ));
+        }
+        if let Some(existing) = sessions.pending.get(&target.id) {
+            if existing.target != *target || existing.attachment != *binding {
+                return Err(Error::new(
+                    ErrorCode::Conflict,
+                    format!(
+                        "container {} already has a different pending reusable guest-session admission",
+                        target.id
+                    ),
+                )
+                .for_operation("utility-vm-create"));
+            }
+        }
+        sessions.pending.insert(
+            target.id.clone(),
+            PendingGuestSessionAdmission {
+                target: target.clone(),
+                attachment: binding.clone(),
+            },
+        );
+        Ok(())
+    }
+
+    pub(super) async fn clear_pending_session(
+        &self,
+        target: &ContainerTarget,
+        binding: &GuestSessionAttachment,
+    ) {
+        let mut sessions = self.sessions.lock().await;
+        if matches!(
+            sessions.pending.get(&target.id),
+            Some(existing) if existing.target == *target && existing.attachment == *binding
+        ) {
+            sessions.pending.remove(&target.id);
+        }
+    }
+
     pub(super) fn validate_create_contract(&self, request: &DriverCreateRequest) -> Result<()> {
         let isolation = request.isolation.class();
         if isolation == IsolationClass::SharedHostKernel
@@ -200,6 +307,7 @@ impl UtilityVmRuntimeDriver {
 
     pub(super) async fn remove_stopped(&self, target: &ContainerTarget) {
         let mut sessions = self.sessions.lock().await;
+        sessions.pending.remove(&target.id);
         if matches!(
             sessions.attachments.get(&target.id),
             Some(UtilityVmAttachment::RecoveredStopped { target: current, .. }) if current == target
@@ -209,13 +317,15 @@ impl UtilityVmRuntimeDriver {
     }
 
     pub(super) async fn session_root_is_unowned(&self, binding: &GuestSessionAttachment) -> bool {
-        !self
-            .sessions
-            .lock()
-            .await
+        let sessions = self.sessions.lock().await;
+        !sessions
             .reusable
             .get(binding.id())
             .is_some_and(|session| session.attachment == *binding)
+            && !sessions
+                .pending
+                .values()
+                .any(|entry| entry.attachment == *binding)
     }
 
     pub(super) async fn admit_new_container(
@@ -241,6 +351,8 @@ impl UtilityVmRuntimeDriver {
             );
             return Ok(container);
         };
+
+        self.preflight_session_admission(target, binding).await?;
 
         let retained = {
             let sessions = self.sessions.lock().await;
@@ -405,6 +517,9 @@ impl UtilityVmRuntimeDriver {
         container: &Arc<UtilityVmContainer>,
         mut error: Error,
     ) -> Error {
+        if let Some(binding) = container.guest_session.as_ref() {
+            self.clear_pending_session(&container.target, binding).await;
+        }
         let mut remove_session = container.guest_session.is_none();
         if let Some(binding) = container.guest_session.as_ref() {
             let last_destroy_member = {

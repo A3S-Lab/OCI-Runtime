@@ -408,3 +408,101 @@ async fn driver_shutdown_reaps_one_shared_owner_and_leaves_exact_tombstones() {
         .expect("clean final tombstone");
     assert!(!fixture.shared_session_root(SESSION_ID, 7).exists());
 }
+
+#[tokio::test]
+async fn replacement_owner_rejects_an_orphaned_session_root_before_handoff() {
+    let fixture = Fixture::with_shared_guest_sessions();
+    let alpha = named_target("orphan-alpha", 1);
+    fixture
+        .driver
+        .create(
+            fixture
+                .stage(shared_request(
+                    &fixture,
+                    "orphan-alpha-create",
+                    alpha,
+                    2,
+                    GuestSessionReset::DestroyOnEmpty,
+                ))
+                .await,
+        )
+        .await
+        .expect("create the original session member");
+
+    // Model an owner-process replacement: the persisted marker and exact
+    // share remain, but the replacement has no process-local guest registry.
+    {
+        let mut sessions = fixture.driver.sessions.lock().await;
+        sessions.attachments.clear();
+        sessions.reusable.clear();
+        assert!(sessions.pending.is_empty());
+    }
+
+    let beta = named_target("orphan-beta", 1);
+    let request = fixture.shared_handoff_request(
+        "orphan-beta-create",
+        beta,
+        SharedSessionFixture {
+            id: SESSION_ID,
+            generation: 8,
+            trust_domain: TRUST_DOMAIN,
+            capacity: 2,
+            reset: GuestSessionReset::DestroyOnEmpty,
+        },
+    );
+    let source = request.bundle.directory().to_path_buf();
+    let error = fixture
+        .driver
+        .prepare_create_bundle(&request)
+        .await
+        .expect_err("an unowned persisted session must fail closed");
+    assert_eq!(error.code, ErrorCode::Conflict);
+    assert!(error.message.contains("unowned persisted root"));
+    assert!(source.is_dir(), "the caller handoff must not be consumed");
+    assert!(fixture.shared_session_root(SESSION_ID, 7).is_dir());
+    assert!(!fixture.shared_session_root(SESSION_ID, 8).exists());
+    assert_eq!(fixture.factory.launches.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn pending_session_admission_rejects_contract_drift_before_bundle_move() {
+    let fixture = Fixture::with_shared_guest_sessions();
+    let alpha = named_target("pending-alpha", 1);
+    let alpha_request = shared_request(
+        &fixture,
+        "pending-alpha-create",
+        alpha,
+        2,
+        GuestSessionReset::DestroyOnEmpty,
+    );
+    fixture
+        .driver
+        .prepare_create_bundle(&alpha_request)
+        .await
+        .expect("record the first pending admission");
+
+    let beta = named_target("pending-beta", 1);
+    let drifted = fixture.shared_handoff_request(
+        "pending-beta-create",
+        beta,
+        SharedSessionFixture {
+            id: SESSION_ID,
+            generation: 7,
+            trust_domain: "different-domain",
+            capacity: 2,
+            reset: GuestSessionReset::DestroyOnEmpty,
+        },
+    );
+    let source = drifted.bundle.directory().to_path_buf();
+    let error = fixture
+        .driver
+        .prepare_create_bundle(&drifted)
+        .await
+        .expect_err("a pending session must not change its ownership contract");
+    assert_eq!(error.code, ErrorCode::Conflict);
+    assert!(
+        source.is_dir(),
+        "the drifted handoff must remain caller-owned"
+    );
+    assert_eq!(fixture.factory.launches.load(Ordering::Relaxed), 0);
+}
