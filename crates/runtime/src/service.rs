@@ -11,11 +11,12 @@ use a3s_oci_sdk::{
     ContainerStats, ContainerTarget, CreateRequest, DeleteRequest, Error, ErrorCode, EventBatch,
     EventsRequest, ExecRequest, ExitStatus, FileOp, FileRequest, FileResponse, FilesystemOp,
     FilesystemRequest, FilesystemResponse, KillRequest, ListRequest, OciLinuxSupport,
-    OciRuntimeService, OutputChunk, ProcessId, ProcessRecord, ProcessTarget, ProcessesRequest,
-    ReadOutputRequest, ResizeRequest, RestoreRequest, RestoreResponse, Result, RuntimeExtensions,
-    RuntimeInfo, RuntimeOperation, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
-    TeeAttestationRequest, TeeAttestationResponse, TeeSha256Digest, UpdateRequest, ValidateRequest,
-    WaitProcessRequest, WaitRequest, WriteStdinRequest, MAX_FILE_TRANSFER_BYTES,
+    OciRuntimeService, OperationId, OutputChunk, ProcessId, ProcessRecord, ProcessTarget,
+    ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, RestoreResponse, Result,
+    RuntimeExtensions, RuntimeInfo, RuntimeOperation, SignalProcessRequest, StartRequest,
+    StateRequest, StatsRequest, TeeAttestationRequest, TeeAttestationResponse, TeeSha256Digest,
+    UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    MAX_FILE_TRANSFER_BYTES,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
@@ -424,12 +425,54 @@ impl LifecycleHost {
         self.drivers.get(kind, operation)
     }
 
-    fn ensure_operation(&self, operation: RuntimeOperation, name: &'static str) -> Result<()> {
-        if self.drivers.operations().contains(&operation) {
+    /// Reject an operation only when no registered driver can serve it.
+    ///
+    /// Optional operations are negotiated per driver.  The registry's flat
+    /// operation set is intentionally the safe intersection for legacy
+    /// callers, so using it as a service-wide gate would reject a request
+    /// that is valid for the driver's durable isolation target.
+    fn ensure_any_driver_operation(
+        &self,
+        operation: RuntimeOperation,
+        name: &'static str,
+    ) -> Result<()> {
+        if self.drivers.any_driver_supports(operation) {
             Ok(())
         } else {
             Err(Error::unsupported(name))
         }
+    }
+
+    /// Preflight a new container-targeted operation against its durable driver.
+    ///
+    /// Existing journals are deliberately exempt from the lookup and the
+    /// service-wide availability gate so completed responses and recoverable
+    /// intents retain their normal idempotent replay path. The post-prepare
+    /// checks in each operation remain the final fence for a concurrent
+    /// generation change or a recovered intent.
+    async fn ensure_target_driver_operation(
+        &self,
+        operation_id: &OperationId,
+        target: &ContainerTarget,
+        operation: RuntimeOperation,
+        name: &'static str,
+    ) -> Result<()> {
+        if self
+            .store
+            .operation_exists(operation_id)
+            .await
+            .map_err(|error| error.for_operation(name))?
+        {
+            return Ok(());
+        }
+        self.ensure_any_driver_operation(operation, name)?;
+        let record = self
+            .store
+            .state(target)
+            .await
+            .map_err(|error| error.for_operation(name))?;
+        self.driver(record.driver, name)?
+            .ensure_operation(operation, name)
     }
 
     async fn fail_driver_operation<T>(
@@ -772,12 +815,19 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn exec(&self, request: ExecRequest) -> Result<ProcessRecord> {
         let lifecycle = self.lifecycle("exec")?;
-        lifecycle.ensure_operation(RuntimeOperation::Exec, "exec")?;
         request.validate()?;
         lifecycle
             .drivers
             .linux_support()
             .validate_process(&request.process, "exec")?;
+        lifecycle
+            .ensure_target_driver_operation(
+                &request.context.operation_id,
+                &request.container,
+                RuntimeOperation::Exec,
+                "exec",
+            )
+            .await?;
         let prepared = lifecycle.store.prepare_exec(&request).await?;
         let durable = match prepared {
             ProcessOperationPreparation::Replayed(record) => {
@@ -791,7 +841,11 @@ impl OciRuntimeService for HostRuntimeService {
         let target = durable.target;
         let container = lifecycle.store.state(&target.container).await?;
         let registered = lifecycle.driver(container.driver, "exec")?;
-        registered.ensure_operation(RuntimeOperation::Exec, "exec")?;
+        if let Err(error) = registered.ensure_operation(RuntimeOperation::Exec, "exec") {
+            return lifecycle
+                .fail_driver_operation(&request.context.operation_id, error)
+                .await;
+        }
         lifecycle.driver_boundary(DriverOperation::Exec, DriverBoundaryStage::BeforeCall)?;
         let result = registered
             .driver()
@@ -826,7 +880,7 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn wait(&self, request: WaitRequest) -> Result<ExitStatus> {
         let lifecycle = self.lifecycle("wait")?;
-        lifecycle.ensure_operation(RuntimeOperation::Wait, "wait")?;
+        lifecycle.ensure_any_driver_operation(RuntimeOperation::Wait, "wait")?;
         request.validate()?;
         let process_request = WaitProcessRequest {
             process: ProcessTarget {
@@ -866,7 +920,15 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn pause(&self, request: ContainerOperationRequest) -> Result<ContainerRecord> {
         let lifecycle = self.lifecycle("pause")?;
-        lifecycle.ensure_operation(RuntimeOperation::Pause, "pause")?;
+        request.validate()?;
+        lifecycle
+            .ensure_target_driver_operation(
+                &request.context.operation_id,
+                &request.target,
+                RuntimeOperation::Pause,
+                "pause",
+            )
+            .await?;
         let record = match lifecycle.store.prepare_pause(&request).await? {
             RecordOperationPreparation::Replayed(record) => {
                 return lifecycle
@@ -877,7 +939,11 @@ impl OciRuntimeService for HostRuntimeService {
             | RecordOperationPreparation::Resume(record) => record,
         };
         let registered = lifecycle.driver(record.driver, "pause")?;
-        registered.ensure_operation(RuntimeOperation::Pause, "pause")?;
+        if let Err(error) = registered.ensure_operation(RuntimeOperation::Pause, "pause") {
+            return lifecycle
+                .fail_driver_operation(&request.context.operation_id, error)
+                .await;
+        }
         let target = ContainerTarget::exact(request.target.id.clone(), record.generation);
         lifecycle.driver_boundary(DriverOperation::Pause, DriverBoundaryStage::BeforeCall)?;
         let result = registered
@@ -912,7 +978,15 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn resume(&self, request: ContainerOperationRequest) -> Result<ContainerRecord> {
         let lifecycle = self.lifecycle("resume")?;
-        lifecycle.ensure_operation(RuntimeOperation::Resume, "resume")?;
+        request.validate()?;
+        lifecycle
+            .ensure_target_driver_operation(
+                &request.context.operation_id,
+                &request.target,
+                RuntimeOperation::Resume,
+                "resume",
+            )
+            .await?;
         let record = match lifecycle.store.prepare_resume(&request).await? {
             RecordOperationPreparation::Replayed(record) => {
                 return lifecycle
@@ -923,7 +997,11 @@ impl OciRuntimeService for HostRuntimeService {
             | RecordOperationPreparation::Resume(record) => record,
         };
         let registered = lifecycle.driver(record.driver, "resume")?;
-        registered.ensure_operation(RuntimeOperation::Resume, "resume")?;
+        if let Err(error) = registered.ensure_operation(RuntimeOperation::Resume, "resume") {
+            return lifecycle
+                .fail_driver_operation(&request.context.operation_id, error)
+                .await;
+        }
         let target = ContainerTarget::exact(request.target.id.clone(), record.generation);
         lifecycle.driver_boundary(DriverOperation::Resume, DriverBoundaryStage::BeforeCall)?;
         let result = registered
@@ -958,12 +1036,19 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn update(&self, request: UpdateRequest) -> Result<ContainerRecord> {
         let lifecycle = self.lifecycle("update")?;
-        lifecycle.ensure_operation(RuntimeOperation::Update, "update")?;
         request.validate()?;
         lifecycle
             .drivers
             .linux_support()
             .validate_resources(&request.resources, "update")?;
+        lifecycle
+            .ensure_target_driver_operation(
+                &request.context.operation_id,
+                &request.target,
+                RuntimeOperation::Update,
+                "update",
+            )
+            .await?;
         let record = match lifecycle.store.prepare_update(&request).await? {
             RecordOperationPreparation::Replayed(record) => {
                 return lifecycle
@@ -974,7 +1059,11 @@ impl OciRuntimeService for HostRuntimeService {
             | RecordOperationPreparation::Resume(record) => record,
         };
         let registered = lifecycle.driver(record.driver, "update")?;
-        registered.ensure_operation(RuntimeOperation::Update, "update")?;
+        if let Err(error) = registered.ensure_operation(RuntimeOperation::Update, "update") {
+            return lifecycle
+                .fail_driver_operation(&request.context.operation_id, error)
+                .await;
+        }
         let target = ContainerTarget::exact(request.target.id.clone(), record.generation);
         lifecycle.driver_boundary(DriverOperation::Update, DriverBoundaryStage::BeforeCall)?;
         let result = registered
@@ -1010,7 +1099,7 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn processes(&self, request: ProcessesRequest) -> Result<Vec<ProcessRecord>> {
         let lifecycle = self.lifecycle("processes")?;
-        lifecycle.ensure_operation(RuntimeOperation::Processes, "processes")?;
+        lifecycle.ensure_any_driver_operation(RuntimeOperation::Processes, "processes")?;
         request.validate()?;
         let record = lifecycle.store.state(&request.target).await?;
         let registered = lifecycle.driver(record.driver, "processes")?;
@@ -1056,7 +1145,7 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn stats(&self, request: StatsRequest) -> Result<ContainerStats> {
         let lifecycle = self.lifecycle("stats")?;
-        lifecycle.ensure_operation(RuntimeOperation::Stats, "stats")?;
+        lifecycle.ensure_any_driver_operation(RuntimeOperation::Stats, "stats")?;
         request.validate()?;
         let record = lifecycle.store.state(&request.target).await?;
         let registered = lifecycle.driver(record.driver, "stats")?;
@@ -1090,7 +1179,7 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn read_output(&self, request: ReadOutputRequest) -> Result<Vec<OutputChunk>> {
         let lifecycle = self.lifecycle("read-output")?;
-        lifecycle.ensure_operation(RuntimeOperation::ReadOutput, "read-output")?;
+        lifecycle.ensure_any_driver_operation(RuntimeOperation::ReadOutput, "read-output")?;
         request.validate()?;
         let target = lifecycle
             .store
@@ -1117,7 +1206,15 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn write_stdin(&self, request: WriteStdinRequest) -> Result<()> {
         let lifecycle = self.lifecycle("write-stdin")?;
-        lifecycle.ensure_operation(RuntimeOperation::WriteStdin, "write-stdin")?;
+        request.validate()?;
+        lifecycle
+            .ensure_target_driver_operation(
+                &request.context.operation_id,
+                &request.process.container,
+                RuntimeOperation::WriteStdin,
+                "write-stdin",
+            )
+            .await?;
         let target = match lifecycle.store.prepare_write_stdin(&request).await? {
             ProcessIoPreparation::Replayed => {
                 return lifecycle
@@ -1128,7 +1225,12 @@ impl OciRuntimeService for HostRuntimeService {
         };
         let container = lifecycle.store.state(&target.container).await?;
         let registered = lifecycle.driver(container.driver, "write-stdin")?;
-        registered.ensure_operation(RuntimeOperation::WriteStdin, "write-stdin")?;
+        if let Err(error) = registered.ensure_operation(RuntimeOperation::WriteStdin, "write-stdin")
+        {
+            return lifecycle
+                .fail_driver_operation(&request.context.operation_id, error)
+                .await;
+        }
         lifecycle.driver_boundary(DriverOperation::WriteStdin, DriverBoundaryStage::BeforeCall)?;
         let result = registered
             .driver()
@@ -1155,7 +1257,15 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn close_stdin(&self, request: CloseStdinRequest) -> Result<()> {
         let lifecycle = self.lifecycle("close-stdin")?;
-        lifecycle.ensure_operation(RuntimeOperation::CloseStdin, "close-stdin")?;
+        request.validate()?;
+        lifecycle
+            .ensure_target_driver_operation(
+                &request.context.operation_id,
+                &request.process.container,
+                RuntimeOperation::CloseStdin,
+                "close-stdin",
+            )
+            .await?;
         let target = match lifecycle.store.prepare_close_stdin(&request).await? {
             ProcessIoPreparation::Replayed => {
                 return lifecycle
@@ -1166,7 +1276,12 @@ impl OciRuntimeService for HostRuntimeService {
         };
         let container = lifecycle.store.state(&target.container).await?;
         let registered = lifecycle.driver(container.driver, "close-stdin")?;
-        registered.ensure_operation(RuntimeOperation::CloseStdin, "close-stdin")?;
+        if let Err(error) = registered.ensure_operation(RuntimeOperation::CloseStdin, "close-stdin")
+        {
+            return lifecycle
+                .fail_driver_operation(&request.context.operation_id, error)
+                .await;
+        }
         lifecycle.driver_boundary(DriverOperation::CloseStdin, DriverBoundaryStage::BeforeCall)?;
         let result = registered
             .driver()
@@ -1192,7 +1307,15 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn resize(&self, request: ResizeRequest) -> Result<()> {
         let lifecycle = self.lifecycle("resize")?;
-        lifecycle.ensure_operation(RuntimeOperation::Resize, "resize")?;
+        request.validate()?;
+        lifecycle
+            .ensure_target_driver_operation(
+                &request.context.operation_id,
+                &request.process.container,
+                RuntimeOperation::Resize,
+                "resize",
+            )
+            .await?;
         let target = match lifecycle.store.prepare_resize(&request).await? {
             ProcessIoPreparation::Replayed => {
                 return lifecycle
@@ -1203,7 +1326,11 @@ impl OciRuntimeService for HostRuntimeService {
         };
         let container = lifecycle.store.state(&target.container).await?;
         let registered = lifecycle.driver(container.driver, "resize")?;
-        registered.ensure_operation(RuntimeOperation::Resize, "resize")?;
+        if let Err(error) = registered.ensure_operation(RuntimeOperation::Resize, "resize") {
+            return lifecycle
+                .fail_driver_operation(&request.context.operation_id, error)
+                .await;
+        }
         lifecycle.driver_boundary(DriverOperation::Resize, DriverBoundaryStage::BeforeCall)?;
         let result = registered
             .driver()
@@ -1230,7 +1357,15 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn signal_process(&self, request: SignalProcessRequest) -> Result<()> {
         let lifecycle = self.lifecycle("signal-process")?;
-        lifecycle.ensure_operation(RuntimeOperation::SignalProcess, "signal-process")?;
+        request.validate()?;
+        lifecycle
+            .ensure_target_driver_operation(
+                &request.context.operation_id,
+                &request.process.container,
+                RuntimeOperation::SignalProcess,
+                "signal-process",
+            )
+            .await?;
         let target = match lifecycle.store.prepare_signal_process(&request).await? {
             SignalProcessPreparation::Replayed => {
                 return lifecycle
@@ -1242,7 +1377,13 @@ impl OciRuntimeService for HostRuntimeService {
         };
         let container = lifecycle.store.state(&target.container).await?;
         let registered = lifecycle.driver(container.driver, "signal-process")?;
-        registered.ensure_operation(RuntimeOperation::SignalProcess, "signal-process")?;
+        if let Err(error) =
+            registered.ensure_operation(RuntimeOperation::SignalProcess, "signal-process")
+        {
+            return lifecycle
+                .fail_driver_operation(&request.context.operation_id, error)
+                .await;
+        }
         lifecycle.driver_boundary(
             DriverOperation::SignalProcess,
             DriverBoundaryStage::BeforeCall,
@@ -1275,7 +1416,7 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn wait_process(&self, request: WaitProcessRequest) -> Result<ExitStatus> {
         let lifecycle = self.lifecycle("wait-process")?;
-        lifecycle.ensure_operation(RuntimeOperation::WaitProcess, "wait-process")?;
+        lifecycle.ensure_any_driver_operation(RuntimeOperation::WaitProcess, "wait-process")?;
         let target = match lifecycle.store.prepare_wait_process(&request).await? {
             ProcessWaitPreparation::Replayed(status) => return Ok(status),
             ProcessWaitPreparation::Prepared(target) => target,
@@ -1302,7 +1443,6 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn file(&self, mut request: FileRequest) -> Result<FileResponse> {
         let lifecycle = self.lifecycle("file")?;
-        lifecycle.ensure_operation(RuntimeOperation::File, "file")?;
         request.validate()?;
         if request.op == FileOp::Upload {
             let operation_id = request
@@ -1324,6 +1464,14 @@ impl OciRuntimeService for HostRuntimeService {
                     .for_operation("file")
                 })?
                 .map(|data| data.len() as u64);
+            lifecycle
+                .ensure_target_driver_operation(
+                    &operation_id,
+                    &request.target,
+                    RuntimeOperation::File,
+                    "file",
+                )
+                .await?;
             let target = match lifecycle.store.prepare_file_mutation(&request).await? {
                 FilesystemMutationPreparation::Replayed(response) => {
                     return lifecycle
@@ -1335,7 +1483,9 @@ impl OciRuntimeService for HostRuntimeService {
             };
             let record = lifecycle.store.state(&target).await?;
             let registered = lifecycle.driver(record.driver, "file")?;
-            registered.ensure_operation(RuntimeOperation::File, "file")?;
+            if let Err(error) = registered.ensure_operation(RuntimeOperation::File, "file") {
+                return lifecycle.fail_driver_operation(&operation_id, error).await;
+            }
             request.target = target.clone();
             lifecycle.driver_boundary(DriverOperation::File, DriverBoundaryStage::BeforeCall)?;
             let result = registered.driver().file(request).await;
@@ -1358,6 +1508,7 @@ impl OciRuntimeService for HostRuntimeService {
             return lifecycle.acknowledge_result(&operation_id, completed).await;
         }
 
+        lifecycle.ensure_any_driver_operation(RuntimeOperation::File, "file")?;
         let record = lifecycle.store.state(&request.target).await?;
         ensure_live_filesystem(&record, "file")?;
         let registered = lifecycle.driver(record.driver, "file")?;
@@ -1375,7 +1526,6 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn filesystem(&self, mut request: FilesystemRequest) -> Result<FilesystemResponse> {
         let lifecycle = self.lifecycle("filesystem")?;
-        lifecycle.ensure_operation(RuntimeOperation::Filesystem, "filesystem")?;
         request.validate()?;
         if request.op.is_mutating() {
             let operation_id = request
@@ -1385,6 +1535,14 @@ impl OciRuntimeService for HostRuntimeService {
                 .operation_id
                 .clone();
             let operation = request.op;
+            lifecycle
+                .ensure_target_driver_operation(
+                    &operation_id,
+                    &request.target,
+                    RuntimeOperation::Filesystem,
+                    "filesystem",
+                )
+                .await?;
             let target = match lifecycle
                 .store
                 .prepare_filesystem_mutation(&request)
@@ -1400,7 +1558,11 @@ impl OciRuntimeService for HostRuntimeService {
             };
             let record = lifecycle.store.state(&target).await?;
             let registered = lifecycle.driver(record.driver, "filesystem")?;
-            registered.ensure_operation(RuntimeOperation::Filesystem, "filesystem")?;
+            if let Err(error) =
+                registered.ensure_operation(RuntimeOperation::Filesystem, "filesystem")
+            {
+                return lifecycle.fail_driver_operation(&operation_id, error).await;
+            }
             request.target = target.clone();
             lifecycle
                 .driver_boundary(DriverOperation::Filesystem, DriverBoundaryStage::BeforeCall)?;
@@ -1423,6 +1585,7 @@ impl OciRuntimeService for HostRuntimeService {
             return lifecycle.acknowledge_result(&operation_id, completed).await;
         }
 
+        lifecycle.ensure_any_driver_operation(RuntimeOperation::Filesystem, "filesystem")?;
         let record = lifecycle.store.state(&request.target).await?;
         ensure_live_filesystem(&record, "filesystem")?;
         let registered = lifecycle.driver(record.driver, "filesystem")?;
@@ -1441,16 +1604,18 @@ impl OciRuntimeService for HostRuntimeService {
     async fn checkpoint(&self, request: CheckpointRequest) -> Result<CheckpointResponse> {
         request.validate()?;
         let lifecycle = self.lifecycle("checkpoint")?;
-        if !lifecycle
-            .drivers
-            .any_driver_supports(RuntimeOperation::Checkpoint)
-        {
-            return Err(Error::unsupported("checkpoint"));
-        }
         let operation_id = request.context().operation_id.clone();
         let runtime_artifact = artifact::current()
             .await
             .map_err(|error| error.for_operation("checkpoint"))?;
+        lifecycle
+            .ensure_target_driver_operation(
+                &operation_id,
+                request.target(),
+                RuntimeOperation::Checkpoint,
+                "checkpoint",
+            )
+            .await?;
         let source = match lifecycle.store.prepare_checkpoint(&request).await? {
             CheckpointOperationPreparation::Replayed(response) => {
                 return lifecycle

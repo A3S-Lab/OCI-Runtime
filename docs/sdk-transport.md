@@ -134,6 +134,15 @@ per-driver entry. OCI `potentiallyUnsafeConfigAnnotations` continues to list
 the union of recognized driver annotations because it describes the complete
 service parser rather than one selected launch path.
 
+After a container is created, the Host resolves each request to the exact
+generation and driver recorded in durable state. Optional operations are then
+checked against that selected driver, so a capability absent from one driver
+does not disable the same operation for another isolation class. A durable
+operation is preflighted before a new journal is claimed. If a recovered
+operation has already claimed a journal but targets a driver without the
+requested capability, it is recorded as a terminal `Unsupported` result and
+releases its claim before returning.
+
 Catalog, artifact, driver, isolation, operation-version, schema, and extension
 inventories are bounded and canonical. Missing versions return `Unsupported`
 from `negotiate-runtime`. A legacy response without the additive field decodes

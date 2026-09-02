@@ -50,7 +50,8 @@ pub struct RuntimeInfo {
     pub oci: Features,
     /// Driver availability, readiness, and isolation evidence.
     pub drivers: RuntimeFeatures,
-    /// Operations implemented by this exact service and driver set.
+    /// Legacy operation intersection guaranteed by every registered driver.
+    /// Driver-specific optional operations are exposed through `extensions`.
     pub operations: Vec<RuntimeOperation>,
     /// Versioned create-time attachment schemas and optional extensions.
     pub attachments: AttachmentCapabilities,

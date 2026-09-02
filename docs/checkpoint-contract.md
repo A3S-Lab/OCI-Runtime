@@ -11,9 +11,10 @@ The default Native Linux feature inventory and
 `NativeLinuxDriver::open_experimental` advertise neither operation. The
 separate rootful `NativeLinuxDriver::open_experimental_with_criu` constructor
 advertises `Checkpoint` and `Restore` only after it binds and probes one exact
-CRIU executable. No production driver advertises either operation, so callers
-must treat absence from `RuntimeInfo::operations` and the exact-artifact
-extension catalog as authoritative.
+CRIU executable. No production driver advertises either operation. Legacy
+callers must treat absence from `RuntimeInfo::operations` as unavailable;
+capability-aware callers must additionally negotiate the exact-artifact
+per-driver extension catalog for the selected isolation class.
 
 A production driver may advertise checkpoint only after it provides the
 required atomic artifact and cleanup behavior and the relevant real-host
