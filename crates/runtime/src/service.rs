@@ -1,7 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use a3s_oci_core::{DriverKind, HostPlatform, RuntimeFeatures};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
@@ -19,6 +19,7 @@ use a3s_oci_sdk::{
     MAX_FILE_TRANSFER_BYTES,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use crate::driver::{
     DriverAttestationRequest, DriverCheckpointRequest, DriverCloseStdinRequest,
@@ -58,10 +59,40 @@ struct BoundNativeControl {
     descriptors: crate::NativeControlDescriptors,
 }
 
+/// Coordinates duplicate requests for the same durable operation while they
+/// are executing in one host process.
+///
+/// The on-disk journal remains the source of truth across process restarts,
+/// while this small in-process single-flight layer prevents a second caller
+/// from dispatching the same operation after the first caller has already
+/// completed and acknowledged the driver's replay record.
+#[derive(Default)]
+struct OperationGates {
+    entries: Mutex<BTreeMap<OperationId, Weak<Mutex<()>>>>,
+}
+
+impl OperationGates {
+    async fn acquire(&self, operation_id: &OperationId) -> OwnedMutexGuard<()> {
+        let gate = {
+            let mut entries = self.entries.lock().await;
+            entries.retain(|_, gate| gate.strong_count() > 0);
+            if let Some(gate) = entries.get(operation_id).and_then(Weak::upgrade) {
+                gate
+            } else {
+                let gate = Arc::new(Mutex::new(()));
+                entries.insert(operation_id.clone(), Arc::downgrade(&gate));
+                gate
+            }
+        };
+        gate.lock_owned().await
+    }
+}
+
 struct LifecycleHost {
     store: DurableStateStore,
     drivers: DriverRegistry,
     faults: Arc<dyn FaultInjector>,
+    operation_gates: OperationGates,
 }
 
 impl fmt::Debug for HostRuntimeService {
@@ -229,6 +260,7 @@ impl HostRuntimeService {
                 store,
                 drivers,
                 faults,
+                operation_gates: OperationGates::default(),
             })),
             #[cfg(target_os = "linux")]
             native_control: None,
@@ -284,6 +316,10 @@ impl HostRuntimeService {
         request.validate()?;
         let tee_launch = request.attachments.tee_launch(&request.bundle)?;
         let lifecycle = self.lifecycle("create")?;
+        let _operation_gate = lifecycle
+            .operation_gates
+            .acquire(&request.context.operation_id)
+            .await;
         let registered = lifecycle
             .drivers
             .select(request.isolation.class(), "create")?;
@@ -677,6 +713,10 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn start(&self, request: StartRequest) -> Result<ContainerRecord> {
         let lifecycle = self.lifecycle("start")?;
+        let _operation_gate = lifecycle
+            .operation_gates
+            .acquire(&request.context.operation_id)
+            .await;
         let prepared = lifecycle.store.prepare_start(&request).await?;
         let record = match prepared {
             RecordOperationPreparation::Replayed(record) => {
@@ -732,6 +772,10 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn kill(&self, request: KillRequest) -> Result<ContainerRecord> {
         let lifecycle = self.lifecycle("kill")?;
+        let _operation_gate = lifecycle
+            .operation_gates
+            .acquire(&request.context.operation_id)
+            .await;
         let prepared = lifecycle.store.prepare_kill(&request).await?;
         let record = match prepared {
             RecordOperationPreparation::Replayed(record) => {
@@ -778,6 +822,10 @@ impl OciRuntimeService for HostRuntimeService {
 
     async fn delete(&self, request: DeleteRequest) -> Result<()> {
         let lifecycle = self.lifecycle("delete")?;
+        let _operation_gate = lifecycle
+            .operation_gates
+            .acquire(&request.context.operation_id)
+            .await;
         let prepared = lifecycle.store.prepare_delete(&request).await?;
         let record = match prepared {
             DeletePreparation::Replayed => {
@@ -816,6 +864,10 @@ impl OciRuntimeService for HostRuntimeService {
     async fn exec(&self, request: ExecRequest) -> Result<ProcessRecord> {
         let lifecycle = self.lifecycle("exec")?;
         request.validate()?;
+        let _operation_gate = lifecycle
+            .operation_gates
+            .acquire(&request.context.operation_id)
+            .await;
         lifecycle
             .drivers
             .linux_support()
@@ -921,6 +973,10 @@ impl OciRuntimeService for HostRuntimeService {
     async fn pause(&self, request: ContainerOperationRequest) -> Result<ContainerRecord> {
         let lifecycle = self.lifecycle("pause")?;
         request.validate()?;
+        let _operation_gate = lifecycle
+            .operation_gates
+            .acquire(&request.context.operation_id)
+            .await;
         lifecycle
             .ensure_target_driver_operation(
                 &request.context.operation_id,
@@ -979,6 +1035,10 @@ impl OciRuntimeService for HostRuntimeService {
     async fn resume(&self, request: ContainerOperationRequest) -> Result<ContainerRecord> {
         let lifecycle = self.lifecycle("resume")?;
         request.validate()?;
+        let _operation_gate = lifecycle
+            .operation_gates
+            .acquire(&request.context.operation_id)
+            .await;
         lifecycle
             .ensure_target_driver_operation(
                 &request.context.operation_id,
@@ -1037,6 +1097,10 @@ impl OciRuntimeService for HostRuntimeService {
     async fn update(&self, request: UpdateRequest) -> Result<ContainerRecord> {
         let lifecycle = self.lifecycle("update")?;
         request.validate()?;
+        let _operation_gate = lifecycle
+            .operation_gates
+            .acquire(&request.context.operation_id)
+            .await;
         lifecycle
             .drivers
             .linux_support()
@@ -1207,6 +1271,10 @@ impl OciRuntimeService for HostRuntimeService {
     async fn write_stdin(&self, request: WriteStdinRequest) -> Result<()> {
         let lifecycle = self.lifecycle("write-stdin")?;
         request.validate()?;
+        let _operation_gate = lifecycle
+            .operation_gates
+            .acquire(&request.context.operation_id)
+            .await;
         lifecycle
             .ensure_target_driver_operation(
                 &request.context.operation_id,
@@ -1258,6 +1326,10 @@ impl OciRuntimeService for HostRuntimeService {
     async fn close_stdin(&self, request: CloseStdinRequest) -> Result<()> {
         let lifecycle = self.lifecycle("close-stdin")?;
         request.validate()?;
+        let _operation_gate = lifecycle
+            .operation_gates
+            .acquire(&request.context.operation_id)
+            .await;
         lifecycle
             .ensure_target_driver_operation(
                 &request.context.operation_id,
@@ -1308,6 +1380,10 @@ impl OciRuntimeService for HostRuntimeService {
     async fn resize(&self, request: ResizeRequest) -> Result<()> {
         let lifecycle = self.lifecycle("resize")?;
         request.validate()?;
+        let _operation_gate = lifecycle
+            .operation_gates
+            .acquire(&request.context.operation_id)
+            .await;
         lifecycle
             .ensure_target_driver_operation(
                 &request.context.operation_id,
@@ -1358,6 +1434,10 @@ impl OciRuntimeService for HostRuntimeService {
     async fn signal_process(&self, request: SignalProcessRequest) -> Result<()> {
         let lifecycle = self.lifecycle("signal-process")?;
         request.validate()?;
+        let _operation_gate = lifecycle
+            .operation_gates
+            .acquire(&request.context.operation_id)
+            .await;
         lifecycle
             .ensure_target_driver_operation(
                 &request.context.operation_id,
@@ -1451,6 +1531,7 @@ impl OciRuntimeService for HostRuntimeService {
                 .expect("validated File upload has an operation context")
                 .operation_id
                 .clone();
+            let _operation_gate = lifecycle.operation_gates.acquire(&operation_id).await;
             let expected_upload_size = request
                 .data
                 .as_deref()
@@ -1534,6 +1615,7 @@ impl OciRuntimeService for HostRuntimeService {
                 .expect("validated Filesystem mutation has an operation context")
                 .operation_id
                 .clone();
+            let _operation_gate = lifecycle.operation_gates.acquire(&operation_id).await;
             let operation = request.op;
             lifecycle
                 .ensure_target_driver_operation(
@@ -1605,6 +1687,7 @@ impl OciRuntimeService for HostRuntimeService {
         request.validate()?;
         let lifecycle = self.lifecycle("checkpoint")?;
         let operation_id = request.context().operation_id.clone();
+        let _operation_gate = lifecycle.operation_gates.acquire(&operation_id).await;
         let runtime_artifact = artifact::current()
             .await
             .map_err(|error| error.for_operation("checkpoint"))?;
@@ -1698,6 +1781,7 @@ impl OciRuntimeService for HostRuntimeService {
             return Err(Error::unsupported("restore"));
         }
         let operation_id = request.context().operation_id.clone();
+        let _operation_gate = lifecycle.operation_gates.acquire(&operation_id).await;
         if let RestoreOperationLookup::Replayed(response) =
             lifecycle.store.lookup_restore(&request).await?
         {
@@ -1846,6 +1930,7 @@ impl OciRuntimeService for HostRuntimeService {
         request.validate()?;
         let lifecycle = self.lifecycle("attest")?;
         let operation_id = request.context.operation_id.clone();
+        let _operation_gate = lifecycle.operation_gates.acquire(&operation_id).await;
         if let AttestationOperationLookup::Replayed(response) =
             lifecycle.store.lookup_attestation(&request).await?
         {

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[cfg(target_os = "linux")]
@@ -44,7 +45,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-use super::HostRuntimeService;
+use super::{HostRuntimeService, OperationGates};
 use crate::fault::testing::RecordingFaultInjector;
 use crate::fault::{DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint};
 #[cfg(target_os = "linux")]
@@ -87,6 +88,90 @@ const TEST_CONFIG: &str = concat!(
     "  \"root\": {\"path\": \"rootfs\", \"readonly\": true}\n",
     "}\n",
 );
+
+#[tokio::test]
+async fn duplicate_operation_gate_serializes_same_operation_id() {
+    let gates = Arc::new(OperationGates::default());
+    let operation_id = OperationId::new("operation-gate-test").expect("operation ID");
+    let first = gates.acquire(&operation_id).await;
+    let (acquired_sender, acquired_receiver) = tokio::sync::oneshot::channel();
+    let second_gates = Arc::clone(&gates);
+    let second_id = operation_id.clone();
+    let second = tokio::spawn(async move {
+        let _guard = second_gates.acquire(&second_id).await;
+        let _ = acquired_sender.send(());
+    });
+
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), acquired_receiver)
+            .await
+            .is_err(),
+        "a duplicate operation must wait for the first caller"
+    );
+    drop(first);
+    tokio::time::timeout(std::time::Duration::from_secs(1), second)
+        .await
+        .expect("duplicate operation gate should eventually open")
+        .expect("duplicate operation task should succeed");
+}
+
+#[tokio::test]
+async fn duplicate_write_stdin_does_not_dispatch_after_first_acknowledgement() {
+    let (_temporary, driver, service, target) = io_operations::io_fixture().await;
+    let block = driver.block_next_write_stdin();
+    let request = WriteStdinRequest {
+        context: OperationContext::new(operation_id("concurrent-write-stdin")),
+        process: ProcessTarget {
+            container: target,
+            process_id: ProcessId::init(),
+        },
+        data: b"concurrent input".to_vec(),
+    };
+
+    let first_service = service.clone();
+    let first_request = request.clone();
+    let first = tokio::spawn(async move { first_service.write_stdin(first_request).await });
+    block.entered.notified().await;
+
+    let second_service = service.clone();
+    let second_request = request.clone();
+    let second_done = Arc::new(tokio::sync::Notify::new());
+    let second_done_signal = Arc::clone(&second_done);
+    let second = tokio::spawn(async move {
+        let result = second_service.write_stdin(second_request).await;
+        second_done_signal.notify_one();
+        result
+    });
+    let second_before_release = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        second_done.notified(),
+    )
+    .await
+    .is_ok();
+    block.release.notify_one();
+
+    first
+        .await
+        .expect("first write task should join")
+        .expect("first write should succeed");
+    second
+        .await
+        .expect("second write task should join")
+        .expect("second write should replay successfully");
+    assert!(
+        !second_before_release,
+        "duplicate write must wait for the first driver call"
+    );
+    assert_eq!(
+        driver
+            .calls()
+            .into_iter()
+            .filter(|call| matches!(call, DriverCall::WriteStdin(_)))
+            .count(),
+        1,
+        "the driver must receive one call for a duplicate operation ID"
+    );
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DriverCall {
@@ -144,6 +229,8 @@ struct RecordingDriver {
     signal_process_replays: Mutex<HashMap<OperationId, DriverSignalProcessRequest>>,
     update_replays: Mutex<HashMap<OperationId, DriverUpdateRequest>>,
     write_stdin_replays: Mutex<HashMap<OperationId, DriverWriteStdinRequest>>,
+    write_stdin_block: Mutex<Option<Arc<WriteStdinBlock>>>,
+    write_stdin_in_flight: AtomicBool,
     close_stdin_replays: Mutex<HashMap<OperationId, DriverCloseStdinRequest>>,
     resize_replays: Mutex<HashMap<OperationId, DriverResizeRequest>>,
     checkpoint_replays:
@@ -162,6 +249,12 @@ struct RecordingDriver {
     process_fixture_state: Option<PathBuf>,
     recover_process_fixture_state: bool,
     staged_bundle_directory: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+struct WriteStdinBlock {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 
 impl RecordingDriver {
@@ -195,6 +288,8 @@ impl RecordingDriver {
             signal_process_replays: Mutex::new(HashMap::new()),
             update_replays: Mutex::new(HashMap::new()),
             write_stdin_replays: Mutex::new(HashMap::new()),
+            write_stdin_block: Mutex::new(None),
+            write_stdin_in_flight: AtomicBool::new(false),
             close_stdin_replays: Mutex::new(HashMap::new()),
             resize_replays: Mutex::new(HashMap::new()),
             checkpoint_replays: Mutex::new(HashMap::new()),
@@ -212,6 +307,18 @@ impl RecordingDriver {
             recover_process_fixture_state: false,
             staged_bundle_directory: None,
         }
+    }
+
+    fn block_next_write_stdin(&self) -> Arc<WriteStdinBlock> {
+        let block = Arc::new(WriteStdinBlock {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        *self
+            .write_stdin_block
+            .lock()
+            .expect("write-stdin block lock") = Some(Arc::clone(&block));
+        block
     }
 
     fn process_fixture(log: PathBuf) -> Self {
@@ -1409,6 +1516,24 @@ impl RuntimeDriver for RecordingDriver {
             .lock()
             .expect("driver calls lock")
             .push(DriverCall::WriteStdin(request.clone()));
+        if self.write_stdin_in_flight.load(Ordering::Acquire) {
+            return Err(Error::new(
+                ErrorCode::NotFound,
+                "test driver rejects a duplicate in-flight stdin operation",
+            )
+            .for_operation("driver-write-stdin"));
+        }
+        let block = self
+            .write_stdin_block
+            .lock()
+            .expect("write-stdin block lock")
+            .take();
+        if let Some(block) = block {
+            self.write_stdin_in_flight.store(true, Ordering::Release);
+            block.entered.notify_one();
+            block.release.notified().await;
+            self.write_stdin_in_flight.store(false, Ordering::Release);
+        }
         if let Some(recorded) = self
             .write_stdin_replays
             .lock()
