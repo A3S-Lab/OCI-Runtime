@@ -416,6 +416,32 @@ This is an observation on the existing development host, not a newly
 provisioned release host, and it does not close the remaining fresh-host
 operation-stage or package-promotion gates.
 
+A subsequent run from current merged `main` commit
+`bf43388dc1a5630f3fbbd699203877cf84f1ee2d` repeated the same gate with a
+source-matched static guest agent and a newly rebuilt immutable system image.
+The `a3s.oci.windows-whpx-soak.v2` report again passed all 56 samples (25
+serial, six parallel, three multi-container, three lifecycle-fault, five
+workload, ten typed-negative, and four owner-kill cases), with empty start and
+final host-process inventories. The source-matched image manifest, ext4 image,
+and compressed image hashes were respectively
+`7530794ec4a4e93c0e34487c7e8998cc1c4803c598e5ffa04ddd7ca325d15654`,
+`e0c62f1bde36db08d9bf58f12bd0a15e11fb9fcfdd2866727d590e1400739a7d`, and
+`79adbea9c151267f2fc4a8711b7d496a7cab9e37ef4d0aa7f205be1d248f265e`.
+The embedded x86_64 agent hash is
+`be1e338890205384aca9066725361d6c8b51d8f8940b69fb31391f650134042e`.
+The soak summary and operation-table hashes are
+`a3b5e6905029f65dea1132fe11ae8442377a61f42943e0261dec99cb1c48aa7a` and
+`ac0a5719cdd005c7c2aa16a4e50bf2885d130d96a4918cc876f9d3a80f4cbbff`.
+The separately scoped direct-driver and Host Service recovery reports also
+returned `available`; their summary hashes are
+`f8d263fcf5662531f4f48a57401da6adbb23dfbb4d90245291692a5b979dbd77` and
+`748c22f53a525796395abe3db597e32282240143e99d28ba4bd1798b56cca76e`.
+Every one of the 51 VM reports retained equal nonzero in-process Windows handle
+inventories, and the reports verified the protocol-v10 immutable-root boot
+assets. This is still an observation on the existing development host; the
+freshly provisioned release-host rerun and the operation-stage qualification
+remain release gates.
+
 The August 1, 2026 direct-driver qualification ran from clean commit
 `7bb09dff81b5445e275c31faff6592ad4c32a45f` and emitted
 `a3s.oci.whpx-driver-smoke-run.v1`. From 12:50:37Z through 12:51:08Z it built
