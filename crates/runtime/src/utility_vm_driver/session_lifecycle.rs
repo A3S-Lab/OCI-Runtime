@@ -352,6 +352,7 @@ impl UtilityVmRuntimeDriver {
             return Ok(container);
         };
 
+        let generation = require_exact_generation(target, "utility-vm-create")?;
         self.preflight_session_admission(target, binding).await?;
 
         let retained = {
@@ -432,7 +433,7 @@ impl UtilityVmRuntimeDriver {
         let mut sessions = self.sessions.lock().await;
         sessions.reusable.insert(
             binding.id().clone(),
-            ReusableGuestSession::new(binding.clone(), guest, target),
+            ReusableGuestSession::new(binding.clone(), guest, target, generation),
         );
         sessions.attachments.insert(
             target.id.clone(),

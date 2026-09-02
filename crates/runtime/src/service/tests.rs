@@ -45,7 +45,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-use super::{HostRuntimeService, OperationGates};
+use super::{required_mutation_operation_id, HostRuntimeService, OperationGates};
 use crate::fault::testing::RecordingFaultInjector;
 use crate::fault::{DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint};
 #[cfg(target_os = "linux")]
@@ -113,6 +113,21 @@ async fn duplicate_operation_gate_serializes_same_operation_id() {
         .await
         .expect("duplicate operation gate should eventually open")
         .expect("duplicate operation task should succeed");
+}
+
+#[test]
+fn mutation_operation_context_is_checked_without_an_invariant_panic() {
+    let error = required_mutation_operation_id(None, "file", "file upload")
+        .expect_err("missing mutation context must be reported as an argument error");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert_eq!(error.operation.as_deref(), Some("file"));
+    assert!(error.message.contains("file upload"));
+
+    let context = OperationContext::new(operation_id("context-check"));
+    let operation_id =
+        required_mutation_operation_id(Some(&context), "filesystem", "mutating filesystem request")
+            .expect("present mutation context must produce its operation ID");
+    assert_eq!(operation_id, context.operation_id);
 }
 
 #[tokio::test]

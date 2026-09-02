@@ -11,12 +11,12 @@ use a3s_oci_sdk::{
     ContainerStats, ContainerTarget, CreateRequest, DeleteRequest, Error, ErrorCode, EventBatch,
     EventsRequest, ExecRequest, ExitStatus, FileOp, FileRequest, FileResponse, FilesystemOp,
     FilesystemRequest, FilesystemResponse, KillRequest, ListRequest, OciLinuxSupport,
-    OciRuntimeService, OperationId, OutputChunk, ProcessId, ProcessRecord, ProcessTarget,
-    ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, RestoreResponse, Result,
-    RuntimeExtensions, RuntimeInfo, RuntimeOperation, SignalProcessRequest, StartRequest,
-    StateRequest, StatsRequest, TeeAttestationRequest, TeeAttestationResponse, TeeSha256Digest,
-    UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
-    MAX_FILE_TRANSFER_BYTES,
+    OciRuntimeService, OperationContext, OperationId, OutputChunk, ProcessId, ProcessRecord,
+    ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest,
+    RestoreResponse, Result, RuntimeExtensions, RuntimeInfo, RuntimeOperation,
+    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, TeeAttestationRequest,
+    TeeAttestationResponse, TeeSha256Digest, UpdateRequest, ValidateRequest, WaitProcessRequest,
+    WaitRequest, WriteStdinRequest, MAX_FILE_TRANSFER_BYTES,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use tokio::sync::{Mutex, OwnedMutexGuard};
@@ -1525,12 +1525,8 @@ impl OciRuntimeService for HostRuntimeService {
         let lifecycle = self.lifecycle("file")?;
         request.validate()?;
         if request.op == FileOp::Upload {
-            let operation_id = request
-                .context
-                .as_ref()
-                .expect("validated File upload has an operation context")
-                .operation_id
-                .clone();
+            let operation_id =
+                required_mutation_operation_id(request.context.as_ref(), "file", "file upload")?;
             let _operation_gate = lifecycle.operation_gates.acquire(&operation_id).await;
             let expected_upload_size = request
                 .data
@@ -1609,12 +1605,11 @@ impl OciRuntimeService for HostRuntimeService {
         let lifecycle = self.lifecycle("filesystem")?;
         request.validate()?;
         if request.op.is_mutating() {
-            let operation_id = request
-                .context
-                .as_ref()
-                .expect("validated Filesystem mutation has an operation context")
-                .operation_id
-                .clone();
+            let operation_id = required_mutation_operation_id(
+                request.context.as_ref(),
+                "filesystem",
+                "mutating filesystem request",
+            )?;
             let _operation_gate = lifecycle.operation_gates.acquire(&operation_id).await;
             let operation = request.op;
             lifecycle
@@ -2023,6 +2018,22 @@ impl OciRuntimeService for HostRuntimeService {
             .await;
         lifecycle.acknowledge_result(&operation_id, completed).await
     }
+}
+
+fn required_mutation_operation_id(
+    context: Option<&OperationContext>,
+    operation: &'static str,
+    subject: &'static str,
+) -> Result<OperationId> {
+    context
+        .map(|context| context.operation_id.clone())
+        .ok_or_else(|| {
+            Error::new(
+                ErrorCode::InvalidArgument,
+                format!("{subject} requires an idempotency operation context"),
+            )
+            .for_operation(operation)
+        })
 }
 
 fn ensure_live_filesystem(record: &ContainerRecord, operation: &'static str) -> Result<()> {
