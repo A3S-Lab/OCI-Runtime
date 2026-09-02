@@ -658,6 +658,17 @@ creation and after VM exit; Host validation and the hardware soak reject any
 drift. This remains implementation evidence until the fresh-host matrix
 retains matching counts in every session.
 
+The September 3, 2026 current-main qualification added real-host observations
+without changing those readiness classifications. On x86_64 WSL2, the pinned
+Linux KVM assets passed entry, 14/14 compatibility drift cases, 17/17
+lifecycle cases, owner-death/restart, 25/25 soak waves, and 162/162 operation
+replacement paths. On the existing Windows 10 x86_64 host, the pinned WHPX
+assets passed 56/56 lifecycle, multi-container, fault, workload, negative, and
+owner-kill samples, with all 51 VM handle inventories restored. These results
+are explicitly observation-only: fresh-host evidence for both advertised
+architectures, the remaining WHPX/KVM operation-stage boundaries, and signed
+release artifacts are still required before promotion.
+
 ## Architecture
 
 ```text

@@ -797,6 +797,23 @@ input and the API retry performed no additional dispatch. Every path verified
 the exact EOF marker, changed-process rejection, both stale generation fences,
 and complete cleanup. The retained aggregate has SHA-256
 `dc1743b4c6f53360b40dd9ebcb39b05832322555bfb6d6c0e55f750090c6ba33`.
+On September 3, 2026, a qualification from a clean current-main checkout at
+revision `28df6259c2cbb703b37fc8670ed224d1b34531e4` exercised an x86_64 WSL2
+host (`6.18.33.2-microsoft-standard-WSL2`) with a real `/dev/kvm` device and
+API version 12. The release build retained available normal and injected
+post-probe entry reports (1/1 each), the complete 14/14 compatibility-drift
+matrix, 17/17 lifecycle cases, 1/1 owner-death/restart case, 25/25 soak waves,
+and all 18 operation-stage matrices (9/9 each, 162/162 replacement paths).
+Every report returned to its process, descriptor, endpoint, runtime-share,
+bootstrap, marker, and recovery baselines. The key report SHA-256 values are
+`d596ee0536e379a1fc8bb0e639b6715aec81d0adbcd7901ab7b52b5c84afdc0e`
+(entry), `559d472ed5aa04ebfaf622f60490f670508c346ee0338b17f93fab1f4162854c`
+(compatibility), `74b7f62fe004b4b14ed5d8cffbb4e7e0d47479bff8f5fec32019bf8bf1b15ca2`
+(lifecycle), `1fbc5917b508181e3b6782e1feadb5bffe09c64131551d169e69725ec560dcb5`
+(recovery), and `197301e7255b76a0895fdfd687b776eb95b3937d2b4e735cecd3b5755acf04e3`
+(soak). This is an observation-only WSL2 qualification: it does not replace
+the required fresh-host AArch64 and x86_64 promotion artifacts, so the KVM
+candidate remains `probe-only`.
 AArch64 hardware evidence and the other 3 workload-operation matrices plus
 Host shutdown remain open; the candidate therefore remains `probe-only`.
 
