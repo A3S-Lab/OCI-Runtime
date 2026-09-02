@@ -349,11 +349,18 @@ fn run_exec_payload(
             ),
         );
     }
+    // Secret files are mounted read-only and owned by root. Materialize their
+    // values while this helper still has root credentials, before applying the
+    // workload UID/GID below.
+    let mut process_environment = plan.environment.clone();
+    if let Err(error) = crate::executor::secret_env::materialize(&mut process_environment) {
+        return reject_exec(control, error);
+    }
     match crate::executor::scheduler::apply(plan.scheduler.as_ref())
         .and_then(|()| crate::executor::io_priority::apply(plan.io_priority.as_ref()))
         .and_then(|()| crate::executor::oom::apply(host_proc, plan.oom_score_adj))
         .and_then(|()| apply_exec_credentials(plan, control))
-        .and_then(|()| execute_process(plan))
+        .and_then(|()| execute_process(plan, &process_environment))
     {
         Ok(()) => Ok(()),
         Err(error) => reject_exec(control, error),
@@ -402,9 +409,9 @@ fn apply_exec_credentials(plan: &ProcessPlan, control: &mut StdUnixStream) -> Re
     Ok(())
 }
 
-fn execute_process(plan: &ProcessPlan) -> Result<()> {
+fn execute_process(plan: &ProcessPlan, environment: &[String]) -> Result<()> {
     let args = cstring_vector(&plan.args, "process.args")?;
-    let environment = cstring_vector(&plan.environment, "process.env")?;
+    let environment = cstring_vector(environment, "process.env")?;
     if args.is_empty() {
         return Err(exec_error(
             ErrorCode::InvalidArgument,
