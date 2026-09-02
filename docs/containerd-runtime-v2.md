@@ -71,6 +71,20 @@ qualification snapshots, shim processes, qualification processes, or workload
 processes. This source-build evidence does not extend contract v1's advertised
 2.2.2 compatibility claim; the 2.2.3 published-artifact record remains open.
 
+A fresh current-main observation on September 3, 2026 used source revision
+`12bd861ebae188813d5592d210a4210c04c33fb3`, containerd 2.2.1, Ubuntu 24.04.3
+LTS/WSL2 x86_64, and the experimental Native Linux shared-host-kernel driver.
+Three consecutive complete matrices took 110.09, 103.32, and 103.73 seconds;
+each crossed all 23 restart, rehydration, and forced-cleanup boundaries. The
+run used a private `/var/tmp` containerd root/state/socket and a distinct
+systemd unit, with the matching current-main debug glibc artifacts recorded in
+the machine-readable record. Final live audits found zero tasks, containers,
+task bundles, live Runtime container records, matching shim/workload
+processes, mounts, or cgroups; the private root was removed. The default
+containerd and Docker services remained active with unchanged PIDs throughout.
+This refreshes observation evidence for the current source only; it does not
+qualify a signed published package or promote any development/support claim.
+
 The August 24, 2026 arm64 requalification used source revision
 `5a6d5f2d817d5951929c2394dff57ef925dd5822`, containerd 2.2.2, and Linux
 7.0.11-orbstack-00360-gc9bc4d96ac70. Three complete 65.15, 66.76, and
