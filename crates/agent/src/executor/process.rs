@@ -185,6 +185,7 @@ impl PreparedProcess {
         // already-validated caller descriptors with bounded dup2.
         unsafe {
             command.pre_exec(move || {
+                super::fd_boundary::mark_private_descriptors_close_on_exec()?;
                 pid_supervisor::verify_and_arm_parent_death_signal(
                     expected_owner_pid,
                     "container launcher",

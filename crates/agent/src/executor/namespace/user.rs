@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -573,22 +574,28 @@ fn mapping_helper_arguments(pid: i32, mappings: &[IdMapping]) -> Vec<OsString> {
 }
 
 fn run_mapping_helper(path: &Path, kind: &str, pid: i32, mappings: &[IdMapping]) -> Result<()> {
-    let output = Command::new(path)
+    let mut command = Command::new(path);
+    command
         .args(mapping_helper_arguments(pid, mappings))
         .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| {
-            namespace_error(
-                ErrorCode::FailedPrecondition,
-                format!(
-                    "failed to execute {kind} mapping helper {}: {error}",
-                    path.display()
-                ),
-            )
-        })?;
+        .stderr(Stdio::piped());
+    // SAFETY: the callback runs in the freshly forked mapping-helper child and
+    // performs one bounded close-on-exec syscall before the setuid helper is
+    // executed. No runtime-private descriptor should cross this boundary.
+    unsafe {
+        command.pre_exec(super::super::fd_boundary::mark_private_descriptors_close_on_exec);
+    }
+    let output = command.output().map_err(|error| {
+        namespace_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to execute {kind} mapping helper {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
     if output.status.success() {
         return Ok(());
     }

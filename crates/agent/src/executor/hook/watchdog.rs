@@ -3,7 +3,8 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
-const FIRST_PRIVATE_DESCRIPTOR: u32 = 3;
+use super::super::fd_boundary::{mark_private_descriptors_close_on_exec, FIRST_PRIVATE_DESCRIPTOR};
+
 const WATCHDOG_READY: u8 = 1;
 
 /// Install the pre-exec descriptor boundary and a detached owner-death
@@ -59,22 +60,6 @@ fn configure_child(owner_pid: libc::pid_t, owner_pidfd: RawFd) -> io::Result<()>
         return Err(io::Error::from_raw_os_error(libc::ECHILD));
     }
     Ok(())
-}
-
-fn mark_private_descriptors_close_on_exec() -> io::Result<()> {
-    let result = unsafe {
-        libc::syscall(
-            libc::SYS_close_range,
-            FIRST_PRIVATE_DESCRIPTOR,
-            u32::MAX,
-            libc::CLOSE_RANGE_CLOEXEC,
-        )
-    };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
 }
 
 fn open_pidfd(pid: libc::pid_t) -> io::Result<OwnedFd> {

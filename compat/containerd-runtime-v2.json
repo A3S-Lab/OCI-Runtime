@@ -340,6 +340,88 @@
         "post_commit_resize_pty_forced_cleanup": true,
         "boundary_count": 23
       }
+    },
+    {
+      "id": "2026-09-03-containerd-2.2.1-wsl2-x86_64-main-release",
+      "recorded_on": "2026-09-03",
+      "result": "passed",
+      "claim_effect": "observation-only",
+      "source_commit": "878f8414cef3b85bef1b51fe6735017b25828252",
+      "containerd": {
+        "version": "2.2.1",
+        "revision": "dea7da592f5d1d2b7755e3a161be07f43fad8f75"
+      },
+      "host": {
+        "contract_host": "ubuntu-wsl2-x86_64",
+        "distribution": "Ubuntu 24.04.3 LTS",
+        "kernel": "6.18.33.2-microsoft-standard-WSL2",
+        "architecture": "x86_64",
+        "environment": "wsl2"
+      },
+      "runtime_profile": {
+        "driver": "native-linux",
+        "isolation": "shared-host-kernel"
+      },
+      "protocols": {
+        "sdk": {
+          "minimum": 3,
+          "maximum": 9
+        },
+        "agent": {
+          "minimum": 1,
+          "maximum": 10
+        }
+      },
+      "artifacts": {
+        "cargo_lock_sha256": "b1ad6feb50f260fc6fe502cca723e6c6665b500243baa4b5cd65947c265adb11",
+        "files": [
+          {
+            "role": "cli",
+            "name": "a3s-oci",
+            "sha256": "b32d4bf5f50283141dcae0b8a19f2b42f8992ab900414deb9ca5084f92f5b63b",
+            "size_bytes": 37489928,
+            "format": "elf-static-pie-musl"
+          },
+          {
+            "role": "agent",
+            "name": "a3s-oci-agent",
+            "sha256": "596e214d85eae2df132ae12e708bcd8e1c640167186ca83247985bac36d7758a",
+            "size_bytes": 15299104,
+            "format": "elf-static-pie-musl"
+          },
+          {
+            "role": "shim",
+            "name": "containerd-shim-a3s-oci-v2",
+            "sha256": "c76ed0190a574e0dc23e729f9c58302e890e54d09d647d014bc2d236fdd36903",
+            "size_bytes": 19774520,
+            "format": "elf-static-pie-musl"
+          },
+          {
+            "role": "qualification-test",
+            "name": "containerd_runtime_v2-e5303586084363b1",
+            "sha256": "9871f2fb412f9a64e27a38a788e82a85371e78bfa9d64b31aba1e0b3a41f5b06",
+            "size_bytes": 17564464,
+            "format": "elf-dynamic-glibc-release"
+          }
+        ]
+      },
+      "qualification": {
+        "test": "real_containerd_runtime_v2_qualification",
+        "passes": 3,
+        "duration_seconds": [
+          96.42,
+          96.17,
+          95.31
+        ],
+        "preflight_passed": true,
+        "isolated_containerd": true,
+        "default_containerd_preserved": true,
+        "tasks_after": 0,
+        "containers_after": 0,
+        "temporary_roots_removed": true,
+        "post_commit_resize_pty_forced_cleanup": true,
+        "boundary_count": 23
+      }
     }
   ]
 }

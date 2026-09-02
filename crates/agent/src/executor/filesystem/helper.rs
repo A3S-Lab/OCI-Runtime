@@ -128,7 +128,10 @@ async fn call(
     // SAFETY: this callback runs after fork in the command child and changes
     // only close-on-exec flags in that child's descriptor table.
     unsafe {
-        command.pre_exec(move || make_descriptors_inheritable(&inherited));
+        command.pre_exec(move || {
+            crate::executor::fd_boundary::mark_private_descriptors_close_on_exec()?;
+            make_descriptors_inheritable(&inherited)
+        });
     }
     let mut child = command.spawn().map_err(|error| {
         helper_error(
