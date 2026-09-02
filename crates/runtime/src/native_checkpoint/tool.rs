@@ -1,6 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -20,6 +20,7 @@ use super::{checkpoint_error, io_error};
 const TOOL_OUTPUT_LIMIT: usize = 64 * 1024;
 const TOOL_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_DUMP_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const FIRST_PRIVATE_DESCRIPTOR: u32 = 3;
 const CRIU_DUMP_OPTIONS: [&str; 6] = [
     "--leave-running",
     "--shell-job",
@@ -270,6 +271,7 @@ impl CriuTool {
         // controlling terminal from being mistaken for checkpoint state.
         unsafe {
             command.pre_exec(|| {
+                mark_private_descriptors_close_on_exec()?;
                 if libc::setsid() < 0 {
                     Err(std::io::Error::last_os_error())
                 } else {
@@ -405,6 +407,24 @@ impl LinuxRestoreSpawner for CriuRestoreSpawner<'_> {
                 error.message = format!("{}; restore log: {}", error.message, log_path.display());
                 error
             })
+    }
+}
+
+fn mark_private_descriptors_close_on_exec() -> io::Result<()> {
+    // SAFETY: `close_range` receives a bounded descriptor interval and the
+    // kernel-defined close-on-exec flag; it does not dereference pointers.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_close_range,
+            FIRST_PRIVATE_DESCRIPTOR,
+            u32::MAX,
+            libc::CLOSE_RANGE_CLOEXEC,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
     }
 }
 

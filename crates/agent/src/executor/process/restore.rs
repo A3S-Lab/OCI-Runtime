@@ -433,6 +433,7 @@ async fn prepare_restore_cgroup_namespace(
     // the established parent-death check and one retained cgroup.procs write.
     unsafe {
         command.pre_exec(move || {
+            super::super::fd_boundary::mark_private_descriptors_close_on_exec()?;
             pid_supervisor::verify_and_arm_parent_death_signal(
                 expected_owner_pid,
                 "restore cgroup namespace launcher",

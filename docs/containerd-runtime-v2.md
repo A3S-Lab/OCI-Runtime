@@ -85,6 +85,20 @@ containerd and Docker services remained active with unchanged PIDs throughout.
 This refreshes observation evidence for the current source only; it does not
 qualify a signed published package or promote any development/support claim.
 
+A release-profile qualification of current main on the same host used source
+revision `878f8414cef3b85bef1b51fe6735017b25828252`, static-musl CLI, Agent,
+and shim binaries, and a release-built qualification executable. Three
+consecutive matrices completed in 96.42, 96.17, and 95.31 seconds and crossed
+all 23 restart, rehydration, and forced-cleanup boundaries. The run used
+containerd 2.2.1 (`dea7da592f5d1d2b7755e3a161be07f43fad8f75`) under a private
+systemd unit and a separate Native Linux Host Service; the default containerd
+PID 180 and Host PID 65320 were unchanged. Independent post-run audits found
+zero tasks, containers, bundles, Runtime records, matching shim/workload
+processes, mounts, or cgroups, and the private root and units were removed.
+This remains observation-only because the artifacts were source-built and the
+host is WSL2; it does not qualify a signed published package or extend the
+2.2.2 development claim.
+
 The August 24, 2026 arm64 requalification used source revision
 `5a6d5f2d817d5951929c2394dff57ef925dd5822`, containerd 2.2.2, and Linux
 7.0.11-orbstack-00360-gc9bc4d96ac70. Three complete 65.15, 66.76, and
@@ -769,6 +783,12 @@ socket, `A3S_OCI_CONTAINERD_STATE_ROOT` to its private
 `A3S_OCI_RUNTIME_ENDPOINT` to the selected Host service socket, and
 `A3S_OCI_CONTAINERD_SERVICE` to the isolated systemd unit before allowing the
 suite to restart containerd.
+
+When the selected service is an isolated systemd unit, set
+`KillMode=process` (as in the upstream containerd unit). `KillMode=control-group`
+also terminates the runtime-v2 shim during a daemon restart, so the rehydration
+and response-replay assertions are no longer testing a live shim and the run
+must be treated as invalid.
 
 ## Open release gates
 

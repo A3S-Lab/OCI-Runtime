@@ -164,9 +164,13 @@ the 20 workload operations or their maintenance acknowledgement.
 OCI hooks do not add guest protocol operations: they travel inside the exact
 digest-bound `config.json` and execute in the shared Linux executor. Native
 feature discovery separately advertises the six enforced hook phases. Every
-Hook child marks all descriptors above standard error close-on-exec with one
-fail-closed Linux `close_range` operation, so neither an in-process Native
-executor nor a Guest agent can leak runtime-private handles into Hook code.
+Agent-owned child boundary (init, Exec, filesystem and restore helpers,
+mapping helpers, CRIU tools, and Hooks) marks all descriptors above standard
+error close-on-exec with one fail-closed Linux `close_range` operation, so
+runtime-private handles cannot leak into workload, helper, or Hook code.
+Explicit authenticated descriptors are installed after that boundary. Every
+Hook child therefore receives the same isolation guarantee as the in-process
+Native executor and Guest agent paths.
 Before the Hook is allowed to `exec`, the executor also opens pidfds for the
 exact current owner and Hook process-group leader and starts a detached,
 descriptor-minimal watchdog. If that owner incarnation exits, the watchdog

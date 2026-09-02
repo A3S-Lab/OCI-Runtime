@@ -1474,6 +1474,14 @@ cannot establish this boundary fails the Hook before `exec`. The portable
 subprocess regression deliberately clears `FD_CLOEXEC` on a live descriptor
 and requires it to be absent from the Hook's `/proc/self/fd` inventory.
 
+The same fail-closed boundary is applied before every Agent-owned init, Exec,
+filesystem-helper, restore-helper, and CRIU-tool `exec`. Explicit descriptors
+needed by those child contracts are installed or made inheritable only after
+the private range is marked, so a retained cgroup, namespace, rootfs, control,
+or PTY broker handle cannot leak into a workload or checkpoint helper. This is
+also what lets native CRIU capture a non-terminal workload without inheriting
+the Host Service's controlling PTY.
+
 The same pre-exec boundary opens a pidfd for the exact process invoking the
 Hook, requires the Hook child to lead a private process group, opens its pidfd,
 and double-forks a detached watchdog. That watchdog closes every descriptor

@@ -72,6 +72,7 @@ impl ExecProcess {
         // workload cgroup, and applies final affinity before forking payload.
         unsafe {
             command.pre_exec(move || {
+                super::fd_boundary::mark_private_descriptors_close_on_exec()?;
                 make_descriptors_inheritable(&inherited)?;
                 super::terminal::prepare_child_terminal(terminal_io)
             });

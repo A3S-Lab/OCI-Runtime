@@ -9,6 +9,7 @@ mod device_mount_transport;
 mod device_policy;
 mod exec;
 mod exec_process;
+mod fd_boundary;
 mod filesystem;
 mod hook;
 mod inherited_descriptor;

@@ -669,6 +669,16 @@ are explicitly observation-only: fresh-host evidence for both advertised
 architectures, the remaining WHPX/KVM operation-stage boundaries, and signed
 release artifacts are still required before promotion.
 
+The same date also retained a release-profile Native Linux/containerd
+observation from source `878f8414cef3b85bef1b51fe6735017b25828252`: three
+consecutive isolated containerd 2.2.1 matrices (96.42/96.17/95.31 seconds)
+passed all 23 restart, rehydration, and forced-cleanup boundaries with static
+musl CLI/Agent/shim artifacts. The default containerd and Host Service stayed
+at their original PIDs, and post-run audits found no task, bundle, process,
+mount, cgroup, or Runtime residue. It is recorded as observation-only because
+it used source-built artifacts on WSL2; it does not promote the advertised
+containerd or driver claims.
+
 ## Architecture
 
 ```text

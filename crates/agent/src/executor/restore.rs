@@ -115,6 +115,7 @@ impl LinuxRestoreSpawnRequest {
         // one write through a retained cgroup.procs descriptor.
         unsafe {
             command.pre_exec(move || {
+                super::fd_boundary::mark_private_descriptors_close_on_exec()?;
                 if libc::setsid() < 0 {
                     return Err(io::Error::last_os_error());
                 }
