@@ -528,7 +528,7 @@ async fn pump_stdin(
                 }
             }
             StdinStartup::Activated | StdinStartup::DrainRequested => {}
-            StdinStartup::Stopped => unreachable!("stopped stdin startup handled before replay"),
+            StdinStartup::Stopped => return Err(stopped_stdin_startup_error()),
         }
     }
     loop {
@@ -616,6 +616,14 @@ async fn pump_stdin(
         )
         .await?;
     }
+}
+
+fn stopped_stdin_startup_error() -> RuntimeError {
+    RuntimeError::new(
+        ErrorCode::Internal,
+        "stdin pump reached the stopped startup state after its activation gate",
+    )
+    .for_operation("containerd-stdin")
 }
 
 async fn wait_for_stdin_activation(

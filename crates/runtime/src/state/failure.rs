@@ -59,7 +59,15 @@ impl DurableStateStore {
             let failure_mutation = match operation.kind {
                 StoredOperationKind::Create => DurableMutation::RecordCreateFailure,
                 StoredOperationKind::Restore => DurableMutation::RecordRestoreFailure,
-                _ => unreachable!("creation kind was checked above"),
+                kind => {
+                    return Err(state_error(
+                        ErrorCode::Internal,
+                        "fail-operation",
+                        format!(
+                            "operation {operation_id} reported creation kind {kind:?} without a creation failure mutation"
+                        ),
+                    ));
+                }
             };
             self.write_json(
                 failure_mutation,
@@ -198,7 +206,16 @@ impl DurableStateStore {
                 self.failed_restore_tombstone(&operation.operation_id),
                 DurableMutation::MoveFailedRestoreTombstone,
             ),
-            _ => unreachable!("creation kind was checked above"),
+            kind => {
+                return Err(state_error(
+                    ErrorCode::Internal,
+                    "reconcile-failed-creation",
+                    format!(
+                        "operation {} reported creation kind {kind:?} without a failure tombstone",
+                        operation.operation_id
+                    ),
+                ));
+            }
         };
         match (
             self.filesystem.path_exists(&source).await?,
