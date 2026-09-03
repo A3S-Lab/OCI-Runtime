@@ -15,6 +15,10 @@ const UPSTREAM_BUNDLE_VALIDATION: &str =
     include_str!("../../../.github/scripts/upstream-oci-bundle-validation.sh");
 const UPSTREAM_LIFECYCLE_VALIDATION: &str =
     include_str!("../../../.github/scripts/upstream-oci-lifecycle-validation.sh");
+const CREATE_RELEASE_PACKAGE_MANIFEST: &str =
+    include_str!("../../../.github/scripts/create-release-package-manifest.sh");
+const VERIFY_RELEASE_PACKAGE_MANIFEST: &str =
+    include_str!("../../../.github/scripts/verify-release-package-manifest.sh");
 const UPSTREAM_RUNTIME_TOOLS_LOCK: &str =
     include_str!("../../../compat/upstream-runtime-tools.json");
 
@@ -228,6 +232,62 @@ fn linux_release_archives_retain_exact_package_qualification() {
         release_workflow.contains("A3S_OCI_CRIU_BINARY=/usr/local/lib/a3s-oci-tools/criu-4.2.1")
     );
     assert!(release_workflow.contains("A3S_OCI_GIT_REVISION=\"$GITHUB_SHA\""));
+}
+
+#[test]
+fn linux_release_archives_bind_and_verify_their_complete_package_manifest() {
+    let release_workflow = normalized_release_workflow();
+    let qualification = release_workflow
+        .find("bash .github/scripts/native-linux-package-smoke.sh \"$package\"")
+        .expect("Linux package qualification must be present");
+    let manifest_creation = release_workflow
+        .find("bash .github/scripts/create-release-package-manifest.sh \"$package\"")
+        .expect("Linux package manifest creation must be present");
+    let manifest_verification = release_workflow
+        .find("bash .github/scripts/verify-release-package-manifest.sh \"$package\"")
+        .expect("Linux package manifest verification must be present");
+    let archive = release_workflow
+        .find("tar -czf \"${package}.tar.gz\" \"$package\"")
+        .expect("host package archive must be created");
+    assert!(qualification < manifest_creation);
+    assert!(manifest_creation < manifest_verification);
+    assert!(manifest_verification < archive);
+    assert!(release_workflow
+        .contains("cp .github/scripts/verify-release-package-manifest.sh \"$package/docs/\""));
+
+    for required in [
+        "a3s.oci.release-package-manifest.v1",
+        "export LC_ALL=C",
+        "qualification/native-linux-package.json",
+        "compat/containerd-runtime-v2.json",
+        "qualified_protocols",
+        "sort_by(.path)",
+        "mode: $mode",
+        "manifest_size=$(jq -r --arg path \"$path\"",
+        "ln -- \"$temporary\" \"$manifest_path\"",
+    ] {
+        assert!(
+            CREATE_RELEASE_PACKAGE_MANIFEST.contains(required),
+            "package manifest creation lost {required}"
+        );
+    }
+    for required in [
+        "a3s.oci.release-package-manifest.v1",
+        "export LC_ALL=C",
+        "Release package file inventory differs from its manifest",
+        "Release package qualification record does not match its manifest",
+        "Release package compatibility record does not match its manifest",
+        "select(([.qualification_runs[].protocols] | unique) == $expected_protocols)",
+        "find -P \"$package_directory\" -type l",
+        "Manifest file is not a regular nonsymlink file",
+        "actual_mode=$(stat --format '%a' -- \"$path\")",
+        "report_size=$(jq -r \"$report_size_pointer\" \"$qualification_report\")",
+    ] {
+        assert!(
+            VERIFY_RELEASE_PACKAGE_MANIFEST.contains(required),
+            "package manifest verification lost {required}"
+        );
+    }
 }
 
 #[test]

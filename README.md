@@ -1249,6 +1249,10 @@ Sigstore bundle. Follow
 [Release verification](docs/release-verification.md) to enforce the repository,
 workflow, tag, and digest identity. Successful verification does not promote
 the selected driver's advertised readiness or replace its real-host gates.
+Each Linux host-runtime archive also carries a digest-and-mode-bound
+`package-manifest.json` linking its exact runtime, Agent, containerd shim,
+qualification report, and containerd compatibility contract; the packaged
+verifier can validate it offline before installation.
 
 Real execution gates require a prepared host and isolated runtime root.
 

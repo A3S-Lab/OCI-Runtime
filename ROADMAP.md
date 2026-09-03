@@ -2444,6 +2444,16 @@ executable digests in the compatibility record. This strengthens the Native
 Linux package evidence but does not close the cross-driver or signed
 published-package release gates.
 
+The release workflow now creates `package-manifest.json` inside each Linux
+host-runtime archive before compression. Its v1 schema binds the source
+revision, selected Native Linux profile, containerd Runtime V2 contract and
+protocol ranges, the qualification report, and every regular package entry's
+relative path, mode, size, and SHA-256 digest. The packaged verifier checks the
+complete inventory and rejects symlink, special-file, path, or identity
+substitution. A signed
+published archive and a retained exact release qualification remain required
+to close this gate.
+
 Exit gate: containerd task, restart, I/O, and cleanup suites pass through the
 public SDK without the Box CLI, a direct VMM path, duplicate lifecycle state,
 or leaked runtime resources.

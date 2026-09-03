@@ -78,7 +78,7 @@ for the intended host and integration.
 
 ## Linux package qualification
 
-Each Linux host archive contains
+Each Native Linux host-runtime archive contains
 `qualification/native-linux-package.json` with schema
 `a3s.oci.native-linux-package-qualification.v7`. The tag workflow creates this
 report before compression by running the staged musl CLI and Agent, not Cargo
@@ -125,7 +125,30 @@ response replays, and the frozen and resumed workload counters for all 100
 lifecycles. Before binding their sizes and digests, the package gate rejects
 links and non-regular evidence entries and normalizes all thirteen retained
 records to mode `0644`, so an unprivileged archive consumer can verify them.
-After verifying the outer archive provenance, inspect the package report with:
+
+Each Native Linux host-runtime archive also contains `package-manifest.json`,
+whose schema is `a3s.oci.release-package-manifest.v1`. It enumerates every
+regular archive entry except itself with its relative path, mode, size, and
+SHA-256 digest. The
+manifest separately binds the exact package qualification report and
+`compat/containerd-runtime-v2.json`, including the frozen containerd Task API,
+runtime type, identity encoding, and protocol ranges. The release workflow
+creates and verifies this manifest before compressing the archive. Verify it
+offline after extracting an archive with:
+
+```bash
+bash docs/verify-release-package-manifest.sh \
+  a3s-oci-runtime-vX.Y.Z-linux-x86_64
+```
+
+The verifier rejects symlinks, special files, missing or extra entries, unsafe
+relative paths, mode/size/digest drift, a changed source revision, and a
+qualification or containerd compatibility record that is not the one bound by
+the manifest. This package manifest complements (and does not replace) the
+outer `SHA256SUMS` and Sigstore/SLSA provenance verification.
+
+After verifying the package manifest and outer archive provenance, inspect the
+package report with:
 
 ```bash
 jq --exit-status \
