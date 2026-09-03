@@ -13,6 +13,8 @@ use tonic::metadata::{Ascii, MetadataValue};
 use tonic::transport::Channel;
 use tonic::{Code, Request};
 
+use super::restart_boundaries::RestartBoundaryLedger;
+
 pub(crate) type TestError = Box<dyn std::error::Error + Send + Sync>;
 pub(crate) type TestResult<T> = Result<T, TestError>;
 
@@ -33,6 +35,7 @@ pub(crate) struct QualificationConfig {
     pub(crate) image: String,
     pub(crate) runtime: String,
     service: String,
+    pub(crate) restart_boundaries: RestartBoundaryLedger,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +74,7 @@ impl QualificationConfig {
             ),
             runtime: environment_value("A3S_OCI_CONTAINERD_RUNTIME", "io.containerd.a3s-oci.v2"),
             service: environment_value("A3S_OCI_CONTAINERD_SERVICE", "containerd"),
+            restart_boundaries: RestartBoundaryLedger::default(),
         })
     }
 
@@ -276,7 +280,16 @@ pub(crate) async fn restart_containerd(
     eprintln!("restarting containerd at {boundary}");
     let output = command_output("systemctl", &["restart", &config.service]).await?;
     require_success(&format!("restart containerd at {boundary}"), &output)?;
-    connect_ready(config).await
+    let channel = connect_ready(config).await?;
+    config
+        .restart_boundaries
+        .record(boundary)
+        .map_err(|error| {
+            qualification_error(format!(
+                "record successful containerd restart at {boundary}: {error}"
+            ))
+        })?;
+    Ok(channel)
 }
 
 pub(crate) async fn containerd_main_pid(config: &QualificationConfig) -> TestResult<u32> {

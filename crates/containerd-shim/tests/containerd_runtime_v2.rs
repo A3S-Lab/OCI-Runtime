@@ -10,6 +10,8 @@ mod faults;
 mod parallel;
 #[path = "containerd_runtime_v2/rehydration.rs"]
 mod rehydration;
+#[path = "containerd_runtime_v2/restart_boundaries.rs"]
+mod restart_boundaries;
 #[path = "containerd_runtime_v2/stdio.rs"]
 mod stdio;
 #[path = "containerd_runtime_v2/support.rs"]
@@ -59,6 +61,10 @@ async fn real_containerd_runtime_v2_qualification() -> TestResult<()> {
 }
 
 async fn qualify(config: &QualificationConfig, prefix: &str, lifecycle_id: &str) -> TestResult<()> {
+    config
+        .restart_boundaries
+        .reset()
+        .map_err(|error| qualification_error(format!("reset restart boundary ledger: {error}")))?;
     stdio::qualify_ctr_stdio(config, prefix).await?;
     create_container(config, lifecycle_id).await?;
 
@@ -279,6 +285,14 @@ async fn qualify(config: &QualificationConfig, prefix: &str, lifecycle_id: &str)
     rehydration::qualify_manual_shim_rehydration(config, prefix).await?;
     faults::qualify_shim_sigkill(config, prefix).await?;
     parallel::qualify_parallel_tasks(config, prefix).await?;
+    config
+        .restart_boundaries
+        .verify_complete()
+        .map_err(|error| {
+            qualification_error(format!(
+                "verify Runtime V2 restart boundary ledger: {error}"
+            ))
+        })?;
     Ok(())
 }
 
