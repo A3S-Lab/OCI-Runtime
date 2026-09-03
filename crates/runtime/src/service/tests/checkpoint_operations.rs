@@ -188,6 +188,54 @@ async fn checkpoint_rejects_a_same_name_but_different_host_artifact_identity() {
 }
 
 #[tokio::test]
+async fn checkpoint_rejects_driver_evidence_that_does_not_match_the_published_file() {
+    let (temporary, driver, service, source) = checkpoint_fixture().await;
+    driver.override_checkpoint_artifact_evidence(
+        CheckpointDigest::new(format!("sha256:{}", "f".repeat(64)))
+            .expect("canonical wrong artifact digest"),
+        1,
+    );
+    let checkpoint = request(
+        &source,
+        "checkpoint-artifact-evidence",
+        temporary.path().join("artifact-evidence.bin"),
+    );
+
+    let error = service
+        .checkpoint(checkpoint.clone())
+        .await
+        .expect_err("Host must reject evidence that does not describe the file");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(!error.retryable);
+    assert_eq!(error.operation.as_deref(), Some("checkpoint"));
+    assert_eq!(
+        service
+            .checkpoint(checkpoint.clone())
+            .await
+            .expect_err("the terminal evidence failure must replay"),
+        error
+    );
+    assert_eq!(
+        driver
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Checkpoint(_)))
+            .count(),
+        1,
+        "a rejected artifact must not redispatch on replay"
+    );
+
+    let resumed = service
+        .resume(ContainerOperationRequest {
+            context: OperationContext::new(operation_id("checkpoint-evidence-resume")),
+            target: checkpoint.target().clone(),
+        })
+        .await
+        .expect("terminal evidence failure must release the source claim");
+    assert!(!resumed.is_paused());
+}
+
+#[tokio::test]
 async fn checkpoint_rejects_unpaused_sources_before_driver_dispatch() {
     let (temporary, driver, service, source) = checkpoint_fixture().await;
     let target = ContainerTarget::exact(container_id(source.state.id()), source.generation);

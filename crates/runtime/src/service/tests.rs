@@ -252,8 +252,10 @@ struct RecordingDriver {
         Mutex<HashMap<OperationId, (DriverCheckpointRequest, DriverCheckpointResult)>>,
     checkpoint_gate: tokio::sync::Mutex<()>,
     checkpoint_runtime_artifact: Mutex<Option<a3s_oci_sdk::RuntimeArtifact>>,
+    checkpoint_artifact_evidence: Mutex<Option<(CheckpointDigest, u64)>>,
     restore_replays: Mutex<HashMap<OperationId, (DriverRestoreRequest, DriverState)>>,
     restore_gate: tokio::sync::Mutex<()>,
+    skip_restore_artifact_validation: AtomicBool,
     attestation_replays:
         Mutex<HashMap<OperationId, (DriverAttestationRequest, DriverAttestationResult)>>,
     attestation_gate: tokio::sync::Mutex<()>,
@@ -310,8 +312,10 @@ impl RecordingDriver {
             checkpoint_replays: Mutex::new(HashMap::new()),
             checkpoint_gate: tokio::sync::Mutex::new(()),
             checkpoint_runtime_artifact: Mutex::new(None),
+            checkpoint_artifact_evidence: Mutex::new(None),
             restore_replays: Mutex::new(HashMap::new()),
             restore_gate: tokio::sync::Mutex::new(()),
+            skip_restore_artifact_validation: AtomicBool::new(false),
             attestation_replays: Mutex::new(HashMap::new()),
             attestation_gate: tokio::sync::Mutex::new(()),
             output_responses: Mutex::new(VecDeque::new()),
@@ -447,6 +451,18 @@ impl RecordingDriver {
             .checkpoint_runtime_artifact
             .lock()
             .expect("checkpoint runtime artifact lock") = Some(artifact);
+    }
+
+    fn override_checkpoint_artifact_evidence(&self, digest: CheckpointDigest, size_bytes: u64) {
+        *self
+            .checkpoint_artifact_evidence
+            .lock()
+            .expect("checkpoint artifact evidence lock") = Some((digest, size_bytes));
+    }
+
+    fn skip_restore_artifact_validation(&self) {
+        self.skip_restore_artifact_validation
+            .store(true, Ordering::SeqCst);
     }
 
     fn with_hooks(hooks: Vec<OciHookPhase>) -> Self {
@@ -1778,6 +1794,12 @@ impl RuntimeDriver for RecordingDriver {
             )
             .for_operation("driver-checkpoint")
         })?;
+        let (artifact_digest, artifact_size_bytes) = self
+            .checkpoint_artifact_evidence
+            .lock()
+            .expect("checkpoint artifact evidence lock")
+            .take()
+            .unwrap_or((artifact_digest, artifact_size_bytes));
         let result =
             DriverCheckpointResult::new(compatibility, artifact_digest, artifact_size_bytes)?;
 
@@ -1861,6 +1883,9 @@ impl RuntimeDriver for RecordingDriver {
             .push(DriverCall::RestoreValidation(Box::new(request.clone())));
         if let Some(error) = self.take_failure("restore-validation") {
             return Err(error);
+        }
+        if self.skip_restore_artifact_validation.load(Ordering::SeqCst) {
+            return Ok(());
         }
         self.validate_restore_fixture(
             &request.artifact_path,

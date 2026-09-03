@@ -415,8 +415,8 @@ async fn prepared_restore_artifact_failure_is_durable_and_releases_its_claim() {
             .iter()
             .filter(|call| matches!(call, DriverCall::RestoreValidation(_)))
             .count(),
-        2,
-        "terminal replay must not reopen the caller artifact"
+        1,
+        "Host artifact rejection must not dispatch driver validation again"
     );
 
     tokio::fs::write(&fixture.artifact_path, &fixture.artifact_bytes)
@@ -469,6 +469,45 @@ async fn restore_validates_artifact_before_allocating_durable_lifecycle_state() 
         .await
         .expect("retry after read-only preflight failure");
     assert_eq!(restored.restored().generation, Generation(1));
+}
+
+#[tokio::test]
+async fn restore_host_verifies_artifact_before_dispatching_driver_validation() {
+    let fixture = restore_fixture().await;
+    fixture.driver.skip_restore_artifact_validation();
+    let restore = request(
+        &fixture,
+        "restore-host-artifact-verification",
+        "restore-host-artifact-verification-operation",
+    );
+    let mut tampered = fixture.artifact_bytes.clone();
+    tampered[0] ^= 0x01;
+    tokio::fs::write(&fixture.artifact_path, &tampered)
+        .await
+        .expect("tamper checkpoint artifact");
+
+    let error = fixture
+        .service
+        .restore(restore.clone())
+        .await
+        .expect_err("Host must reject a tampered artifact independently");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(!error.retryable);
+    assert!(fixture.driver.calls().iter().all(|call| !matches!(
+        call,
+        DriverCall::RestoreValidation(_) | DriverCall::Restore(_)
+    )));
+    assert_eq!(
+        fixture
+            .service
+            .state(StateRequest {
+                target: ContainerTarget::current(restore.id().clone()),
+            })
+            .await
+            .expect_err("Host preflight must not allocate a restore generation")
+            .code,
+        ErrorCode::NotFound
+    );
 }
 
 #[tokio::test]

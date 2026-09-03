@@ -1704,17 +1704,30 @@ impl OciRuntimeService for HostRuntimeService {
         let lifecycle = self.lifecycle("checkpoint")?;
         let operation_id = request.context().operation_id.clone();
         let _operation_gate = lifecycle.operation_gates.acquire(&operation_id).await;
-        let runtime_artifact = artifact::current()
-            .await
-            .map_err(|error| error.for_operation("checkpoint"))?;
-        lifecycle
-            .ensure_target_driver_operation(
-                &operation_id,
-                request.target(),
-                RuntimeOperation::Checkpoint,
-                "checkpoint",
+        let operation_exists = lifecycle.store.operation_exists(&operation_id).await?;
+        // A new request is preflighted before creating a journal.  A prepared
+        // request, however, must be able to resume across capability or Host
+        // artifact drift; its exact journal is the authority and any terminal
+        // preflight failure must release the retained source claim.
+        let runtime_artifact = if operation_exists {
+            None
+        } else {
+            Some(
+                artifact::current()
+                    .await
+                    .map_err(|error| error.for_operation("checkpoint"))?,
             )
-            .await?;
+        };
+        if !operation_exists {
+            lifecycle
+                .ensure_target_driver_operation(
+                    &operation_id,
+                    request.target(),
+                    RuntimeOperation::Checkpoint,
+                    "checkpoint",
+                )
+                .await?;
+        }
         let source = match lifecycle.store.prepare_checkpoint(&request).await? {
             CheckpointOperationPreparation::Replayed(response) => {
                 return lifecycle
@@ -1724,7 +1737,20 @@ impl OciRuntimeService for HostRuntimeService {
             CheckpointOperationPreparation::Prepared(source)
             | CheckpointOperationPreparation::Resume(source) => source,
         };
-        let registered = lifecycle.driver(source.driver, "checkpoint")?;
+        let runtime_artifact = match runtime_artifact {
+            Some(artifact) => artifact,
+            None => match artifact::current()
+                .await
+                .map_err(|error| error.for_operation("checkpoint"))
+            {
+                Ok(artifact) => artifact,
+                Err(error) => return lifecycle.fail_driver_operation(&operation_id, error).await,
+            },
+        };
+        let registered = match lifecycle.driver(source.driver, "checkpoint") {
+            Ok(registered) => registered,
+            Err(error) => return lifecycle.fail_driver_operation(&operation_id, error).await,
+        };
         if let Err(error) = registered.ensure_operation(RuntimeOperation::Checkpoint, "checkpoint")
         {
             return lifecycle.fail_driver_operation(&operation_id, error).await;
@@ -1753,12 +1779,23 @@ impl OciRuntimeService for HostRuntimeService {
             || compatibility.architecture() != std::env::consts::ARCH
             || compatibility.runtime_artifact() != &runtime_artifact
         {
-            return Err(Error::new(
+            let error = Error::new(
                 ErrorCode::FailedPrecondition,
                 "runtime driver returned checkpoint compatibility evidence for a different execution stack",
             )
             .for_operation("checkpoint")
-            .retryable(true));
+            .retryable(true);
+            return lifecycle.fail_driver_operation(&operation_id, error).await;
+        }
+        if let Err(error) = artifact::verify_checkpoint_artifact(
+            request.artifact_path(),
+            result.artifact_digest(),
+            result.artifact_size_bytes(),
+            "checkpoint",
+        )
+        .await
+        {
+            return lifecycle.fail_driver_operation(&operation_id, error).await;
         }
         let reference = match CheckpointReference::new(
             &source,
@@ -1768,7 +1805,12 @@ impl OciRuntimeService for HostRuntimeService {
         ) {
             Ok(reference) => reference,
             Err(error) => {
-                return Err(error.for_operation("checkpoint").retryable(true));
+                return lifecycle
+                    .fail_driver_operation(
+                        &operation_id,
+                        error.for_operation("checkpoint").retryable(true),
+                    )
+                    .await;
             }
         };
         let response = match CheckpointResponse::new(source, reference)
@@ -1776,7 +1818,12 @@ impl OciRuntimeService for HostRuntimeService {
         {
             Ok(response) => response,
             Err(error) => {
-                return Err(error.for_operation("checkpoint").retryable(true));
+                return lifecycle
+                    .fail_driver_operation(
+                        &operation_id,
+                        error.for_operation("checkpoint").retryable(true),
+                    )
+                    .await;
             }
         };
         let completed = lifecycle
@@ -1892,6 +1939,24 @@ impl OciRuntimeService for HostRuntimeService {
         if let Err(error) = registered
             .attachment_capabilities()
             .require(request.attachments())
+        {
+            return lifecycle
+                .settle_existing_driver_operation(&operation_id, operation_exists, error)
+                .await;
+        }
+
+        // The driver performs format-specific validation below, but the Host
+        // independently verifies the immutable file identity before any
+        // driver validation or lifecycle reservation.  This keeps a faulty
+        // driver from turning an unverified caller artifact into a live
+        // generation.
+        if let Err(error) = artifact::verify_checkpoint_artifact(
+            request.artifact_path(),
+            reference.artifact_digest(),
+            reference.artifact_size_bytes(),
+            "restore",
+        )
+        .await
         {
             return lifecycle
                 .settle_existing_driver_operation(&operation_id, operation_exists, error)
