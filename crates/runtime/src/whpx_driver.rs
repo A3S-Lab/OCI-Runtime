@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
+use std::io;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Weak};
@@ -23,6 +24,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio::time::{sleep, Instant};
+use windows_sys::Win32::Foundation::{
+    ERROR_ACCESS_DENIED, ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION,
+};
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
 use crate::agent_driver::{AgentDriverClient, AGENT_DRIVER_HOOKS, AGENT_DRIVER_OPERATIONS};
@@ -41,8 +45,13 @@ const RECOVERY_DIRECTORY: &str = "recovery";
 const RUNTIME_SHARE_DIRECTORY: &str = "shares";
 const BUNDLE_HANDOFF_MARKER: &str = ".a3s-oci-bundle-handoff.json";
 const BUNDLE_HANDOFF_MARKER_PENDING: &str = ".a3s-oci-bundle-handoff.pending";
+const BUNDLE_HANDOFF_MARKER_STAGING_PREFIX: &str = ".a3s-oci-bundle-handoff.pending.";
 const BUNDLE_HANDOFF_MARKER_SCHEMA: &str = "a3s.oci.bundle-handoff.v1";
 const MAX_BUNDLE_HANDOFF_MARKER_BYTES: usize = 4 * 1024;
+const BUNDLE_HANDOFF_MARKER_PUBLISH_ATTEMPTS: usize = 3;
+const BUNDLE_HANDOFF_MARKER_STAGING_ATTEMPTS: usize = 8;
+const BUNDLE_HANDOFF_METADATA_RETRY_ATTEMPTS: usize = 40;
+const BUNDLE_HANDOFF_METADATA_RETRY_DELAY: Duration = Duration::from_millis(5);
 const RECOVERY_HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const RECOVERY_HANDOFF_TIMEOUT: Duration = Duration::from_secs(16);
 
@@ -1725,25 +1734,12 @@ async fn ensure_bundle_handoff_marker(
     config_digest: &str,
 ) -> Result<()> {
     let marker = runtime_share.join(BUNDLE_HANDOFF_MARKER);
+    let pending = runtime_share.join(BUNDLE_HANDOFF_MARKER_PENDING);
     let expected = BundleHandoffMarker {
         schema_version: BUNDLE_HANDOFF_MARKER_SCHEMA.to_string(),
         target: target.clone(),
         config_digest: config_digest.to_string(),
     };
-    if path_metadata(&marker).await?.is_some() {
-        let retained = read_bundle_handoff_marker(&marker).await?;
-        if retained != expected {
-            return Err(bundle_handoff_error(
-                ErrorCode::Conflict,
-                "existing WHPX bundle-handoff marker differs from this create",
-            ));
-        }
-        remove_plain_file_if_present(&runtime_share.join(BUNDLE_HANDOFF_MARKER_PENDING)).await?;
-        return Ok(());
-    }
-
-    let pending = runtime_share.join(BUNDLE_HANDOFF_MARKER_PENDING);
-    remove_plain_file_if_present(&pending).await?;
     let encoded = serde_json::to_vec(&expected).map_err(|error| {
         bundle_handoff_error(
             ErrorCode::Internal,
@@ -1756,61 +1752,330 @@ async fn ensure_bundle_handoff_marker(
             "WHPX bundle-handoff marker exceeds its fixed bound",
         ));
     }
-    let mut file = tokio::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&pending)
-        .await
-        .map_err(|error| {
-            bundle_handoff_error(
+    for attempt in 0..BUNDLE_HANDOFF_MARKER_PUBLISH_ATTEMPTS {
+        // Re-check the authoritative name on every retry. A concurrent owner
+        // may have consumed `pending` between our observation and adoption;
+        // once the final marker is present, no new pending inode should be
+        // created merely to discover that fact at the next rename boundary.
+        if path_metadata(&marker).await?.is_some() {
+            let retained = read_bundle_handoff_marker(&marker).await?;
+            if retained != expected {
+                return Err(bundle_handoff_error(
+                    ErrorCode::Conflict,
+                    "existing WHPX bundle-handoff marker differs from this create",
+                ));
+            }
+            remove_matching_bundle_handoff_pending(&pending, &expected).await?;
+            sync_whpx_directory(runtime_share).await?;
+            return Ok(());
+        }
+        match create_or_reuse_bundle_handoff_pending(runtime_share, &pending, &encoded, &expected)
+            .await
+        {
+            Err(error)
+                if error.retryable && attempt + 1 < BUNDLE_HANDOFF_MARKER_PUBLISH_ATTEMPTS =>
+            {
+                continue
+            }
+            Err(error) => return Err(error),
+            Ok(()) => {}
+        }
+        match publish_bundle_handoff_marker(runtime_share, &pending, &marker, &expected).await {
+            Err(error)
+                if error.retryable && attempt + 1 < BUNDLE_HANDOFF_MARKER_PUBLISH_ATTEMPTS =>
+            {
+                continue
+            }
+            result => return result,
+        }
+    }
+    Err(bundle_handoff_error(
+        ErrorCode::Unavailable,
+        "WHPX bundle-handoff marker publication kept losing its concurrent owner",
+    )
+    .retryable(true))
+}
+
+async fn rename_private_file_noreplace(source: &Path, destination: &Path) -> Result<()> {
+    let source = source.to_path_buf();
+    let destination = destination.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        crate::windows_security::rename_private_file_noreplace(&source, &destination)
+    })
+    .await
+    .map_err(|error| {
+        bundle_handoff_error(
+            ErrorCode::Internal,
+            format!("WHPX marker publication task failed: {error}"),
+        )
+    })?
+}
+
+async fn create_or_reuse_bundle_handoff_pending(
+    runtime_share: &Path,
+    pending: &Path,
+    encoded: &[u8],
+    expected: &BundleHandoffMarker,
+) -> Result<()> {
+    if path_metadata(pending).await?.is_some() {
+        ensure_bundle_handoff_pending_matches(pending, expected).await?;
+        return Ok(());
+    }
+
+    let staging = create_bundle_handoff_staging(runtime_share, pending, encoded).await?;
+    match rename_private_file_noreplace(&staging, pending).await {
+        Ok(()) => sync_whpx_directory(runtime_share).await,
+        Err(error) if error.code == ErrorCode::AlreadyExists => {
+            let _ = remove_plain_file_if_present(&staging).await;
+            ensure_bundle_handoff_pending_matches(pending, expected).await
+        }
+        Err(error) => {
+            let source_exists = path_metadata(&staging).await?.is_some();
+            let _ = remove_plain_file_if_present(&staging).await;
+            if !source_exists {
+                return Err(bundle_handoff_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "WHPX bundle-handoff staging marker disappeared before pending publication: {}",
+                        pending.display()
+                    ),
+                )
+                .retryable(true));
+            }
+            Err(error)
+        }
+    }
+}
+
+async fn create_bundle_handoff_staging(
+    runtime_share: &Path,
+    pending: &Path,
+    encoded: &[u8],
+) -> Result<PathBuf> {
+    if pending.parent() != Some(runtime_share) {
+        return Err(bundle_handoff_error(
+            ErrorCode::Internal,
+            "WHPX bundle-handoff marker paths do not share their protected root",
+        ));
+    }
+    for _ in 0..BUNDLE_HANDOFF_MARKER_STAGING_ATTEMPTS {
+        let staging = whpx_staging_path(runtime_share)?;
+        let mut file = match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staging)
+            .await
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(bundle_handoff_error(
+                    ErrorCode::Internal,
+                    format!(
+                        "failed to create WHPX bundle-handoff staging marker {}: {error}",
+                        staging.display()
+                    ),
+                ));
+            }
+        };
+        if let Err(error) = file.write_all(encoded).await {
+            let _ = remove_plain_file_if_present(&staging).await;
+            return Err(bundle_handoff_error(
                 ErrorCode::Internal,
                 format!(
-                    "failed to create WHPX bundle-handoff marker {}: {error}",
-                    pending.display()
+                    "failed to write WHPX bundle-handoff staging marker {}: {error}",
+                    staging.display()
                 ),
-            )
-        })?;
-    file.write_all(&encoded).await.map_err(|error| {
-        bundle_handoff_error(
-            ErrorCode::Internal,
-            format!(
-                "failed to write WHPX bundle-handoff marker {}: {error}",
-                pending.display()
-            ),
-        )
-    })?;
-    file.flush().await.map_err(|error| {
-        bundle_handoff_error(
-            ErrorCode::Internal,
-            format!(
-                "failed to flush WHPX bundle-handoff marker {}: {error}",
-                pending.display()
-            ),
-        )
-    })?;
-    file.sync_all().await.map_err(|error| {
-        bundle_handoff_error(
-            ErrorCode::Internal,
-            format!(
-                "failed to sync WHPX bundle-handoff marker {}: {error}",
-                pending.display()
-            ),
-        )
-    })?;
-    drop(file);
-    protect_path(pending.clone()).await?;
-    tokio::fs::rename(&pending, &marker)
-        .await
-        .map_err(|error| {
-            bundle_handoff_error(
+            ));
+        }
+        if let Err(error) = file.flush().await {
+            let _ = remove_plain_file_if_present(&staging).await;
+            return Err(bundle_handoff_error(
                 ErrorCode::Internal,
                 format!(
-                    "failed to commit WHPX bundle-handoff marker {}: {error}",
-                    marker.display()
+                    "failed to flush WHPX bundle-handoff staging marker {}: {error}",
+                    staging.display()
                 ),
-            )
-        })?;
-    protect_path(marker).await
+            ));
+        }
+        if let Err(error) = file.sync_all().await {
+            let _ = remove_plain_file_if_present(&staging).await;
+            return Err(bundle_handoff_error(
+                ErrorCode::Internal,
+                format!(
+                    "failed to sync WHPX bundle-handoff staging marker {}: {error}",
+                    staging.display()
+                ),
+            ));
+        }
+        drop(file);
+        protect_path(staging.clone()).await?;
+        return Ok(staging);
+    }
+    Err(bundle_handoff_error(
+        ErrorCode::Internal,
+        format!(
+            "failed to allocate a unique WHPX bundle-handoff staging marker near {}",
+            pending.display()
+        ),
+    ))
+}
+
+fn whpx_staging_path(runtime_share: &Path) -> Result<PathBuf> {
+    let mut nonce = [0_u8; 16];
+    getrandom::fill(&mut nonce).map_err(|error| {
+        bundle_handoff_error(
+            ErrorCode::Internal,
+            format!("failed to allocate WHPX bundle-handoff marker nonce: {error}"),
+        )
+    })?;
+    let mut encoded = String::with_capacity(nonce.len() * 2);
+    for byte in nonce {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    Ok(runtime_share.join(format!(
+        "{BUNDLE_HANDOFF_MARKER_STAGING_PREFIX}{}{encoded}",
+        std::process::id()
+    )))
+}
+
+async fn ensure_bundle_handoff_pending_matches(
+    pending: &Path,
+    expected: &BundleHandoffMarker,
+) -> Result<()> {
+    match read_bundle_handoff_marker_if_present(pending).await? {
+        Some(retained) if retained == *expected => Ok(()),
+        Some(_) => Err(bundle_handoff_marker_conflict(expected)),
+        None => Err(bundle_handoff_error(
+            ErrorCode::Unavailable,
+            format!(
+                "WHPX bundle-handoff pending marker disappeared before adoption: {}",
+                pending.display()
+            ),
+        )
+        .retryable(true)),
+    }
+}
+
+async fn publish_bundle_handoff_marker(
+    runtime_share: &Path,
+    pending: &Path,
+    marker: &Path,
+    expected: &BundleHandoffMarker,
+) -> Result<()> {
+    match rename_private_file_noreplace(pending, marker).await {
+        Ok(()) => {
+            let retained = read_bundle_handoff_marker(marker).await?;
+            if retained != *expected {
+                return Err(bundle_handoff_marker_conflict(expected));
+            }
+            protect_path(marker.to_path_buf()).await?;
+            sync_whpx_directory(runtime_share).await
+        }
+        Err(error) if error.code == ErrorCode::AlreadyExists => {
+            let retained = read_bundle_handoff_marker(marker).await?;
+            if retained != *expected {
+                return Err(bundle_handoff_marker_conflict(expected));
+            }
+            remove_matching_bundle_handoff_pending(pending, expected).await?;
+            sync_whpx_directory(runtime_share).await
+        }
+        Err(error) if error.code == ErrorCode::NotFound => {
+            match read_bundle_handoff_marker_if_present(marker).await? {
+                Some(retained) if retained == *expected => sync_whpx_directory(runtime_share).await,
+                Some(_) => Err(bundle_handoff_marker_conflict(expected)),
+                None => Err(bundle_handoff_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "WHPX bundle-handoff pending marker disappeared before publication: {}",
+                        pending.display()
+                    ),
+                )
+                .retryable(true)),
+            }
+        }
+        Err(error) => {
+            if path_metadata(pending).await?.is_none() {
+                match read_bundle_handoff_marker_if_present(marker).await? {
+                    Some(retained) if retained == *expected => {
+                        return sync_whpx_directory(runtime_share).await;
+                    }
+                    Some(_) => return Err(bundle_handoff_marker_conflict(expected)),
+                    None => {
+                        return Err(bundle_handoff_error(
+                            ErrorCode::Unavailable,
+                            format!(
+                                "WHPX bundle-handoff pending marker disappeared before publication: {}",
+                                pending.display()
+                            ),
+                        )
+                        .retryable(true));
+                    }
+                }
+            }
+            Err(error)
+        }
+    }
+}
+
+async fn read_bundle_handoff_marker_if_present(path: &Path) -> Result<Option<BundleHandoffMarker>> {
+    let Some(initial_metadata) = path_metadata(path).await? else {
+        return Ok(None);
+    };
+    match read_bundle_handoff_marker(path).await {
+        Ok(marker) => Ok(Some(marker)),
+        Err(error) => match path_metadata(path).await? {
+            None => Ok(None),
+            Some(current_metadata)
+                if !same_whpx_file_identity(&initial_metadata, &current_metadata) =>
+            {
+                Err(bundle_handoff_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "WHPX bundle-handoff marker changed while it was being read: {}",
+                        path.display()
+                    ),
+                )
+                .retryable(true))
+            }
+            Some(_) => Err(error),
+        },
+    }
+}
+
+async fn remove_matching_bundle_handoff_pending(
+    pending: &Path,
+    expected: &BundleHandoffMarker,
+) -> Result<()> {
+    if let Some(retained) = read_bundle_handoff_marker_if_present(pending).await? {
+        if retained != *expected {
+            return Err(bundle_handoff_marker_conflict(expected));
+        }
+        remove_plain_file_if_present(pending).await?;
+    }
+    Ok(())
+}
+
+fn bundle_handoff_marker_conflict(expected: &BundleHandoffMarker) -> Error {
+    bundle_handoff_error(
+        ErrorCode::Conflict,
+        format!(
+            "WHPX bundle-handoff target {} generation {:?} has a different retained marker",
+            expected.target.id, expected.target.generation
+        ),
+    )
+}
+
+fn same_whpx_file_identity(first: &std::fs::Metadata, second: &std::fs::Metadata) -> bool {
+    // The stable Windows MetadataExt API does not expose the volume/file
+    // identity pair (those accessors are still unstable). These immutable
+    // creation/size/write fields detect the normal remove-and-recreate race;
+    // a false positive only causes a bounded retry.
+    first.file_size() == second.file_size()
+        && first.creation_time() == second.creation_time()
+        && first.last_write_time() == second.last_write_time()
 }
 
 async fn read_bundle_handoff_marker(path: &Path) -> Result<BundleHandoffMarker> {
@@ -1897,15 +2162,53 @@ fn ensure_plain_file_metadata(
     Ok(())
 }
 
+async fn sync_whpx_directory(_path: &Path) -> Result<()> {
+    // `MoveFileExW(..., MOVEFILE_WRITE_THROUGH)` provides the durable rename
+    // boundary on Windows. Unlike Unix, opening a directory as a file for a
+    // separate fsync is not a portable operation, so there is no additional
+    // directory handle to sync here.
+    Ok(())
+}
+
 async fn path_metadata(path: &Path) -> Result<Option<std::fs::Metadata>> {
-    match tokio::fs::symlink_metadata(path).await {
-        Ok(metadata) => Ok(Some(metadata)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(bundle_handoff_error(
-            ErrorCode::Internal,
-            format!("failed to inspect {}: {error}", path.display()),
-        )),
+    for attempt in 0..=BUNDLE_HANDOFF_METADATA_RETRY_ATTEMPTS {
+        match tokio::fs::symlink_metadata(path).await {
+            Ok(metadata) => return Ok(Some(metadata)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error)
+                if is_transient_metadata_error(&error)
+                    && attempt < BUNDLE_HANDOFF_METADATA_RETRY_ATTEMPTS =>
+            {
+                // MoveFileExW briefly holds an exclusive namespace lock while
+                // another creator publishes the pending/final marker. Treat
+                // that bounded window as a retryable observation race; a
+                // persistent ACL/lock failure still fails closed below.
+                sleep(BUNDLE_HANDOFF_METADATA_RETRY_DELAY).await;
+            }
+            Err(error) => {
+                return Err(bundle_handoff_error(
+                    ErrorCode::Internal,
+                    format!("failed to inspect {}: {error}", path.display()),
+                ));
+            }
+        }
     }
+    Err(bundle_handoff_error(
+        ErrorCode::Internal,
+        format!("failed to inspect {} after bounded retries", path.display()),
+    ))
+}
+
+fn is_transient_metadata_error(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::WouldBlock
+        || error.raw_os_error().is_some_and(|code| {
+            u32::try_from(code).is_ok_and(|code| {
+                matches!(
+                    code,
+                    ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION
+                )
+            })
+        })
 }
 
 async fn remove_plain_file_if_present(path: &Path) -> Result<()> {
@@ -1913,12 +2216,14 @@ async fn remove_plain_file_if_present(path: &Path) -> Result<()> {
         return Ok(());
     };
     ensure_plain_file_metadata(&metadata, path, "WHPX bundle-handoff temporary file")?;
-    tokio::fs::remove_file(path).await.map_err(|error| {
-        bundle_handoff_error(
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(bundle_handoff_error(
             ErrorCode::Internal,
             format!("failed to remove {}: {error}", path.display()),
-        )
-    })
+        )),
+    }
 }
 
 async fn cleanup_empty_handoff_parents(source: &Path, runtime_root: &Path) -> Result<()> {
@@ -2136,6 +2441,7 @@ fn path_error(code: ErrorCode, message: impl Into<String>) -> Error {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex as StdMutex};
@@ -2156,12 +2462,16 @@ mod tests {
         IsolationRequest, OciBundle, OperationContext, OperationId, ProcessIo, Result, Signal,
         RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
     };
+    use tokio::io::AsyncWriteExt;
     use tokio::sync::Mutex;
 
     use super::{
-        recovery_pending_path, AgentDriverClient, DriverCreateRequest, DriverDeleteRequest,
+        bundle_handoff_marker_conflict, ensure_bundle_handoff_marker,
+        publish_bundle_handoff_marker, read_bundle_handoff_marker, recovery_pending_path,
+        AgentDriverClient, BundleHandoffMarker, DriverCreateRequest, DriverDeleteRequest,
         DriverKillRequest, DriverWaitRequest, LaunchedUtilityVm, PreparedWhpxLayout, RuntimeDriver,
         UtilityVmFactory, UtilityVmOwner, WhpxRuntimeDriver, WhpxRuntimeDriverConfig,
+        BUNDLE_HANDOFF_MARKER, BUNDLE_HANDOFF_MARKER_PENDING, BUNDLE_HANDOFF_MARKER_SCHEMA,
     };
     use crate::DriverCreateAttachments;
 
@@ -2177,6 +2487,29 @@ mod tests {
         "  \"root\": {\"path\": \"rootfs\", \"readonly\": true}\n",
         "}\n",
     );
+
+    fn marker(target: ContainerTarget, digest: &str) -> BundleHandoffMarker {
+        BundleHandoffMarker {
+            schema_version: BUNDLE_HANDOFF_MARKER_SCHEMA.to_string(),
+            target,
+            config_digest: digest.to_string(),
+        }
+    }
+
+    async fn write_private_marker(path: &Path, bytes: &[u8]) {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .await
+            .expect("create marker fixture");
+        file.write_all(bytes).await.expect("write marker fixture");
+        file.sync_all().await.expect("sync marker fixture");
+        drop(file);
+        super::protect_path(path.to_path_buf())
+            .await
+            .expect("protect marker fixture");
+    }
 
     #[derive(Default)]
     struct FakeGuest {
@@ -2574,6 +2907,141 @@ mod tests {
 
     fn context(operation: &str) -> OperationContext {
         OperationContext::new(OperationId::new(operation).expect("operation ID"))
+    }
+
+    #[tokio::test]
+    async fn bundle_handoff_marker_is_published_without_a_pending_alias() {
+        let temporary = tempfile::tempdir().expect("temporary marker root");
+        let expected_target = target(1);
+        let digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+        ensure_bundle_handoff_marker(temporary.path(), &expected_target, digest)
+            .await
+            .expect("publish WHPX marker");
+
+        assert_eq!(
+            read_bundle_handoff_marker(&temporary.path().join(BUNDLE_HANDOFF_MARKER))
+                .await
+                .expect("read WHPX marker"),
+            marker(expected_target, digest)
+        );
+        assert!(!temporary
+            .path()
+            .join(BUNDLE_HANDOFF_MARKER_PENDING)
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn bundle_handoff_pending_drift_is_rejected_without_overwrite() {
+        let temporary = tempfile::tempdir().expect("temporary marker root");
+        let pending = temporary.path().join(BUNDLE_HANDOFF_MARKER_PENDING);
+        let retained = serde_json::to_vec(&marker(
+            target(2),
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        ))
+        .expect("encode retained marker");
+        write_private_marker(&pending, &retained).await;
+
+        let error = ensure_bundle_handoff_marker(
+            temporary.path(),
+            &target(1),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .await
+        .expect_err("different pending marker must fail closed");
+        assert_eq!(error.code, ErrorCode::Conflict);
+        assert_eq!(
+            std::fs::read(&pending).expect("read retained marker"),
+            retained
+        );
+        assert!(!temporary.path().join(BUNDLE_HANDOFF_MARKER).exists());
+    }
+
+    #[tokio::test]
+    async fn bundle_handoff_partial_pending_is_rejected_without_replacement() {
+        let temporary = tempfile::tempdir().expect("temporary marker root");
+        let pending = temporary.path().join(BUNDLE_HANDOFF_MARKER_PENDING);
+        let retained = br#"{"schemaVersion":"a3s.oci.bundle-handoff.v1""#;
+        write_private_marker(&pending, retained).await;
+
+        let error = ensure_bundle_handoff_marker(
+            temporary.path(),
+            &target(1),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .await
+        .expect_err("partial pending marker must fail closed");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert_eq!(
+            std::fs::read(&pending).expect("read retained marker"),
+            retained
+        );
+        assert!(!temporary.path().join(BUNDLE_HANDOFF_MARKER).exists());
+    }
+
+    #[tokio::test]
+    async fn bundle_handoff_no_replace_preserves_an_incumbent_marker() {
+        let temporary = tempfile::tempdir().expect("temporary marker root");
+        let marker_path = temporary.path().join(BUNDLE_HANDOFF_MARKER);
+        let pending = temporary.path().join(BUNDLE_HANDOFF_MARKER_PENDING);
+        let expected = marker(
+            target(1),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        let incumbent = serde_json::to_vec(&marker(
+            target(2),
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        ))
+        .expect("encode incumbent marker");
+        let candidate = serde_json::to_vec(&expected).expect("encode candidate marker");
+        write_private_marker(&marker_path, &incumbent).await;
+        write_private_marker(&pending, &candidate).await;
+
+        let error =
+            publish_bundle_handoff_marker(temporary.path(), &pending, &marker_path, &expected)
+                .await
+                .expect_err("occupied marker must not be replaced");
+        assert_eq!(error, bundle_handoff_marker_conflict(&expected));
+        assert_eq!(
+            std::fs::read(&marker_path).expect("read incumbent"),
+            incumbent
+        );
+        assert_eq!(std::fs::read(&pending).expect("read candidate"), candidate);
+    }
+
+    #[tokio::test]
+    async fn concurrent_bundle_handoff_marker_ensures_publish_one_complete_marker() {
+        let temporary = tempfile::tempdir().expect("temporary marker root");
+        let expected_target = target(1);
+        let digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+        let mut calls = Vec::new();
+        for _ in 0..16 {
+            let root = temporary.path().to_path_buf();
+            let target = expected_target.clone();
+            calls.push(tokio::spawn(async move {
+                ensure_bundle_handoff_marker(&root, &target, digest).await
+            }));
+        }
+        for call in calls {
+            call.await
+                .expect("marker task must not panic")
+                .expect("concurrent marker ensure must succeed");
+        }
+
+        assert_eq!(
+            read_bundle_handoff_marker(&temporary.path().join(BUNDLE_HANDOFF_MARKER))
+                .await
+                .expect("read concurrent marker"),
+            marker(expected_target, digest)
+        );
+        let mut entries = tokio::fs::read_dir(temporary.path())
+            .await
+            .expect("enumerate marker root");
+        let mut names = Vec::new();
+        while let Some(entry) = entries.next_entry().await.expect("read marker entry") {
+            names.push(entry.file_name());
+        }
+        assert_eq!(names, vec![std::ffi::OsString::from(BUNDLE_HANDOFF_MARKER)]);
     }
 
     fn delete_request(generation: u64) -> DriverDeleteRequest {

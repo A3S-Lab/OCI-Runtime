@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::{Error, ErrorCode, GuestSessionAttachment, Result};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 
+use super::atomic_publication;
 use super::layout::{
-    is_private_file, path_metadata, remove_directory_if_empty, PRIVATE_FILE_MODE,
-    REUSABLE_GUEST_SESSION_DIRECTORY,
+    is_private_file, path_metadata, remove_directory_if_empty, REUSABLE_GUEST_SESSION_DIRECTORY,
 };
 
 const MARKER_FILE: &str = ".a3s-oci-guest-session.json";
@@ -15,8 +15,7 @@ const PENDING_MARKER_FILE: &str = ".a3s-oci-guest-session.pending";
 const STAGING_MARKER_PREFIX: &str = ".a3s-oci-guest-session.pending.";
 const MARKER_SCHEMA: &str = "a3s.oci.guest-session.v1";
 const MAX_MARKER_BYTES: usize = 4 * 1024;
-const STAGING_ATTEMPTS: usize = 8;
-const PUBLISH_ATTEMPTS: usize = 3;
+const PUBLISH_ATTEMPTS: usize = atomic_publication::PUBLISH_ATTEMPTS;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -128,95 +127,22 @@ async fn create_complete_staging(
     pending: &Path,
     encoded: &[u8],
 ) -> Result<PathBuf> {
-    for _ in 0..STAGING_ATTEMPTS {
-        let staging = staging_path(session_root, pending)?;
-        let mut options = tokio::fs::OpenOptions::new();
-        options
-            .write(true)
-            .create_new(true)
-            .mode(PRIVATE_FILE_MODE)
-            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
-        let mut file = match options.open(&staging).await {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                return Err(session_error(
-                    ErrorCode::Internal,
-                    format!(
-                        "failed to create reusable guest-session marker staging file {}: {error}",
-                        staging.display()
-                    ),
-                ));
-            }
-        };
-
-        if let Err(error) = file.write_all(encoded).await {
-            let _ = remove_private_file_if_present(&staging).await;
-            return Err(session_error(
-                ErrorCode::Internal,
-                format!(
-                    "failed to write reusable guest-session marker staging file {}: {error}",
-                    staging.display()
-                ),
-            ));
-        }
-        if let Err(error) = file.flush().await {
-            let _ = remove_private_file_if_present(&staging).await;
-            return Err(session_error(
-                ErrorCode::Internal,
-                format!(
-                    "failed to flush reusable guest-session marker staging file {}: {error}",
-                    staging.display()
-                ),
-            ));
-        }
-        if let Err(error) = file.sync_all().await {
-            let _ = remove_private_file_if_present(&staging).await;
-            return Err(session_error(
-                ErrorCode::Internal,
-                format!(
-                    "failed to sync reusable guest-session marker staging file {}: {error}",
-                    staging.display()
-                ),
-            ));
-        }
-        drop(file);
-        return Ok(staging);
-    }
-
-    Err(session_error(
-        ErrorCode::Internal,
-        format!(
-            "failed to allocate a unique reusable guest-session marker staging file near {}",
-            pending.display()
-        ),
-    ))
-}
-
-fn staging_path(session_root: &Path, pending: &Path) -> Result<PathBuf> {
-    if pending.parent() != Some(session_root) {
-        return Err(session_error(
-            ErrorCode::Internal,
-            "reusable guest-session marker paths do not share their protected root",
-        ));
-    }
-    let mut nonce = [0_u8; 16];
-    getrandom::fill(&mut nonce).map_err(|error| {
+    atomic_publication::create_complete_staging(
+        session_root,
+        pending,
+        encoded,
+        STAGING_MARKER_PREFIX,
+    )
+    .await
+    .map_err(|error| {
         session_error(
             ErrorCode::Internal,
-            format!("failed to allocate reusable guest-session marker nonce: {error}"),
+            format!(
+                "failed to create reusable guest-session marker staging file near {}: {error}",
+                pending.display()
+            ),
         )
-    })?;
-    let mut encoded = String::with_capacity(nonce.len() * 2);
-    for byte in nonce {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        encoded.push(HEX[(byte >> 4) as usize] as char);
-        encoded.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    Ok(session_root.join(format!(
-        "{STAGING_MARKER_PREFIX}{}{encoded}",
-        std::process::id()
-    )))
+    })
 }
 
 async fn ensure_pending_matches(pending: &Path, expected: &GuestSessionMarker) -> Result<()> {
@@ -235,18 +161,30 @@ async fn ensure_pending_matches(pending: &Path, expected: &GuestSessionMarker) -
 }
 
 async fn read_if_present(path: &Path) -> Result<Option<GuestSessionMarker>> {
-    if path_metadata(path).await?.is_none() {
+    let Some(initial_metadata) = path_metadata(path).await? else {
         return Ok(None);
-    }
+    };
     match read(path).await {
         Ok(retained) => Ok(Some(retained)),
-        Err(error) => {
-            if path_metadata(path).await?.is_none() {
-                Ok(None)
-            } else {
-                Err(error)
+        Err(error) => match path_metadata(path).await? {
+            None => Ok(None),
+            Some(current_metadata)
+                if !atomic_publication::same_file_identity(
+                    &initial_metadata,
+                    &current_metadata,
+                ) =>
+            {
+                Err(session_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "reusable guest-session marker changed while it was being read: {}",
+                        path.display()
+                    ),
+                )
+                .retryable(true))
             }
-        }
+            Some(_) => Err(error),
+        },
     }
 }
 
@@ -553,10 +491,10 @@ mod tests {
     use tempfile::tempdir;
     use tokio::io::AsyncWriteExt;
 
+    use super::super::layout::PRIVATE_FILE_MODE;
     use super::{
         ensure, marker_conflict, publish_marker, read, validate_root_identity, GuestSessionMarker,
-        MARKER_FILE, MARKER_SCHEMA, PENDING_MARKER_FILE, PRIVATE_FILE_MODE,
-        REUSABLE_GUEST_SESSION_DIRECTORY,
+        MARKER_FILE, MARKER_SCHEMA, PENDING_MARKER_FILE, REUSABLE_GUEST_SESSION_DIRECTORY,
     };
 
     fn attachment() -> GuestSessionAttachment {

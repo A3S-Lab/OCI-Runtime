@@ -300,6 +300,18 @@ generation while members remain fails with no VM replacement. A newer
 generation may replace an empty retained incarnation only after the old owner
 and root are reaped.
 
+The same no-replace publication invariant applies to every runtime-owned
+attachment marker. Bundle-handoff markers and Linux KVM attachment manifests
+are written to random, fully synced private staging inodes, adopted under
+their fixed pending names without replacement, and promoted to their final
+names without replacement. Each incumbent or concurrent pending file is
+decoded and compared with the exact request before cleanup; malformed or
+cross-generation ownership evidence fails closed (a private malformed KVM
+pending inode is discarded only after its unchanged inode identity is
+rechecked as a legacy interruption). The Windows WHPX path uses
+the protected `MoveFileExW` no-replace primitive with the same bounded retry
+and read-back contract.
+
 An owner replacement cannot infer that a persisted session root is an empty
 pool. When no in-process owner or handoff admission proof exists, the runtime
 rejects the create before consuming the caller bundle, even if the root is

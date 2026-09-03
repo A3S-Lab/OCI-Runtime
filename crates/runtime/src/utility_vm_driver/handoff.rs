@@ -1,3 +1,4 @@
+use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use a3s_oci_agent_protocol::{GuestPath, AGENT_RUNTIME_SHARE_GUEST_ROOT};
@@ -7,20 +8,23 @@ use a3s_oci_sdk::{
     RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY,
 };
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 
+use super::atomic_publication;
 use super::layout::{
     canonical_plain_directory, canonical_plain_file, canonical_private_directory,
     ensure_reusable_guest_session_root, ensure_runtime_share_paths, existing_runtime_share_paths,
-    is_private_file, path_metadata, remove_directory_if_empty, PRIVATE_FILE_MODE,
+    is_private_file, path_metadata, remove_directory_if_empty,
 };
 use super::session_marker;
 use crate::DriverCreateRequest;
 
 const MARKER_FILE: &str = ".a3s-oci-bundle-handoff.json";
 const PENDING_MARKER_FILE: &str = ".a3s-oci-bundle-handoff.pending";
+const STAGING_MARKER_PREFIX: &str = ".a3s-oci-bundle-handoff.pending.";
 const MARKER_SCHEMA: &str = "a3s.oci.bundle-handoff.v1";
 const MAX_MARKER_BYTES: usize = 4 * 1024;
+const PUBLISH_ATTEMPTS: usize = atomic_publication::PUBLISH_ATTEMPTS;
 
 #[derive(Debug, Clone)]
 pub(super) struct BundleHandoffStore {
@@ -538,6 +542,7 @@ async fn ensure_marker(
     config_digest: &str,
 ) -> Result<()> {
     let marker_path = runtime_share.join(MARKER_FILE);
+    let pending = runtime_share.join(PENDING_MARKER_FILE);
     let expected = BundleHandoffMarker {
         schema_version: MARKER_SCHEMA.to_string(),
         target: target.clone(),
@@ -551,12 +556,11 @@ async fn ensure_marker(
                 "existing utility-VM bundle-handoff marker differs from this create",
             ));
         }
-        remove_private_file_if_present(&runtime_share.join(PENDING_MARKER_FILE)).await?;
+        remove_matching_pending(&pending, &expected).await?;
+        sync_directory(runtime_share).await?;
         return Ok(());
     }
 
-    let pending = runtime_share.join(PENDING_MARKER_FILE);
-    remove_private_file_if_present(&pending).await?;
     let encoded = serde_json::to_vec(&expected).map_err(|error| {
         handoff_error(
             ErrorCode::Internal,
@@ -569,61 +573,191 @@ async fn ensure_marker(
             "utility-VM bundle-handoff marker exceeds its fixed bound",
         ));
     }
-    let mut options = tokio::fs::OpenOptions::new();
-    options
-        .write(true)
-        .create_new(true)
-        .mode(PRIVATE_FILE_MODE)
-        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
-    let mut file = options.open(&pending).await.map_err(|error| {
+    for attempt in 0..PUBLISH_ATTEMPTS {
+        match create_or_reuse_pending(runtime_share, &pending, &encoded, &expected).await {
+            Err(error) if error.retryable && attempt + 1 < PUBLISH_ATTEMPTS => continue,
+            Err(error) => return Err(error),
+            Ok(()) => {}
+        }
+        match publish_marker(runtime_share, &pending, &marker_path, &expected).await {
+            Err(error) if error.retryable && attempt + 1 < PUBLISH_ATTEMPTS => continue,
+            result => return result,
+        }
+    }
+    Err(handoff_error(
+        ErrorCode::Unavailable,
+        "utility-VM bundle-handoff marker publication kept losing its concurrent owner",
+    )
+    .retryable(true))
+}
+
+async fn create_or_reuse_pending(
+    runtime_share: &Path,
+    pending: &Path,
+    encoded: &[u8],
+    expected: &BundleHandoffMarker,
+) -> Result<()> {
+    if path_metadata(pending).await?.is_some() {
+        ensure_pending_matches(pending, expected).await?;
+        return Ok(());
+    }
+
+    let staging = atomic_publication::create_complete_staging(
+        runtime_share,
+        pending,
+        encoded,
+        STAGING_MARKER_PREFIX,
+    )
+    .await
+    .map_err(|error| {
         handoff_error(
             ErrorCode::Internal,
             format!(
-                "failed to create utility-VM bundle-handoff marker {}: {error}",
+                "failed to create utility-VM bundle-handoff marker staging file near {}: {error}",
                 pending.display()
             ),
         )
     })?;
-    file.write_all(&encoded).await.map_err(|error| {
-        handoff_error(
-            ErrorCode::Internal,
-            format!(
-                "failed to write utility-VM bundle-handoff marker {}: {error}",
-                pending.display()
-            ),
-        )
-    })?;
-    file.flush().await.map_err(|error| {
-        handoff_error(
-            ErrorCode::Internal,
-            format!(
-                "failed to flush utility-VM bundle-handoff marker {}: {error}",
-                pending.display()
-            ),
-        )
-    })?;
-    file.sync_all().await.map_err(|error| {
-        handoff_error(
-            ErrorCode::Internal,
-            format!(
-                "failed to sync utility-VM bundle-handoff marker {}: {error}",
-                pending.display()
-            ),
-        )
-    })?;
-    drop(file);
-    tokio::fs::rename(&pending, &marker_path)
-        .await
-        .map_err(|error| {
-            handoff_error(
+    match tokio::fs::hard_link(&staging, pending).await {
+        Ok(()) => {
+            atomic_publication::remove_file_if_present(&staging)
+                .await
+                .map_err(|error| {
+                    handoff_error(
+                        ErrorCode::Internal,
+                        format!(
+                            "failed to remove utility-VM bundle-handoff staging file {}: {error}",
+                            staging.display()
+                        ),
+                    )
+                })?;
+            sync_directory(runtime_share).await
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            let _ = atomic_publication::remove_file_if_present(&staging).await;
+            ensure_pending_matches(pending, expected).await
+        }
+        Err(error) => {
+            let _ = atomic_publication::remove_file_if_present(&staging).await;
+            Err(handoff_error(
                 ErrorCode::Internal,
                 format!(
-                    "failed to commit utility-VM bundle-handoff marker {}: {error}",
-                    marker_path.display()
+                    "failed to publish utility-VM bundle-handoff pending marker {}: {error}",
+                    pending.display()
                 ),
-            )
-        })?;
-    sync_directory(runtime_share).await
+            ))
+        }
+    }
+}
+
+async fn ensure_pending_matches(pending: &Path, expected: &BundleHandoffMarker) -> Result<()> {
+    match read_if_present(pending).await? {
+        Some(retained) if retained == *expected => Ok(()),
+        Some(_) => Err(marker_conflict(expected)),
+        None => Err(handoff_error(
+            ErrorCode::Unavailable,
+            format!(
+                "utility-VM bundle-handoff pending marker disappeared before adoption: {}",
+                pending.display()
+            ),
+        )
+        .retryable(true)),
+    }
+}
+
+async fn publish_marker(
+    runtime_share: &Path,
+    pending: &Path,
+    marker_path: &Path,
+    expected: &BundleHandoffMarker,
+) -> Result<()> {
+    match tokio::fs::hard_link(pending, marker_path).await {
+        Ok(()) => {
+            let retained = read_marker(marker_path).await?;
+            if retained != *expected {
+                return Err(marker_conflict(expected));
+            }
+            remove_matching_pending(pending, expected).await?;
+            sync_directory(runtime_share).await
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            let retained = read_marker(marker_path).await?;
+            if retained != *expected {
+                return Err(marker_conflict(expected));
+            }
+            remove_matching_pending(pending, expected).await?;
+            sync_directory(runtime_share).await
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            match read_if_present(marker_path).await? {
+                Some(retained) if retained == *expected => sync_directory(runtime_share).await,
+                Some(_) => Err(marker_conflict(expected)),
+                None => Err(handoff_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "utility-VM bundle-handoff pending marker disappeared before publication: {}",
+                        pending.display()
+                    ),
+                )
+                .retryable(true)),
+            }
+        }
+        Err(error) => Err(handoff_error(
+            ErrorCode::Internal,
+            format!(
+                "failed to commit utility-VM bundle-handoff marker {}: {error}",
+                marker_path.display()
+            ),
+        )),
+    }
+}
+
+async fn read_if_present(path: &Path) -> Result<Option<BundleHandoffMarker>> {
+    let Some(initial_metadata) = path_metadata(path).await? else {
+        return Ok(None);
+    };
+    match read_marker(path).await {
+        Ok(marker) => Ok(Some(marker)),
+        Err(error) => match path_metadata(path).await? {
+            None => Ok(None),
+            Some(current_metadata)
+                if !atomic_publication::same_file_identity(
+                    &initial_metadata,
+                    &current_metadata,
+                ) =>
+            {
+                Err(handoff_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "utility-VM bundle-handoff marker changed while it was being read: {}",
+                        path.display()
+                    ),
+                )
+                .retryable(true))
+            }
+            Some(_) => Err(error),
+        },
+    }
+}
+
+async fn remove_matching_pending(pending: &Path, expected: &BundleHandoffMarker) -> Result<()> {
+    if let Some(retained) = read_if_present(pending).await? {
+        if retained != *expected {
+            return Err(marker_conflict(expected));
+        }
+        remove_private_file_if_present(pending).await?;
+    }
+    Ok(())
+}
+
+fn marker_conflict(expected: &BundleHandoffMarker) -> Error {
+    handoff_error(
+        ErrorCode::Conflict,
+        format!(
+            "utility-VM bundle-handoff target {} generation {:?} has a different retained marker",
+            expected.target.id, expected.target.generation
+        ),
+    )
 }
 
 async fn read_marker(path: &Path) -> Result<BundleHandoffMarker> {
@@ -704,12 +838,14 @@ async fn remove_private_file_if_present(path: &Path) -> Result<()> {
             format!("refusing to remove a non-private file: {}", path.display()),
         ));
     }
-    tokio::fs::remove_file(path).await.map_err(|error| {
-        handoff_error(
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(handoff_error(
             ErrorCode::Internal,
             format!("failed to remove {}: {error}", path.display()),
-        )
-    })
+        )),
+    }
 }
 
 async fn cleanup_empty_source_parents(source: &Path, runtime_root: &Path) -> Result<()> {
@@ -775,4 +911,179 @@ fn nonempty_session_error(session: &GuestSessionAttachment) -> Error {
             session.generation()
         ),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use a3s_oci_sdk::{ContainerId, ContainerTarget, ErrorCode, Generation};
+    use tempfile::tempdir;
+    use tokio::io::AsyncWriteExt;
+
+    use super::super::layout::PRIVATE_FILE_MODE;
+    use super::{
+        ensure_marker, marker_conflict, publish_marker, read_marker, BundleHandoffMarker,
+        MARKER_FILE, MARKER_SCHEMA, PENDING_MARKER_FILE,
+    };
+
+    fn target(id: &str, generation: u64) -> ContainerTarget {
+        ContainerTarget::exact(
+            ContainerId::new(id).expect("container ID"),
+            Generation(generation),
+        )
+    }
+
+    fn marker(target: ContainerTarget, digest: &str) -> BundleHandoffMarker {
+        BundleHandoffMarker {
+            schema_version: MARKER_SCHEMA.to_string(),
+            target,
+            config_digest: digest.to_string(),
+        }
+    }
+
+    async fn write_private(path: &Path, bytes: &[u8]) {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(PRIVATE_FILE_MODE)
+            .open(path)
+            .await
+            .expect("create private marker fixture");
+        file.write_all(bytes).await.expect("write marker fixture");
+        file.sync_all().await.expect("sync marker fixture");
+    }
+
+    #[tokio::test]
+    async fn ensure_publishes_a_complete_marker_without_a_pending_alias() {
+        let temporary = tempdir().expect("temporary marker root");
+        let expected_target = target("handoff-marker", 1);
+        let digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+        ensure_marker(temporary.path(), &expected_target, digest)
+            .await
+            .expect("publish marker");
+
+        let marker_path = temporary.path().join(MARKER_FILE);
+        assert_eq!(
+            read_marker(&marker_path).await.expect("read marker"),
+            marker(expected_target, digest)
+        );
+        assert!(!temporary.path().join(PENDING_MARKER_FILE).exists());
+    }
+
+    #[tokio::test]
+    async fn pending_contract_drift_is_rejected_without_overwrite() {
+        let temporary = tempdir().expect("temporary marker root");
+        let pending = temporary.path().join(PENDING_MARKER_FILE);
+        let retained = serde_json::to_vec(&marker(
+            target("handoff-marker", 2),
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        ))
+        .expect("encode retained marker");
+        write_private(&pending, &retained).await;
+
+        let error = ensure_marker(
+            temporary.path(),
+            &target("handoff-marker", 1),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .await
+        .expect_err("different pending marker must fail closed");
+        assert_eq!(error.code, ErrorCode::Conflict);
+        assert_eq!(
+            tokio::fs::read(&pending).await.expect("read pending"),
+            retained
+        );
+        assert!(!temporary.path().join(MARKER_FILE).exists());
+    }
+
+    #[tokio::test]
+    async fn partial_pending_marker_is_rejected_without_replacement() {
+        let temporary = tempdir().expect("temporary marker root");
+        let pending = temporary.path().join(PENDING_MARKER_FILE);
+        let retained = br#"{"schemaVersion":"a3s.oci.bundle-handoff.v1""#;
+        write_private(&pending, retained).await;
+
+        let error = ensure_marker(
+            temporary.path(),
+            &target("handoff-marker", 1),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .await
+        .expect_err("partial pending marker must fail closed");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert_eq!(
+            tokio::fs::read(&pending).await.expect("read pending"),
+            retained
+        );
+        assert!(!temporary.path().join(MARKER_FILE).exists());
+    }
+
+    #[tokio::test]
+    async fn no_replace_publication_preserves_an_incumbent_marker() {
+        let temporary = tempdir().expect("temporary marker root");
+        let marker_path = temporary.path().join(MARKER_FILE);
+        let pending = temporary.path().join(PENDING_MARKER_FILE);
+        let expected = marker(
+            target("handoff-marker", 1),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        let incumbent = serde_json::to_vec(&marker(
+            target("handoff-marker", 2),
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        ))
+        .expect("encode incumbent");
+        let candidate = serde_json::to_vec(&expected).expect("encode candidate");
+        write_private(&marker_path, &incumbent).await;
+        write_private(&pending, &candidate).await;
+
+        let error = publish_marker(temporary.path(), &pending, &marker_path, &expected)
+            .await
+            .expect_err("occupied marker must not be replaced");
+        assert_eq!(error, marker_conflict(&expected));
+        assert_eq!(
+            tokio::fs::read(&marker_path).await.expect("read incumbent"),
+            incumbent
+        );
+        assert_eq!(
+            tokio::fs::read(&pending).await.expect("read candidate"),
+            candidate
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_ensure_calls_publish_one_complete_marker() {
+        let temporary = tempdir().expect("temporary marker root");
+        let expected_target = target("concurrent-handoff", 1);
+        let digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+        let mut calls = Vec::new();
+        for _ in 0..16 {
+            let root = temporary.path().to_path_buf();
+            let target = expected_target.clone();
+            calls.push(tokio::spawn(async move {
+                ensure_marker(&root, &target, digest).await
+            }));
+        }
+        for call in calls {
+            call.await
+                .expect("marker task must not panic")
+                .expect("concurrent marker ensure must succeed");
+        }
+
+        assert_eq!(
+            read_marker(&temporary.path().join(MARKER_FILE))
+                .await
+                .expect("read concurrent marker"),
+            marker(expected_target, digest)
+        );
+        let mut entries = tokio::fs::read_dir(temporary.path())
+            .await
+            .expect("enumerate marker root");
+        let mut names = Vec::new();
+        while let Some(entry) = entries.next_entry().await.expect("read marker entry") {
+            names.push(entry.file_name());
+        }
+        assert_eq!(names, vec![std::ffi::OsString::from(MARKER_FILE)]);
+    }
 }

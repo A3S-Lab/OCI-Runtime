@@ -1,4 +1,6 @@
 use std::ffi::CString;
+use std::io;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use a3s_oci_agent_protocol::{
@@ -10,14 +12,17 @@ use a3s_oci_sdk::{
     Error, ErrorCode, NetworkAttachment, Result, RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY,
 };
 use serde_json::Value;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 
-use super::layout::{is_private_file, path_metadata, PRIVATE_FILE_MODE};
+use super::atomic_publication;
+use super::layout::{is_private_file, path_metadata};
 use super::UtilityVmLaunchRequest;
 
 mod storage;
 
 const PENDING_MANIFEST_FILE_NAME: &str = ".a3s-oci-agent-vm-attachments.pending";
+const STAGING_MANIFEST_PREFIX: &str = ".a3s-oci-agent-vm-attachments.pending.";
+const PUBLISH_ATTEMPTS: usize = atomic_publication::PUBLISH_ATTEMPTS;
 const TUN_FLAG: u32 = 0x0001;
 const TAP_FLAG: u32 = 0x0002;
 
@@ -197,67 +202,223 @@ async fn persist_manifest(
                 "existing KVM attachment transport manifest differs from this Create",
             ));
         }
-        remove_private_file_if_present(&pending_path).await?;
+        remove_matching_pending(&pending_path, manifest).await?;
+        sync_directory(runtime_share).await?;
         return Ok(());
     }
 
-    remove_private_file_if_present(&pending_path).await?;
     let encoded = manifest.to_bytes()?;
-    let mut options = tokio::fs::OpenOptions::new();
-    options
-        .write(true)
-        .create_new(true)
-        .mode(PRIVATE_FILE_MODE)
-        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
-    let mut file = options.open(&pending_path).await.map_err(|error| {
+    for attempt in 0..PUBLISH_ATTEMPTS {
+        match create_or_reuse_pending(runtime_share, &pending_path, &encoded, manifest).await {
+            Err(error) if error.retryable && attempt + 1 < PUBLISH_ATTEMPTS => continue,
+            Err(error) => return Err(error),
+            Ok(()) => {}
+        }
+        match publish_manifest(runtime_share, &pending_path, &final_path, manifest).await {
+            Err(error) if error.retryable && attempt + 1 < PUBLISH_ATTEMPTS => continue,
+            result => return result,
+        }
+    }
+    Err(attachment_error(
+        ErrorCode::Unavailable,
+        "KVM attachment transport manifest publication kept losing its concurrent owner",
+    )
+    .retryable(true))
+}
+
+async fn create_or_reuse_pending(
+    runtime_share: &Path,
+    pending: &Path,
+    encoded: &[u8],
+    expected: &AgentVmAttachmentManifest,
+) -> Result<()> {
+    if let Some(initial_metadata) = path_metadata(pending).await? {
+        match read_manifest(pending).await {
+            Ok(retained) if retained == *expected => return Ok(()),
+            Ok(_) => return Err(manifest_conflict()),
+            Err(error) if error.code == ErrorCode::FailedPrecondition => {
+                // The new writer never exposes a partial pending inode: it
+                // links a fully synced staging inode into this name. A
+                // malformed private pending file therefore belongs to an
+                // interrupted writer from the legacy path and may be
+                // discarded. Non-private or disappearing files remain
+                // fail-closed below.
+                let Some(metadata) = path_metadata(pending).await? else {
+                    return Err(error.retryable(true));
+                };
+                if metadata.dev() != initial_metadata.dev()
+                    || metadata.ino() != initial_metadata.ino()
+                {
+                    return Err(error.retryable(true));
+                }
+                if !is_private_file(&metadata) {
+                    return Err(error);
+                }
+                remove_private_file_if_present(pending).await?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    let staging = atomic_publication::create_complete_staging(
+        runtime_share,
+        pending,
+        encoded,
+        STAGING_MANIFEST_PREFIX,
+    )
+    .await
+    .map_err(|error| {
         attachment_error(
             ErrorCode::Internal,
             format!(
-                "failed to create KVM attachment transport manifest {}: {error}",
-                pending_path.display()
+                "failed to create KVM attachment transport staging manifest near {}: {error}",
+                pending.display()
             ),
         )
     })?;
-    file.write_all(&encoded).await.map_err(|error| {
-        attachment_error(
-            ErrorCode::Internal,
-            format!(
-                "failed to write KVM attachment transport manifest {}: {error}",
-                pending_path.display()
-            ),
-        )
-    })?;
-    file.flush().await.map_err(|error| {
-        attachment_error(
-            ErrorCode::Internal,
-            format!(
-                "failed to flush KVM attachment transport manifest {}: {error}",
-                pending_path.display()
-            ),
-        )
-    })?;
-    file.sync_all().await.map_err(|error| {
-        attachment_error(
-            ErrorCode::Internal,
-            format!(
-                "failed to sync KVM attachment transport manifest {}: {error}",
-                pending_path.display()
-            ),
-        )
-    })?;
-    drop(file);
-    tokio::fs::rename(&pending_path, &final_path)
-        .await
-        .map_err(|error| {
-            attachment_error(
+    match tokio::fs::hard_link(&staging, pending).await {
+        Ok(()) => {
+            atomic_publication::remove_file_if_present(&staging)
+                .await
+                .map_err(|error| {
+                    attachment_error(
+                        ErrorCode::Internal,
+                        format!(
+                            "failed to remove KVM attachment transport staging manifest {}: {error}",
+                            staging.display()
+                        ),
+                    )
+                })?;
+            sync_directory(runtime_share).await
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            let _ = atomic_publication::remove_file_if_present(&staging).await;
+            ensure_pending_matches(pending, expected).await
+        }
+        Err(error) => {
+            let _ = atomic_publication::remove_file_if_present(&staging).await;
+            Err(attachment_error(
                 ErrorCode::Internal,
                 format!(
-                    "failed to commit KVM attachment transport manifest {}: {error}",
-                    final_path.display()
+                    "failed to publish KVM attachment transport pending manifest {}: {error}",
+                    pending.display()
                 ),
-            )
-        })?;
-    sync_directory(runtime_share).await
+            ))
+        }
+    }
+}
+
+async fn ensure_pending_matches(
+    pending: &Path,
+    expected: &AgentVmAttachmentManifest,
+) -> Result<()> {
+    match read_manifest_if_present(pending).await? {
+        Some(retained) if retained == *expected => Ok(()),
+        Some(_) => Err(manifest_conflict()),
+        None => Err(attachment_error(
+            ErrorCode::Unavailable,
+            format!(
+                "KVM attachment transport pending manifest disappeared before adoption: {}",
+                pending.display()
+            ),
+        )
+        .retryable(true)),
+    }
+}
+
+async fn publish_manifest(
+    runtime_share: &Path,
+    pending: &Path,
+    final_path: &Path,
+    expected: &AgentVmAttachmentManifest,
+) -> Result<()> {
+    match tokio::fs::hard_link(pending, final_path).await {
+        Ok(()) => {
+            let retained = read_manifest(final_path).await?;
+            if retained != *expected {
+                return Err(manifest_conflict());
+            }
+            remove_matching_pending(pending, expected).await?;
+            sync_directory(runtime_share).await
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            let retained = read_manifest(final_path).await?;
+            if retained != *expected {
+                return Err(manifest_conflict());
+            }
+            remove_matching_pending(pending, expected).await?;
+            sync_directory(runtime_share).await
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            match read_manifest_if_present(final_path).await? {
+                Some(retained) if retained == *expected => sync_directory(runtime_share).await,
+                Some(_) => Err(manifest_conflict()),
+                None => Err(attachment_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "KVM attachment transport pending manifest disappeared before publication: {}",
+                        pending.display()
+                    ),
+                )
+                .retryable(true)),
+            }
+        }
+        Err(error) => Err(attachment_error(
+            ErrorCode::Internal,
+            format!(
+                "failed to commit KVM attachment transport manifest {}: {error}",
+                final_path.display()
+            ),
+        )),
+    }
+}
+
+async fn read_manifest_if_present(path: &Path) -> Result<Option<AgentVmAttachmentManifest>> {
+    let Some(initial_metadata) = path_metadata(path).await? else {
+        return Ok(None);
+    };
+    match read_manifest(path).await {
+        Ok(manifest) => Ok(Some(manifest)),
+        Err(error) => match path_metadata(path).await? {
+            None => Ok(None),
+            Some(current_metadata)
+                if !atomic_publication::same_file_identity(
+                    &initial_metadata,
+                    &current_metadata,
+                ) =>
+            {
+                Err(attachment_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "KVM attachment transport manifest changed while it was being read: {}",
+                        path.display()
+                    ),
+                )
+                .retryable(true))
+            }
+            Some(_) => Err(error),
+        },
+    }
+}
+
+async fn remove_matching_pending(
+    pending: &Path,
+    expected: &AgentVmAttachmentManifest,
+) -> Result<()> {
+    if let Some(retained) = read_manifest_if_present(pending).await? {
+        if retained != *expected {
+            return Err(manifest_conflict());
+        }
+        remove_private_file_if_present(pending).await?;
+    }
+    Ok(())
+}
+
+fn manifest_conflict() -> Error {
+    attachment_error(
+        ErrorCode::Conflict,
+        "KVM attachment transport manifest differs from the requested Create",
+    )
 }
 
 async fn read_manifest(path: &Path) -> Result<AgentVmAttachmentManifest> {
@@ -350,12 +511,16 @@ async fn remove_private_file_if_present(path: &Path) -> Result<()> {
             ),
         ));
     }
-    tokio::fs::remove_file(path).await.map_err(|error| {
-        attachment_error(
-            ErrorCode::Internal,
-            format!("failed to remove {}: {error}", path.display()),
-        )
-    })?;
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(attachment_error(
+                ErrorCode::Internal,
+                format!("failed to remove {}: {error}", path.display()),
+            ));
+        }
+    }
     let parent = path.parent().ok_or_else(|| {
         attachment_error(
             ErrorCode::Internal,
@@ -409,9 +574,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ensure_absent, persist_manifest, prepare, read_manifest, AgentVmAttachmentManifest,
-        ErrorCode, UtilityVmLaunchRequest, AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME,
-        PENDING_MANIFEST_FILE_NAME,
+        ensure_absent, manifest_conflict, persist_manifest, prepare, publish_manifest,
+        read_manifest, AgentVmAttachmentManifest, ErrorCode, UtilityVmLaunchRequest,
+        AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME, PENDING_MANIFEST_FILE_NAME,
     };
 
     fn manifest(generation: u64) -> AgentVmAttachmentManifest {
@@ -518,6 +683,100 @@ mod tests {
             .expect_err("non-private pending evidence must not be removed");
         assert_eq!(error.code, ErrorCode::FailedPrecondition);
         assert!(public_pending.exists());
+    }
+
+    #[tokio::test]
+    async fn partial_pending_manifest_is_discarded_as_legacy_interruption() {
+        let temporary = tempfile::tempdir().expect("temporary runtime share");
+        let pending_path = temporary.path().join(PENDING_MANIFEST_FILE_NAME);
+        std::fs::write(&pending_path, br#"{"target":"partial""#)
+            .expect("write partial pending manifest");
+        std::fs::set_permissions(&pending_path, std::fs::Permissions::from_mode(0o600))
+            .expect("protect partial pending manifest");
+
+        persist_manifest(temporary.path(), &manifest(1))
+            .await
+            .expect("discard legacy partial pending manifest");
+        assert!(!pending_path.exists());
+        assert!(temporary
+            .path()
+            .join(AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME)
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn no_replace_manifest_publication_preserves_an_incumbent() {
+        let temporary = tempfile::tempdir().expect("temporary runtime share");
+        let final_path = temporary
+            .path()
+            .join(AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME);
+        let pending_path = temporary.path().join(PENDING_MANIFEST_FILE_NAME);
+        let incumbent = manifest(2);
+        let expected = manifest(1);
+        let incumbent_bytes = incumbent.to_bytes().expect("encode incumbent");
+        let expected_bytes = expected.to_bytes().expect("encode expected");
+        std::fs::write(&final_path, &incumbent_bytes).expect("write incumbent");
+        std::fs::write(&pending_path, &expected_bytes).expect("write pending");
+        for path in [&final_path, &pending_path] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .expect("protect manifest");
+        }
+
+        let error = publish_manifest(temporary.path(), &pending_path, &final_path, &expected)
+            .await
+            .expect_err("occupied manifest must not be replaced");
+        assert_eq!(error, manifest_conflict());
+        assert_eq!(
+            std::fs::read(&final_path).expect("read incumbent"),
+            incumbent_bytes
+        );
+        assert_eq!(
+            std::fs::read(&pending_path).expect("read pending"),
+            expected_bytes
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_manifest_persistence_publishes_one_complete_file() {
+        let temporary = tempfile::tempdir().expect("temporary runtime share");
+        let expected = manifest(1);
+        let mut calls = Vec::new();
+        for _ in 0..16 {
+            let root = temporary.path().to_path_buf();
+            let expected = expected.clone();
+            calls.push(tokio::spawn(async move {
+                persist_manifest(&root, &expected).await
+            }));
+        }
+        for call in calls {
+            call.await
+                .expect("manifest task must not panic")
+                .expect("concurrent manifest persistence must succeed");
+        }
+
+        assert_eq!(
+            read_manifest(
+                &temporary
+                    .path()
+                    .join(AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME)
+            )
+            .await
+            .expect("read concurrent manifest"),
+            expected
+        );
+        let mut entries = tokio::fs::read_dir(temporary.path())
+            .await
+            .expect("enumerate manifest root");
+        let mut names = Vec::new();
+        while let Some(entry) = entries.next_entry().await.expect("read manifest entry") {
+            names.push(entry.file_name());
+        }
+        assert_eq!(
+            names,
+            vec![std::ffi::OsString::from(
+                AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME
+            )]
+        );
     }
 
     #[tokio::test]

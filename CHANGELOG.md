@@ -42,6 +42,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
   instead of being overwritten. This closes the cross-owner trust-domain and
   generation race while retaining bounded crash-retry cleanup semantics.
 
+- Extended the no-replace ownership publication contract to utility-VM
+  bundle-handoff markers and Linux KVM attachment manifests, and to the
+  Windows WHPX bundle-handoff path. All three paths now publish complete
+  private staging files under no-replace pending/final names, detect
+  remove-and-recreate races, preserve incumbent contracts, and keep legacy
+  private KVM interruption cleanup bounded to the exact inode observed.
+
 - Retained a current-source packaged-shim containerd qualification record.
   The static-musl x86_64 package from revision
   `af8c5f97ac1f4eb506b32e8d57b3d1c0d5fb3645` passed three isolated
