@@ -473,7 +473,9 @@ pub(super) async fn read_start_result(stream: &mut UnixStream) -> Result<Vec<Cap
                     ),
                 ));
             }
-            Ok(_) => unreachable!("one-byte control read returned more than one byte"),
+            Ok(length) => {
+                return Err(start_result_read_length_error(length));
+            }
             Err(error) => {
                 return Err(control_error(
                     ErrorCode::Unavailable,
@@ -482,6 +484,15 @@ pub(super) async fn read_start_result(stream: &mut UnixStream) -> Result<Vec<Cap
             }
         }
     }
+}
+
+fn start_result_read_length_error(length: usize) -> Error {
+    control_error(
+        ErrorCode::Internal,
+        format!(
+            "prepared container start outcome read returned {length} bytes for a one-byte discriminator"
+        ),
+    )
 }
 
 async fn read_ready_pids(stream: &mut UnixStream) -> Result<(i32, Option<i32>)> {

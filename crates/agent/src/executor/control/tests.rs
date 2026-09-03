@@ -321,3 +321,12 @@ async fn rejection_reader_rejects_an_unbounded_frame() {
     assert_eq!(error.code, ErrorCode::ResourceExhausted);
     writer.await.expect("control writer task");
 }
+
+#[test]
+fn oversized_start_result_read_is_reported_as_a_protocol_error() {
+    let error = super::start_result_read_length_error(2);
+
+    assert_eq!(error.code, ErrorCode::Internal);
+    assert_eq!(error.operation.as_deref(), Some("run-container-init"));
+    assert!(error.message.contains("2 bytes"));
+}

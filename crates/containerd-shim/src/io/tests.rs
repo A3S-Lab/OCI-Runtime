@@ -601,5 +601,14 @@ fn late_stdin_is_ignored_only_after_the_exact_process_exits() {
     assert!(!late_process_io_can_be_ignored(&unrelated, &[], &target));
 }
 
+#[test]
+fn stopped_stdin_startup_is_reported_without_panicking() {
+    let error = stopped_stdin_startup_error();
+
+    assert_eq!(error.code, ErrorCode::Internal);
+    assert_eq!(error.operation.as_deref(), Some("containerd-stdin"));
+    assert!(error.message.contains("stopped startup state"));
+}
+
 mod output;
 mod stdin;
