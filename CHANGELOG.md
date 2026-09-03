@@ -27,6 +27,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Retained a current-source packaged-shim containerd qualification record.
+  The static-musl x86_64 package from revision
+  `af8c5f97ac1f4eb506b32e8d57b3d1c0d5fb3645` passed three isolated
+  containerd 2.2.1 WSL2 matrices across all 23 restart, shim-rehydration, and
+  forced-cleanup boundaries (95.09, 95.25, and 114.44 seconds). The
+  compatibility record binds the source revision, package qualification
+  report, executable and Cargo.lock digests, while keeping the result
+  observation-only until a signed published archive and the remaining driver
+  profiles are qualified.
+
 - Hardened Host checkpoint-artifact verification across platforms. The Host
   now keeps hashing bound to the validated no-follow handle and compares
   Windows volume/file identities across the path and consumed opens, while

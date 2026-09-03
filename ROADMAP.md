@@ -2434,6 +2434,16 @@ the R7 release gates remain open: every advertised driver profile and the
 exact signed/checksummed release-package compatibility record still require
 their own real-host evidence.
 
+The current Runtime revision `af8c5f97ac1f4eb506b32e8d57b3d1c0d5fb3645` also
+passed three isolated containerd 2.2.1 WSL2 x86_64 matrices using the staged
+static-musl package. The runs completed in 95.09, 95.25, and 114.44 seconds,
+covered all 23 restart, shim-rehydration, and forced-cleanup boundaries, and
+retained the package qualification report (SHA-256
+`d87aa3ff3cd58843d57f51b75b91ca6d05c880f043d24477789105dfc065ba86`) plus
+executable digests in the compatibility record. This strengthens the Native
+Linux package evidence but does not close the cross-driver or signed
+published-package release gates.
+
 Exit gate: containerd task, restart, I/O, and cleanup suites pass through the
 public SDK without the Box CLI, a direct VMM path, duplicate lifecycle state,
 or leaked runtime resources.

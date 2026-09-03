@@ -115,7 +115,18 @@ struct ProtocolRange {
 #[serde(deny_unknown_fields)]
 struct ArtifactSet {
     cargo_lock_sha256: String,
+    #[serde(default)]
+    package: Option<PackageArtifact>,
     files: Vec<Artifact>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PackageArtifact {
+    name: String,
+    qualification_schema: String,
+    qualification_report_sha256: String,
+    qualification_report_size_bytes: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -247,6 +258,22 @@ fn machine_readable_compatibility_record_is_complete_and_exact() {
             64,
             "artifacts.cargo_lock_sha256",
         );
+        if let Some(package) = &run.artifacts.package {
+            assert_nonempty(&package.name, "artifacts.package.name");
+            assert_nonempty(
+                &package.qualification_schema,
+                "artifacts.package.qualification_schema",
+            );
+            assert_lower_hex(
+                &package.qualification_report_sha256,
+                64,
+                "artifacts.package.qualification_report_sha256",
+            );
+            assert!(
+                package.qualification_report_size_bytes > 0,
+                "artifacts.package.qualification_report_size_bytes must be positive"
+            );
+        }
         let mut artifact_names = BTreeSet::new();
         let mut artifact_roles = BTreeSet::new();
         for artifact in &run.artifacts.files {

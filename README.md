@@ -701,6 +701,18 @@ shim/workload processes, mounts, or cgroups before the private root and units
 were removed. This remains observation-only source-build evidence on WSL2 and
 does not close the cross-driver or signed release-package gates.
 
+The current packaged qualification used source revision
+`af8c5f97ac1f4eb506b32e8d57b3d1c0d5fb3645` and was exercised through the
+staged static-musl package
+`a3s-oci-runtime-v0.2.0-linux-x86_64`. Three isolated containerd 2.2.1 WSL2
+x86_64 matrices completed in 95.09/95.25/114.44 seconds across all 23
+restart, shim-rehydration, and forced-cleanup boundaries. The package report
+and executable digests (including report SHA-256
+`d87aa3ff3cd58843d57f51b75b91ca6d05c880f043d24477789105dfc065ba86`) are
+retained in `compat/containerd-runtime-v2.json`;
+the run remains observation-only because it was not a signed published
+archive and does not extend the cross-driver support claim.
+
 ## Architecture
 
 ```text

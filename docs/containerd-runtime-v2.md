@@ -113,6 +113,23 @@ bundles, Runtime records, shim/workload processes, mounts, or cgroups. This
 remains observation-only source-build evidence on WSL2 and does not promote a
 driver or signed release package.
 
+The current packaged-runtime follow-up at source revision
+`af8c5f97ac1f4eb506b32e8d57b3d1c0d5fb3645` repeated the same isolated
+containerd 2.2.1 WSL2 x86_64 qualification with the staged static-musl
+package `a3s-oci-runtime-v0.2.0-linux-x86_64`. Three consecutive matrices
+completed in 95.09, 95.25, and 114.44 seconds and crossed all 23 restart,
+shim-rehydration, and forced-cleanup boundaries. The package qualification
+report is schema `a3s.oci.native-linux-package-qualification.v7`; its CLI,
+Agent, and shim digests are retained in the compatibility record alongside
+the qualification-report digest
+`d87aa3ff3cd58843d57f51b75b91ca6d05c880f043d24477789105dfc065ba86`. The
+default containerd and Docker services
+kept their original PIDs, and the isolated root, task bundles, processes,
+mounts, cgroups, and Host Service were removed after the run. This is still
+observation-only evidence: the staged directory was not a signed published
+archive, and the advertised cross-driver and release-package gates remain
+open.
+
 The August 24, 2026 arm64 requalification used source revision
 `5a6d5f2d817d5951929c2394dff57ef925dd5822`, containerd 2.2.2, and Linux
 7.0.11-orbstack-00360-gc9bc4d96ac70. Three complete 65.15, 66.76, and
