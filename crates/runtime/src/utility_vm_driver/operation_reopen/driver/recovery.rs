@@ -3,8 +3,8 @@ use std::sync::atomic::Ordering;
 use a3s_oci_core::{DriverKind, IsolationClass};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerRecord, ContainerTarget, ErrorCode, OciBundle, ProcessRecord, ProcessTarget,
-    ResizeRequest, Result,
+    ContainerRecord, ContainerTarget, ErrorCode, FileRequest, FilesystemRequest, OciBundle,
+    ProcessRecord, ProcessTarget, ResizeRequest, Result,
 };
 
 use super::{qualification_error, QualificationKvmOperationDriver};
@@ -146,6 +146,62 @@ impl QualificationKvmOperationDriver {
                 }
                 self.rehydrated_update.store(true, Ordering::SeqCst);
                 return DriverRecovery::recreated_running(updated);
+            }
+            if self.retained_file.is_some() {
+                let (marker, expected) =
+                    self.retained_file_ready_marker.as_ref().ok_or_else(|| {
+                        qualification_error(
+                            ErrorCode::FailedPrecondition,
+                            "KVM File recovery has no init readiness marker",
+                        )
+                    })?;
+                super::super::exec::wait_for_exact_marker(
+                    marker,
+                    expected,
+                    "replacement KVM File init readiness",
+                )
+                .await
+                .map_err(|reason| qualification_error(ErrorCode::FailedPrecondition, reason))?;
+                let response = self
+                    .dispatch_file(self.recovery_file_request(record)?)
+                    .await?;
+                if response.target.generation != Some(record.generation) {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        "replacement KVM Guest returned a File response for another generation",
+                    ));
+                }
+                self.rehydrated_file.store(true, Ordering::SeqCst);
+                return DriverRecovery::recreated_running(running);
+            }
+            if self.retained_filesystem.is_some() {
+                let (marker, expected) = self
+                    .retained_filesystem_ready_marker
+                    .as_ref()
+                    .ok_or_else(|| {
+                        qualification_error(
+                            ErrorCode::FailedPrecondition,
+                            "KVM Filesystem recovery has no init readiness marker",
+                        )
+                    })?;
+                super::super::exec::wait_for_exact_marker(
+                    marker,
+                    expected,
+                    "replacement KVM Filesystem init readiness",
+                )
+                .await
+                .map_err(|reason| qualification_error(ErrorCode::FailedPrecondition, reason))?;
+                let response = self
+                    .dispatch_filesystem(self.recovery_filesystem_request(record)?)
+                    .await?;
+                if response.target.generation != Some(record.generation) {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        "replacement KVM Guest returned a Filesystem response for another generation",
+                    ));
+                }
+                self.rehydrated_filesystem.store(true, Ordering::SeqCst);
+                return DriverRecovery::recreated_running(running);
             }
             if self.retained_pause.is_some() {
                 let (marker, expected) =
@@ -594,6 +650,44 @@ impl QualificationKvmOperationDriver {
                 process_id: request.process.process_id.clone(),
             },
             size: request.size,
+        })
+    }
+
+    fn recovery_file_request(&self, record: &ContainerRecord) -> Result<FileRequest> {
+        let request = self.retained_file.as_ref().ok_or_else(|| {
+            qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM replacement has no retained File request",
+            )
+        })?;
+        if request.target.id != self.retained_create.id || request.context.is_none() {
+            return Err(qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM recovery File request differs from the durable container",
+            ));
+        }
+        Ok(FileRequest {
+            target: ContainerTarget::exact(request.target.id.clone(), record.generation),
+            ..request.clone()
+        })
+    }
+
+    fn recovery_filesystem_request(&self, record: &ContainerRecord) -> Result<FilesystemRequest> {
+        let request = self.retained_filesystem.as_ref().ok_or_else(|| {
+            qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM replacement has no retained Filesystem request",
+            )
+        })?;
+        if request.target.id != self.retained_create.id || request.context.is_none() {
+            return Err(qualification_error(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM recovery Filesystem request differs from the durable container",
+            ));
+        }
+        Ok(FilesystemRequest {
+            target: ContainerTarget::exact(request.target.id.clone(), record.generation),
+            ..request.clone()
         })
     }
 

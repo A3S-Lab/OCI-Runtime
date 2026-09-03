@@ -5,7 +5,8 @@ use a3s_oci_agent_protocol::{
     AgentWriteStdinRequest,
 };
 use a3s_oci_sdk::{
-    ContainerStats, ContainerTarget, ErrorCode, ExitStatus, OutputChunk, ProcessRecord, Result,
+    ContainerStats, ContainerTarget, ErrorCode, ExitStatus, FileRequest, FileResponse,
+    FilesystemRequest, FilesystemResponse, OutputChunk, ProcessRecord, Result,
 };
 
 use super::{qualification_error, ActiveSession, QualificationKvmOperationDriver};
@@ -179,6 +180,30 @@ impl QualificationKvmOperationDriver {
             .owner
             .client()
             .resize(request)
+            .await
+    }
+
+    pub(in crate::utility_vm_driver::operation_reopen) async fn guest_file(
+        &self,
+        request: FileRequest,
+    ) -> Result<FileResponse> {
+        self.live_session(&request.target)
+            .await?
+            .owner
+            .client()
+            .file(request)
+            .await
+    }
+
+    pub(in crate::utility_vm_driver::operation_reopen) async fn guest_filesystem(
+        &self,
+        request: FilesystemRequest,
+    ) -> Result<FilesystemResponse> {
+        self.live_session(&request.target)
+            .await?
+            .owner
+            .client()
+            .filesystem(request)
             .await
     }
 }

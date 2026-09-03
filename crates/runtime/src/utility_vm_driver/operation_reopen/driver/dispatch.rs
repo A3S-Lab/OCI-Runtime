@@ -1,7 +1,8 @@
 use std::sync::atomic::Ordering;
 
 use a3s_oci_sdk::{
-    ContainerStats, ContainerTarget, ErrorCode, ExitStatus, OutputChunk, ProcessRecord, Result,
+    ContainerStats, ContainerTarget, ErrorCode, ExitStatus, FileRequest, FileResponse,
+    FilesystemRequest, FilesystemResponse, OutputChunk, ProcessRecord, Result,
 };
 
 use super::{qualification_error, QualificationKvmOperationDriver};
@@ -484,6 +485,60 @@ impl QualificationKvmOperationDriver {
             .await?
             .client
             .resize(request)
+            .await
+    }
+
+    pub(super) async fn dispatch_file(&self, request: FileRequest) -> Result<FileResponse> {
+        {
+            let mut retained = self.file_identity.lock().map_err(|_| {
+                qualification_error(ErrorCode::Internal, "KVM File identity lock was poisoned")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &request => {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        "qualification KVM owner received a changed File request",
+                    ));
+                }
+                Some(_) => {}
+                None => *retained = Some(request.clone()),
+            }
+        }
+        self.file_calls.fetch_add(1, Ordering::SeqCst);
+        self.live_session(&request.target)
+            .await?
+            .client
+            .file(request)
+            .await
+    }
+
+    pub(super) async fn dispatch_filesystem(
+        &self,
+        request: FilesystemRequest,
+    ) -> Result<FilesystemResponse> {
+        {
+            let mut retained = self.filesystem_identity.lock().map_err(|_| {
+                qualification_error(
+                    ErrorCode::Internal,
+                    "KVM Filesystem identity lock was poisoned",
+                )
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &request => {
+                    return Err(qualification_error(
+                        ErrorCode::Conflict,
+                        "qualification KVM owner received a changed Filesystem request",
+                    ));
+                }
+                Some(_) => {}
+                None => *retained = Some(request.clone()),
+            }
+        }
+        self.filesystem_calls.fetch_add(1, Ordering::SeqCst);
+        self.live_session(&request.target)
+            .await?
+            .client
+            .filesystem(request)
             .await
     }
 }

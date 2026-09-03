@@ -90,7 +90,7 @@ pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_STATE_SCHEMA_VERSION: &str =
 
 const QUALIFICATION_FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";
 
-/// Retained evidence for one operation reissued through a replacement HVF owner.
+/// Retained evidence for one operation reissued through a replacement utility-VM owner.
 ///
 /// Version 1 qualifies `state`, version 2 adds `start`, version 3 adds `kill`,
 /// version 4 adds stopped-only `delete`, version 5 adds init `wait` with

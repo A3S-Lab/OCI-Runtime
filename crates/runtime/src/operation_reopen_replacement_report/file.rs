@@ -32,12 +32,12 @@ impl OciVmOperationReopenReplacementReport {
         let mut report = Self::initial_file(platform, requested_stage);
         report.status = CapabilityStatus::Unsupported;
         report.first_vm.status = CapabilityStatus::Unsupported;
-        report.first_vm.reason = Some("the first HVF owner was not started".to_string());
+        report.first_vm.reason = Some("the first utility-VM owner was not started".to_string());
         report.replacement_vm.status = CapabilityStatus::Unsupported;
         report.replacement_vm.reason =
-            Some("the replacement HVF owner was not started".to_string());
+            Some("the replacement utility-VM owner was not started".to_string());
         report.reason = Some(
-            "real utility-VM File reopen and owner replacement is implemented only for macOS aarch64/HVF"
+            "real utility-VM File reopen and owner replacement requires macOS aarch64/HVF or Linux KVM"
                 .to_string(),
         );
         report
@@ -74,7 +74,7 @@ impl OciVmOperationReopenReplacementReport {
             .is_some_and(|((file, create), start)| {
                 file != create && file != start && create != start
             });
-        matches!(self.platform, HostPlatform::Macos)
+        matches!(self.platform, HostPlatform::Macos | HostPlatform::Linux)
             && self.first_vm.platform == self.platform
             && self.replacement_vm.platform == self.platform
             && self.bundle_loaded
