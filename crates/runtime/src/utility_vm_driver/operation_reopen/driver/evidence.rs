@@ -1,6 +1,8 @@
 use std::sync::atomic::Ordering;
 
-use a3s_oci_sdk::{ContainerTarget, DeleteMode, OperationId, ProcessTarget, Signal};
+use a3s_oci_sdk::{
+    ContainerTarget, DeleteMode, FileRequest, FilesystemRequest, OperationId, ProcessTarget, Signal,
+};
 
 use super::QualificationKvmOperationDriver;
 use crate::driver::{
@@ -243,6 +245,34 @@ impl QualificationKvmOperationDriver {
         self.resize_calls.load(Ordering::SeqCst)
     }
 
+    pub(in crate::utility_vm_driver::operation_reopen) fn file_identity(
+        &self,
+    ) -> std::result::Result<FileRequest, String> {
+        self.file_identity
+            .lock()
+            .map_err(|_| "KVM File identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification KVM owner recorded no File dispatch".to_string())
+    }
+
+    pub(in crate::utility_vm_driver::operation_reopen) fn file_calls(&self) -> u32 {
+        self.file_calls.load(Ordering::SeqCst)
+    }
+
+    pub(in crate::utility_vm_driver::operation_reopen) fn filesystem_identity(
+        &self,
+    ) -> std::result::Result<FilesystemRequest, String> {
+        self.filesystem_identity
+            .lock()
+            .map_err(|_| "KVM Filesystem identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification KVM owner recorded no Filesystem dispatch".to_string())
+    }
+
+    pub(in crate::utility_vm_driver::operation_reopen) fn filesystem_calls(&self) -> u32 {
+        self.filesystem_calls.load(Ordering::SeqCst)
+    }
+
     pub(in crate::utility_vm_driver::operation_reopen) fn recovery_calls(&self) -> u32 {
         self.recovery_calls.load(Ordering::SeqCst)
     }
@@ -277,6 +307,14 @@ impl QualificationKvmOperationDriver {
 
     pub(in crate::utility_vm_driver::operation_reopen) fn rehydrated_resize(&self) -> bool {
         self.rehydrated_resize.load(Ordering::SeqCst)
+    }
+
+    pub(in crate::utility_vm_driver::operation_reopen) fn rehydrated_file(&self) -> bool {
+        self.rehydrated_file.load(Ordering::SeqCst)
+    }
+
+    pub(in crate::utility_vm_driver::operation_reopen) fn rehydrated_filesystem(&self) -> bool {
+        self.rehydrated_filesystem.load(Ordering::SeqCst)
     }
 
     pub(in crate::utility_vm_driver::operation_reopen) fn rehydrated_paused_record(&self) -> bool {

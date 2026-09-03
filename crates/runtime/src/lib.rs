@@ -346,6 +346,7 @@ pub use transport_cleanup_report::{
 pub use utility_vm_driver::operation_reopen::{
     linux_kvm_close_stdin_reopen_replacement, linux_kvm_create_reopen_replacement,
     linux_kvm_delete_reopen_replacement, linux_kvm_exec_reopen_replacement,
+    linux_kvm_file_reopen_replacement, linux_kvm_filesystem_reopen_replacement,
     linux_kvm_kill_reopen_replacement, linux_kvm_pause_reopen_replacement,
     linux_kvm_processes_reopen_replacement, linux_kvm_read_output_reopen_replacement,
     linux_kvm_resize_reopen_replacement, linux_kvm_resume_reopen_replacement,
@@ -354,11 +355,12 @@ pub use utility_vm_driver::operation_reopen::{
     linux_kvm_update_reopen_replacement, linux_kvm_wait_process_reopen_replacement,
     linux_kvm_wait_reopen_replacement, linux_kvm_write_stdin_reopen_replacement,
     LinuxKvmCloseStdinReopenConfig, LinuxKvmCreateReopenConfig, LinuxKvmDeleteReopenConfig,
-    LinuxKvmExecReopenConfig, LinuxKvmKillReopenConfig, LinuxKvmPauseReopenConfig,
-    LinuxKvmProcessesReopenConfig, LinuxKvmReadOutputReopenConfig, LinuxKvmResizeReopenConfig,
-    LinuxKvmResumeReopenConfig, LinuxKvmSignalProcessReopenConfig, LinuxKvmStartReopenConfig,
-    LinuxKvmStateReopenConfig, LinuxKvmStatsReopenConfig, LinuxKvmUpdateReopenConfig,
-    LinuxKvmWaitProcessReopenConfig, LinuxKvmWaitReopenConfig, LinuxKvmWriteStdinReopenConfig,
+    LinuxKvmExecReopenConfig, LinuxKvmFileReopenConfig, LinuxKvmFilesystemReopenConfig,
+    LinuxKvmKillReopenConfig, LinuxKvmPauseReopenConfig, LinuxKvmProcessesReopenConfig,
+    LinuxKvmReadOutputReopenConfig, LinuxKvmResizeReopenConfig, LinuxKvmResumeReopenConfig,
+    LinuxKvmSignalProcessReopenConfig, LinuxKvmStartReopenConfig, LinuxKvmStateReopenConfig,
+    LinuxKvmStatsReopenConfig, LinuxKvmUpdateReopenConfig, LinuxKvmWaitProcessReopenConfig,
+    LinuxKvmWaitReopenConfig, LinuxKvmWriteStdinReopenConfig,
 };
 pub use utility_vm_soak_report::{
     MacosHvfSoakConfig, MacosHvfSoakReport, MACOS_HVF_SOAK_CONCURRENT_CONTAINERS,

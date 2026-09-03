@@ -311,6 +311,20 @@ jobs:
           A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
         run: bash .github/scripts/linux-kvm-resize-reopen.sh
       - if: runner.os == 'Linux'
+        name: Linux KVM File operation-stage owner replacement
+        timeout-minutes: 15
+        env:
+          A3S_OCI_LINUX_KVM_FILE_REOPEN_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-file-reopen.json
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
+        run: bash .github/scripts/linux-kvm-file-reopen.sh
+      - if: runner.os == 'Linux'
+        name: Linux KVM Filesystem operation-stage owner replacement
+        timeout-minutes: 15
+        env:
+          A3S_OCI_LINUX_KVM_FILESYSTEM_REOPEN_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-filesystem-reopen.json
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
+        run: bash .github/scripts/linux-kvm-filesystem-reopen.sh
+      - if: runner.os == 'Linux'
         name: Linux KVM bounded fresh-generation soak
         timeout-minutes: 45
         env:
@@ -1111,6 +1125,8 @@ jobs:
             ${{ runner.temp }}/a3s-oci-linux-kvm-write-stdin-reopen.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-close-stdin-reopen.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-resize-reopen.json
+            ${{ runner.temp }}/a3s-oci-linux-kvm-file-reopen.json
+            ${{ runner.temp }}/a3s-oci-linux-kvm-filesystem-reopen.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-soak.json
           if-no-files-found: warn
           retention-days: 14
@@ -1374,6 +1390,18 @@ jobs:
           A3S_OCI_LINUX_KVM_RESIZE_REOPEN_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-resize-reopen.json
           A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
         run: bash .github/scripts/linux-kvm-resize-reopen.sh
+      - name: Linux KVM File operation-stage owner replacement
+        timeout-minutes: 15
+        env:
+          A3S_OCI_LINUX_KVM_FILE_REOPEN_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-file-reopen.json
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
+        run: bash .github/scripts/linux-kvm-file-reopen.sh
+      - name: Linux KVM Filesystem operation-stage owner replacement
+        timeout-minutes: 15
+        env:
+          A3S_OCI_LINUX_KVM_FILESYSTEM_REOPEN_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-filesystem-reopen.json
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.sha }}
+        run: bash .github/scripts/linux-kvm-filesystem-reopen.sh
       - name: Linux KVM bounded fresh-generation soak
         timeout-minutes: 45
         env:
@@ -1427,6 +1455,8 @@ jobs:
             ${{ runner.temp }}/a3s-oci-linux-kvm-write-stdin-reopen.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-close-stdin-reopen.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-resize-reopen.json
+            ${{ runner.temp }}/a3s-oci-linux-kvm-file-reopen.json
+            ${{ runner.temp }}/a3s-oci-linux-kvm-filesystem-reopen.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-soak.json
           if-no-files-found: warn
           retention-days: 14

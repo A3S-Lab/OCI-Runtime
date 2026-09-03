@@ -10,10 +10,10 @@ use a3s_oci_core::{
 use a3s_oci_sdk::{
     async_trait, AttachmentCapabilities, CloseStdinRequest, ContainerOperationRequest,
     ContainerRecord, ContainerStats, ContainerTarget, CreateRequest, DeleteMode, Error, ErrorCode,
-    ExecRequest, ExitStatus, KillRequest, OciBundle, OperationId, OutputChunk, ProcessRecord,
-    ProcessTarget, ResizeRequest, Result, RuntimeOperation, Signal, SignalProcessRequest,
-    StartRequest, UpdateRequest, WriteStdinRequest, RUNTIME_BUNDLE_HANDOFF_EXTENSION,
-    RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
+    ExecRequest, ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse,
+    KillRequest, OciBundle, OperationId, OutputChunk, ProcessRecord, ProcessTarget, ResizeRequest,
+    Result, RuntimeOperation, Signal, SignalProcessRequest, StartRequest, UpdateRequest,
+    WriteStdinRequest, RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
 };
 use tokio::sync::Mutex;
 
@@ -39,7 +39,7 @@ mod evidence;
 mod guest;
 mod recovery;
 
-const QUALIFICATION_OPERATIONS: [RuntimeOperation; 18] = [
+const QUALIFICATION_OPERATIONS: [RuntimeOperation; 20] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -58,6 +58,8 @@ const QUALIFICATION_OPERATIONS: [RuntimeOperation; 18] = [
     RuntimeOperation::WriteStdin,
     RuntimeOperation::CloseStdin,
     RuntimeOperation::Resize,
+    RuntimeOperation::File,
+    RuntimeOperation::Filesystem,
 ];
 const QUALIFICATION_SCOPE: &str = "linux-kvm-operation-stage-reopen-only-v1";
 
@@ -94,6 +96,10 @@ pub(super) struct QualificationKvmOperationDriver {
     retained_close_ready_marker: Option<(PathBuf, Vec<u8>)>,
     retained_resize: Option<ResizeRequest>,
     retained_resize_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    retained_file: Option<FileRequest>,
+    retained_file_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    retained_filesystem: Option<FilesystemRequest>,
+    retained_filesystem_ready_marker: Option<(PathBuf, Vec<u8>)>,
     retained_pause: Option<ContainerOperationRequest>,
     retained_pause_ready_marker: Option<(PathBuf, Vec<u8>)>,
     retained_resume: Option<ContainerOperationRequest>,
@@ -121,6 +127,8 @@ pub(super) struct QualificationKvmOperationDriver {
     write_stdin_identity: StdMutex<Option<DriverWriteStdinRequest>>,
     close_stdin_identity: StdMutex<Option<DriverCloseStdinRequest>>,
     resize_identity: StdMutex<Option<DriverResizeRequest>>,
+    file_identity: StdMutex<Option<FileRequest>>,
+    filesystem_identity: StdMutex<Option<FilesystemRequest>>,
     start_calls: AtomicU32,
     kill_calls: AtomicU32,
     delete_calls: AtomicU32,
@@ -137,6 +145,8 @@ pub(super) struct QualificationKvmOperationDriver {
     write_stdin_calls: AtomicU32,
     close_stdin_calls: AtomicU32,
     resize_calls: AtomicU32,
+    file_calls: AtomicU32,
+    filesystem_calls: AtomicU32,
     recovery_calls: AtomicU32,
     rehydrated_created_record: AtomicBool,
     rehydrated_running_record: AtomicBool,
@@ -146,6 +156,8 @@ pub(super) struct QualificationKvmOperationDriver {
     rehydrated_write_stdin: AtomicBool,
     rehydrated_close_stdin: AtomicBool,
     rehydrated_resize: AtomicBool,
+    rehydrated_file: AtomicBool,
+    rehydrated_filesystem: AtomicBool,
     rehydrated_paused_record: AtomicBool,
     rehydrated_resumed_record: AtomicBool,
     rehydrated_update: AtomicBool,
@@ -183,6 +195,10 @@ impl QualificationKvmOperationDriver {
             retained_close_ready_marker: None,
             retained_resize: None,
             retained_resize_ready_marker: None,
+            retained_file: None,
+            retained_file_ready_marker: None,
+            retained_filesystem: None,
+            retained_filesystem_ready_marker: None,
             retained_pause: None,
             retained_pause_ready_marker: None,
             retained_resume: None,
@@ -210,6 +226,8 @@ impl QualificationKvmOperationDriver {
             write_stdin_identity: StdMutex::new(None),
             close_stdin_identity: StdMutex::new(None),
             resize_identity: StdMutex::new(None),
+            file_identity: StdMutex::new(None),
+            filesystem_identity: StdMutex::new(None),
             start_calls: AtomicU32::new(0),
             kill_calls: AtomicU32::new(0),
             delete_calls: AtomicU32::new(0),
@@ -226,6 +244,8 @@ impl QualificationKvmOperationDriver {
             write_stdin_calls: AtomicU32::new(0),
             close_stdin_calls: AtomicU32::new(0),
             resize_calls: AtomicU32::new(0),
+            file_calls: AtomicU32::new(0),
+            filesystem_calls: AtomicU32::new(0),
             recovery_calls: AtomicU32::new(0),
             rehydrated_created_record: AtomicBool::new(false),
             rehydrated_running_record: AtomicBool::new(false),
@@ -235,6 +255,8 @@ impl QualificationKvmOperationDriver {
             rehydrated_write_stdin: AtomicBool::new(false),
             rehydrated_close_stdin: AtomicBool::new(false),
             rehydrated_resize: AtomicBool::new(false),
+            rehydrated_file: AtomicBool::new(false),
+            rehydrated_filesystem: AtomicBool::new(false),
             rehydrated_paused_record: AtomicBool::new(false),
             rehydrated_resumed_record: AtomicBool::new(false),
             rehydrated_update: AtomicBool::new(false),
@@ -414,6 +436,36 @@ impl QualificationKvmOperationDriver {
         );
         driver.retained_resize = retained_resize;
         driver.retained_resize_ready_marker = retained_resize_ready_marker;
+        driver
+    }
+
+    pub(super) fn with_file_recovery(
+        prepared: &PreparedUtilityVmLayout,
+        console: PathBuf,
+        retained_create: CreateRequest,
+        retained_start: StartRequest,
+        retained_file: Option<FileRequest>,
+        retained_file_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    ) -> Self {
+        let mut driver =
+            Self::with_start_recovery(prepared, console, retained_create, retained_start);
+        driver.retained_file = retained_file;
+        driver.retained_file_ready_marker = retained_file_ready_marker;
+        driver
+    }
+
+    pub(super) fn with_filesystem_recovery(
+        prepared: &PreparedUtilityVmLayout,
+        console: PathBuf,
+        retained_create: CreateRequest,
+        retained_start: StartRequest,
+        retained_filesystem: Option<FilesystemRequest>,
+        retained_filesystem_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    ) -> Self {
+        let mut driver =
+            Self::with_start_recovery(prepared, console, retained_create, retained_start);
+        driver.retained_filesystem = retained_filesystem;
+        driver.retained_filesystem_ready_marker = retained_filesystem_ready_marker;
         driver
     }
 
@@ -737,6 +789,14 @@ impl RuntimeDriver for QualificationKvmOperationDriver {
 
     async fn resize(&self, request: DriverResizeRequest) -> Result<()> {
         self.dispatch_resize(request).await
+    }
+
+    async fn file(&self, request: FileRequest) -> Result<FileResponse> {
+        self.dispatch_file(request).await
+    }
+
+    async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        self.dispatch_filesystem(request).await
     }
 }
 

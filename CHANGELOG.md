@@ -27,6 +27,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added Linux KVM File and Filesystem operation-stage owner-replacement
+  qualifications. Both operations now use the qualification-only dedicated-VM
+  driver, durable request/response journals, exact-generation and operation-ID
+  fencing, replacement-owner rehydration, idempotent replay, effect verification,
+  and explicit zero-residue cleanup. CI runs all nine Host/Guest transport
+  boundaries for each operation on both advertised Linux architectures and
+  emits versioned matrix reports; clean x86_64 revision `fa4c593` retained 9/9
+  File and 9/9 Filesystem stages.
 - Fixed concurrent retries of the same durable operation in the Host Service.
   A per-operation single-flight gate now keeps duplicate callers from
   dispatching a second driver request after the first caller acknowledges its
