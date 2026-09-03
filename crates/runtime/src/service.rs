@@ -524,6 +524,27 @@ impl LifecycleHost {
         Err(error)
     }
 
+    /// Settle a terminal preflight error for a prepared operation while
+    /// preserving retryable failures for the normal resume path.
+    ///
+    /// Restore validates the caller-owned checkpoint before it can dispatch a
+    /// driver.  A request may nevertheless be resuming an already prepared
+    /// journal, so returning a non-retryable validation error directly would
+    /// strand its generation claim forever.  New requests have no journal to
+    /// settle and retain the ordinary error path.
+    async fn settle_existing_driver_operation<T>(
+        &self,
+        operation_id: &a3s_oci_sdk::OperationId,
+        operation_exists: bool,
+        error: Error,
+    ) -> Result<T> {
+        if operation_exists {
+            self.fail_driver_operation(operation_id, error).await
+        } else {
+            Err(error)
+        }
+    }
+
     async fn acknowledge_operation(&self, operation_id: &a3s_oci_sdk::OperationId) -> Result<()> {
         self.drivers.acknowledge_operation(operation_id).await
     }
@@ -1803,18 +1824,29 @@ impl OciRuntimeService for HostRuntimeService {
 
         let reference = request.reference()?.clone();
         let compatibility = reference.compatibility();
-        let runtime_artifact = artifact::current()
+        let runtime_artifact = match artifact::current()
             .await
-            .map_err(|error| error.for_operation("restore"))?;
+            .map_err(|error| error.for_operation("restore"))
+        {
+            Ok(artifact) => artifact,
+            Err(error) => {
+                return lifecycle
+                    .settle_existing_driver_operation(&operation_id, operation_exists, error)
+                    .await;
+            }
+        };
         if compatibility.platform() != HostPlatform::current()
             || compatibility.architecture() != std::env::consts::ARCH
             || compatibility.runtime_artifact() != &runtime_artifact
         {
-            return Err(Error::new(
+            let error = Error::new(
                 ErrorCode::FailedPrecondition,
                 "checkpoint reference is incompatible with the current Host platform, architecture, or executable",
             )
-            .for_operation("restore"));
+            .for_operation("restore");
+            return lifecycle
+                .settle_existing_driver_operation(&operation_id, operation_exists, error)
+                .await;
         }
         let registered = match lifecycle.driver(compatibility.driver(), "restore") {
             Ok(registered) => registered,
@@ -1834,22 +1866,37 @@ impl OciRuntimeService for HostRuntimeService {
             .isolation_classes
             .contains(&request.isolation().class())
         {
-            return Err(Error::new(
+            let error = Error::new(
                 ErrorCode::Unsupported,
                 "checkpoint restore isolation is not provided by its recorded driver",
             )
-            .for_operation("restore"));
+            .for_operation("restore");
+            return lifecycle
+                .settle_existing_driver_operation(&operation_id, operation_exists, error)
+                .await;
         }
-        lifecycle
+        if let Err(error) = lifecycle
             .drivers
             .linux_support()
-            .validate_spec(request.bundle().spec(), "restore")?;
-        registered
-            .driver()
-            .validate_create_bundle(request.bundle())?;
-        registered
+            .validate_spec(request.bundle().spec(), "restore")
+        {
+            return lifecycle
+                .settle_existing_driver_operation(&operation_id, operation_exists, error)
+                .await;
+        }
+        if let Err(error) = registered.driver().validate_create_bundle(request.bundle()) {
+            return lifecycle
+                .settle_existing_driver_operation(&operation_id, operation_exists, error)
+                .await;
+        }
+        if let Err(error) = registered
             .attachment_capabilities()
-            .require(request.attachments())?;
+            .require(request.attachments())
+        {
+            return lifecycle
+                .settle_existing_driver_operation(&operation_id, operation_exists, error)
+                .await;
+        }
 
         lifecycle.driver_boundary(
             DriverOperation::RestoreValidation,
@@ -1868,7 +1915,11 @@ impl OciRuntimeService for HostRuntimeService {
             DriverOperation::RestoreValidation,
             DriverBoundaryStage::AfterCall,
         )?;
-        validation?;
+        if let Err(error) = validation {
+            return lifecycle
+                .settle_existing_driver_operation(&operation_id, operation_exists, error)
+                .await;
+        }
 
         let restoring = match lifecycle
             .store
