@@ -24,6 +24,7 @@ use crate::driver::{
     DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
 };
 
+mod atomic_publication;
 mod delegate;
 mod handoff;
 #[cfg(all(
