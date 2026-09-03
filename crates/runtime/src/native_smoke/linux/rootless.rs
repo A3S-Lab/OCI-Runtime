@@ -229,7 +229,7 @@ async fn run_inner(run: RootlessRun<'_>) -> NativeLinuxRootlessSmokeReport {
         (None, None) => {
             NativeLinuxDriver::open_experimental(&executor_parent, init_executable).await
         }
-        (None, Some(_)) => unreachable!("device bootstrap always retains one delegation"),
+        (None, Some(_)) => Err(rootless_device_bootstrap_configuration_error()),
     } {
         Ok(driver) => Arc::new(driver),
         Err(error) => {
@@ -309,6 +309,14 @@ async fn run_inner(run: RootlessRun<'_>) -> NativeLinuxRootlessSmokeReport {
         report.reason = None;
     }
     report
+}
+
+fn rootless_device_bootstrap_configuration_error() -> Error {
+    Error::new(
+        ErrorCode::InvalidArgument,
+        "rootless device-policy bootstrap requires an explicit delegated cgroup root",
+    )
+    .for_operation("open-native-linux-driver")
 }
 
 pub(super) async fn run_device_policy(
@@ -1219,4 +1227,20 @@ fn failed(
 ) -> NativeLinuxRootlessSmokeReport {
     append_reason(&mut report, reason);
     report
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rootless_device_bootstrap_configuration_error;
+    use a3s_oci_sdk::ErrorCode;
+
+    #[test]
+    fn invalid_device_bootstrap_configuration_is_reported_contextually() {
+        let error = rootless_device_bootstrap_configuration_error();
+
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert_eq!(error.operation.as_deref(), Some("open-native-linux-driver"));
+        assert!(!error.retryable);
+        assert!(error.message.contains("delegated cgroup root"));
+    }
 }
