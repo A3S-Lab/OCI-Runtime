@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::{Error, ErrorCode, GuestSessionAttachment, Result};
 use serde::{Deserialize, Serialize};
@@ -11,8 +12,11 @@ use super::layout::{
 
 const MARKER_FILE: &str = ".a3s-oci-guest-session.json";
 const PENDING_MARKER_FILE: &str = ".a3s-oci-guest-session.pending";
+const STAGING_MARKER_PREFIX: &str = ".a3s-oci-guest-session.pending.";
 const MARKER_SCHEMA: &str = "a3s.oci.guest-session.v1";
 const MAX_MARKER_BYTES: usize = 4 * 1024;
+const STAGING_ATTEMPTS: usize = 8;
+const PUBLISH_ATTEMPTS: usize = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -23,6 +27,7 @@ struct GuestSessionMarker {
 
 pub(super) async fn ensure(session_root: &Path, attachment: &GuestSessionAttachment) -> Result<()> {
     let marker_path = session_root.join(MARKER_FILE);
+    let pending = session_root.join(PENDING_MARKER_FILE);
     let expected = GuestSessionMarker {
         schema_version: MARKER_SCHEMA.to_string(),
         attachment: attachment.clone(),
@@ -39,7 +44,8 @@ pub(super) async fn ensure(session_root: &Path, attachment: &GuestSessionAttachm
                 ),
             ));
         }
-        remove_private_file_if_present(&session_root.join(PENDING_MARKER_FILE)).await?;
+        remove_matching_pending(&pending, &expected).await?;
+        sync_directory(session_root).await?;
         return Ok(());
     }
 
@@ -55,63 +61,278 @@ pub(super) async fn ensure(session_root: &Path, attachment: &GuestSessionAttachm
             "reusable guest-session marker exceeds its fixed bound",
         ));
     }
-    let pending = session_root.join(PENDING_MARKER_FILE);
-    remove_private_file_if_present(&pending).await?;
-    let mut options = tokio::fs::OpenOptions::new();
-    options
-        .write(true)
-        .create_new(true)
-        .mode(PRIVATE_FILE_MODE)
-        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
-    let mut file = options.open(&pending).await.map_err(|error| {
-        session_error(
-            ErrorCode::Internal,
-            format!(
-                "failed to create reusable guest-session marker {}: {error}",
-                pending.display()
-            ),
-        )
-    })?;
-    file.write_all(&encoded).await.map_err(|error| {
-        session_error(
-            ErrorCode::Internal,
-            format!(
-                "failed to write reusable guest-session marker {}: {error}",
-                pending.display()
-            ),
-        )
-    })?;
-    file.flush().await.map_err(|error| {
-        session_error(
-            ErrorCode::Internal,
-            format!(
-                "failed to flush reusable guest-session marker {}: {error}",
-                pending.display()
-            ),
-        )
-    })?;
-    file.sync_all().await.map_err(|error| {
-        session_error(
-            ErrorCode::Internal,
-            format!(
-                "failed to sync reusable guest-session marker {}: {error}",
-                pending.display()
-            ),
-        )
-    })?;
-    drop(file);
-    tokio::fs::rename(&pending, &marker_path)
-        .await
-        .map_err(|error| {
-            session_error(
+    for attempt in 0..PUBLISH_ATTEMPTS {
+        match create_or_reuse_pending(session_root, &pending, &encoded, &expected).await {
+            Err(error) if error.retryable && attempt + 1 < PUBLISH_ATTEMPTS => continue,
+            Err(error) => return Err(error),
+            Ok(()) => {}
+        }
+        match publish_marker(session_root, &pending, &marker_path, &expected).await {
+            Err(error) if error.retryable && attempt + 1 < PUBLISH_ATTEMPTS => continue,
+            result => return result,
+        }
+    }
+    Err(session_error(
+        ErrorCode::Unavailable,
+        "reusable guest-session marker publication kept losing its concurrent owner",
+    )
+    .retryable(true))
+}
+
+/// Create and publish a complete pending marker without exposing a partially
+/// written file under the authoritative name. A pending marker can survive a
+/// process crash, so an exact matching file is safe to adopt while a different
+/// or malformed file must fail closed.
+async fn create_or_reuse_pending(
+    session_root: &Path,
+    pending: &Path,
+    encoded: &[u8],
+    expected: &GuestSessionMarker,
+) -> Result<()> {
+    if path_metadata(pending).await?.is_some() {
+        ensure_pending_matches(pending, expected).await?;
+        return Ok(());
+    }
+
+    let staging = create_complete_staging(session_root, pending, encoded).await?;
+    match tokio::fs::hard_link(&staging, pending).await {
+        Ok(()) => {
+            // The hard link is the first publication of the complete inode.
+            // Removing the private staging name leaves only the authoritative
+            // pending name; a directory sync makes that publication durable.
+            remove_private_file_if_present(&staging).await?;
+            sync_directory(session_root).await
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            // Another owner won the no-replace publication race. The staging
+            // inode is no longer needed, and the winner's complete pending
+            // contract is adopted only after an exact read-back.
+            let _ = remove_private_file_if_present(&staging).await;
+            ensure_pending_matches(pending, expected).await
+        }
+        Err(error) => {
+            let _ = remove_private_file_if_present(&staging).await;
+            Err(session_error(
                 ErrorCode::Internal,
                 format!(
-                    "failed to commit reusable guest-session marker {}: {error}",
-                    marker_path.display()
+                    "failed to publish reusable guest-session pending marker {}: {error}",
+                    pending.display()
                 ),
-            )
-        })?;
-    sync_directory(session_root).await
+            ))
+        }
+    }
+}
+
+async fn create_complete_staging(
+    session_root: &Path,
+    pending: &Path,
+    encoded: &[u8],
+) -> Result<PathBuf> {
+    for _ in 0..STAGING_ATTEMPTS {
+        let staging = staging_path(session_root, pending)?;
+        let mut options = tokio::fs::OpenOptions::new();
+        options
+            .write(true)
+            .create_new(true)
+            .mode(PRIVATE_FILE_MODE)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+        let mut file = match options.open(&staging).await {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(session_error(
+                    ErrorCode::Internal,
+                    format!(
+                        "failed to create reusable guest-session marker staging file {}: {error}",
+                        staging.display()
+                    ),
+                ));
+            }
+        };
+
+        if let Err(error) = file.write_all(encoded).await {
+            let _ = remove_private_file_if_present(&staging).await;
+            return Err(session_error(
+                ErrorCode::Internal,
+                format!(
+                    "failed to write reusable guest-session marker staging file {}: {error}",
+                    staging.display()
+                ),
+            ));
+        }
+        if let Err(error) = file.flush().await {
+            let _ = remove_private_file_if_present(&staging).await;
+            return Err(session_error(
+                ErrorCode::Internal,
+                format!(
+                    "failed to flush reusable guest-session marker staging file {}: {error}",
+                    staging.display()
+                ),
+            ));
+        }
+        if let Err(error) = file.sync_all().await {
+            let _ = remove_private_file_if_present(&staging).await;
+            return Err(session_error(
+                ErrorCode::Internal,
+                format!(
+                    "failed to sync reusable guest-session marker staging file {}: {error}",
+                    staging.display()
+                ),
+            ));
+        }
+        drop(file);
+        return Ok(staging);
+    }
+
+    Err(session_error(
+        ErrorCode::Internal,
+        format!(
+            "failed to allocate a unique reusable guest-session marker staging file near {}",
+            pending.display()
+        ),
+    ))
+}
+
+fn staging_path(session_root: &Path, pending: &Path) -> Result<PathBuf> {
+    if pending.parent() != Some(session_root) {
+        return Err(session_error(
+            ErrorCode::Internal,
+            "reusable guest-session marker paths do not share their protected root",
+        ));
+    }
+    let mut nonce = [0_u8; 16];
+    getrandom::fill(&mut nonce).map_err(|error| {
+        session_error(
+            ErrorCode::Internal,
+            format!("failed to allocate reusable guest-session marker nonce: {error}"),
+        )
+    })?;
+    let mut encoded = String::with_capacity(nonce.len() * 2);
+    for byte in nonce {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    Ok(session_root.join(format!(
+        "{STAGING_MARKER_PREFIX}{}{encoded}",
+        std::process::id()
+    )))
+}
+
+async fn ensure_pending_matches(pending: &Path, expected: &GuestSessionMarker) -> Result<()> {
+    match read_if_present(pending).await? {
+        Some(retained) if retained == *expected => Ok(()),
+        Some(_) => Err(marker_conflict(expected)),
+        None => Err(session_error(
+            ErrorCode::Unavailable,
+            format!(
+                "reusable guest-session pending marker disappeared before adoption: {}",
+                pending.display()
+            ),
+        )
+        .retryable(true)),
+    }
+}
+
+async fn read_if_present(path: &Path) -> Result<Option<GuestSessionMarker>> {
+    if path_metadata(path).await?.is_none() {
+        return Ok(None);
+    }
+    match read(path).await {
+        Ok(retained) => Ok(Some(retained)),
+        Err(error) => {
+            if path_metadata(path).await?.is_none() {
+                Ok(None)
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+/// Publish a complete marker with no replacement semantics.
+///
+/// `rename` is intentionally not used here: on Unix it replaces an existing
+/// destination, which could let a concurrent owner silently change the trust
+/// domain or generation represented by a persisted session root. A hard link
+/// publishes the already-synced inode atomically and returns `AlreadyExists`
+/// without touching the incumbent marker.
+async fn publish_marker(
+    session_root: &Path,
+    pending: &Path,
+    marker_path: &Path,
+    expected: &GuestSessionMarker,
+) -> Result<()> {
+    match tokio::fs::hard_link(pending, marker_path).await {
+        Ok(()) => {
+            // Validate the destination after publication as well. This keeps
+            // a racing replacement of the pending name fail closed instead of
+            // allowing a symlink or malformed inode to become authoritative.
+            let retained = read(marker_path).await?;
+            if retained != *expected {
+                return Err(marker_conflict(expected));
+            }
+            remove_private_file_if_present(pending).await?;
+            sync_directory(session_root).await
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            let retained = read(marker_path).await?;
+            if retained != *expected {
+                return Err(marker_conflict(expected));
+            }
+            // Only remove a pending file that carries the same complete
+            // contract. A different pending owner remains intact for its own
+            // retry and is surfaced as a conflict.
+            remove_matching_pending(pending, expected).await?;
+            sync_directory(session_root).await
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            // A concurrent owner may have consumed the pending inode just
+            // before this link. Adopt its final marker when available;
+            // otherwise the bounded caller loop rebuilds a complete pending
+            // inode and retries the publication.
+            match read_if_present(marker_path).await? {
+                Some(retained) if retained == *expected => sync_directory(session_root).await,
+                Some(_) => Err(marker_conflict(expected)),
+                None => Err(session_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "reusable guest-session pending marker disappeared before publication: {}",
+                        pending.display()
+                    ),
+                )
+                .retryable(true)),
+            }
+        }
+        Err(error) => Err(session_error(
+            ErrorCode::Internal,
+            format!(
+                "failed to commit reusable guest-session marker {}: {error}",
+                marker_path.display()
+            ),
+        )),
+    }
+}
+
+async fn remove_matching_pending(pending: &Path, expected: &GuestSessionMarker) -> Result<()> {
+    if let Some(retained) = read_if_present(pending).await? {
+        if retained != *expected {
+            return Err(marker_conflict(expected));
+        }
+        remove_private_file_if_present(pending).await?;
+    }
+    Ok(())
+}
+
+fn marker_conflict(expected: &GuestSessionMarker) -> Error {
+    session_error(
+        ErrorCode::Conflict,
+        format!(
+            "reusable guest-session incarnation {} generation {} has a different retained marker",
+            expected.attachment.id(),
+            expected.attachment.generation()
+        ),
+    )
 }
 
 pub(super) async fn validate(
@@ -288,12 +509,14 @@ async fn remove_private_file_if_present(path: &Path) -> Result<()> {
             format!("refusing to remove a non-private file: {}", path.display()),
         ));
     }
-    tokio::fs::remove_file(path).await.map_err(|error| {
-        session_error(
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(session_error(
             ErrorCode::Internal,
             format!("failed to remove {}: {error}", path.display()),
-        )
-    })
+        )),
+    }
 }
 
 async fn sync_directory(path: &Path) -> Result<()> {
@@ -326,8 +549,15 @@ fn session_error(code: ErrorCode, message: impl Into<String>) -> Error {
 mod tests {
     use std::path::Path;
 
-    use super::{validate_root_identity, REUSABLE_GUEST_SESSION_DIRECTORY};
-    use a3s_oci_sdk::GuestSessionAttachment;
+    use a3s_oci_sdk::{ErrorCode, GuestSessionAttachment};
+    use tempfile::tempdir;
+    use tokio::io::AsyncWriteExt;
+
+    use super::{
+        ensure, marker_conflict, publish_marker, read, validate_root_identity, GuestSessionMarker,
+        MARKER_FILE, MARKER_SCHEMA, PENDING_MARKER_FILE, PRIVATE_FILE_MODE,
+        REUSABLE_GUEST_SESSION_DIRECTORY,
+    };
 
     fn attachment() -> GuestSessionAttachment {
         serde_json::from_value(serde_json::json!({
@@ -340,6 +570,40 @@ mod tests {
             "ownership": "runtime"
         }))
         .expect("valid guest-session attachment")
+    }
+
+    fn alternate_attachment() -> GuestSessionAttachment {
+        serde_json::from_value(serde_json::json!({
+            "id": "marker-session",
+            "generation": 7,
+            "trustDomain": "different-domain",
+            "isolation": "shared-guest-kernel",
+            "capacity": 2,
+            "reset": "destroy-on-empty",
+            "ownership": "runtime"
+        }))
+        .expect("valid alternate guest-session attachment")
+    }
+
+    fn marker(attachment: &GuestSessionAttachment) -> GuestSessionMarker {
+        GuestSessionMarker {
+            schema_version: MARKER_SCHEMA.to_string(),
+            attachment: attachment.clone(),
+        }
+    }
+
+    async fn write_private_file(path: &Path, bytes: &[u8]) {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(PRIVATE_FILE_MODE)
+            .open(path)
+            .await
+            .expect("create private marker fixture");
+        file.write_all(bytes)
+            .await
+            .expect("write private marker fixture");
+        file.sync_all().await.expect("sync private marker fixture");
     }
 
     #[test]
@@ -364,5 +628,167 @@ mod tests {
         let error = validate_root_identity(Path::new("/run/a3s"), Path::new("7"), &attachment())
             .expect_err("malformed root must fail closed");
         assert!(error.message.contains("escaped"));
+    }
+
+    #[tokio::test]
+    async fn ensure_publishes_a_complete_marker_without_a_pending_alias() {
+        let temporary = tempdir().expect("temporary marker root");
+        let session_root = temporary.path().join("session");
+        tokio::fs::create_dir(&session_root)
+            .await
+            .expect("create session root");
+
+        ensure(&session_root, &attachment())
+            .await
+            .expect("publish session marker");
+
+        assert_eq!(
+            read(&session_root.join(MARKER_FILE))
+                .await
+                .expect("read published marker"),
+            marker(&attachment())
+        );
+        assert!(!session_root.join(PENDING_MARKER_FILE).exists());
+    }
+
+    #[tokio::test]
+    async fn pending_marker_contract_drift_is_rejected_without_overwrite() {
+        let temporary = tempdir().expect("temporary marker root");
+        let session_root = temporary.path().join("session");
+        tokio::fs::create_dir(&session_root)
+            .await
+            .expect("create session root");
+        let pending = session_root.join(PENDING_MARKER_FILE);
+        let retained = serde_json::to_vec(&marker(&alternate_attachment()))
+            .expect("encode alternate pending marker");
+        write_private_file(&pending, &retained).await;
+
+        let error = ensure(&session_root, &attachment())
+            .await
+            .expect_err("different pending marker must fail closed");
+        assert_eq!(error.code, ErrorCode::Conflict);
+        assert_eq!(
+            tokio::fs::read(&pending)
+                .await
+                .expect("read retained pending"),
+            retained
+        );
+        assert!(!session_root.join(MARKER_FILE).exists());
+    }
+
+    #[tokio::test]
+    async fn partial_pending_marker_is_rejected_without_replacement() {
+        let temporary = tempdir().expect("temporary marker root");
+        let session_root = temporary.path().join("session");
+        tokio::fs::create_dir(&session_root)
+            .await
+            .expect("create session root");
+        let pending = session_root.join(PENDING_MARKER_FILE);
+        let retained = br#"{"schemaVersion":"a3s.oci.guest-session.v1""#;
+        write_private_file(&pending, retained).await;
+
+        let error = ensure(&session_root, &attachment())
+            .await
+            .expect_err("partial pending marker must fail closed");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert_eq!(
+            tokio::fs::read(&pending).await.expect("read pending"),
+            retained
+        );
+        assert!(!session_root.join(MARKER_FILE).exists());
+    }
+
+    #[tokio::test]
+    async fn no_replace_publication_preserves_an_incumbent_marker() {
+        let temporary = tempdir().expect("temporary marker root");
+        let session_root = temporary.path().join("session");
+        tokio::fs::create_dir(&session_root)
+            .await
+            .expect("create session root");
+        let marker_path = session_root.join(MARKER_FILE);
+        let pending = session_root.join(PENDING_MARKER_FILE);
+        let incumbent =
+            serde_json::to_vec(&marker(&alternate_attachment())).expect("encode incumbent marker");
+        let candidate = serde_json::to_vec(&marker(&attachment())).expect("encode candidate");
+        write_private_file(&marker_path, &incumbent).await;
+        write_private_file(&pending, &candidate).await;
+
+        let error = publish_marker(
+            &session_root,
+            &pending,
+            &marker_path,
+            &marker(&attachment()),
+        )
+        .await
+        .expect_err("an occupied marker must not be replaced");
+        assert_eq!(error, marker_conflict(&marker(&attachment())));
+        assert_eq!(
+            tokio::fs::read(&marker_path).await.expect("read incumbent"),
+            incumbent
+        );
+        assert_eq!(
+            tokio::fs::read(&pending).await.expect("read candidate"),
+            candidate
+        );
+    }
+
+    #[tokio::test]
+    async fn matching_incumbent_marker_only_cleans_matching_pending() {
+        let temporary = tempdir().expect("temporary marker root");
+        let session_root = temporary.path().join("session");
+        tokio::fs::create_dir(&session_root)
+            .await
+            .expect("create session root");
+        let marker_path = session_root.join(MARKER_FILE);
+        let pending = session_root.join(PENDING_MARKER_FILE);
+        let encoded = serde_json::to_vec(&marker(&attachment())).expect("encode marker");
+        write_private_file(&marker_path, &encoded).await;
+        write_private_file(&pending, &encoded).await;
+
+        ensure(&session_root, &attachment())
+            .await
+            .expect("reuse matching marker");
+        assert!(!pending.exists());
+        assert_eq!(
+            tokio::fs::read(&marker_path).await.expect("read marker"),
+            encoded
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_ensure_calls_publish_one_complete_marker() {
+        let temporary = tempdir().expect("temporary marker root");
+        let session_root = temporary.path().join("session");
+        tokio::fs::create_dir(&session_root)
+            .await
+            .expect("create session root");
+
+        let mut calls = Vec::new();
+        for _ in 0..16 {
+            let session_root = session_root.clone();
+            calls.push(tokio::spawn(async move {
+                ensure(&session_root, &attachment()).await
+            }));
+        }
+        for call in calls {
+            call.await
+                .expect("marker ensure task must not panic")
+                .expect("concurrent marker ensure must succeed");
+        }
+
+        assert_eq!(
+            read(&session_root.join(MARKER_FILE))
+                .await
+                .expect("read concurrent marker"),
+            marker(&attachment())
+        );
+        let mut entries = tokio::fs::read_dir(&session_root)
+            .await
+            .expect("enumerate marker root");
+        let mut names = Vec::new();
+        while let Some(entry) = entries.next_entry().await.expect("read marker entry") {
+            names.push(entry.file_name());
+        }
+        assert_eq!(names, vec![std::ffi::OsString::from(MARKER_FILE)]);
     }
 }

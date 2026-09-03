@@ -35,6 +35,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
   compatibility-record substitution before installation. This strengthens the
   R7 packaging identity gate without promoting a probe-only driver.
 
+- Hardened reusable utility-VM guest-session ownership publication. Session
+  markers are now written to a fully synced private staging inode, published
+  to the pending name and final name with no-replace hard-links, and read back
+  at each race boundary. An incumbent marker or pending contract must match
+  instead of being overwritten. This closes the cross-owner trust-domain and
+  generation race while retaining bounded crash-retry cleanup semantics.
+
 - Retained a current-source packaged-shim containerd qualification record.
   The static-musl x86_64 package from revision
   `af8c5f97ac1f4eb506b32e8d57b3d1c0d5fb3645` passed three isolated
