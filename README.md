@@ -688,6 +688,19 @@ mount, cgroup, or Runtime residue. It is recorded as observation-only because
 it used source-built artifacts on WSL2; it does not promote the advertised
 containerd or driver claims.
 
+The restart-boundary follow-up at source revision
+`fa9393d473c2f2305ce8f7ec67054acea7ea54a0` repeated the same isolated
+containerd 2.2.1 WSL2 x86_64 qualification three times in 96.53, 96.63, and
+96.59 seconds. The qualification now records a code-enforced, ordered ledger
+for all 23 restart, shim-rehydration, and forced-cleanup boundaries; every
+pass completed the exact inventory. Static-musl CLI, agent, shim, and
+qualification artifacts plus the matching Cargo.lock digest are retained in
+`compat/containerd-runtime-v2.json`. The default containerd stayed at PID 180,
+and final audits found zero tasks, containers, bundles, Runtime records,
+shim/workload processes, mounts, or cgroups before the private root and units
+were removed. This remains observation-only source-build evidence on WSL2 and
+does not close the cross-driver or signed release-package gates.
+
 ## Architecture
 
 ```text

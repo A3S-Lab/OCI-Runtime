@@ -349,8 +349,7 @@ impl Service {
             let key = Self::pump_key(task_id, exec_id);
             let pump = state.pumps.get_mut(&key).ok_or_else(|| {
                 ttrpc_not_found(format!(
-                    "containerd process I/O pump is unavailable for task {task_id} exec {:?}",
-                    exec_id
+                    "containerd process I/O pump is unavailable for task {task_id} exec {exec_id:?}"
                 ))
             })?;
             if let Some(error) = pump.failure() {
@@ -360,8 +359,7 @@ impl Service {
                 ttrpc::Error::RpcStatus(ttrpc::get_status(
                     ttrpc::Code::FAILED_PRECONDITION,
                     format!(
-                        "task {task_id} exec {:?} was not configured with containerd stdin",
-                        exec_id
+                        "task {task_id} exec {exec_id:?} was not configured with containerd stdin"
                     ),
                 ))
             })?
@@ -460,8 +458,7 @@ impl Service {
                     return;
                 }
                 log::warn!(
-                    "containerd exit monitor failed for task {task_id} exec {:?}: {error}",
-                    exec_id
+                    "containerd exit monitor failed for task {task_id} exec {exec_id:?}: {error}"
                 );
                 let mut state = service.state.lock().await;
                 let still_current = match exec_identity.as_ref() {

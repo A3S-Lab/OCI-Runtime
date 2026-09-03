@@ -2422,10 +2422,17 @@ against a dedicated private containerd root, state, socket, and systemd unit;
 the production daemon remained active at PID 2485480. Independent audits after
 the probe and every pass found zero matching task, container, shim,
 qualification process, workload process, bundle, live Runtime record, cgroup,
-or snapshot. The remaining R7 items stay open until the implemented
-`ResizePty` process-I/O forced-cleanup gate retains its three-pass real-host
-record, every advertised driver profile passes, and the published
-release-artifact compatibility record is complete.
+or snapshot. The September 3 follow-up at source revision
+`fa9393d473c2f2305ce8f7ec67054acea7ea54a0` retains three consecutive
+2.2.1 WSL2 x86_64 passes (96.53/96.63/96.59 seconds) with a code-enforced
+ordered ledger covering all 23 restart, shim-rehydration, and forced-cleanup
+boundaries. The exact static-musl artifact and Cargo.lock digests, unchanged
+default-containerd PID, isolated Host/daemon cleanup, and zero-residue audit
+are recorded in `compat/containerd-runtime-v2.json`. This closes the
+qualification-evidence sub-item for the implemented Native Linux path, but
+the R7 release gates remain open: every advertised driver profile and the
+exact signed/checksummed release-package compatibility record still require
+their own real-host evidence.
 
 Exit gate: containerd task, restart, I/O, and cleanup suites pass through the
 public SDK without the Box CLI, a direct VMM path, duplicate lifecycle state,
