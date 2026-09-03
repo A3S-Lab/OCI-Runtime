@@ -206,8 +206,7 @@ pub(super) async fn verify_checkpoint_artifact(
         return Err(checkpoint_artifact_contract_error(
             operation,
             format!(
-                "checkpoint artifact digest {} differs from expected {}",
-                actual_digest, expected_digest
+                "checkpoint artifact digest {actual_digest} differs from expected {expected_digest}"
             ),
         ));
     }

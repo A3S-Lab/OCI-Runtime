@@ -288,13 +288,17 @@ the session preserves v4 rather than downgrading the schema.
 
 The platform-neutral HVF/KVM lifecycle uses a private root for each exact
 session incarnation. An immutable mode-`0600` marker binds that root to the
-complete v4 contract before a container bundle becomes Guest-visible. Creates
-for one logical session serialize through a session gate, reuse one
-authenticated Guest owner, and count admitted retryable members against the
-fixed capacity. A different contract at the same incarnation, a stale
-generation, or a newer generation while members remain fails with no VM
-replacement. A newer generation may replace an empty retained incarnation
-only after the old owner and root are reaped.
+complete v4 contract before a container bundle becomes Guest-visible. Marker
+publication writes and syncs a complete private staging file, links it into the
+pending name without replacement, and then links that complete inode into the
+final name without replacement; a racing or pre-existing marker is read back
+and must match the exact decoded contract. Creates for one
+logical session serialize through a session gate, reuse one authenticated Guest
+owner, and count admitted retryable members against the fixed capacity. A
+different contract at the same incarnation, a stale generation, or a newer
+generation while members remain fails with no VM replacement. A newer
+generation may replace an empty retained incarnation only after the old owner
+and root are reaped.
 
 An owner replacement cannot infer that a persisted session root is an empty
 pool. When no in-process owner or handoff admission proof exists, the runtime
