@@ -1384,6 +1384,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
   unsupported intents become terminal failures and release their claims. The
   legacy flat capability fields remain the safe intersection while negotiated
   per-driver operations can execute normally.
+- Fixed prepared restore preflight failures. When a resumed restore discovers
+  checkpoint artifact tampering or immutable platform, bundle, Linux-support,
+  isolation, or attachment drift, the Host now records the terminal error,
+  acknowledges the driver journal, and quarantines that generation; retryable
+  preflight failures remain resumable. This prevents a failed restore from
+  permanently retaining its generation claim and adds a cross-restart tamper
+  regression.
 - Make Linux KVM probing and real entry deterministic on variadic libc ABIs by
   passing the unused `KVM_GET_API_VERSION` ioctl argument as an explicit zero.
   Also expose each descriptor-pinned writable virtio-fs share through

@@ -325,6 +325,112 @@ async fn prepared_restore_capability_drift_is_durable_and_releases_its_claim() {
 }
 
 #[tokio::test]
+async fn prepared_restore_artifact_failure_is_durable_and_releases_its_claim() {
+    let fixture = restore_fixture().await;
+    let restore = request(
+        &fixture,
+        "prepared-restore-artifact",
+        "prepared-restore-artifact",
+    );
+    let retry = request(
+        &fixture,
+        "prepared-restore-artifact",
+        "restore-after-artifact-failure",
+    );
+    let state_root = fixture.temporary.path().join("state");
+    drop(fixture.service);
+
+    // Stop immediately before the driver restore call so the operation has a
+    // durable prepared generation but no driver-side container yet.
+    let fault = Arc::new(RecordingFaultInjector::fail_once(
+        FaultPoint::DriverBoundary {
+            operation: DriverOperation::Restore,
+            stage: DriverBoundaryStage::BeforeCall,
+        },
+    ));
+    let faulted = HostRuntimeService::open_with_fault_injector(
+        &state_root,
+        Arc::clone(&fixture.driver) as Arc<dyn RuntimeDriver>,
+        fault.clone(),
+    )
+    .await
+    .expect("open faulted restore runtime");
+    let interrupted = faulted
+        .restore(restore.clone())
+        .await
+        .expect_err("restore boundary fault must leave a prepared journal");
+    assert!(interrupted.retryable);
+    assert!(fault.fired());
+    drop(faulted);
+
+    let mut tampered = fixture.artifact_bytes.clone();
+    tampered[0] ^= 0x01;
+    tokio::fs::write(&fixture.artifact_path, &tampered)
+        .await
+        .expect("tamper checkpoint artifact after prepare");
+
+    let reopened = HostRuntimeService::open(
+        &state_root,
+        Arc::clone(&fixture.driver) as Arc<dyn RuntimeDriver>,
+    )
+    .await
+    .expect("reopen prepared restore runtime");
+    let terminal = reopened
+        .restore(restore.clone())
+        .await
+        .expect_err("prepared restore artifact failure must be durable");
+    assert_eq!(terminal.code, ErrorCode::FailedPrecondition);
+    assert!(!terminal.retryable);
+    assert_eq!(
+        reopened
+            .restore(restore.clone())
+            .await
+            .expect_err("terminal artifact failure must replay"),
+        terminal
+    );
+    assert_eq!(
+        reopened
+            .state(StateRequest {
+                target: ContainerTarget::current(restore.id().clone()),
+            })
+            .await
+            .expect_err("failed restore generation must be quarantined")
+            .code,
+        ErrorCode::NotFound
+    );
+    assert_eq!(
+        fixture
+            .driver
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Restore(_)))
+            .count(),
+        0,
+        "artifact preflight failure must not dispatch restore"
+    );
+    assert_eq!(
+        fixture
+            .driver
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::RestoreValidation(_)))
+            .count(),
+        2,
+        "terminal replay must not reopen the caller artifact"
+    );
+
+    tokio::fs::write(&fixture.artifact_path, &fixture.artifact_bytes)
+        .await
+        .expect("repair checkpoint artifact");
+    let restored = reopened
+        .restore(retry)
+        .await
+        .expect("new operation may reuse the quarantined ID");
+    assert_eq!(restored.restored().generation, Generation(2));
+    assert!(restored.restored().is_paused());
+}
+
+#[tokio::test]
 async fn restore_validates_artifact_before_allocating_durable_lifecycle_state() {
     let fixture = restore_fixture().await;
     let restore = request(&fixture, "restore-tampered", "restore-tampered-operation");

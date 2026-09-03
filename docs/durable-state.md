@@ -169,7 +169,10 @@ new process I/O until its exact response or terminal error is durable. Restore
 checks for a committed replay first, validates the immutable caller artifact
 and exact compatibility without lifecycle effects, and only then allocates and
 claims a new `creating` generation. Success commits a positive driver PID as a
-paused `running` record. Update fingerprints the complete OCI `LinuxResources`
+paused `running` record. If a restore is resuming an already prepared journal,
+any terminal preflight failure (including artifact or capability drift) is
+recorded in that journal and its generation is quarantined; retryable preflight
+failures leave the claim resumable. Update fingerprints the complete OCI `LinuxResources`
 patch and returns the exact observed container record on replay. Delete
 atomically moves the owned container directory into quarantine rather than
 recursively deleting an unresolved path.
