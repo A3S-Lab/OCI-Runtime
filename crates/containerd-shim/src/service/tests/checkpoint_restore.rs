@@ -443,7 +443,7 @@ async fn rehydration_adopts_a_restore_resume_committed_before_metadata_advance()
 }
 
 #[tokio::test]
-async fn delete_shim_replays_a_durable_restore_intent_before_exact_cleanup() {
+async fn delete_shim_replays_a_durable_restore_intent_after_capability_drift() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let bundle_path = std::fs::canonicalize(temporary.path()).expect("canonical bundle");
     std::fs::create_dir(bundle_path.join("rootfs")).expect("rootfs directory");
@@ -498,7 +498,7 @@ async fn delete_shim_replays_a_durable_restore_intent_before_exact_cleanup() {
         stderr: String::new(),
         terminal: false,
         rootfs_mounted: false,
-        restore: Some((destination.artifact_path().clone(), reference)),
+        restore: Some((destination.artifact_path().clone(), reference.clone())),
     })
     .expect("restore create intent")
     .store()
@@ -509,8 +509,20 @@ async fn delete_shim_replays_a_durable_restore_intent_before_exact_cleanup() {
     let adapter = RuntimeAdapter::from_client_with_extensions(
         a3s_oci_sdk::RuntimeClient::new(runtime),
         IsolationRequest::SharedHostKernel,
-        extensions(artifact, &[RuntimeOperation::Restore]),
+        extensions(artifact, &[RuntimeOperation::Checkpoint]),
     );
+    let error = adapter
+        .restore(
+            &identity,
+            &bundle_path,
+            adapter::process_io(false, false, false, false),
+            destination.artifact_path().clone(),
+            reference,
+        )
+        .await
+        .expect_err("a fresh restore must honor the current capability contract");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+
     let mut service = recovery_service_instance(&bundle_path, adapter);
     let response = service
         .delete_shim()
