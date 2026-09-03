@@ -99,6 +99,20 @@ This remains observation-only because the artifacts were source-built and the
 host is WSL2; it does not qualify a signed published package or extend the
 2.2.2 development claim.
 
+The restart-boundary follow-up at source revision
+`fa9393d473c2f2305ce8f7ec67054acea7ea54a0` ran the same isolated
+containerd 2.2.1 WSL2 x86_64 qualification three consecutive times in
+96.53, 96.63, and 96.59 seconds. `RestartBoundaryLedger` records each
+successful daemon restart only after the replacement endpoint is ready and
+verifies the exact ordered set of 23 restart, rehydration, and forced-cleanup
+boundaries before the test can pass. Static-musl artifact digests and the
+Cargo.lock digest are recorded in the compatibility JSON. The default
+containerd remained active at PID 180; the isolated Host Service and
+containerd units were removed after audits found zero tasks, containers,
+bundles, Runtime records, shim/workload processes, mounts, or cgroups. This
+remains observation-only source-build evidence on WSL2 and does not promote a
+driver or signed release package.
+
 The August 24, 2026 arm64 requalification used source revision
 `5a6d5f2d817d5951929c2394dff57ef925dd5822`, containerd 2.2.2, and Linux
 7.0.11-orbstack-00360-gc9bc4d96ac70. Three complete 65.15, 66.76, and
