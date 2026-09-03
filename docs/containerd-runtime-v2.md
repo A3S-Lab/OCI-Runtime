@@ -114,14 +114,16 @@ remains observation-only source-build evidence on WSL2 and does not promote a
 driver or signed release package.
 
 The current packaged-runtime follow-up at source revision
-`a3c853ec74b087c19c1816bad9c5dbd86df51722` repeated the same isolated
+`14404ab18261e3b7bcb8723655c719ee736b9504` repeated the same isolated
 containerd 2.2.1 WSL2 x86_64 qualification with the staged static-musl
 package `a3s-oci-runtime-v0.2.0-linux-x86_64`. Three consecutive matrices
-completed in 95.33, 95.88, and 96.32 seconds and crossed all 23 restart,
+completed in 94.80, 94.94, and 96.17 seconds and crossed all 23 restart,
 shim-rehydration, and forced-cleanup boundaries. The package qualification
 report is schema `a3s.oci.native-linux-package-qualification.v7`; its CLI,
 Agent, and shim digests are retained in the compatibility record alongside
-the qualification-report digest. The default containerd and Docker services
+the qualification-report digest
+`549bd5e996173991f88bdff32d4bf0b68752b546b4584c9bee57481e66667120`. The
+default containerd and Docker services
 kept their original PIDs, and the isolated root, task bundles, processes,
 mounts, cgroups, and Host Service were removed after the run. This is still
 observation-only evidence: the staged directory was not a signed published
