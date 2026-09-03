@@ -7,9 +7,9 @@ use a3s_oci_sdk::oci_spec::runtime::{ContainerState, StateBuilder};
 use a3s_oci_sdk::{
     async_trait, AttachmentCapabilities, CheckpointCompatibility, CheckpointDigest,
     CheckpointFormat, CheckpointReference, CheckpointRequest, CheckpointResponse,
-    ContainerOperationRequest, ContainerRecord, Error, ErrorCode, ExitStatus, HostPlatform,
-    IsolationClass, IsolationRequest, OciBundle, OciRuntimeService, RestoreRequest,
-    RestoreResponse, RuntimeArtifact, RuntimeDriverCapabilities, RuntimeExtensions,
+    ContainerOperationRequest, ContainerRecord, DriverKind, Error, ErrorCode, ExitStatus,
+    Generation, HostPlatform, IsolationClass, IsolationRequest, OciBundle, OciRuntimeService,
+    RestoreRequest, RestoreResponse, RuntimeArtifact, RuntimeDriverCapabilities, RuntimeExtensions,
     RuntimeOperation, RuntimeOperationCapability, StateRequest, WaitRequest,
     PAUSED_STATE_ANNOTATION,
 };
@@ -271,6 +271,54 @@ async fn checkpoint_commits_one_replayable_containerd_package_and_detects_tamper
             .len(),
         1,
         "local package validation must fail before SDK redispatch"
+    );
+}
+
+#[tokio::test]
+async fn checkpoint_dispatches_after_cached_capability_catalog_drift() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let task = TaskIdentity::new("k8s.io", "checkpoint-capability-drift")
+        .expect("checkpoint task identity");
+    let source = paused_record(
+        task.container_id.as_str(),
+        temporary.path(),
+        &format!("sha256:{}", "a".repeat(64)),
+        &format!("sha256:{}", "b".repeat(64)),
+    );
+    let artifact = runtime_artifact();
+    let runtime = BridgeRuntime::new(artifact.clone(), Some(source));
+    let calls = Arc::clone(&runtime.calls);
+    // The shim's catalog is deliberately stale and no longer advertises
+    // Checkpoint.  Host-side durable operation lookup remains authoritative.
+    let adapter = RuntimeAdapter::from_client_with_extensions(
+        a3s_oci_sdk::RuntimeClient::new(runtime),
+        IsolationRequest::SharedHostKernel,
+        extensions(artifact, &[RuntimeOperation::Restore]),
+    );
+    let checkpoint_directory = temporary.path().join("checkpoint");
+    tokio::fs::create_dir(&checkpoint_directory)
+        .await
+        .expect("checkpoint directory");
+    let destination = crate::checkpoint::CheckpointDestination::open(
+        checkpoint_directory
+            .to_str()
+            .expect("UTF-8 checkpoint directory"),
+    )
+    .await
+    .expect("checkpoint destination");
+
+    let response = adapter
+        .checkpoint(&task, Generation(7), destination.artifact_path().clone())
+        .await
+        .expect("checkpoint must reach the authoritative Host");
+    assert_eq!(response.source().generation, Generation(7));
+    assert_eq!(
+        calls
+            .lock()
+            .expect("checkpoint bridge calls")
+            .checkpoint_operation_ids
+            .len(),
+        1,
     );
 }
 

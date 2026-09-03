@@ -593,15 +593,16 @@ impl RuntimeAdapter {
         &self,
         task: &TaskIdentity,
         generation: a3s_oci_sdk::Generation,
-        source_driver: a3s_oci_sdk::DriverKind,
-        source_isolation: a3s_oci_sdk::IsolationClass,
         artifact_path: CheckpointArtifactPath,
     ) -> Result<CheckpointResponse> {
-        self.ensure_optional_operation(
-            source_isolation,
-            source_driver,
-            RuntimeOperation::Checkpoint,
-        )?;
+        // The Host is the authority for the exact durable checkpoint
+        // operation.  Do not reject here from the shim's cached RuntimeInfo:
+        // a checkpoint may already be prepared or completed when the shim is
+        // replaced, and a capability change between connections must not turn
+        // an idempotent retry into a local Unsupported error.  The Host still
+        // validates the recorded driver and isolation before claiming a new
+        // operation, so this does not permit rerouting or an unadvertised
+        // fresh mutation.
         let path = artifact_path.as_path().to_str().ok_or_else(|| {
             adapter_error(
                 ErrorCode::InvalidArgument,
