@@ -35,10 +35,13 @@ pub(super) async fn verify_checkpoint_artifact(
     }
 
     let path = artifact_path.as_path();
-    let metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
+    // Reject an obviously invalid path early so callers receive a stable
+    // contract error.  The metadata is also compared with the opened handle
+    // below, but it is never used for reading artifact contents.
+    let path_metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
         checkpoint_artifact_io_error("inspect checkpoint artifact", path, operation, error)
     })?;
-    if !is_plain_file(&metadata) {
+    if !is_plain_file(&path_metadata) {
         return Err(checkpoint_artifact_contract_error(
             operation,
             format!(
@@ -48,6 +51,45 @@ pub(super) async fn verify_checkpoint_artifact(
         ));
     }
 
+    // Windows metadata does not expose a stable file identity through the
+    // stable Rust API.  Capture one from a no-follow handle before opening
+    // the handle that will be consumed, so a delete/recreate between the two
+    // opens is detected without relying on path metadata alone.
+    #[cfg(windows)]
+    let path_identity = {
+        let identity_file = open_readonly_nofollow(path).await.map_err(|error| {
+            checkpoint_artifact_io_error(
+                "open checkpoint artifact for identity",
+                path,
+                operation,
+                error,
+            )
+        })?;
+        let identity_metadata = identity_file.metadata().await.map_err(|error| {
+            checkpoint_artifact_io_error(
+                "inspect checkpoint artifact identity handle",
+                path,
+                operation,
+                error,
+            )
+        })?;
+        if !is_plain_file(&identity_metadata) {
+            return Err(checkpoint_artifact_contract_error(
+                operation,
+                format!(
+                    "checkpoint artifact identity handle is not a regular nonsymlink file: {}",
+                    path.display()
+                ),
+            ));
+        }
+        file_identity(&identity_file, path, operation)?
+    };
+
+    // Validate the handle that will actually be consumed.  A path-based
+    // metadata check can become stale between inspection and open (including
+    // a delete/recreate or reparse-point substitution).  The platform
+    // no-follow flags make the opened object the trust anchor; all subsequent
+    // metadata and hashing operations stay on that handle.
     let mut file = open_readonly_nofollow(path).await.map_err(|error| {
         checkpoint_artifact_io_error("open checkpoint artifact", path, operation, error)
     })?;
@@ -63,7 +105,18 @@ pub(super) async fn verify_checkpoint_artifact(
             ),
         ));
     }
-    if !same_file_identity(&metadata, &opened) {
+    #[cfg(unix)]
+    if !same_file_identity(&path_metadata, &opened) {
+        return Err(checkpoint_artifact_contract_error(
+            operation,
+            format!(
+                "checkpoint artifact was replaced while it was being opened: {}",
+                path.display()
+            ),
+        ));
+    }
+    #[cfg(windows)]
+    if file_identity(&file, path, operation)? != path_identity {
         return Err(checkpoint_artifact_contract_error(
             operation,
             format!(
@@ -195,18 +248,57 @@ fn is_plain_file(metadata: &std::fs::Metadata) -> bool {
     metadata.is_file() && !metadata.file_type().is_symlink() && !is_reparse_point(metadata)
 }
 
-fn same_file_identity(_left: &std::fs::Metadata, _right: &std::fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
+#[cfg(unix)]
+fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
 
-        _left.dev() == _right.dev() && _left.ino() == _right.ino()
-    }
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
 
-    #[cfg(not(unix))]
-    {
-        true
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileIdentity {
+    volume_serial_number: u32,
+    file_index: u64,
+}
+
+#[cfg(windows)]
+fn file_identity(
+    file: &tokio::fs::File,
+    path: &Path,
+    operation: &'static str,
+) -> Result<FileIdentity> {
+    use std::mem::MaybeUninit;
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    let mut information = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    // SAFETY: the file owns a valid handle for the duration of the call and
+    // the output pointer refers to writable storage of the exact structure.
+    let succeeded =
+        unsafe { GetFileInformationByHandle(file.as_raw_handle(), information.as_mut_ptr()) };
+    if succeeded == 0 {
+        return Err(Error::new(
+            ErrorCode::Unavailable,
+            format!(
+                "failed to obtain checkpoint artifact identity {}: {}",
+                path.display(),
+                std::io::Error::last_os_error()
+            ),
+        )
+        .for_operation(operation)
+        .retryable(true));
     }
+    // SAFETY: GetFileInformationByHandle returned success and initialized the
+    // complete BY_HANDLE_FILE_INFORMATION structure.
+    let information = unsafe { information.assume_init() };
+    Ok(FileIdentity {
+        volume_serial_number: information.dwVolumeSerialNumber,
+        file_index: (u64::from(information.nFileIndexHigh) << 32)
+            | u64::from(information.nFileIndexLow),
+    })
 }
 
 #[cfg(windows)]
@@ -304,7 +396,149 @@ fn artifact_error(message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use a3s_oci_sdk::{CheckpointArtifactPath, CheckpointDigest, ErrorCode};
     use sha2::{Digest, Sha256};
+
+    fn artifact_path(path: PathBuf) -> CheckpointArtifactPath {
+        CheckpointArtifactPath::new(path).expect("valid checkpoint artifact path")
+    }
+
+    fn digest(bytes: &[u8]) -> CheckpointDigest {
+        CheckpointDigest::new(format!("sha256:{:x}", Sha256::digest(bytes)))
+            .expect("valid checkpoint digest")
+    }
+
+    #[tokio::test]
+    async fn verifier_accepts_the_exact_regular_file_contents() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("checkpoint.bin");
+        let bytes = b"checkpoint payload";
+        tokio::fs::write(&path, bytes)
+            .await
+            .expect("write checkpoint artifact");
+
+        super::verify_checkpoint_artifact(
+            &artifact_path(path),
+            &digest(bytes),
+            bytes.len() as u64,
+            "test",
+        )
+        .await
+        .expect("regular artifact must verify");
+    }
+
+    #[tokio::test]
+    async fn verifier_rejects_size_and_digest_mismatches_without_retry() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("checkpoint.bin");
+        let bytes = b"checkpoint payload";
+        tokio::fs::write(&path, bytes)
+            .await
+            .expect("write checkpoint artifact");
+        let wrapped = artifact_path(path);
+
+        let size_error = super::verify_checkpoint_artifact(
+            &wrapped,
+            &digest(bytes),
+            bytes.len() as u64 + 1,
+            "test",
+        )
+        .await
+        .expect_err("wrong artifact size must fail");
+        assert_eq!(size_error.code, ErrorCode::FailedPrecondition);
+        assert!(!size_error.retryable);
+
+        let digest_error = super::verify_checkpoint_artifact(
+            &wrapped,
+            &digest(b"different payload"),
+            bytes.len() as u64,
+            "test",
+        )
+        .await
+        .expect_err("wrong artifact digest must fail");
+        assert_eq!(digest_error.code, ErrorCode::FailedPrecondition);
+        assert!(!digest_error.retryable);
+    }
+
+    #[tokio::test]
+    async fn verifier_rejects_empty_and_directory_artifacts() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let empty = temporary.path().join("empty.bin");
+        tokio::fs::write(&empty, [])
+            .await
+            .expect("write empty artifact");
+        let empty_error =
+            super::verify_checkpoint_artifact(&artifact_path(empty), &digest(&[]), 0, "test")
+                .await
+                .expect_err("empty artifact must fail");
+        assert_eq!(empty_error.code, ErrorCode::FailedPrecondition);
+
+        let directory = temporary.path().join("directory");
+        tokio::fs::create_dir(&directory)
+            .await
+            .expect("create artifact directory");
+        let directory_error = super::verify_checkpoint_artifact(
+            &artifact_path(directory),
+            &digest(b"directory"),
+            9,
+            "test",
+        )
+        .await
+        .expect_err("directory artifact must fail");
+        assert_eq!(directory_error.code, ErrorCode::FailedPrecondition);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn verifier_rejects_a_symlink_artifact() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let target = temporary.path().join("target.bin");
+        let link = temporary.path().join("link.bin");
+        let bytes = b"checkpoint payload";
+        tokio::fs::write(&target, bytes)
+            .await
+            .expect("write target artifact");
+        symlink(&target, &link).expect("create artifact symlink");
+
+        let error = super::verify_checkpoint_artifact(
+            &artifact_path(link),
+            &digest(bytes),
+            bytes.len() as u64,
+            "test",
+        )
+        .await
+        .expect_err("symlink artifact must fail closed");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_file_identity_distinguishes_distinct_open_files() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let first_path = temporary.path().join("first.bin");
+        let second_path = temporary.path().join("second.bin");
+        tokio::fs::write(&first_path, b"first")
+            .await
+            .expect("write first artifact");
+        tokio::fs::write(&second_path, b"second")
+            .await
+            .expect("write second artifact");
+        let first = tokio::fs::File::open(&first_path)
+            .await
+            .expect("open first artifact");
+        let second = tokio::fs::File::open(&second_path)
+            .await
+            .expect("open second artifact");
+
+        assert_ne!(
+            super::file_identity(&first, &first_path, "test").expect("first identity"),
+            super::file_identity(&second, &second_path, "test").expect("second identity")
+        );
+    }
 
     #[tokio::test]
     async fn catalog_identity_matches_the_exact_host_test_executable() {

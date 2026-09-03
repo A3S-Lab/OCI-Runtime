@@ -92,9 +92,15 @@ owned pending link; it never removes the published artifact.
 
 The Host independently opens the published destination with platform
 no-follow/reparse protection and verifies its regular-file type, exact byte
-size, and SHA-256 digest before accepting the driver's evidence. This check is
-in addition to the driver's format-specific validation and prevents malformed
-or faulty driver evidence from becoming an immutable reference.
+size, and SHA-256 digest before accepting the driver's evidence. The content
+read is always performed through that validated handle. Unix compares the
+opened object's device/inode with the initial path identity; Windows captures
+the volume serial and file index from a second no-follow handle and compares
+it with the consumed handle. A replacement between path inspection and the
+consumed open therefore fails closed instead of relying on stale path
+metadata. This check is in addition to the driver's format-specific
+validation and prevents malformed or faulty driver evidence from becoming an
+immutable reference.
 
 The Host operation journal and live executor provide exact restore replay for
 response loss in one process. A separate driver-local restore journal durably

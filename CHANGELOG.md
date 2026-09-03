@@ -27,6 +27,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Hardened Host checkpoint-artifact verification across platforms. The Host
+  now keeps hashing bound to the validated no-follow handle and compares
+  Windows volume/file identities across the path and consumed opens, while
+  retaining Unix device/inode checks. Added direct success, mismatch, empty,
+  directory, and symlink regression coverage.
+
 - Added Linux KVM File and Filesystem operation-stage owner-replacement
   qualifications. Both operations now use the qualification-only dedicated-VM
   driver, durable request/response journals, exact-generation and operation-ID
