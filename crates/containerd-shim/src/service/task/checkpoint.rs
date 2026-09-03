@@ -53,8 +53,6 @@ impl Service {
             .checkpoint(
                 &task.identity,
                 task.record.generation,
-                task.record.driver,
-                task.record.isolation,
                 destination.artifact_path().clone(),
             )
             .await

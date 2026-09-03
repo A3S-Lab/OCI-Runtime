@@ -412,6 +412,13 @@ shim crash before metadata advance. Pause, Resume, Update, Kill, Exec, and a
 new Checkpoint cannot bypass a pending Start; DeleteShim can replay a schema-v2
 restore intent and clean the exact generation.
 
+The shim treats the negotiated optional-operation catalog as connection-time
+metadata, not as the authority for replay. Checkpoint calls and durable
+Restore replays are adjudicated by the Host's exact operation journal and
+recorded driver contract. This preserves idempotent retries across a capability
+change between shim connections while still rejecting a new request that the
+selected driver does not support.
+
 Create without A3S options selects `shared-host-kernel`. The versioned
 `dev.a3s.oci.runtime.v1.CreateOptions` payload can request
 `shared-host-kernel` or `dedicated-vm`. `shared-guest-kernel`, unknown fields,
