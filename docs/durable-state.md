@@ -165,7 +165,12 @@ recording an intent. Pause and resume preserve the standard OCI `running`
 status and store freezer state in the reserved
 `dev.a3s.oci.runtime.paused=true` state annotation. Checkpoint requires that
 paused running state, refuses any active init or exec mutation/I/O, and prevents
-new process I/O until its exact response or terminal error is durable. Restore
+new process I/O until its exact response or terminal error is durable. After a
+driver publishes a checkpoint, the Host independently verifies the
+destination's nonsymlink regular-file identity, exact size, and SHA-256 digest
+before committing the immutable reference. Restore performs the same generic
+file verification before driver-specific artifact validation or generation
+allocation. Restore
 checks for a committed replay first, validates the immutable caller artifact
 and exact compatibility without lifecycle effects, and only then allocates and
 claims a new `creating` generation. Success commits a positive driver PID as a

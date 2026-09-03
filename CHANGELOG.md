@@ -1391,6 +1391,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
   preflight failures remain resumable. This prevents a failed restore from
   permanently retaining its generation claim and adds a cross-restart tamper
   regression.
+- Hardened checkpoint artifact trust boundaries. The Host now independently
+  opens a nonsymlink regular file with platform no-follow flags, verifies its
+  exact size and SHA-256 evidence after checkpoint publication and before
+  restore lifecycle allocation, and durably releases a checkpoint claim when
+  non-retryable driver evidence does not describe the published bytes.
 - Make Linux KVM probing and real entry deterministic on variadic libc ABIs by
   passing the unused `KVM_GET_API_VERSION` ioctl argument as an explicit zero.
   Also expose each descriptor-pinned writable virtio-fs share through

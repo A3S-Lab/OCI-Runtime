@@ -90,6 +90,12 @@ published result without reading the caller-owned final artifact. Host
 acknowledgement removes the operation journal, staging directory, and any
 owned pending link; it never removes the published artifact.
 
+The Host independently opens the published destination with platform
+no-follow/reparse protection and verifies its regular-file type, exact byte
+size, and SHA-256 digest before accepting the driver's evidence. This check is
+in addition to the driver's format-specific validation and prevents malformed
+or faulty driver evidence from becoming an immutable reference.
+
 The Host operation journal and live executor provide exact restore replay for
 response loss in one process. A separate driver-local restore journal durably
 retains the allocated request, validated manifest, extracted image stage, and
@@ -164,9 +170,11 @@ Before publication, failure removes only runtime-created partial files. After
 publication and durable response commit, ownership of the immutable artifact
 belongs to the caller; container deletion and runtime recovery never remove it.
 
-Restore opens the caller-owned artifact read-only, rejects links or identity
-replacement according to the driver's platform boundary, verifies size and
-content before lifecycle mutation, and never changes or deletes the artifact.
+A restore first opens the caller-owned artifact read-only with the Host's
+platform no-follow/reparse protection and independently verifies its regular
+file type, exact size, and content digest before invoking driver-specific
+validation or allocating lifecycle state. The driver then performs its
+format-specific checks. Restore never changes or deletes the artifact.
 A failed restore removes only runtime-owned lifecycle, driver, and attachment
 resources created for that attempt.
 
