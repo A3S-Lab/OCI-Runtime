@@ -27,6 +27,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added a self-verifying Linux release package manifest. Each staged archive
+  now records the exact source, runtime profile, containerd Runtime V2
+  contract, qualification report, and every regular file's relative path,
+  mode, size, and SHA-256 digest. The packaged verifier rejects symlinks,
+  special files, inventory drift, unsafe paths, and qualification or
+  compatibility-record substitution before installation. This strengthens the
+  R7 packaging identity gate without promoting a probe-only driver.
+
 - Retained a current-source packaged-shim containerd qualification record.
   The static-musl x86_64 package from revision
   `af8c5f97ac1f4eb506b32e8d57b3d1c0d5fb3645` passed three isolated
