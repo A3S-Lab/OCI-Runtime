@@ -223,6 +223,18 @@ impl RuntimeAdapter {
             reference.compatibility().driver(),
             RuntimeOperation::Restore,
         )?;
+        self.dispatch_restore(task, bundle_directory, io, artifact_path, reference)
+            .await
+    }
+
+    async fn dispatch_restore(
+        &self,
+        task: &TaskIdentity,
+        bundle_directory: &Path,
+        io: ProcessIo,
+        artifact_path: CheckpointArtifactPath,
+        reference: CheckpointReference,
+    ) -> Result<RestoreResponse> {
         let bundle = OciBundle::load(bundle_directory).await?;
         let attachments = CreateAttachments::from_bundle(&bundle, io)?;
         self.client
@@ -248,8 +260,13 @@ impl RuntimeAdapter {
     ) -> Result<RestoreResponse> {
         let deadline = tokio::time::Instant::now() + DELETE_RETRY_TIMEOUT;
         loop {
+            // The create intent is durable before the first Restore dispatch.
+            // Let the host service decide whether this operation identity is a
+            // replay or a new request: its durable journal can replay an
+            // accepted operation after capability drift, while still rejecting
+            // a never-admitted Restore against the current driver contract.
             match self
-                .restore(
+                .dispatch_restore(
                     task,
                     bundle_directory,
                     io.clone(),
