@@ -207,6 +207,124 @@ async fn restore_creates_and_replays_one_exact_paused_running_generation() {
 }
 
 #[tokio::test]
+async fn committed_restore_replays_after_driver_capability_drift() {
+    let fixture = restore_fixture().await;
+    let restore = request(
+        &fixture,
+        "restore-capability-drift",
+        "restore-capability-drift",
+    );
+    let response = fixture
+        .service
+        .restore(restore.clone())
+        .await
+        .expect("initial restore");
+    let state_root = fixture.temporary.path().join("state");
+    let driver_kind = fixture.driver.capability.driver;
+    let isolation_classes = fixture.driver.capability.isolation_classes.clone();
+    let attachments = fixture.driver.attachments.clone();
+    drop(fixture.service);
+
+    // Keep the recorded driver and isolation owner available, but remove the
+    // optional Restore operation from its advertised capability.  A durable
+    // response must still be replayable without a second driver dispatch.
+    let mut drifted = RecordingDriver::with_control_operations();
+    drifted.capability.driver = driver_kind;
+    drifted.capability.isolation_classes = isolation_classes;
+    drifted.attachments = attachments;
+    let drifted = Arc::new(drifted);
+    let reopened =
+        HostRuntimeService::open(state_root, Arc::clone(&drifted) as Arc<dyn RuntimeDriver>)
+            .await
+            .expect("reopen with restore capability drift");
+
+    assert_eq!(
+        reopened.restore(restore).await.expect("replay restore"),
+        response
+    );
+    assert!(drifted.calls().iter().all(|call| !matches!(
+        call,
+        DriverCall::Restore(_) | DriverCall::RestoreValidation(_)
+    )));
+}
+
+#[tokio::test]
+async fn prepared_restore_capability_drift_is_durable_and_releases_its_claim() {
+    let fixture = restore_fixture().await;
+    let restore = request(
+        &fixture,
+        "prepared-restore-capability-drift",
+        "prepared-restore-capability-drift",
+    );
+    let state_root = fixture.temporary.path().join("state");
+    let driver_kind = fixture.driver.capability.driver;
+    let isolation_classes = fixture.driver.capability.isolation_classes.clone();
+    let attachments = fixture.driver.attachments.clone();
+    drop(fixture.service);
+
+    let fault = Arc::new(RecordingFaultInjector::fail_once(
+        FaultPoint::DriverBoundary {
+            operation: DriverOperation::Restore,
+            stage: DriverBoundaryStage::BeforeCall,
+        },
+    ));
+    let faulted = HostRuntimeService::open_with_fault_injector(
+        &state_root,
+        Arc::clone(&fixture.driver) as Arc<dyn RuntimeDriver>,
+        fault.clone(),
+    )
+    .await
+    .expect("open faulted restore runtime");
+    let interrupted = faulted
+        .restore(restore.clone())
+        .await
+        .expect_err("restore boundary fault must leave a prepared journal");
+    assert!(interrupted.retryable);
+    assert!(fault.fired());
+    drop(faulted);
+
+    // The replacement still owns the recorded isolation, but no longer
+    // advertises Restore.  The prepared operation must become a durable
+    // terminal failure and quarantine only its allocated generation.
+    let mut drifted = RecordingDriver::with_control_operations();
+    drifted.capability.driver = driver_kind;
+    drifted.capability.isolation_classes = isolation_classes;
+    drifted.attachments = attachments;
+    let drifted = Arc::new(drifted);
+    let reopened =
+        HostRuntimeService::open(&state_root, Arc::clone(&drifted) as Arc<dyn RuntimeDriver>)
+            .await
+            .expect("reopen with prepared restore capability drift");
+    let terminal = reopened
+        .restore(restore.clone())
+        .await
+        .expect_err("prepared restore capability drift must fail durably");
+    assert_eq!(terminal.code, ErrorCode::Unsupported);
+    assert!(!terminal.retryable);
+    assert_eq!(
+        reopened
+            .restore(restore.clone())
+            .await
+            .expect_err("terminal restore capability failure must replay"),
+        terminal
+    );
+    assert_eq!(
+        reopened
+            .state(StateRequest {
+                target: ContainerTarget::current(restore.id().clone()),
+            })
+            .await
+            .expect_err("failed restore generation must be quarantined")
+            .code,
+        ErrorCode::NotFound
+    );
+    assert!(drifted.calls().iter().all(|call| !matches!(
+        call,
+        DriverCall::Restore(_) | DriverCall::RestoreValidation(_)
+    )));
+}
+
+#[tokio::test]
 async fn restore_validates_artifact_before_allocating_durable_lifecycle_state() {
     let fixture = restore_fixture().await;
     let restore = request(&fixture, "restore-tampered", "restore-tampered-operation");

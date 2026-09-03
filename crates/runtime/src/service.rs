@@ -1769,12 +1769,6 @@ impl OciRuntimeService for HostRuntimeService {
         request.validate()?;
         let tee_launch = request.attachments().tee_launch(request.bundle())?;
         let lifecycle = self.lifecycle("restore")?;
-        if !lifecycle
-            .drivers
-            .any_driver_supports(RuntimeOperation::Restore)
-        {
-            return Err(Error::unsupported("restore"));
-        }
         let operation_id = request.context().operation_id.clone();
         let _operation_gate = lifecycle.operation_gates.acquire(&operation_id).await;
         if let RestoreOperationLookup::Replayed(response) =
@@ -1783,6 +1777,28 @@ impl OciRuntimeService for HostRuntimeService {
             return lifecycle
                 .acknowledge_result(&operation_id, Ok(*response))
                 .await;
+        }
+
+        // `Pending` covers both a new request and a prepared request that is
+        // resuming after an owner interruption.  Existing journals must not
+        // be rejected by the service-wide capability intersection: the
+        // recorded driver below is the only authority for a prepared restore,
+        // and a capability failure there is made durable so its claim cannot
+        // remain stuck.
+        let operation_exists = lifecycle.store.operation_exists(&operation_id).await?;
+
+        // A committed or terminal restore must replay before capability
+        // probing.  This mirrors the other durable operations: an operation
+        // identity is the source of truth once it exists, so a later driver
+        // capability change cannot turn an already durable response into a
+        // spurious Unsupported error.  New and prepared restores still pass
+        // this gate below before any fresh lifecycle effect is dispatched.
+        if !operation_exists
+            && !lifecycle
+                .drivers
+                .any_driver_supports(RuntimeOperation::Restore)
+        {
+            return Err(Error::unsupported("restore"));
         }
 
         let reference = request.reference()?.clone();
@@ -1800,8 +1816,19 @@ impl OciRuntimeService for HostRuntimeService {
             )
             .for_operation("restore"));
         }
-        let registered = lifecycle.driver(compatibility.driver(), "restore")?;
-        registered.ensure_operation(RuntimeOperation::Restore, "restore")?;
+        let registered = match lifecycle.driver(compatibility.driver(), "restore") {
+            Ok(registered) => registered,
+            Err(error) if operation_exists => {
+                return lifecycle.fail_driver_operation(&operation_id, error).await;
+            }
+            Err(error) => return Err(error),
+        };
+        if let Err(error) = registered.ensure_operation(RuntimeOperation::Restore, "restore") {
+            if operation_exists {
+                return lifecycle.fail_driver_operation(&operation_id, error).await;
+            }
+            return Err(error);
+        }
         if !registered
             .capability()
             .isolation_classes
