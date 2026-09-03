@@ -1566,6 +1566,18 @@ release-promotion gates above.
     before `shares/<container>/<generation>` is created. The same production
     path and cleanup assertions run on Linux x86_64 and AArch64 CI without
     requiring `/dev/kvm`.
+  - [x] Add the Linux KVM nine-stage File owner-replacement qualification.
+    The gate uses an isolated writable `/tmp` mount, retains the exact upload
+    request and generation, rehydrates committed uploads in a replacement
+    Guest, verifies a byte-for-byte download effect, fences changed and stale
+    identities, and proves explicit cleanup. Clean x86_64 revision `fa4c593`
+    retained 9 / 9 stages; CI wires both advertised architectures.
+  - [x] Add the corresponding Linux KVM nine-stage Filesystem
+    owner-replacement qualification. The gate retains mkdir metadata and
+    durable response identity, verifies replacement Stat and Remove effects,
+    fences changed paths and stale generations, and proves zero residue. Clean
+    x86_64 revision `fa4c593` retained 9 / 9 stages; CI wires both advertised
+    architectures.
   - [ ] Retain the `available` 17-case lifecycle, owner-death/restart, and
     25-wave soak reports on fresh x86_64 and AArch64 KVM hosts. The lifecycle
     artifact must include the integrated ten-case Guest path-isolation report;

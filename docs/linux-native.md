@@ -668,6 +668,53 @@ Host and Guest generations, verifies the exact nonce-bound EOF effect marker,
 force-deletes the workload, and restores every inventory. The aggregate schema
 is `a3s.oci.linux-kvm-close-stdin-reopen-matrix.v1`.
 
+Resize retains the exact setup Create, Start, and PTY Exec dimensions:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_RESIZE_REOPEN_REPORT=/absolute/path/to/resize-reopen.json \
+  bash .github/scripts/linux-kvm-resize-reopen.sh
+```
+
+The first eight boundaries dispatch the prepared terminal resize once after
+reopen. At `guest-after-response-write`, recovery reapplies the committed
+dimensions to the replacement PTY and Host replay performs no second driver
+dispatch. Exact dimensions, process identity, stale-generation fences, marker
+cleanup, and both VM inventories are required. The aggregate schema is
+`a3s.oci.linux-kvm-resize-reopen-matrix.v1`.
+
+File retains a durable upload request and qualifies it through all four Host and
+five Guest transport boundaries:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_FILE_REOPEN_REPORT=/absolute/path/to/file-reopen.json \
+  bash .github/scripts/linux-kvm-file-reopen.sh
+```
+
+The qualification bundle adds an isolated writable `/tmp` tmpfs. A replacement
+owner verifies the exact request digest, generation, and durable response;
+prepared paths dispatch the upload once, while the committed final path
+rehydrates and replays it without a second API-driven dispatch. A replacement
+download checks the exact bytes, changed and stale requests are rejected, an
+explicit Remove is verified, and all runtime inventories return to baseline.
+The aggregate schema is `a3s.oci.linux-kvm-file-reopen-matrix.v1`.
+
+Filesystem applies the same proof to mkdir and Stat:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_FILESYSTEM_REOPEN_REPORT=/absolute/path/to/filesystem-reopen.json \
+  bash .github/scripts/linux-kvm-filesystem-reopen.sh
+```
+
+The exact directory metadata and operation identity are retained across owner
+replacement. Prepared paths create the directory once; the committed final
+path rehydrates the already-successful mkdir and replays the Host response
+without another driver dispatch. Replacement Stat, changed-path rejection,
+stale-generation fences, explicit Remove, and zero residue are required. The
+aggregate schema is `a3s.oci.linux-kvm-filesystem-reopen-matrix.v1`.
+
 The bounded soak has a different qualification owner and the exact
 `linux-kvm-bounded-soak-only-v1` scope:
 
@@ -692,7 +739,8 @@ nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
 If KVM is unavailable, none of the lifecycle, recovery, operation-reopen, or soak
 scripts downloads or unpacks the Alpine fixture. Lifecycle, recovery, and
 Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume,
-Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin reopen emit zero-case
+Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem
+reopen emit zero-case
 `unavailable` reports; soak emits
 `completed_iterations: 0` and
 `fixture_downloaded: false`. CI uploads those reports, but they are not
@@ -803,7 +851,8 @@ host (`6.18.33.2-microsoft-standard-WSL2`) with a real `/dev/kvm` device and
 API version 12. The release build retained available normal and injected
 post-probe entry reports (1/1 each), the complete 14/14 compatibility-drift
 matrix, 17/17 lifecycle cases, 1/1 owner-death/restart case, 25/25 soak waves,
-and all 18 operation-stage matrices (9/9 each, 162/162 replacement paths).
+and all 18 previously implemented operation-stage matrices (9/9 each,
+162/162 replacement paths).
 Every report returned to its process, descriptor, endpoint, runtime-share,
 bootstrap, marker, and recovery baselines. The key report SHA-256 values are
 `d596ee0536e379a1fc8bb0e639b6715aec81d0adbcd7901ab7b52b5c84afdc0e`
@@ -814,8 +863,20 @@ bootstrap, marker, and recovery baselines. The key report SHA-256 values are
 (soak). This is an observation-only WSL2 qualification: it does not replace
 the required fresh-host AArch64 and x86_64 promotion artifacts, so the KVM
 candidate remains `probe-only`.
-AArch64 hardware evidence and the other 3 workload-operation matrices plus
-Host shutdown remain open; the candidate therefore remains `probe-only`.
+AArch64 hardware evidence and Host shutdown remain open; the candidate
+therefore remains `probe-only`.
+
+The September 3 follow-up at clean Runtime revision `fa4c59347346b677ab3b0a5c2efa7562d52bef17`
+added the Linux KVM File and Filesystem gates. Each passed all nine Host/Guest
+transport boundaries on the same real x86_64 KVM host, with immutable manifest
+provenance and zero endpoint, process, handoff, share, marker, and state-root
+residue. The retained aggregate report digests are
+`8bd1bb731198c5a28659a47e85d146a5e8285483488a6540acda8d1596d51ec3` (File)
+and `205e3b493e218a3fc3d8bc50f4d4b3af14ccf0156846352dfa00bd1d84d67c19`
+(Filesystem). These reports close the implementation and x86_64 observation
+for all 20 KVM workload operations (180/180 operation-stage paths); fresh
+AArch64 evidence, Host shutdown, and promotion-only negative-isolation and
+release gates remain open.
 
 ## Experimental CRIU checkpoint and restore gate
 
