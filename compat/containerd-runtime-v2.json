@@ -510,7 +510,7 @@
       "recorded_on": "2026-09-03",
       "result": "passed",
       "claim_effect": "observation-only",
-      "source_commit": "14404ab18261e3b7bcb8723655c719ee736b9504",
+      "source_commit": "af8c5f97ac1f4eb506b32e8d57b3d1c0d5fb3645",
       "containerd": {
         "version": "2.2.1",
         "revision": "dea7da592f5d1d2b7755e3a161be07f43fad8f75"
@@ -541,15 +541,15 @@
         "package": {
           "name": "a3s-oci-runtime-v0.2.0-linux-x86_64",
           "qualification_schema": "a3s.oci.native-linux-package-qualification.v7",
-          "qualification_report_sha256": "549bd5e996173991f88bdff32d4bf0b68752b546b4584c9bee57481e66667120",
+          "qualification_report_sha256": "d87aa3ff3cd58843d57f51b75b91ca6d05c880f043d24477789105dfc065ba86",
           "qualification_report_size_bytes": 5889
         },
         "files": [
           {
             "role": "cli",
             "name": "a3s-oci",
-            "sha256": "0446f6a2095bc231e476a12aab844b5a980a5cf853374033c1bc144a293382a7",
-            "size_bytes": 37712072,
+            "sha256": "2be45cdd357a39c6ecc4b4a21d29d3027b3c5f24b65b634c7aa6e6cb0a90fca3",
+            "size_bytes": 37712048,
             "format": "elf-static-pie-musl"
           },
           {
@@ -562,7 +562,7 @@
           {
             "role": "shim",
             "name": "containerd-shim-a3s-oci-v2",
-            "sha256": "32b535dbb56cdc8c2d5592fcd225b1ffe7285eac8a85cc8e62f413d2a9c42b5f",
+            "sha256": "56a90ffdd9425983ac336a490411efef6d490d3f2bced3d93310b7f4ca764e54",
             "size_bytes": 20352208,
             "format": "elf-static-pie-musl"
           },
@@ -579,9 +579,9 @@
         "test": "real_containerd_runtime_v2_qualification",
         "passes": 3,
         "duration_seconds": [
-          94.80,
-          94.94,
-          96.17
+          95.09,
+          95.25,
+          114.44
         ],
         "preflight_passed": true,
         "isolated_containerd": true,
