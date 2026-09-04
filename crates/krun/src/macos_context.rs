@@ -77,37 +77,46 @@ impl MacosKrunApi {
             .map_err(|error| error.for_operation("load-macos-libkrun"))?;
         verify_pinned_runtime_file(&firmware_file, LIBKRUNFW_SIZE, LIBKRUNFW_SHA256)?;
         verify_pinned_runtime_file(&krun_file, LIBKRUN_SIZE, LIBKRUN_SHA256)?;
+        let firmware_loader_path = firmware_file.loader_path();
+        let krun_loader_path = krun_file.loader_path();
 
-        // SAFETY: both paths are absolute, checksum-verified regular files.
-        // RTLD_GLOBAL makes the already-loaded firmware visible when libkrun
-        // later resolves its fixed `libkrunfw.5.dylib` provider.
-        let firmware =
-            unsafe { Library::open(Some(firmware_path.as_os_str()), RTLD_NOW | RTLD_GLOBAL) }
-                .map_err(|error| {
-                    runtime_error(
-                        "load-macos-libkrunfw",
-                        format!(
-                            "failed to load checksum-verified firmware {}: {error}",
-                            firmware_path.display()
-                        ),
-                    )
-                })?;
+        // SAFETY: the Darwin fdesc path resolves to the exact checksum-
+        // verified firmware object retained above. RTLD_GLOBAL makes the
+        // already-loaded firmware visible when libkrun resolves its fixed
+        // `libkrunfw.5.dylib` provider.
+        let firmware = unsafe {
+            Library::open(
+                Some(firmware_loader_path.as_os_str()),
+                RTLD_NOW | RTLD_GLOBAL,
+            )
+        }
+        .map_err(|error| {
+            runtime_error(
+                "load-macos-libkrunfw",
+                format!(
+                    "failed to load checksum-verified firmware {}: {error}",
+                    firmware_path.display()
+                ),
+            )
+        })?;
         firmware_file
             .reverify("dynamic library load")
             .map_err(|error| error.for_operation("load-macos-libkrunfw"))?;
 
-        // SAFETY: the exact runtime-owned libkrun file was verified above and
-        // stays loaded for the lifetime of every copied function pointer.
-        let krun = unsafe { Library::open(Some(krun_path.as_os_str()), RTLD_NOW | RTLD_LOCAL) }
-            .map_err(|error| {
-                runtime_error(
-                    "load-macos-libkrun",
-                    format!(
-                        "failed to load checksum-verified libkrun {}: {error}",
-                        krun_path.display()
-                    ),
-                )
-            })?;
+        // SAFETY: the Darwin fdesc path resolves to the exact runtime-owned
+        // libkrun object retained above and stays loaded for the lifetime of
+        // every copied function pointer.
+        let krun =
+            unsafe { Library::open(Some(krun_loader_path.as_os_str()), RTLD_NOW | RTLD_LOCAL) }
+                .map_err(|error| {
+                    runtime_error(
+                        "load-macos-libkrun",
+                        format!(
+                            "failed to load checksum-verified libkrun {}: {error}",
+                            krun_path.display()
+                        ),
+                    )
+                })?;
         krun_file
             .reverify("dynamic library load")
             .map_err(|error| error.for_operation("load-macos-libkrun"))?;

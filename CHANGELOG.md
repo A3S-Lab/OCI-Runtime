@@ -27,6 +27,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Hardened macOS HVF libkrun loading. The firmware and libkrun dylibs now
+  enter `dlopen` through retained Darwin `/dev/fd` descriptors after manifest
+  verification, preventing a runtime-directory replacement from redirecting
+  the native loader between hashing and load.
+
 - Hardened Linux libkrun runtime loading. The firmware and libkrun shared
   objects are now opened with no-follow, manifest-bound descriptors and loaded
   through descriptor-backed `/proc/self/fd` paths; descriptor identity and
