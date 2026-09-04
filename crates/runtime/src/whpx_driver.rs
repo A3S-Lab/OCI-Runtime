@@ -2272,15 +2272,19 @@ async fn remove_plain_file_bound(
             path.display()
         )));
     }
-    verified
-        .verify_path_unchanged(path)
-        .await
-        .map_err(|error| {
-            bundle_handoff_race_error(format!(
+    match verified.verify_path_unchanged(path).await {
+        Ok(()) => {}
+        // Another concurrent creator may have atomically consumed this exact
+        // pending inode after the handle was opened. Nothing remains at the
+        // pathname to delete, so cleanup is already complete.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(bundle_handoff_race_error(format!(
                 "refusing to remove changed {label} {} ({error})",
                 path.display()
-            ))
-        })?;
+            )));
+        }
+    }
     match tokio::fs::remove_file(path).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),

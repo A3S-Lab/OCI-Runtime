@@ -27,6 +27,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Made Windows WHPX pending-marker cleanup idempotent when a concurrent
+  publisher consumes the exact inode between handle verification and the
+  pathname check; replacement or reparse-point entries remain rejected.
+
 - Hardened Unix utility-VM exact-generation cleanup. The runtime now snapshots
   the generation and container directory identities before validating retained
   ownership evidence, opens cleanup targets without following the final
