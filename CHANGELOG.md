@@ -27,6 +27,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Hardened the Linux KVM compatibility-drift qualification barrier. Ready and
+  continue markers now use no-follow opens, bounded reads, ownership/mode
+  checks, and device/inode revalidation; the barrier retains the opened marker
+  handles so teardown cannot consume a replacement entry after a remove-and-
+  recreate race.
+
 - Hardened Linux KVM attachment-manifest reads and pending cleanup. Manifest
   bytes now come from a no-follow handle bound to the initial device/inode,
   with bounded read, handle, and final-path revalidation; replacement,
