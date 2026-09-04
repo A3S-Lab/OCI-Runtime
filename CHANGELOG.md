@@ -27,6 +27,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Hardened Linux KVM attachment-manifest reads and pending cleanup. Manifest
+  bytes now come from a no-follow handle bound to the initial device/inode,
+  with bounded read, handle, and final-path revalidation; replacement,
+  permission, and symlink races fail closed while concurrent disappearance
+  remains retryable or idempotent as appropriate.
+
 - Made Windows WHPX pending-marker cleanup idempotent when a concurrent
   publisher consumes the exact inode between handle verification and the
   pathname check; replacement or reparse-point entries remain rejected.

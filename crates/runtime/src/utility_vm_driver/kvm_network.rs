@@ -377,7 +377,7 @@ async fn read_manifest_if_present(path: &Path) -> Result<Option<AgentVmAttachmen
     let Some(initial_metadata) = path_metadata(path).await? else {
         return Ok(None);
     };
-    match read_manifest(path).await {
+    match read_manifest_bound(path, &initial_metadata).await {
         Ok(manifest) => Ok(Some(manifest)),
         Err(error) => match path_metadata(path).await? {
             None => Ok(None),
@@ -431,7 +431,14 @@ async fn read_manifest(path: &Path) -> Result<AgentVmAttachmentManifest> {
             ),
         )
     })?;
-    if !is_private_file(&metadata)
+    read_manifest_bound(path, &metadata).await
+}
+
+async fn read_manifest_bound(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+) -> Result<AgentVmAttachmentManifest> {
+    if !is_private_file(metadata)
         || metadata.len() == 0
         || metadata.len() > AGENT_VM_ATTACHMENT_MANIFEST_MAX_BYTES as u64
     {
@@ -443,13 +450,74 @@ async fn read_manifest(path: &Path) -> Result<AgentVmAttachmentManifest> {
             ),
         ));
     }
-    let mut options = tokio::fs::OpenOptions::new();
-    options
-        .read(true)
-        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
-    let mut encoded = Vec::with_capacity(metadata.len() as usize);
-    options
-        .open(path)
+    let mut verified = crate::file_security::open_verified_regular_file(path)
+        .await
+        .map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                attachment_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "KVM attachment transport manifest disappeared while it was being opened: {}",
+                        path.display()
+                    ),
+                )
+                .retryable(true)
+            } else if error.kind() == io::ErrorKind::InvalidData {
+                attachment_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "KVM attachment transport manifest changed while it was being opened: {} ({error})",
+                        path.display()
+                    ),
+                )
+                .retryable(true)
+            } else {
+                attachment_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "failed to open KVM attachment transport manifest {}: {error}",
+                        path.display()
+                    ),
+                )
+            }
+        })?;
+    let opened_metadata = verified.file.metadata().await.map_err(|error| {
+        attachment_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect opened KVM attachment transport manifest {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if opened_metadata.len() != metadata.len()
+        || !atomic_publication::same_file_identity(metadata, &opened_metadata)
+    {
+        return Err(attachment_error(
+            ErrorCode::Unavailable,
+            format!(
+                "KVM attachment transport manifest changed while it was being opened: {}",
+                path.display()
+            ),
+        )
+        .retryable(true));
+    }
+    if !is_private_file(&opened_metadata)
+        || opened_metadata.len() == 0
+        || opened_metadata.len() > AGENT_VM_ATTACHMENT_MANIFEST_MAX_BYTES as u64
+    {
+        return Err(attachment_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "KVM attachment transport manifest is not a bounded private file: {}",
+                path.display()
+            ),
+        ));
+    }
+    let mut encoded = Vec::with_capacity(opened_metadata.len() as usize);
+    (&mut verified.file)
+        .take((AGENT_VM_ATTACHMENT_MANIFEST_MAX_BYTES + 1) as u64)
+        .read_to_end(&mut encoded)
         .await
         .map_err(|error| {
             attachment_error(
@@ -459,18 +527,66 @@ async fn read_manifest(path: &Path) -> Result<AgentVmAttachmentManifest> {
                     path.display()
                 ),
             )
-        })?
-        .take((AGENT_VM_ATTACHMENT_MANIFEST_MAX_BYTES + 1) as u64)
-        .read_to_end(&mut encoded)
+        })?;
+    let final_metadata = verified.file.metadata().await.map_err(|error| {
+        attachment_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect KVM attachment transport manifest after reading {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if final_metadata.len() != opened_metadata.len()
+        || encoded.len() != opened_metadata.len() as usize
+        || !atomic_publication::same_file_identity(&opened_metadata, &final_metadata)
+    {
+        return Err(attachment_error(
+            ErrorCode::Unavailable,
+            format!(
+                "KVM attachment transport manifest changed while it was being read: {}",
+                path.display()
+            ),
+        )
+        .retryable(true));
+    }
+    if !is_private_file(&final_metadata)
+        || final_metadata.len() == 0
+        || final_metadata.len() > AGENT_VM_ATTACHMENT_MANIFEST_MAX_BYTES as u64
+    {
+        return Err(attachment_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "KVM attachment transport manifest is not a bounded private file: {}",
+                path.display()
+            ),
+        ));
+    }
+    verified
+        .verify_unchanged(encoded.len() as u64)
         .await
         .map_err(|error| {
             attachment_error(
-                ErrorCode::FailedPrecondition,
+                ErrorCode::Unavailable,
                 format!(
-                    "failed to read KVM attachment transport manifest {}: {error}",
+                    "KVM attachment transport manifest changed while it was being read: {} ({error})",
                     path.display()
                 ),
             )
+            .retryable(true)
+        })?;
+    verified
+        .verify_path_unchanged(path)
+        .await
+        .map_err(|error| {
+            attachment_error(
+                ErrorCode::Unavailable,
+                format!(
+                    "KVM attachment transport manifest path changed while it was being read: {} ({error})",
+                    path.display()
+                ),
+            )
+            .retryable(true)
         })?;
     AgentVmAttachmentManifest::from_bytes(&encoded).map_err(|error| {
         attachment_error(
@@ -502,7 +618,14 @@ async fn remove_private_file_if_present(path: &Path) -> Result<()> {
     let Some(metadata) = path_metadata(path).await? else {
         return Ok(());
     };
-    if !is_private_file(&metadata) {
+    remove_private_file_bound(path, &metadata).await
+}
+
+async fn remove_private_file_bound(
+    path: &Path,
+    initial_metadata: &std::fs::Metadata,
+) -> Result<()> {
+    if !is_private_file(initial_metadata) {
         return Err(attachment_error(
             ErrorCode::FailedPrecondition,
             format!(
@@ -510,6 +633,65 @@ async fn remove_private_file_if_present(path: &Path) -> Result<()> {
                 path.display()
             ),
         ));
+    }
+    let verified = match crate::file_security::open_verified_regular_file(path).await {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+            return Err(attachment_error(
+                ErrorCode::Unavailable,
+                format!(
+                    "refusing to remove changed KVM evidence {} ({error})",
+                    path.display()
+                ),
+            )
+            .retryable(true));
+        }
+        Err(error) => {
+            return Err(attachment_error(
+                ErrorCode::Internal,
+                format!(
+                    "failed to open KVM evidence {} for identity binding: {error}",
+                    path.display()
+                ),
+            ));
+        }
+    };
+    let opened_metadata = verified.file.metadata().await.map_err(|error| {
+        attachment_error(
+            ErrorCode::Internal,
+            format!(
+                "failed to inspect opened KVM evidence {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if !is_private_file(&opened_metadata)
+        || opened_metadata.len() != initial_metadata.len()
+        || !atomic_publication::same_file_identity(initial_metadata, &opened_metadata)
+    {
+        return Err(attachment_error(
+            ErrorCode::Unavailable,
+            format!(
+                "refusing to remove replaced KVM evidence {}",
+                path.display()
+            ),
+        )
+        .retryable(true));
+    }
+    match verified.verify_path_unchanged(path).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(attachment_error(
+                ErrorCode::Unavailable,
+                format!(
+                    "refusing to remove changed KVM evidence {} ({error})",
+                    path.display()
+                ),
+            )
+            .retryable(true));
+        }
     }
     match tokio::fs::remove_file(path).await {
         Ok(()) => {}
@@ -575,8 +757,8 @@ mod tests {
 
     use super::{
         ensure_absent, manifest_conflict, persist_manifest, prepare, publish_manifest,
-        read_manifest, AgentVmAttachmentManifest, ErrorCode, UtilityVmLaunchRequest,
-        AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME, PENDING_MANIFEST_FILE_NAME,
+        read_manifest, remove_private_file_bound, AgentVmAttachmentManifest, ErrorCode,
+        UtilityVmLaunchRequest, AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME, PENDING_MANIFEST_FILE_NAME,
     };
 
     fn manifest(generation: u64) -> AgentVmAttachmentManifest {
@@ -702,6 +884,54 @@ mod tests {
             .path()
             .join(AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME)
             .exists());
+    }
+
+    #[tokio::test]
+    async fn manifest_reader_rejects_a_final_component_symlink() {
+        let temporary = tempfile::tempdir().expect("temporary runtime share");
+        let target = temporary.path().join("target.json");
+        let alias = temporary
+            .path()
+            .join(AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME);
+        let encoded = manifest(1).to_bytes().expect("encode manifest");
+        std::fs::write(&target, &encoded).expect("write target manifest");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))
+            .expect("protect target manifest");
+        std::os::unix::fs::symlink(&target, &alias).expect("create manifest symlink");
+
+        let error = read_manifest(&alias)
+            .await
+            .expect_err("manifest symlink must be rejected");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert_eq!(
+            std::fs::read(&target).expect("read target manifest"),
+            encoded
+        );
+    }
+
+    #[tokio::test]
+    async fn manifest_cleanup_rejects_a_replaced_private_path() {
+        let temporary = tempfile::tempdir().expect("temporary runtime share");
+        let path = temporary.path().join(PENDING_MANIFEST_FILE_NAME);
+        let retained = temporary.path().join("retained-old");
+        std::fs::write(&path, manifest(1).to_bytes().expect("encode original"))
+            .expect("write original manifest");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("protect original manifest");
+        let initial_metadata = std::fs::symlink_metadata(&path).expect("inspect original");
+        std::fs::hard_link(&path, &retained).expect("retain original inode");
+        std::fs::remove_file(&path).expect("remove original path");
+        std::fs::write(&path, manifest(2).to_bytes().expect("encode replacement"))
+            .expect("write replacement manifest");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("protect replacement manifest");
+
+        let error = remove_private_file_bound(&path, &initial_metadata)
+            .await
+            .expect_err("replacement must not be removed");
+        assert_eq!(error.code, ErrorCode::Unavailable);
+        assert!(path.exists(), "replacement manifest must remain");
+        assert!(retained.exists(), "original inode must remain retained");
     }
 
     #[tokio::test]
