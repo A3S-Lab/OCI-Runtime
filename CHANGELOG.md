@@ -33,6 +33,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
   cleanup refuses to remove a same-UID replacement entry and leaves it for its
   current owner.
 
+- Bound one-time guest bootstrap token files and their private directories to
+  the identities created by the shim. Creation, durable write completion, VM
+  entry, owner-death cleanup, and normal shutdown now use no-follow handle
+  checks; cleanup refuses to remove a replacement file or directory on Unix
+  and Windows, and the handoff regression suite covers the replacement case.
+
 - Added a retained descriptor for the Linux KVM writable runtime-state
   directory. The `run/` child is now opened with directory/no-follow flags,
   checked against its path identity during admission, and rechecked through

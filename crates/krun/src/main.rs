@@ -448,6 +448,13 @@ fn main() -> ExitCode {
                         return ExitCode::FAILURE;
                     }
                 };
+                if let Err(error) = bootstrap.reverify() {
+                    eprintln!(
+                        "a3s-oci-krun-shim: refusing VM entry because the guest bootstrap token changed: {error}"
+                    );
+                    owner_monitor.mark_vm_finished();
+                    return ExitCode::FAILURE;
+                }
                 let mut report = a3s_oci_krun::agent_vm_smoke(
                     &rootfs,
                     Some(&system_image_manifest),
@@ -551,6 +558,13 @@ fn main() -> ExitCode {
                 ))]
                 let handoff = handoff
                     .with_vm_attachment_manifest_sha256(vm_attachment_manifest_sha256.as_deref());
+                if let Err(error) = bootstrap.reverify() {
+                    eprintln!(
+                        "a3s-oci-krun-shim: refusing VM entry because the guest bootstrap token changed: {error}"
+                    );
+                    owner_monitor.mark_vm_finished();
+                    return ExitCode::FAILURE;
+                }
                 let mut report = a3s_oci_krun::agent_vm_smoke(
                     &rootfs,
                     Some(&system_image_manifest),

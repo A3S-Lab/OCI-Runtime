@@ -457,8 +457,11 @@ replacement path is rejected and never removed by the original owner.
 that PID's procfs status to require the direct worker child of the exact shim.
 The shim itself must be the host runtime's direct child and the leader of its
 private process group. A pidfd pins the runtime-owner incarnation; owner death
-cleans the token handoff and terminates the exact shim/worker group after the
-bounded recovery grace.
+cleans the token handoff only when its one-time directory and token-file
+identities still match the entries created by that shim, then terminates the
+exact shim/worker group after the bounded recovery grace. The macOS path uses
+the same identity-pinned token handoff contract; Windows uses the volume/file
+identity captured from a no-follow file handle.
 
 Before that endpoint or worker can exist, the shared Unix utility-VM driver checks
 dedicated-VM isolation, exact generation, and atomic bundle-handoff ownership.
