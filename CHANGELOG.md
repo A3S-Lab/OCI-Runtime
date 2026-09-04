@@ -39,6 +39,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
   checks; cleanup refuses to remove a replacement file or directory on Unix
   and Windows, and the handoff regression suite covers the replacement case.
 
+- Bound authenticated guest recovery evidence to its private directory and
+  pending marker identities, and propagated the report-file identity through
+  normal and owner-death cleanup. Recovery reads now use no-follow handles,
+  reject report replacement or growth, and publish the trusted destination
+  with a no-replace fence on every host platform.
+
 - Added a retained descriptor for the Linux KVM writable runtime-state
   directory. The `run/` child is now opened with directory/no-follow flags,
   checked against its path identity during admission, and rechecked through
