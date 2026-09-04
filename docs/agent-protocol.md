@@ -470,6 +470,13 @@ rootfs, and relative bind sources before creating the exact Guest-visible
 generation share. A terminal preflight rejection therefore leaves neither a
 share nor a launchable VM attachment.
 
+The Host also pins the Unix libkrun shim itself at the fork/exec boundary. It
+opens the requested regular file with no-follow semantics, compares the
+requested and canonical directory entries with the retained device/inode, and
+executes the retained descriptor through `/proc/self/fd/<n>` on Linux or
+`/dev/fd/<n>` on macOS. Replacing the shim path after validation therefore
+cannot redirect the process that receives the authenticated session token.
+
 The dedicated Linux KVM path can additionally carry the internal
 `a3s.oci.agent-vm-attachments.v2` bootstrap manifest for authorized v2 raw
 storage together with a v3 TAP contract. Network-only handoff retains the

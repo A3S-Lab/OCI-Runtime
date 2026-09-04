@@ -27,6 +27,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Hardened Unix utility-VM shim launch. The host now opens the validated shim
+  without following the final path component, verifies the requested and
+  canonical entries against the retained inode, and executes through the
+  descriptor-backed `/proc/self/fd` (Linux) or `/dev/fd` (macOS) path. A
+  runtime-directory replacement can no longer substitute an executable after
+  validation and before `exec`.
+
 - Hardened macOS HVF libkrun loading. The firmware and libkrun dylibs now
   enter `dlopen` through retained Darwin `/dev/fd` descriptors after manifest
   verification, preventing a runtime-directory replacement from redirecting

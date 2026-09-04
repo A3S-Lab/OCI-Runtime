@@ -1,8 +1,14 @@
 use std::io;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(unix)]
+use std::{fs, fs::File, fs::OpenOptions};
 
 use a3s_oci_agent_protocol::{
     AgentClient, AgentOperation, AgentTransportFaultInjector, AgentTransportQualificationRequest,
@@ -694,8 +700,8 @@ impl AgentVmSession {
                 return Err(failed(report, reason));
             }
         }
-        let shim = match canonical_file(shim, "libkrun shim").await {
-            Ok(path) => path,
+        let prepared_shim = match prepare_shim(shim, "libkrun shim").await {
+            Ok(shim) => shim,
             Err(reason) => return Err(failed(report, reason)),
         };
         let rootfs = match canonical_directory(rootfs, "guest rootfs").await {
@@ -982,7 +988,7 @@ impl AgentVmSession {
             Ok(encoded) => encoded,
             Err(error) => return Err(failed(report, error.to_string())),
         };
-        let mut command = Command::new(&shim);
+        let mut command = Command::new(prepared_shim.command_path());
         command
             .arg("agent-vm-smoke")
             .arg("--rootfs")
@@ -1055,11 +1061,18 @@ impl AgentVmSession {
             Err(error) => {
                 return Err(failed(
                     report,
-                    format!("failed to start libkrun shim {}: {error}", shim.display()),
+                    format!(
+                        "failed to start libkrun shim {}: {error}",
+                        prepared_shim.display_path().display()
+                    ),
                 ));
             }
         };
         drop(command);
+        // The child has resolved the descriptor-backed executable by the time
+        // `spawn` returns. Releasing the host copy avoids retaining an
+        // otherwise unrelated descriptor for the lifetime of the VM session.
+        drop(prepared_shim);
         drop(encoded_token);
         report.shim_spawned = true;
 
@@ -1390,6 +1403,120 @@ impl Drop for BootstrapTokenCleanup {
 
 async fn canonical_file(path: &Path, description: &str) -> Result<PathBuf, String> {
     canonical_path(path, description, true).await
+}
+
+/// A shim executable pinned to one Unix file descriptor for the fork/exec
+/// boundary. A pathname is only a lookup key; retaining the descriptor makes
+/// the executable immune to a directory-entry replacement after validation.
+struct PreparedShim {
+    command_path: PathBuf,
+    display_path: PathBuf,
+    #[cfg(unix)]
+    _file: File,
+}
+
+impl PreparedShim {
+    fn command_path(&self) -> &Path {
+        &self.command_path
+    }
+
+    fn display_path(&self) -> &Path {
+        &self.display_path
+    }
+}
+
+async fn prepare_shim(path: &Path, description: &str) -> Result<PreparedShim, String> {
+    #[cfg(unix)]
+    {
+        let requested = path.to_path_buf();
+        let description = description.to_owned();
+        let display_description = description.clone();
+        tokio::task::spawn_blocking(move || open_pinned_shim(&requested, &description))
+            .await
+            .map_err(|error| format!("failed to pin {display_description}: {error}"))?
+    }
+
+    #[cfg(not(unix))]
+    {
+        let canonical = canonical_file(path, description).await?;
+        Ok(PreparedShim {
+            command_path: canonical.clone(),
+            display_path: canonical,
+        })
+    }
+}
+
+#[cfg(unix)]
+fn open_pinned_shim(path: &Path, description: &str) -> Result<PreparedShim, String> {
+    let input_metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "failed to inspect {description} {}: {error}",
+            path.display()
+        )
+    })?;
+    if input_metadata.file_type().is_symlink() || !input_metadata.is_file() {
+        return Err(format!(
+            "{description} must be a real file, not a symlink: {}",
+            path.display()
+        ));
+    }
+
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        format!(
+            "failed to resolve {description} {}: {error}",
+            path.display()
+        )
+    })?;
+    let canonical_metadata = fs::symlink_metadata(&canonical).map_err(|error| {
+        format!(
+            "failed to inspect {description} {}: {error}",
+            canonical.display()
+        )
+    })?;
+    if canonical_metadata.file_type().is_symlink() || !canonical_metadata.is_file() {
+        return Err(format!(
+            "{description} is not a regular file: {}",
+            canonical.display()
+        ));
+    }
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    let file = options.open(&canonical).map_err(|error| {
+        format!(
+            "failed to open pinned {description} {}: {error}",
+            canonical.display()
+        )
+    })?;
+    let file_metadata = file.metadata().map_err(|error| {
+        format!(
+            "failed to inspect pinned {description} {}: {error}",
+            canonical.display()
+        )
+    })?;
+    let same_identity = |metadata: &fs::Metadata| {
+        metadata.dev() == file_metadata.dev() && metadata.ino() == file_metadata.ino()
+    };
+    if !same_identity(&input_metadata) || !same_identity(&canonical_metadata) {
+        return Err(format!(
+            "{description} changed while its descriptor was being pinned: {}",
+            canonical.display()
+        ));
+    }
+
+    let descriptor_root = if cfg!(target_os = "linux") {
+        "/proc/self/fd"
+    } else {
+        "/dev/fd"
+    };
+    let command_path = PathBuf::from(format!("{descriptor_root}/{}", file.as_raw_fd()));
+    Ok(PreparedShim {
+        command_path,
+        display_path: canonical,
+        _file: file,
+    })
 }
 
 async fn canonical_directory(path: &Path, description: &str) -> Result<PathBuf, String> {

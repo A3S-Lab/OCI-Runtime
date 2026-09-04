@@ -1,12 +1,12 @@
 use a3s_oci_core::HostPlatform;
 use serde_json::{json, Value};
 
-#[cfg(unix)]
-use super::canonical_file;
 use super::{
     bounded_unverified_shim_report, parse_shim_report, paths_overlap,
     require_expected_manifest_digest, validate_vm_attachment_manifest_digest, BoundedOutput,
 };
+#[cfg(unix)]
+use super::{canonical_file, prepare_shim};
 
 fn valid_output(platform: &str) -> BoundedOutput {
     BoundedOutput {
@@ -310,4 +310,39 @@ async fn rejects_a_symlink_before_canonicalizing_a_trusted_file() {
         .await
         .expect_err("trusted file symlink must fail closed");
     assert!(error.contains("not a symlink"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn executes_the_pinned_shim_after_directory_entry_replacement() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("create pinned-shim fixture");
+    let shim = directory.path().join("shim");
+    let replacement = directory.path().join("replacement");
+    std::fs::copy("/bin/sh", &shim).expect("copy a portable executable fixture");
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
+        .expect("make executable fixture runnable");
+    std::fs::write(&replacement, b"#!/bin/sh\nprintf replacement\n")
+        .expect("write replacement executable");
+    std::fs::set_permissions(&replacement, std::fs::Permissions::from_mode(0o755))
+        .expect("make replacement executable");
+
+    let prepared = prepare_shim(&shim, "test shim")
+        .await
+        .expect("pin the original executable");
+    std::fs::rename(&replacement, &shim).expect("replace the directory entry");
+
+    let output = tokio::process::Command::new(prepared.command_path())
+        .arg("-c")
+        .arg("printf retained")
+        .output()
+        .await
+        .expect("execute the retained descriptor");
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"retained");
+    assert_eq!(
+        std::fs::read(&shim).expect("read replacement executable"),
+        b"#!/bin/sh\nprintf replacement\n"
+    );
 }

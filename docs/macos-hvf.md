@@ -352,7 +352,8 @@ The host runtime establishes the trust chain in this order:
 3. bind `<endpoint>/agent.sock`, set mode `0600`, and retain its device/inode
    identity after verifying that both entries are non-symlinks owned by the
    effective runtime user;
-4. start the public shim as an isolated process-group leader;
+4. open and identity-check the public shim, then execute its retained
+   descriptor as an isolated process-group leader;
 5. let the shim spawn the direct worker that owns `krun_start_enter`;
 6. accept the libkrun Unix connection and read its PID through
    `LOCAL_PEERPID`;
