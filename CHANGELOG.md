@@ -27,6 +27,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Hardened Unix reusable guest-session marker reads and cleanup. Pending and
+  final markers now bind to a no-follow verified inode, revalidate the bounded
+  read and final pathname, and refuse to remove a replacement entry while
+  preserving idempotent disappearance and explicit retryable races.
+
 - Hardened Unix utility-VM bundle-handoff marker reads and cleanup. Pending
   and final markers now bind to the no-follow verified inode, revalidate the
   bounded read and final pathname, and refuse to remove a replacement entry;

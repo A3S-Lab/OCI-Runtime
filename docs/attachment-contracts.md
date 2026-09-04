@@ -302,13 +302,13 @@ and root are reaped.
 
 On Unix, every retained guest-session and bundle-handoff marker read opens the
 final component with `O_NOFOLLOW|O_CLOEXEC`, validates the opened inode against
-the pre-open device/inode snapshot, and reads from that handle. Bundle-handoff
-marker reads additionally verify after the bounded read that the handle and the
-final pathname still name the same private inode. The readers require stable
-private-file metadata and an exact byte count before decoding; a symlink
-substitution, remove-and-recreate race, truncation, or growth is rejected (or
-surfaced as a bounded retryable race) rather than being treated as ownership
-evidence.
+the pre-open device/inode snapshot, and reads from that handle. After the
+bounded read, the readers verify that the handle and final pathname still name
+the same private inode. Cleanup performs the same identity binding before
+removing either a pending or final marker. Stable private-file metadata and an
+exact byte count are required before decoding; a symlink substitution,
+remove-and-recreate race, truncation, or growth is rejected (or surfaced as a
+bounded retryable race) rather than being treated as ownership evidence.
 
 The Host-side read of the immutable system-image manifest uses the same
 handle-bound trust boundary before any Utility-VM launch. Unix reads pin
