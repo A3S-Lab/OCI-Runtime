@@ -3,7 +3,7 @@ use std::fs::OpenOptions;
 #[cfg(target_os = "linux")]
 use std::io::Read;
 #[cfg(target_os = "linux")]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 #[cfg(target_os = "linux")]
 use std::path::Path;
 
@@ -186,6 +186,24 @@ fn validate_guest_bundle(manifest: &AgentVmAttachmentManifest) -> Result<()> {
 
 #[cfg(target_os = "linux")]
 fn read_bounded_file(path: &Path, maximum: u64, label: &str) -> Result<Vec<u8>> {
+    let path_metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        attachment_error(format!(
+            "failed to inspect {label} {}: {error}",
+            path.display()
+        ))
+    })?;
+    if !path_metadata.is_file() || path_metadata.file_type().is_symlink() {
+        return Err(attachment_error(format!(
+            "{label} must be a bounded nonempty regular file: {}",
+            path.display()
+        )));
+    }
+    if path_metadata.len() == 0 || path_metadata.len() > maximum {
+        return Err(attachment_error(format!(
+            "{label} must be a bounded nonempty regular file: {}",
+            path.display()
+        )));
+    }
     let mut options = OpenOptions::new();
     options
         .read(true)
@@ -202,9 +220,16 @@ fn read_bounded_file(path: &Path, maximum: u64, label: &str) -> Result<Vec<u8>> 
             path.display()
         ))
     })?;
-    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > maximum {
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() == 0
+        || metadata.len() > maximum
+        || metadata.dev() != path_metadata.dev()
+        || metadata.ino() != path_metadata.ino()
+        || metadata.len() != path_metadata.len()
+    {
         return Err(attachment_error(format!(
-            "{label} must be a bounded nonempty regular file: {}",
+            "{label} changed while it was being opened: {}",
             path.display()
         )));
     }
@@ -221,6 +246,35 @@ fn read_bounded_file(path: &Path, maximum: u64, label: &str) -> Result<Vec<u8>> 
     if encoded.is_empty() || encoded.len() as u64 > maximum {
         return Err(attachment_error(format!(
             "{label} exceeds its bounded size: {}",
+            path.display()
+        )));
+    }
+    let file_metadata = file.metadata().map_err(|error| {
+        attachment_error(format!(
+            "failed to inspect {label} after reading {}: {error}",
+            path.display()
+        ))
+    })?;
+    let final_path_metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        attachment_error(format!(
+            "failed to re-inspect {label} after reading {}: {error}",
+            path.display()
+        ))
+    })?;
+    if !file_metadata.is_file()
+        || file_metadata.file_type().is_symlink()
+        || file_metadata.dev() != path_metadata.dev()
+        || file_metadata.ino() != path_metadata.ino()
+        || file_metadata.len() != path_metadata.len()
+        || encoded.len() as u64 != path_metadata.len()
+        || !final_path_metadata.is_file()
+        || final_path_metadata.file_type().is_symlink()
+        || final_path_metadata.dev() != path_metadata.dev()
+        || final_path_metadata.ino() != path_metadata.ino()
+        || final_path_metadata.len() != path_metadata.len()
+    {
+        return Err(attachment_error(format!(
+            "{label} changed while it was being read: {}",
             path.display()
         )));
     }
@@ -264,6 +318,21 @@ mod tests {
     use serde_json::json;
 
     use super::{network::rename_plan, UtilityVmAttachmentBinding, UtilityVmStorageSources};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bounded_attachment_read_rejects_a_final_component_symlink() {
+        let temporary = tempfile::tempdir().expect("temporary attachment root");
+        let target = temporary.path().join("target");
+        let alias = temporary.path().join("manifest");
+        std::fs::write(&target, b"manifest").expect("write target");
+        std::os::unix::fs::symlink(&target, &alias).expect("create manifest symlink");
+
+        let error = super::read_bounded_file(&alias, 64, "test attachment")
+            .expect_err("final-component symlink must be rejected");
+        assert!(error.message.contains("regular file"));
+        assert_eq!(std::fs::read(&target).expect("read target"), b"manifest");
+    }
 
     fn manifest(names: &[&str]) -> AgentVmAttachmentManifest {
         manifest_fixture(names).0
