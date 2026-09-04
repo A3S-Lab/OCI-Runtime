@@ -357,8 +357,7 @@ async fn read(path: &Path) -> Result<GuestSessionMarker> {
             ),
         ));
     }
-    let mut encoded = Vec::with_capacity(metadata.len() as usize);
-    tokio::fs::File::open(path)
+    let mut file = atomic_publication::open_readonly_nofollow(path)
         .await
         .map_err(|error| {
             session_error(
@@ -368,7 +367,39 @@ async fn read(path: &Path) -> Result<GuestSessionMarker> {
                     path.display()
                 ),
             )
-        })?
+        })?;
+    let opened_metadata = file.metadata().await.map_err(|error| {
+        session_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect opened reusable guest-session marker {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if opened_metadata.len() != metadata.len()
+        || !atomic_publication::same_file_identity(&metadata, &opened_metadata)
+    {
+        return Err(session_error(
+            ErrorCode::Unavailable,
+            format!(
+                "reusable guest-session marker changed while it was being opened: {}",
+                path.display()
+            ),
+        )
+        .retryable(true));
+    }
+    if !is_private_file(&opened_metadata) || opened_metadata.len() > MAX_MARKER_BYTES as u64 {
+        return Err(session_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "reusable guest-session marker is not a bounded private file: {}",
+                path.display()
+            ),
+        ));
+    }
+    let mut encoded = Vec::with_capacity(opened_metadata.len() as usize);
+    (&mut file)
         .take((MAX_MARKER_BYTES + 1) as u64)
         .read_to_end(&mut encoded)
         .await
@@ -381,6 +412,37 @@ async fn read(path: &Path) -> Result<GuestSessionMarker> {
                 ),
             )
         })?;
+    let final_metadata = file.metadata().await.map_err(|error| {
+        session_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect reusable guest-session marker after reading {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if final_metadata.len() != opened_metadata.len()
+        || encoded.len() != opened_metadata.len() as usize
+        || !atomic_publication::same_file_identity(&opened_metadata, &final_metadata)
+    {
+        return Err(session_error(
+            ErrorCode::Unavailable,
+            format!(
+                "reusable guest-session marker changed while it was being read: {}",
+                path.display()
+            ),
+        )
+        .retryable(true));
+    }
+    if !is_private_file(&final_metadata) || final_metadata.len() > MAX_MARKER_BYTES as u64 {
+        return Err(session_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "reusable guest-session marker is not a bounded private file: {}",
+                path.display()
+            ),
+        ));
+    }
     let marker: GuestSessionMarker = serde_json::from_slice(&encoded).map_err(|error| {
         session_error(
             ErrorCode::FailedPrecondition,

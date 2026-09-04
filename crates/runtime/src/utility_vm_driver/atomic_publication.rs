@@ -100,3 +100,67 @@ pub(super) async fn remove_file_if_present(path: &Path) -> io::Result<()> {
 pub(super) fn same_file_identity(first: &std::fs::Metadata, second: &std::fs::Metadata) -> bool {
     first.dev() == second.dev() && first.ino() == second.ino()
 }
+
+/// Open a retained runtime file without following a final-component symlink.
+///
+/// Callers must validate the returned handle's metadata and compare its
+/// identity with a path snapshot taken before the open. Reads then stay on
+/// the opened inode instead of resolving the path again.
+pub(super) async fn open_readonly_nofollow(path: &Path) -> io::Result<tokio::fs::File> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    options.open(path).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn readonly_open_rejects_a_final_component_symlink() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let target = temporary.path().join("target");
+        let alias = temporary.path().join("alias");
+        let file = tokio::fs::File::create(&target)
+            .await
+            .expect("create target file");
+        file.sync_all().await.expect("sync target file");
+        std::os::unix::fs::symlink(&target, &alias).expect("create marker symlink");
+
+        let error = open_readonly_nofollow(&alias)
+            .await
+            .expect_err("no-follow open must reject a symlink");
+        assert!(error.raw_os_error().is_some());
+    }
+
+    #[tokio::test]
+    async fn file_identity_detects_remove_and_recreate() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("marker");
+        let file = tokio::fs::File::create(&path)
+            .await
+            .expect("create first file");
+        file.sync_all().await.expect("sync first file");
+        let first = tokio::fs::symlink_metadata(&path)
+            .await
+            .expect("inspect first file");
+        let retained_old = temporary.path().join("retained-old");
+        tokio::fs::hard_link(&path, &retained_old)
+            .await
+            .expect("retain first inode");
+        tokio::fs::remove_file(&path)
+            .await
+            .expect("remove first file");
+        let file = tokio::fs::File::create(&path)
+            .await
+            .expect("create replacement file");
+        file.sync_all().await.expect("sync replacement file");
+        let replacement = tokio::fs::symlink_metadata(&path)
+            .await
+            .expect("inspect replacement file");
+
+        assert!(!same_file_identity(&first, &replacement));
+    }
+}
