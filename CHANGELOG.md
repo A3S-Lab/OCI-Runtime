@@ -33,6 +33,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
   permission, and symlink races fail closed while concurrent disappearance
   remains retryable or idempotent as appropriate.
 
+- Hardened the Linux KVM shim's VM-entry manifest read boundary. The retained
+  manifest handle and descriptor-pinned runtime-share pathname are now checked
+  again after every bounded read, so in-place growth, inode replacement, and
+  path replacement cannot be decoded or passed into VM configuration.
+
 - Made Windows WHPX pending-marker cleanup idempotent when a concurrent
   publisher consumes the exact inode between handle verification and the
   pathname check; replacement or reparse-point entries remain rejected.
