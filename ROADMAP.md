@@ -1509,9 +1509,11 @@ release-promotion gates above.
   architecture. CI builds byte-reproducible x86_64 and AArch64 ext4 roots,
   proves that each contains the exact supplied static agent, embeds the exact
   target bundle from the strict shared asset manifest, and configures the
-  descriptor-pinned root read-only in an isolated libkrun context. Manifest,
-  image, target, runtime, symbolic-link, replacement, and same-size content
-  drift all fail closed before VM entry.
+  descriptor-pinned root read-only in an isolated libkrun context. The
+  writable generation share and its required `run/` state child retain
+  independent no-follow descriptors and identity checks through entry.
+  Manifest, image, target, runtime, symbolic-link, replacement, and same-size
+  content drift all fail closed before VM entry.
 - [ ] Start the KVM worker in an isolated shim, mount only the protected
   per-generation runtime share, and authenticate the AF_VSOCK guest-agent
   session without falling back to host-kernel execution.

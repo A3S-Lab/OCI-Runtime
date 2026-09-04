@@ -27,6 +27,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added a retained descriptor for the Linux KVM writable runtime-state
+  directory. The `run/` child is now opened with directory/no-follow flags,
+  checked against its path identity during admission, and rechecked through
+  VM entry alongside the generation share.
+
 - Added descriptor-pinned macOS HVF writable runtime shares. The shim now
   admits only same-UID mode-`0700` directories, retains no-follow handles
   through virtio-fs configuration and VM entry, and rechecks the root and

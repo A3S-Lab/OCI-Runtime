@@ -13,6 +13,7 @@ pub(crate) struct LinuxRuntimeShare {
     path: PathBuf,
     directory: File,
     identity: DirectoryIdentity,
+    state_directory: File,
     state_identity: DirectoryIdentity,
 }
 
@@ -44,16 +45,7 @@ impl LinuxRuntimeShare {
             )));
         }
 
-        let directory = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
-            .open(&canonical)
-            .map_err(|error| {
-                share_error(format!(
-                    "failed to pin Linux KVM runtime share {}: {error}",
-                    canonical.display()
-                ))
-            })?;
+        let directory = pin_directory(&canonical, "runtime share")?;
         let descriptor_metadata = directory.metadata().map_err(|error| {
             share_error(format!(
                 "failed to inspect pinned Linux KVM runtime share {}: {error}",
@@ -90,11 +82,45 @@ impl LinuxRuntimeShare {
             )));
         }
 
+        let state_directory = pin_directory(&state_canonical, "runtime-state directory")?;
+        let state_descriptor_metadata = state_directory.metadata().map_err(|error| {
+            share_error(format!(
+                "failed to inspect pinned Linux KVM runtime-state directory {}: {error}",
+                state_canonical.display()
+            ))
+        })?;
+        ensure_private_directory(
+            &state_descriptor_metadata,
+            &state_canonical,
+            "runtime-state directory",
+        )?;
+        let state_identity = DirectoryIdentity::from_metadata(&state_descriptor_metadata);
+        let state_path_metadata = fs::symlink_metadata(&state_canonical).map_err(|error| {
+            share_error(format!(
+                "failed to re-inspect Linux KVM runtime-state directory {} after pinning: {error}",
+                state_canonical.display()
+            ))
+        })?;
+        ensure_private_directory(
+            &state_path_metadata,
+            &state_canonical,
+            "runtime-state directory",
+        )?;
+        if DirectoryIdentity::from_metadata(&state_metadata) != state_identity
+            || DirectoryIdentity::from_metadata(&state_path_metadata) != state_identity
+        {
+            return Err(share_error(format!(
+                "Linux KVM runtime-state directory changed while it was being pinned: {}",
+                state_canonical.display()
+            )));
+        }
+
         Ok(Self {
             path: canonical,
             directory,
             identity,
-            state_identity: DirectoryIdentity::from_metadata(&state_metadata),
+            state_directory,
+            state_identity,
         })
     }
 
@@ -146,7 +172,20 @@ impl LinuxRuntimeShare {
             ))
         })?;
         ensure_private_directory(&state_metadata, &state, "runtime-state directory")?;
-        if DirectoryIdentity::from_metadata(&state_metadata) != self.state_identity {
+        let state_descriptor_metadata = self.state_directory.metadata().map_err(|error| {
+            share_error(format!(
+                "failed to re-inspect pinned Linux KVM runtime-state directory {}: {error}",
+                state.display()
+            ))
+        })?;
+        ensure_private_directory(
+            &state_descriptor_metadata,
+            &state,
+            "runtime-state directory",
+        )?;
+        if DirectoryIdentity::from_metadata(&state_metadata) != self.state_identity
+            || DirectoryIdentity::from_metadata(&state_descriptor_metadata) != self.state_identity
+        {
             return Err(share_error(format!(
                 "Linux KVM runtime-state identity changed before VM entry: {}",
                 state.display()
@@ -154,6 +193,19 @@ impl LinuxRuntimeShare {
         }
         Ok(())
     }
+}
+
+fn pin_directory(path: &Path, label: &str) -> Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|error| {
+            share_error(format!(
+                "failed to pin Linux KVM {label} {}: {error}",
+                path.display()
+            ))
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

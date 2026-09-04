@@ -102,6 +102,15 @@ pins and rechecks its direct `run/` state child. Symlink, replacement, type,
 owner, and permission changes are rejected with the
 `verify-macos-runtime-share` operation.
 
+## Linux KVM writable runtime state
+
+The Linux KVM shim retains a separate no-follow directory descriptor for the
+required `run/` child in addition to the descriptor-pinned generation root.
+Admission and the final VM-entry check compare both the path and descriptor
+device/inode identities, type, owner, and mode. Replacing or relaxing the
+state directory therefore fails before the guest can observe a different
+runtime-state namespace.
+
 ## Windows x86_64
 
 The Windows x86_64 shim carries one deterministic native runtime archive:
