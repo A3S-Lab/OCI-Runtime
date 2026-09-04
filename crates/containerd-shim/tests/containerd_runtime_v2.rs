@@ -39,6 +39,7 @@ async fn real_containerd_runtime_v2_qualification() -> TestResult<()> {
     require_root().await?;
     require_command("ctr").await?;
     require_command("systemctl").await?;
+    require_restart_safe_service(&config).await?;
     connect_ready(&config).await?;
 
     let nonce = SystemTime::now()

@@ -448,6 +448,52 @@ pub(crate) async fn require_command(command: &str) -> TestResult<()> {
     require_success(&format!("locate {command}"), &output)
 }
 
+pub(crate) async fn require_restart_safe_service(config: &QualificationConfig) -> TestResult<()> {
+    let fragment = systemctl_property(config, "FragmentPath").await?;
+    let transient = systemctl_property(config, "Transient").await?;
+    let kill_mode = systemctl_property(config, "KillMode").await?;
+    validate_restart_safe_service(&fragment, &transient, &kill_mode, &config.service)
+}
+
+async fn systemctl_property(config: &QualificationConfig, property: &str) -> TestResult<String> {
+    let property_argument = format!("--property={property}");
+    let output = command_output(
+        "systemctl",
+        &["show", &property_argument, "--value", &config.service],
+    )
+    .await?;
+    require_success(&format!("read containerd service {property}"), &output)?;
+    String::from_utf8(output.stdout)
+        .map(|value| value.trim().to_string())
+        .map_err(|error| {
+            qualification_error(format!(
+                "decode containerd service {property} value: {error}"
+            ))
+            .into()
+        })
+}
+
+fn validate_restart_safe_service(
+    fragment_path: &str,
+    transient: &str,
+    kill_mode: &str,
+    service: &str,
+) -> TestResult<()> {
+    if fragment_path.trim().is_empty() || transient.trim() != "no" {
+        return Err(qualification_error(format!(
+            "containerd service {service} is transient; install a persistent systemd unit before running restart qualification"
+        ))
+        .into());
+    }
+    if kill_mode.trim() != "process" {
+        return Err(qualification_error(format!(
+            "containerd service {service} uses KillMode={kill_mode}; restart qualification requires KillMode=process so the shim survives daemon replacement"
+        ))
+        .into());
+    }
+    Ok(())
+}
+
 fn require_environment(name: &str, expected: &str) -> TestResult<()> {
     let actual = std::env::var(name).unwrap_or_default();
     if actual != expected {
@@ -473,4 +519,63 @@ pub(crate) fn rpc_error(operation: &str, error: impl std::fmt::Display) -> io::E
 
 pub(crate) fn qualification_error(message: impl Into<String>) -> io::Error {
     io::Error::other(message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_restart_safe_service;
+
+    #[test]
+    fn restart_safe_service_requires_a_persistent_fragment() {
+        let error = validate_restart_safe_service("", "no", "process", "containerd")
+            .expect_err("a transient unit must be rejected");
+        assert!(error.to_string().contains("transient"));
+    }
+
+    #[test]
+    fn restart_safe_service_rejects_a_transient_fragment() {
+        let error = validate_restart_safe_service(
+            "/run/systemd/transient/containerd.service",
+            "yes",
+            "process",
+            "containerd",
+        )
+        .expect_err("a transient unit must be rejected");
+        assert!(error.to_string().contains("transient"));
+    }
+
+    #[test]
+    fn restart_safe_service_rejects_an_unknown_transient_state() {
+        let error = validate_restart_safe_service(
+            "/etc/systemd/system/containerd.service",
+            "",
+            "process",
+            "containerd",
+        )
+        .expect_err("an unknown transient state must be rejected");
+        assert!(error.to_string().contains("transient"));
+    }
+
+    #[test]
+    fn restart_safe_service_requires_process_kill_mode() {
+        let error = validate_restart_safe_service(
+            "/etc/systemd/system/containerd.service",
+            "no",
+            "control-group",
+            "containerd",
+        )
+        .expect_err("a control-group unit must be rejected");
+        assert!(error.to_string().contains("KillMode=control-group"));
+    }
+
+    #[test]
+    fn restart_safe_service_accepts_a_persistent_process_unit() {
+        validate_restart_safe_service(
+            "/etc/systemd/system/containerd.service",
+            "no",
+            "process",
+            "containerd",
+        )
+        .expect("a persistent process unit is restart-safe");
+    }
 }
