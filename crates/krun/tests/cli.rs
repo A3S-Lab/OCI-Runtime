@@ -206,7 +206,10 @@ fn vm_smoke_rejects_a_missing_system_image_before_starting_a_worker() {
     let runtime_share = tempfile::tempdir().expect("runtime share");
     std::fs::set_permissions(runtime_share.path(), std::fs::Permissions::from_mode(0o700))
         .expect("private runtime share mode");
-    std::fs::create_dir(runtime_share.path().join("run")).expect("runtime state directory");
+    let runtime_state = runtime_share.path().join("run");
+    std::fs::create_dir(&runtime_state).expect("runtime state directory");
+    std::fs::set_permissions(&runtime_state, std::fs::Permissions::from_mode(0o700))
+        .expect("private runtime state mode");
     let console = std::env::temp_dir().join(format!(
         "a3s-oci-missing-vm-console-{}-{nonce}.log",
         std::process::id(),
@@ -261,7 +264,10 @@ fn agent_vm_smoke_rejects_a_missing_system_image_before_starting_a_worker() {
     let runtime_share = tempfile::tempdir().expect("runtime share");
     std::fs::set_permissions(runtime_share.path(), std::fs::Permissions::from_mode(0o700))
         .expect("private runtime share mode");
-    std::fs::create_dir(runtime_share.path().join("run")).expect("runtime state directory");
+    let runtime_state = runtime_share.path().join("run");
+    std::fs::create_dir(&runtime_state).expect("runtime state directory");
+    std::fs::set_permissions(&runtime_state, std::fs::Permissions::from_mode(0o700))
+        .expect("private runtime state mode");
     let console = std::env::temp_dir().join(format!(
         "a3s-oci-missing-agent-console-{}-{nonce}.log",
         std::process::id(),

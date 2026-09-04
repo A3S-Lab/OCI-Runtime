@@ -285,14 +285,20 @@ fn canonical_plain_file(path: &Path, description: &'static str) -> Result<PathBu
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         asset_error(
             description,
-            format!("failed to inspect asset {}: {error}", path.display()),
+            format!(
+                "failed to inspect {description} {}: {error}",
+                path.display()
+            ),
         )
     })?;
     ensure_plain_file(&metadata, path, description)?;
     path.canonicalize().map_err(|error| {
         asset_error(
             description,
-            format!("failed to canonicalize asset {}: {error}", path.display()),
+            format!(
+                "failed to canonicalize {description} {}: {error}",
+                path.display()
+            ),
         )
     })
 }
@@ -414,6 +420,17 @@ mod tests {
         let error = PinnedFile::open(&link, "test asset")
             .expect_err("symlink must not cross the trust boundary");
         assert!(error.to_string().contains("not a symlink"));
+    }
+
+    #[test]
+    fn missing_asset_error_keeps_the_typed_description() {
+        let fixture = tempfile::tempdir().expect("create fixture directory");
+        let missing = fixture.path().join("missing");
+
+        let error = PinnedFile::open(&missing, "system-image manifest")
+            .expect_err("missing asset must be rejected");
+
+        assert!(error.to_string().contains("system-image manifest"));
     }
 
     #[test]

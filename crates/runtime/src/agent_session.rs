@@ -1833,15 +1833,31 @@ fn is_canonical_hex(value: &str, length: usize) -> bool {
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 async fn prepare_macos_runtime_share(path: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
+
+    if !path.is_absolute() {
+        return Err(format!(
+            "macOS HVF runtime share must be absolute: {}",
+            path.display()
+        ));
+    }
     let metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
         format!(
             "failed to inspect writable runtime share {}: {error}",
             path.display()
         )
     })?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+    // SAFETY: geteuid has no arguments and cannot fail.
+    let effective_user_id = unsafe { libc::geteuid() };
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_dir()
+        || metadata.uid() != effective_user_id
+        || metadata.mode() & 0o777 != PRIVATE_DIRECTORY_MODE
+    {
         return Err(format!(
-            "writable runtime share must be a real directory, not a symlink: {}",
+            "macOS HVF runtime share must be a real UID-{effective_user_id} directory with mode {PRIVATE_DIRECTORY_MODE:03o}: {}",
             path.display()
         ));
     }
@@ -1853,10 +1869,14 @@ async fn prepare_macos_runtime_share(path: &Path) -> Result<PathBuf, String> {
     })?;
     let state = path.join("run");
     match tokio::fs::symlink_metadata(&state).await {
-        Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(metadata)
+            if metadata.file_type().is_dir()
+                && !metadata.file_type().is_symlink()
+                && metadata.uid() == effective_user_id
+                && metadata.mode() & 0o777 == PRIVATE_DIRECTORY_MODE => {}
         Ok(_) => {
             return Err(format!(
-                "runtime-state path must be a real directory inside the writable share: {}",
+                "macOS runtime-state path must be a real UID-{effective_user_id} directory with mode {PRIVATE_DIRECTORY_MODE:03o}: {}",
                 state.display()
             ))
         }
@@ -1864,6 +1884,17 @@ async fn prepare_macos_runtime_share(path: &Path) -> Result<PathBuf, String> {
             tokio::fs::create_dir(&state).await.map_err(|error| {
                 format!(
                     "failed to create runtime-state directory {}: {error}",
+                    state.display()
+                )
+            })?;
+            tokio::fs::set_permissions(
+                &state,
+                std::fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE),
+            )
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to protect macOS runtime-state directory {}: {error}",
                     state.display()
                 )
             })?;

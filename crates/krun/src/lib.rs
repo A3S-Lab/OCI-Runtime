@@ -60,6 +60,8 @@ mod macos_assets;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_context;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod macos_runtime_share;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_system_image;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_vm_smoke;

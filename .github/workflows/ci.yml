@@ -418,6 +418,7 @@ jobs:
           console="$RUNNER_TEMP/a3s-oci-krun-vm-console.log"
           system_image_manifest="$A3S_OCI_MACOS_SYSTEM_IMAGE_MANIFEST"
           mkdir -p "$rootfs_dir/run" "$smoke_dir"
+          chmod 0700 "$rootfs_dir" "$rootfs_dir/run"
 
           curl --fail --location --retry 3 \
             --output "$rootfs_archive" \

@@ -6,6 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::macos_context::{KrunContext, MacosKrunApi};
+use crate::macos_runtime_share::MacosRuntimeShare;
 use crate::macos_system_image::MacosSystemImage;
 use crate::unix_process::{
     read_bounded_worker_output, resolve_agent_socket, resolve_console, terminate_and_wait,
@@ -93,34 +94,18 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
     // The parent intentionally does not load libkrun. Only bounded worker
     // evidence may advance the native setup fields.
     report.runtime_bundle_loaded = false;
-    let runtime_share = match canonical_runtime_share(runtime_share) {
+    let mut runtime_share = match MacosRuntimeShare::open(runtime_share) {
         Ok(runtime_share) => runtime_share,
-        Err(reason) => {
-            report.reason = Some(reason);
+        Err(error) => {
+            report.reason = Some(error.to_string());
             return report;
         }
     };
-    let state_directory = runtime_share.join("run");
-    let state_metadata = fs::symlink_metadata(&state_directory).map_err(|error| {
-        format!(
-            "failed to inspect writable runtime-state directory {}: {error}",
-            state_directory.display()
-        )
-    });
-    match state_metadata {
-        Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {}
-        Ok(_) => {
-            report.reason = Some(format!(
-                "runtime-state path must be a real directory inside the writable share: {}",
-                state_directory.display()
-            ));
-            return report;
-        }
-        Err(reason) => {
-            report.reason = Some(reason);
-            return report;
-        }
+    if let Err(error) = runtime_share.require_state_directory() {
+        report.reason = Some(error.to_string());
+        return report;
     }
+    let runtime_share = runtime_share.path().to_path_buf();
     report.runtime_share_configured = true;
     let console = match resolve_console(console) {
         Ok(console) => console,
@@ -310,10 +295,13 @@ pub(crate) fn run_worker(
     transport_qualification: Option<&AgentTransportQualificationRequest>,
 ) -> bool {
     let mut evidence = WorkerEvidence::initial();
-    let runtime_share = match canonical_runtime_share(runtime_share) {
+    let mut runtime_share = match MacosRuntimeShare::open(runtime_share) {
         Ok(runtime_share) => runtime_share,
-        Err(reason) => return fail_worker(&mut evidence, reason),
+        Err(error) => return fail_worker(&mut evidence, error.to_string()),
     };
+    if let Err(error) = runtime_share.require_state_directory() {
+        return fail_worker(&mut evidence, error.to_string());
+    }
     let console = match resolve_console(console) {
         Ok(console) => console,
         Err(reason) => return fail_worker(&mut evidence, reason),
@@ -335,10 +323,14 @@ pub(crate) fn run_worker(
         Ok(system_image) => system_image,
         Err(error) => return fail_worker(&mut evidence, error.to_string()),
     };
-    if system_image.image_path().starts_with(&runtime_share)
-        || runtime_share.starts_with(system_image.image_path())
-        || system_image.manifest_path().starts_with(&runtime_share)
-        || runtime_share.starts_with(system_image.manifest_path())
+    if system_image.image_path().starts_with(runtime_share.path())
+        || runtime_share.path().starts_with(system_image.image_path())
+        || system_image
+            .manifest_path()
+            .starts_with(runtime_share.path())
+        || runtime_share
+            .path()
+            .starts_with(system_image.manifest_path())
     {
         return fail_worker(
             &mut evidence,
@@ -364,7 +356,7 @@ pub(crate) fn run_worker(
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.rootfs_configured = true;
-    if let Err(error) = context.add_virtiofs(AGENT_RUNTIME_SHARE_TAG, &runtime_share) {
+    if let Err(error) = context.add_runtime_share(AGENT_RUNTIME_SHARE_TAG, runtime_share) {
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.runtime_share_configured = true;
@@ -417,27 +409,6 @@ pub(crate) fn run_worker(
         ),
         Err(error) => fail_worker(&mut evidence, error.to_string()),
     }
-}
-
-fn canonical_runtime_share(path: &Path) -> Result<std::path::PathBuf, String> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        format!(
-            "failed to inspect writable runtime share {}: {error}",
-            path.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
-        return Err(format!(
-            "writable runtime share must be a real directory, not a symlink: {}",
-            path.display()
-        ));
-    }
-    path.canonicalize().map_err(|error| {
-        format!(
-            "failed to canonicalize writable runtime share {}: {error}",
-            path.display()
-        )
-    })
 }
 
 fn collect_worker_evidence(
