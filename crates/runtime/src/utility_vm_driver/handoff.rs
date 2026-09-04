@@ -716,7 +716,7 @@ async fn read_if_present(path: &Path) -> Result<Option<BundleHandoffMarker>> {
     let Some(initial_metadata) = path_metadata(path).await? else {
         return Ok(None);
     };
-    match read_marker(path).await {
+    match read_marker_bound(path, &initial_metadata).await {
         Ok(marker) => Ok(Some(marker)),
         Err(error) => match path_metadata(path).await? {
             None => Ok(None),
@@ -770,7 +770,14 @@ async fn read_marker(path: &Path) -> Result<BundleHandoffMarker> {
             ),
         )
     })?;
-    if !is_private_file(&metadata) || metadata.len() > MAX_MARKER_BYTES as u64 {
+    read_marker_bound(path, &metadata).await
+}
+
+async fn read_marker_bound(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+) -> Result<BundleHandoffMarker> {
+    if !is_private_file(metadata) || metadata.len() > MAX_MARKER_BYTES as u64 {
         return Err(handoff_error(
             ErrorCode::FailedPrecondition,
             format!(
@@ -779,18 +786,25 @@ async fn read_marker(path: &Path) -> Result<BundleHandoffMarker> {
             ),
         ));
     }
-    let mut file = atomic_publication::open_readonly_nofollow(path)
+    let mut verified = crate::file_security::open_verified_regular_file(path)
         .await
         .map_err(|error| {
-            handoff_error(
-                ErrorCode::FailedPrecondition,
-                format!(
-                    "failed to open utility-VM marker {}: {error}",
+            if error.kind() == io::ErrorKind::InvalidData {
+                handoff_race_error(format!(
+                    "utility-VM bundle-handoff marker changed while it was being opened: {} ({error})",
                     path.display()
-                ),
-            )
+                ))
+            } else {
+                handoff_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "failed to open utility-VM marker {}: {error}",
+                        path.display()
+                    ),
+                )
+            }
         })?;
-    let opened_metadata = file.metadata().await.map_err(|error| {
+    let opened_metadata = verified.file.metadata().await.map_err(|error| {
         handoff_error(
             ErrorCode::FailedPrecondition,
             format!(
@@ -800,7 +814,7 @@ async fn read_marker(path: &Path) -> Result<BundleHandoffMarker> {
         )
     })?;
     if opened_metadata.len() != metadata.len()
-        || !atomic_publication::same_file_identity(&metadata, &opened_metadata)
+        || !atomic_publication::same_file_identity(metadata, &opened_metadata)
     {
         return Err(handoff_error(
             ErrorCode::Unavailable,
@@ -821,7 +835,7 @@ async fn read_marker(path: &Path) -> Result<BundleHandoffMarker> {
         ));
     }
     let mut encoded = Vec::with_capacity(opened_metadata.len() as usize);
-    (&mut file)
+    (&mut verified.file)
         .take((MAX_MARKER_BYTES + 1) as u64)
         .read_to_end(&mut encoded)
         .await
@@ -834,7 +848,7 @@ async fn read_marker(path: &Path) -> Result<BundleHandoffMarker> {
                 ),
             )
         })?;
-    let final_metadata = file.metadata().await.map_err(|error| {
+    let final_metadata = verified.file.metadata().await.map_err(|error| {
         handoff_error(
             ErrorCode::FailedPrecondition,
             format!(
@@ -865,6 +879,24 @@ async fn read_marker(path: &Path) -> Result<BundleHandoffMarker> {
             ),
         ));
     }
+    verified
+        .verify_unchanged(encoded.len() as u64)
+        .await
+        .map_err(|error| {
+            handoff_race_error(format!(
+                "utility-VM bundle-handoff marker changed while it was being read: {} ({error})",
+                path.display()
+            ))
+        })?;
+    verified
+        .verify_path_unchanged(path)
+        .await
+        .map_err(|error| {
+            handoff_race_error(format!(
+                "utility-VM bundle-handoff marker path changed while it was being read: {} ({error})",
+                path.display()
+            ))
+        })?;
     let marker: BundleHandoffMarker = serde_json::from_slice(&encoded).map_err(|error| {
         handoff_error(
             ErrorCode::FailedPrecondition,
@@ -891,15 +923,68 @@ async fn read_marker(path: &Path) -> Result<BundleHandoffMarker> {
 }
 
 async fn remove_private_file_if_present(path: &Path) -> Result<()> {
-    let Some(metadata) = path_metadata(path).await? else {
+    let Some(initial_metadata) = path_metadata(path).await? else {
         return Ok(());
     };
-    if !is_private_file(&metadata) {
+    remove_private_file_bound(path, &initial_metadata).await
+}
+
+async fn remove_private_file_bound(
+    path: &Path,
+    initial_metadata: &std::fs::Metadata,
+) -> Result<()> {
+    if !is_private_file(initial_metadata) {
         return Err(handoff_error(
             ErrorCode::FailedPrecondition,
             format!("refusing to remove a non-private file: {}", path.display()),
         ));
     }
+    let verified = match crate::file_security::open_verified_regular_file(path).await {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+            return Err(handoff_race_error(format!(
+                "refusing to remove replaced utility-VM bundle-handoff marker {} ({error})",
+                path.display()
+            )))
+        }
+        Err(error) => {
+            return Err(handoff_error(
+                ErrorCode::Internal,
+                format!(
+                "failed to open utility-VM bundle-handoff marker {} for identity binding: {error}",
+                path.display()
+            ),
+            ))
+        }
+    };
+    let opened_metadata = verified.file.metadata().await.map_err(|error| {
+        handoff_error(
+            ErrorCode::Internal,
+            format!(
+                "failed to inspect opened utility-VM bundle-handoff marker {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if !is_private_file(&opened_metadata)
+        || opened_metadata.len() != initial_metadata.len()
+        || !atomic_publication::same_file_identity(initial_metadata, &opened_metadata)
+    {
+        return Err(handoff_race_error(format!(
+            "refusing to remove replaced utility-VM bundle-handoff marker {}",
+            path.display()
+        )));
+    }
+    verified
+        .verify_path_unchanged(path)
+        .await
+        .map_err(|error| {
+            handoff_race_error(format!(
+                "refusing to remove changed utility-VM bundle-handoff marker {} ({error})",
+                path.display()
+            ))
+        })?;
     match tokio::fs::remove_file(path).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -964,6 +1049,10 @@ fn handoff_error(code: ErrorCode, message: impl Into<String>) -> Error {
     Error::new(code, message).for_operation("prepare-utility-vm-bundle-handoff")
 }
 
+fn handoff_race_error(message: impl Into<String>) -> Error {
+    handoff_error(ErrorCode::Unavailable, message).retryable(true)
+}
+
 fn nonempty_session_error(session: &GuestSessionAttachment) -> Error {
     handoff_error(
         ErrorCode::FailedPrecondition,
@@ -985,8 +1074,9 @@ mod tests {
 
     use super::super::layout::PRIVATE_FILE_MODE;
     use super::{
-        ensure_marker, marker_conflict, publish_marker, read_marker, BundleHandoffMarker,
-        MARKER_FILE, MARKER_SCHEMA, PENDING_MARKER_FILE,
+        ensure_marker, marker_conflict, publish_marker, read_marker, read_marker_bound,
+        remove_private_file_bound, BundleHandoffMarker, MARKER_FILE, MARKER_SCHEMA,
+        PENDING_MARKER_FILE,
     };
 
     fn target(id: &str, generation: u64) -> ContainerTarget {
@@ -1111,6 +1201,90 @@ mod tests {
         assert_eq!(
             tokio::fs::read(&pending).await.expect("read candidate"),
             candidate
+        );
+    }
+
+    #[tokio::test]
+    async fn marker_reader_rejects_a_replaced_path_before_open() {
+        let temporary = tempdir().expect("temporary marker root");
+        let path = temporary.path().join(MARKER_FILE);
+        let retained = temporary.path().join("retained-original");
+        let replacement = temporary.path().join("replacement");
+        write_private(&path, b"original").await;
+        let original_metadata = tokio::fs::symlink_metadata(&path)
+            .await
+            .expect("inspect original marker");
+        tokio::fs::hard_link(&path, &retained)
+            .await
+            .expect("retain original marker identity");
+        write_private(&replacement, b"replacement").await;
+        tokio::fs::remove_file(&path)
+            .await
+            .expect("remove original marker path");
+        tokio::fs::hard_link(&replacement, &path)
+            .await
+            .expect("install replacement marker path");
+
+        let error = read_marker_bound(&path, &original_metadata)
+            .await
+            .expect_err("replacement marker must be rejected");
+        assert!(error.retryable);
+        assert_eq!(
+            tokio::fs::read(&path)
+                .await
+                .expect("read replacement marker"),
+            b"replacement"
+        );
+    }
+
+    #[tokio::test]
+    async fn marker_cleanup_rejects_a_replaced_path_without_deleting_it() {
+        let temporary = tempdir().expect("temporary marker root");
+        let path = temporary.path().join(PENDING_MARKER_FILE);
+        let retained = temporary.path().join("retained-original");
+        let replacement = temporary.path().join("replacement");
+        write_private(&path, b"original").await;
+        let original_metadata = tokio::fs::symlink_metadata(&path)
+            .await
+            .expect("inspect original marker");
+        tokio::fs::hard_link(&path, &retained)
+            .await
+            .expect("retain original marker identity");
+        write_private(&replacement, b"replacement").await;
+        tokio::fs::remove_file(&path)
+            .await
+            .expect("remove original marker path");
+        tokio::fs::hard_link(&replacement, &path)
+            .await
+            .expect("install replacement marker path");
+
+        let error = remove_private_file_bound(&path, &original_metadata)
+            .await
+            .expect_err("replacement marker must not be deleted");
+        assert!(error.retryable);
+        assert_eq!(
+            tokio::fs::read(&path)
+                .await
+                .expect("read replacement marker"),
+            b"replacement"
+        );
+    }
+
+    #[tokio::test]
+    async fn marker_reader_rejects_a_final_component_symlink() {
+        let temporary = tempdir().expect("temporary marker root");
+        let victim = temporary.path().join("victim");
+        let path = temporary.path().join(MARKER_FILE);
+        write_private(&victim, b"victim").await;
+        std::os::unix::fs::symlink(&victim, &path).expect("create marker symlink");
+
+        let error = read_marker(&path)
+            .await
+            .expect_err("symlink marker must be rejected");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert_eq!(
+            tokio::fs::read(&victim).await.expect("read marker victim"),
+            b"victim"
         );
     }
 
