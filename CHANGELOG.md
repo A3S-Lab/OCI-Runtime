@@ -27,6 +27,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Hardened utility-VM recovery report reads and cleanup. Reports are opened
+  without following final-component links, checked against the settled path
+  identity before and after bounded reads, and rechecked before deletion;
+  replacement entries now return retryable recovery errors without consuming a
+  different file, while a concurrent disappearance remains idempotent cleanup.
+
 - Hardened Linux guest handoff filesystem operations. One-time token
   consumption and recovery-report publication now use a descriptor-relative
   private parent, `O_NOFOLLOW`, device/inode checks, exact `0700`/`0600`
