@@ -1,8 +1,20 @@
+#[cfg(any(unix, windows))]
+use std::fs;
 use std::io;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(unix)]
+use std::{fs::File, fs::OpenOptions};
 
 use a3s_oci_agent_protocol::{
     AgentClient, AgentOperation, AgentTransportFaultInjector, AgentTransportQualificationRequest,
@@ -694,8 +706,8 @@ impl AgentVmSession {
                 return Err(failed(report, reason));
             }
         }
-        let shim = match canonical_file(shim, "libkrun shim").await {
-            Ok(path) => path,
+        let prepared_shim = match prepare_shim(shim, "libkrun shim").await {
+            Ok(shim) => shim,
             Err(reason) => return Err(failed(report, reason)),
         };
         let rootfs = match canonical_directory(rootfs, "guest rootfs").await {
@@ -982,7 +994,7 @@ impl AgentVmSession {
             Ok(encoded) => encoded,
             Err(error) => return Err(failed(report, error.to_string())),
         };
-        let mut command = Command::new(&shim);
+        let mut command = Command::new(prepared_shim.command_path());
         command
             .arg("agent-vm-smoke")
             .arg("--rootfs")
@@ -1055,11 +1067,18 @@ impl AgentVmSession {
             Err(error) => {
                 return Err(failed(
                     report,
-                    format!("failed to start libkrun shim {}: {error}", shim.display()),
+                    format!(
+                        "failed to start libkrun shim {}: {error}",
+                        prepared_shim.display_path().display()
+                    ),
                 ));
             }
         };
         drop(command);
+        // The child has resolved the descriptor-backed executable by the time
+        // `spawn` returns. Releasing the host copy avoids retaining an
+        // otherwise unrelated descriptor for the lifetime of the VM session.
+        drop(prepared_shim);
         drop(encoded_token);
         report.shim_spawned = true;
 
@@ -1392,6 +1411,120 @@ async fn canonical_file(path: &Path, description: &str) -> Result<PathBuf, Strin
     canonical_path(path, description, true).await
 }
 
+/// A shim executable pinned to one Unix file descriptor for the fork/exec
+/// boundary. A pathname is only a lookup key; retaining the descriptor makes
+/// the executable immune to a directory-entry replacement after validation.
+struct PreparedShim {
+    command_path: PathBuf,
+    display_path: PathBuf,
+    #[cfg(unix)]
+    _file: File,
+}
+
+impl PreparedShim {
+    fn command_path(&self) -> &Path {
+        &self.command_path
+    }
+
+    fn display_path(&self) -> &Path {
+        &self.display_path
+    }
+}
+
+async fn prepare_shim(path: &Path, description: &str) -> Result<PreparedShim, String> {
+    #[cfg(unix)]
+    {
+        let requested = path.to_path_buf();
+        let description = description.to_owned();
+        let display_description = description.clone();
+        tokio::task::spawn_blocking(move || open_pinned_shim(&requested, &description))
+            .await
+            .map_err(|error| format!("failed to pin {display_description}: {error}"))?
+    }
+
+    #[cfg(not(unix))]
+    {
+        let canonical = canonical_file(path, description).await?;
+        Ok(PreparedShim {
+            command_path: canonical.clone(),
+            display_path: canonical,
+        })
+    }
+}
+
+#[cfg(unix)]
+fn open_pinned_shim(path: &Path, description: &str) -> Result<PreparedShim, String> {
+    let input_metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "failed to inspect {description} {}: {error}",
+            path.display()
+        )
+    })?;
+    if input_metadata.file_type().is_symlink() || !input_metadata.is_file() {
+        return Err(format!(
+            "{description} must be a real file, not a symlink: {}",
+            path.display()
+        ));
+    }
+
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        format!(
+            "failed to resolve {description} {}: {error}",
+            path.display()
+        )
+    })?;
+    let canonical_metadata = fs::symlink_metadata(&canonical).map_err(|error| {
+        format!(
+            "failed to inspect {description} {}: {error}",
+            canonical.display()
+        )
+    })?;
+    if canonical_metadata.file_type().is_symlink() || !canonical_metadata.is_file() {
+        return Err(format!(
+            "{description} is not a regular file: {}",
+            canonical.display()
+        ));
+    }
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    let file = options.open(&canonical).map_err(|error| {
+        format!(
+            "failed to open pinned {description} {}: {error}",
+            canonical.display()
+        )
+    })?;
+    let file_metadata = file.metadata().map_err(|error| {
+        format!(
+            "failed to inspect pinned {description} {}: {error}",
+            canonical.display()
+        )
+    })?;
+    let same_identity = |metadata: &fs::Metadata| {
+        metadata.dev() == file_metadata.dev() && metadata.ino() == file_metadata.ino()
+    };
+    if !same_identity(&input_metadata) || !same_identity(&canonical_metadata) {
+        return Err(format!(
+            "{description} changed while its descriptor was being pinned: {}",
+            canonical.display()
+        ));
+    }
+
+    let descriptor_root = if cfg!(target_os = "linux") {
+        "/proc/self/fd"
+    } else {
+        "/dev/fd"
+    };
+    let command_path = PathBuf::from(format!("{descriptor_root}/{}", file.as_raw_fd()));
+    Ok(PreparedShim {
+        command_path,
+        display_path: canonical,
+        _file: file,
+    })
+}
+
 async fn canonical_directory(path: &Path, description: &str) -> Result<PathBuf, String> {
     canonical_path(path, description, false).await
 }
@@ -1413,22 +1546,99 @@ async fn canonical_path(
     } else {
         metadata.file_type().is_dir()
     };
-    if metadata.file_type().is_symlink() || !kind_matches {
+    if metadata.file_type().is_symlink() || is_reparse_point(&metadata) || !kind_matches {
         return Err(format!(
             "{description} must be a real {expected_kind}, not a symlink: {}",
             path.display()
         ));
     }
+    // Bind the first observation to a no-follow handle.  Metadata obtained
+    // from a pathname is only a snapshot and can be stale by the time the
+    // canonical path is resolved.
+    let initial_identity = capture_path_identity(path, description, require_file).await?;
     let canonical = tokio::fs::canonicalize(path).await.map_err(|error| {
         format!(
             "failed to resolve {description} {}: {error}",
             path.display()
         )
     })?;
-    let metadata = tokio::fs::metadata(&canonical).await.map_err(|error| {
-        format!(
-            "failed to inspect {description} {}: {error}",
+    let metadata = tokio::fs::symlink_metadata(&canonical)
+        .await
+        .map_err(|error| {
+            format!(
+                "failed to inspect {description} {}: {error}",
+                canonical.display()
+            )
+        })?;
+    let kind_matches = if require_file {
+        metadata.is_file()
+    } else {
+        metadata.is_dir()
+    };
+    if metadata.file_type().is_symlink() || is_reparse_point(&metadata) || !kind_matches {
+        return Err(format!(
+            "{description} is not a regular {expected_kind}: {}",
             canonical.display()
+        ));
+    }
+    let canonical_identity = capture_path_identity(&canonical, description, require_file).await?;
+    ensure_identity_unchanged(description, path, initial_identity, canonical_identity)?;
+    Ok(canonical)
+}
+
+type PathIdentity = (u64, u64);
+
+/// Open one path's final component without following a link and return the
+/// kernel identity of the object held by that handle.
+///
+/// The handle is intentionally dropped after the identity is captured.  This
+/// helper closes the validate-then-canonicalize gap; callers that later pass a
+/// path to another subsystem must still use that subsystem's own pinning
+/// contract for the subsequent operation.
+async fn capture_path_identity(
+    path: &Path,
+    description: &str,
+    require_file: bool,
+) -> Result<PathIdentity, String> {
+    let expected_kind = if require_file { "file" } else { "directory" };
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+
+    #[cfg(unix)]
+    {
+        let mut flags = libc::O_CLOEXEC | libc::O_NOFOLLOW;
+        if !require_file {
+            flags |= libc::O_DIRECTORY;
+        }
+        options.custom_flags(flags);
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+
+        let mut flags = FILE_FLAG_OPEN_REPARSE_POINT;
+        if !require_file {
+            flags |= FILE_FLAG_BACKUP_SEMANTICS;
+        }
+        options
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(flags);
+    }
+
+    let file = options.open(path).await.map_err(|error| {
+        format!(
+            "failed to pin {description} before canonicalization {}: {error}",
+            path.display()
+        )
+    })?;
+    let metadata = file.metadata().await.map_err(|error| {
+        format!(
+            "failed to inspect pinned {description} {}: {error}",
+            path.display()
         )
     })?;
     let kind_matches = if require_file {
@@ -1436,13 +1646,83 @@ async fn canonical_path(
     } else {
         metadata.is_dir()
     };
-    if !kind_matches {
+    if metadata.file_type().is_symlink() || is_reparse_point(&metadata) || !kind_matches {
         return Err(format!(
-            "{description} is not a regular {expected_kind}: {}",
-            canonical.display()
+            "{description} must be a real {expected_kind}, not a symlink: {}",
+            path.display()
         ));
     }
-    Ok(canonical)
+
+    #[cfg(unix)]
+    {
+        Ok((metadata.dev(), metadata.ino()))
+    }
+
+    #[cfg(windows)]
+    {
+        use std::mem::MaybeUninit;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+
+        let mut information = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+        // SAFETY: `file` owns a valid handle for the duration of this call,
+        // and the output pointer refers to writable storage of the exact
+        // structure required by the Windows API.
+        let succeeded =
+            unsafe { GetFileInformationByHandle(file.as_raw_handle(), information.as_mut_ptr()) };
+        if succeeded == 0 {
+            return Err(format!(
+                "failed to identify pinned {description} {}: {}",
+                path.display(),
+                io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: the API returned success and initialized the complete
+        // `BY_HANDLE_FILE_INFORMATION` value.
+        let information = unsafe { information.assume_init() };
+        Ok((
+            u64::from(information.dwVolumeSerialNumber),
+            (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow),
+        ))
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (file, metadata);
+        Err(format!(
+            "cannot identify {description} on this host: {}",
+            path.display()
+        ))
+    }
+}
+
+fn ensure_identity_unchanged(
+    description: &str,
+    path: &Path,
+    initial: PathIdentity,
+    canonical: PathIdentity,
+) -> Result<(), String> {
+    if initial == canonical {
+        Ok(())
+    } else {
+        Err(format!(
+            "{description} changed while it was being canonicalized: {}",
+            path.display()
+        ))
+    }
+}
+
+#[cfg(windows)]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+const fn is_reparse_point(_metadata: &std::fs::Metadata) -> bool {
+    false
 }
 
 async fn prepare_console_path(path: &Path) -> Result<PathBuf, String> {
@@ -1467,12 +1747,7 @@ async fn prepare_console_path(path: &Path) -> Result<PathBuf, String> {
             parent.display()
         )
     })?;
-    let parent = tokio::fs::canonicalize(parent).await.map_err(|error| {
-        format!(
-            "failed to resolve console directory {}: {error}",
-            parent.display()
-        )
-    })?;
+    let parent = canonical_directory(parent, "console directory").await?;
     let console = parent.join(file_name);
     if tokio::fs::try_exists(&console).await.map_err(|error| {
         format!(
@@ -1515,24 +1790,7 @@ async fn prepare_recovery_report_path(path: &Path) -> Result<PathBuf, String> {
             path.display()
         )
     })?;
-    let metadata = tokio::fs::symlink_metadata(parent).await.map_err(|error| {
-        format!(
-            "failed to inspect trusted recovery directory {}: {error}",
-            parent.display()
-        )
-    })?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(format!(
-            "trusted recovery directory must be a plain directory: {}",
-            parent.display()
-        ));
-    }
-    let parent = tokio::fs::canonicalize(parent).await.map_err(|error| {
-        format!(
-            "failed to resolve trusted recovery directory {}: {error}",
-            parent.display()
-        )
-    })?;
+    let parent = canonical_directory(parent, "trusted recovery directory").await?;
     let path = parent.join(file_name);
     if tokio::fs::try_exists(&path).await.map_err(|error| {
         format!(
@@ -1866,12 +2124,7 @@ async fn prepare_macos_runtime_share(path: &Path) -> Result<PathBuf, String> {
             path.display()
         ));
     }
-    let path = tokio::fs::canonicalize(path).await.map_err(|error| {
-        format!(
-            "failed to canonicalize writable runtime share {}: {error}",
-            path.display()
-        )
-    })?;
+    let path = canonical_directory(path, "macOS HVF runtime share").await?;
     let state = path.join("run");
     match tokio::fs::symlink_metadata(&state).await {
         Ok(metadata)
@@ -1947,12 +2200,7 @@ async fn prepare_linux_runtime_share(path: &Path) -> Result<PathBuf, String> {
             path.display()
         ));
     }
-    let path = tokio::fs::canonicalize(path).await.map_err(|error| {
-        format!(
-            "failed to canonicalize Linux KVM runtime share {}: {error}",
-            path.display()
-        )
-    })?;
+    let path = canonical_directory(path, "Linux KVM runtime share").await?;
     let state = path.join("run");
     match tokio::fs::symlink_metadata(&state).await {
         Ok(metadata)

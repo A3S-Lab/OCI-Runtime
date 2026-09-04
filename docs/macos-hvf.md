@@ -189,7 +189,9 @@ to the shim. The shim then:
 
 1. rejects a runtime directory or asset that is a symbolic link;
 2. recomputes both file hashes immediately before loading;
-3. loads `libkrunfw.5.dylib` and `libkrun.1.17.0.dylib` by absolute path;
+3. loads `libkrunfw.5.dylib` and `libkrun.1.17.0.dylib` through retained
+   Darwin `/dev/fd/<n>` paths, so the loader cannot reopen a replaced runtime
+   directory entry;
 4. resolves only the functions required by the context and VM-entry smokes;
 5. creates one libkrun configuration context;
 6. records one vCPU and 128 MiB of memory;
@@ -350,7 +352,8 @@ The host runtime establishes the trust chain in this order:
 3. bind `<endpoint>/agent.sock`, set mode `0600`, and retain its device/inode
    identity after verifying that both entries are non-symlinks owned by the
    effective runtime user;
-4. start the public shim as an isolated process-group leader;
+4. open and identity-check the public shim, then execute its retained
+   descriptor as an isolated process-group leader;
 5. let the shim spawn the direct worker that owns `krun_start_enter`;
 6. accept the libkrun Unix connection and read its PID through
    `LOCAL_PEERPID`;

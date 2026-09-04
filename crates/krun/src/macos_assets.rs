@@ -1,5 +1,6 @@
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
@@ -143,6 +144,15 @@ impl PinnedFile {
 
     pub(crate) fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Return the Darwin fdesc path backed by this retained file descriptor.
+    ///
+    /// `dlopen` receives this path instead of reopening the mutable runtime
+    /// directory entry.  The descriptor remains owned by the `PinnedFile`
+    /// for the lifetime of the loaded native object.
+    pub(crate) fn loader_path(&self) -> PathBuf {
+        PathBuf::from(format!("/dev/fd/{}", self.file.as_raw_fd()))
     }
 
     pub(crate) fn size(&self) -> u64 {
@@ -409,6 +419,26 @@ mod tests {
         let second = PinnedFile::open(&fixture.path, "test asset hash").unwrap();
         assert_eq!(second.sha256(), expected);
         assert_eq!(second.size(), fixture.bytes.len() as u64);
+    }
+
+    #[test]
+    fn loader_path_reads_the_retained_descriptor_after_path_replacement() {
+        let fixture = Fixture::new(b"macos-runtime-asset");
+        let pinned = PinnedFile::open(&fixture.path, "test asset").expect("pin asset");
+        let loader_path = pinned.loader_path();
+        let moved = fixture.path.with_file_name("asset-moved");
+        fs::rename(&fixture.path, &moved).expect("move original asset");
+        fs::write(&fixture.path, b"replacement-asset").expect("create replacement asset");
+
+        assert_eq!(
+            fs::read(loader_path).expect("read descriptor-backed asset"),
+            fixture.bytes
+        );
+        assert!(pinned
+            .reverify("VM entry")
+            .expect_err("replacement must be rejected")
+            .to_string()
+            .contains("identity changed"));
     }
 
     #[test]
