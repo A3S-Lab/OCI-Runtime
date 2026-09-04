@@ -1,13 +1,10 @@
-use std::fs::{self, File};
-use std::io::Read;
-use std::os::unix::fs::MetadataExt;
+use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
-use crate::macos_assets::{sha256_file, MacosRuntimeProvenance};
+use crate::macos_assets::{MacosRuntimeProvenance, PinnedFile};
 use crate::MacosBootAssetsEvidence;
 
 const SCHEMA_VERSION: &str = "a3s.oci.macos-system-image.v1";
@@ -28,81 +25,49 @@ const ALPINE_ARCHIVE_SHA256: &str =
 const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SOURCE_DATE_EPOCH: u64 = 1_735_689_600;
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+const VERIFY_OPERATION: &str = "verify-macos-system-image";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) struct MacosSystemImage {
-    manifest_path: PathBuf,
-    manifest_sha256: String,
-    manifest_size: u64,
-    manifest_device: u64,
-    manifest_inode: u64,
-    image_path: PathBuf,
-    image_sha256: String,
-    image_size: u64,
-    image_device: u64,
-    image_inode: u64,
+    manifest: PinnedFile,
+    image: PinnedFile,
     runtime: MacosRuntimeProvenance,
 }
 
 impl MacosSystemImage {
     pub(crate) fn load(manifest_path: &Path, runtime: &MacosRuntimeProvenance) -> Result<Self> {
-        let manifest_path = canonical_plain_file(manifest_path, "system-image manifest")?;
-        let metadata = fs::symlink_metadata(&manifest_path).map_err(|error| {
-            image_error(format!(
-                "failed to inspect system-image manifest {}: {error}",
-                manifest_path.display()
-            ))
-        })?;
-        if metadata.len() == 0 || metadata.len() > MAX_MANIFEST_BYTES {
+        let manifest_file =
+            PinnedFile::open_bounded(manifest_path, "system-image manifest", MAX_MANIFEST_BYTES)
+                .map_err(with_verify_operation)?;
+        if manifest_file.size() == 0 || manifest_file.size() > MAX_MANIFEST_BYTES {
             return Err(image_error(format!(
                 "system-image manifest size must be between 1 and {MAX_MANIFEST_BYTES} bytes: {}",
-                manifest_path.display()
+                manifest_file.path().display()
             )));
         }
 
-        let bytes = read_bounded(&manifest_path, MAX_MANIFEST_BYTES)?;
-        let manifest_sha256 = format!("{:x}", Sha256::digest(&bytes));
+        let bytes = manifest_file
+            .read_bounded(MAX_MANIFEST_BYTES)
+            .map_err(with_verify_operation)?;
         let manifest: Manifest = strict_json(&bytes)?;
         manifest.validate(runtime)?;
 
-        let parent = manifest_path.parent().ok_or_else(|| {
+        let parent = manifest_file.path().parent().ok_or_else(|| {
             image_error(format!(
                 "system-image manifest has no parent directory: {}",
-                manifest_path.display()
+                manifest_file.path().display()
             ))
         })?;
         let image_path = resolve_manifest_sibling(parent, &manifest.image.name)?;
-        let image_metadata = fs::symlink_metadata(&image_path).map_err(|error| {
-            image_error(format!(
-                "failed to inspect raw system image {}: {error}",
-                image_path.display()
-            ))
-        })?;
-        if image_metadata.file_type().is_symlink() || !image_metadata.file_type().is_file() {
-            return Err(image_error(format!(
-                "raw system image must be a real regular file, not a symlink: {}",
-                image_path.display()
-            )));
-        }
-        let (image_sha256, image_size) = sha256_file(&image_path, "verify-macos-system-image")?;
-        if image_size != manifest.image.size || image_sha256 != manifest.image.sha256 {
-            return Err(image_error(format!(
-                "raw system image does not match manifest: expected {} bytes and SHA-256 {}, found {} bytes and {}",
-                manifest.image.size, manifest.image.sha256, image_size, image_sha256
-            )));
-        }
+        let image =
+            PinnedFile::open(&image_path, "raw system image").map_err(with_verify_operation)?;
+        image
+            .require(manifest.image.size, &manifest.image.sha256)
+            .map_err(with_verify_operation)?;
 
         Ok(Self {
-            manifest_path,
-            manifest_sha256,
-            manifest_size: metadata.len(),
-            manifest_device: metadata.dev(),
-            manifest_inode: metadata.ino(),
-            image_path,
-            image_sha256,
-            image_size,
-            image_device: image_metadata.dev(),
-            image_inode: image_metadata.ino(),
+            manifest: manifest_file,
+            image,
             runtime: runtime.clone(),
         })
     }
@@ -113,51 +78,28 @@ impl MacosSystemImage {
                 "loaded macOS runtime provenance changed before VM entry".to_string(),
             ));
         }
-        verify_identity(
-            &self.manifest_path,
-            self.manifest_device,
-            self.manifest_inode,
-            self.manifest_size,
-            "system-image manifest",
-        )?;
-        let (manifest_sha256, _) = sha256_file(&self.manifest_path, "reverify-macos-system-image")?;
-        if manifest_sha256 != self.manifest_sha256 {
-            return Err(image_error(format!(
-                "system-image manifest SHA-256 changed before VM entry: expected {}, found {manifest_sha256}",
-                self.manifest_sha256
-            )));
-        }
-
-        verify_identity(
-            &self.image_path,
-            self.image_device,
-            self.image_inode,
-            self.image_size,
-            "raw system image",
-        )?;
-        let (image_sha256, _) = sha256_file(&self.image_path, "reverify-macos-system-image")?;
-        if image_sha256 != self.image_sha256 {
-            return Err(image_error(format!(
-                "raw system image SHA-256 changed before VM entry: expected {}, found {image_sha256}",
-                self.image_sha256
-            )));
-        }
+        self.manifest
+            .reverify("VM entry")
+            .map_err(with_verify_operation)?;
+        self.image
+            .reverify("VM entry")
+            .map_err(with_verify_operation)?;
         Ok(())
     }
 
     pub(crate) fn manifest_path(&self) -> &Path {
-        &self.manifest_path
+        self.manifest.path()
     }
 
     pub(crate) fn image_path(&self) -> &Path {
-        &self.image_path
+        self.image.path()
     }
 
     pub(crate) fn evidence(&self, runtime_share_separate: bool) -> MacosBootAssetsEvidence {
         MacosBootAssetsEvidence {
-            manifest_sha256: self.manifest_sha256.clone(),
-            system_image_sha256: self.image_sha256.clone(),
-            system_image_size: self.image_size,
+            manifest_sha256: self.manifest.sha256().to_string(),
+            system_image_sha256: self.image.sha256().to_string(),
+            system_image_size: self.image.size(),
             runtime_archive_sha256: self.runtime.runtime_archive_sha256.clone(),
             libkrun_sha256: self.runtime.libkrun_sha256.clone(),
             firmware_sha256: self.runtime.firmware_sha256.clone(),
@@ -396,25 +338,6 @@ fn strict_json(bytes: &[u8]) -> Result<Manifest> {
     Ok(manifest)
 }
 
-fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    File::open(path)
-        .and_then(|file| file.take(limit + 1).read_to_end(&mut bytes))
-        .map_err(|error| {
-            image_error(format!(
-                "failed to read system-image manifest {}: {error}",
-                path.display()
-            ))
-        })?;
-    if bytes.len() as u64 > limit {
-        return Err(image_error(format!(
-            "system-image manifest exceeds {limit} bytes: {}",
-            path.display()
-        )));
-    }
-    Ok(bytes)
-}
-
 fn canonical_plain_file(path: &Path, description: &str) -> Result<PathBuf> {
     if !path.is_absolute() {
         return Err(image_error(format!(
@@ -462,33 +385,6 @@ fn resolve_manifest_sibling(parent: &Path, name: &str) -> Result<PathBuf> {
     Ok(canonical)
 }
 
-fn verify_identity(
-    path: &Path,
-    expected_device: u64,
-    expected_inode: u64,
-    expected_size: u64,
-    description: &str,
-) -> Result<()> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        image_error(format!(
-            "failed to re-inspect {description} {}: {error}",
-            path.display()
-        ))
-    })?;
-    if metadata.file_type().is_symlink()
-        || !metadata.file_type().is_file()
-        || metadata.dev() != expected_device
-        || metadata.ino() != expected_inode
-        || metadata.len() != expected_size
-    {
-        return Err(image_error(format!(
-            "{description} identity changed before VM entry: {}",
-            path.display()
-        )));
-    }
-    Ok(())
-}
-
 fn require_equal(field: &str, actual: &str, expected: &str) -> Result<()> {
     if actual == expected {
         Ok(())
@@ -524,7 +420,11 @@ fn require_sha256(field: &str, value: &str) -> Result<()> {
 }
 
 fn image_error(message: String) -> Error {
-    Error::new(ErrorCode::Unavailable, message).for_operation("verify-macos-system-image")
+    Error::new(ErrorCode::Unavailable, message).for_operation(VERIFY_OPERATION)
+}
+
+fn with_verify_operation(error: Error) -> Error {
+    error.for_operation(VERIFY_OPERATION)
 }
 
 #[cfg(test)]

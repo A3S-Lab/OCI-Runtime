@@ -11,9 +11,9 @@ use zeroize::Zeroizing;
 
 use crate::ffi::{path_to_cstring, value_to_cstring, FfiStringArray};
 use crate::macos_assets::{
-    sha256_file, MacosRuntimeProvenance, KERNEL_BUNDLE_SHA256, KERNEL_BUNDLE_SIZE,
+    MacosRuntimeProvenance, PinnedFile, KERNEL_BUNDLE_SHA256, KERNEL_BUNDLE_SIZE,
     KERNEL_ENTRY_ADDRESS, KERNEL_GUEST_LOAD_ADDRESS, LIBKRUNFW_NAME, LIBKRUNFW_SHA256,
-    LIBKRUN_NAME, LIBKRUN_SHA256,
+    LIBKRUNFW_SIZE, LIBKRUN_NAME, LIBKRUN_SHA256, LIBKRUN_SIZE,
 };
 use crate::macos_system_image::MacosSystemImage;
 use crate::VmConfig;
@@ -57,8 +57,9 @@ pub(crate) struct MacosKrunApi {
     set_console_output: KrunSetConsoleOutput,
     start_enter: KrunStartEnter,
     get_kernel: KrunfwGetKernel,
-    runtime_dir: PathBuf,
     runtime_provenance: MacosRuntimeProvenance,
+    runtime_krun: PinnedFile,
+    runtime_firmware: PinnedFile,
     // Drop libkrun before its firmware provider.
     _krun: Library,
     _firmware: Library,
@@ -69,6 +70,12 @@ impl MacosKrunApi {
         let runtime_dir = resolve_runtime_dir()?;
         let firmware_path = runtime_dir.join(LIBKRUNFW_NAME);
         let krun_path = runtime_dir.join(LIBKRUN_NAME);
+        let firmware_file = PinnedFile::open(&firmware_path, "macOS libkrun firmware")
+            .map_err(|error| error.for_operation("load-macos-libkrunfw"))?;
+        let krun_file = PinnedFile::open(&krun_path, "macOS libkrun")
+            .map_err(|error| error.for_operation("load-macos-libkrun"))?;
+        verify_pinned_runtime_file(&firmware_file, LIBKRUNFW_SIZE, LIBKRUNFW_SHA256)?;
+        verify_pinned_runtime_file(&krun_file, LIBKRUN_SIZE, LIBKRUN_SHA256)?;
 
         // SAFETY: both paths are absolute, checksum-verified regular files.
         // RTLD_GLOBAL makes the already-loaded firmware visible when libkrun
@@ -84,6 +91,9 @@ impl MacosKrunApi {
                         ),
                     )
                 })?;
+        firmware_file
+            .reverify("dynamic library load")
+            .map_err(|error| error.for_operation("load-macos-libkrunfw"))?;
 
         // SAFETY: the exact runtime-owned libkrun file was verified above and
         // stays loaded for the lifetime of every copied function pointer.
@@ -97,6 +107,9 @@ impl MacosKrunApi {
                     ),
                 )
             })?;
+        krun_file
+            .reverify("dynamic library load")
+            .map_err(|error| error.for_operation("load-macos-libkrun"))?;
 
         let get_kernel = load_symbol(&firmware, b"krunfw_get_kernel\0", "krunfw_get_kernel")?;
         let runtime_provenance = verify_exported_kernel(get_kernel)?;
@@ -141,8 +154,9 @@ impl MacosKrunApi {
             set_console_output,
             start_enter,
             get_kernel,
-            runtime_dir,
             runtime_provenance,
+            runtime_krun: krun_file,
+            runtime_firmware: firmware_file,
             _krun: krun,
             _firmware: firmware,
         })
@@ -153,8 +167,12 @@ impl MacosKrunApi {
     }
 
     fn reverify_runtime(&self) -> Result<MacosRuntimeProvenance> {
-        verify_runtime_file(&self.runtime_dir.join(LIBKRUN_NAME), LIBKRUN_SHA256)?;
-        verify_runtime_file(&self.runtime_dir.join(LIBKRUNFW_NAME), LIBKRUNFW_SHA256)?;
+        self.runtime_krun
+            .reverify("VM entry")
+            .map_err(|error| error.for_operation("reverify-macos-libkrun-runtime"))?;
+        self.runtime_firmware
+            .reverify("VM entry")
+            .map_err(|error| error.for_operation("reverify-macos-libkrun-runtime"))?;
         let provenance = verify_exported_kernel(self.get_kernel)?;
         if provenance != self.runtime_provenance {
             return Err(runtime_error(
@@ -509,13 +527,6 @@ fn verify_runtime_dir(runtime_dir: &Path) -> Result<PathBuf> {
         ));
     }
 
-    for (name, expected) in [
-        (LIBKRUN_NAME, LIBKRUN_SHA256),
-        (LIBKRUNFW_NAME, LIBKRUNFW_SHA256),
-    ] {
-        verify_runtime_file(&runtime_dir.join(name), expected)?;
-    }
-
     runtime_dir.canonicalize().map_err(|error| {
         runtime_error(
             "verify-macos-libkrun-runtime",
@@ -527,14 +538,24 @@ fn verify_runtime_dir(runtime_dir: &Path) -> Result<PathBuf> {
     })
 }
 
-fn verify_runtime_file(path: &Path, expected: &str) -> Result<()> {
-    let (actual, _) = sha256_file(path, "verify-macos-libkrun-runtime")?;
-    if actual != expected {
+fn verify_pinned_runtime_file(file: &PinnedFile, expected_size: u64, expected: &str) -> Result<()> {
+    if file.size() != expected_size {
         return Err(runtime_error(
             "verify-macos-libkrun-runtime",
             format!(
-                "SHA-256 mismatch for {}: expected {expected}, found {actual}",
-                path.display()
+                "size mismatch for {}: expected {expected_size}, found {}",
+                file.path().display(),
+                file.size()
+            ),
+        ));
+    }
+    if file.sha256() != expected {
+        return Err(runtime_error(
+            "verify-macos-libkrun-runtime",
+            format!(
+                "SHA-256 mismatch for {}: expected {expected}, found {}",
+                file.path().display(),
+                file.sha256()
             ),
         ));
     }
@@ -622,7 +643,7 @@ mod tests {
     use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{verify_runtime_file, MacosKrunApi};
+    use super::{verify_pinned_runtime_file, MacosKrunApi};
 
     #[test]
     fn checksum_verified_runtime_exports_the_required_context_api() {
@@ -648,7 +669,9 @@ mod tests {
             .expect("test file must be written");
         drop(file);
 
-        let error = verify_runtime_file(&path, &"0".repeat(64))
+        let pinned = super::PinnedFile::open(&path, "test runtime asset")
+            .expect("test runtime asset must be pinnable");
+        let error = verify_pinned_runtime_file(&pinned, 16, &"0".repeat(64))
             .expect_err("a modified runtime file must be rejected");
         fs::remove_file(&path).expect("test file must be removed");
         assert!(error.to_string().contains("SHA-256 mismatch"));
