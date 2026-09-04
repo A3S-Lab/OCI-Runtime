@@ -9,6 +9,7 @@ use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use serde::{Deserialize, Serialize};
 
 use crate::macos_context::{KrunContext, MacosKrunApi};
+use crate::macos_runtime_share::MacosRuntimeShare;
 use crate::macos_system_image::MacosSystemImage;
 use crate::unix_process::{
     read_bounded_worker_output, require_absent, resolve_console, terminate_and_wait,
@@ -69,10 +70,10 @@ pub(crate) fn vm_smoke(
     // The parent does not load libkrun. Only bounded evidence from the private
     // worker may advance this field from staged-at-build-time to loaded.
     report.runtime_bundle_loaded = false;
-    let runtime_share = match canonical_runtime_share(runtime_share) {
-        Ok(runtime_share) => runtime_share,
-        Err(reason) => {
-            report.reason = Some(reason);
+    let runtime_share = match MacosRuntimeShare::open(runtime_share) {
+        Ok(runtime_share) => runtime_share.path().to_path_buf(),
+        Err(error) => {
+            report.reason = Some(error.to_string());
             return report;
         }
     };
@@ -233,9 +234,9 @@ pub(crate) fn run_worker(
     marker_name: &str,
 ) -> bool {
     let mut evidence = WorkerEvidence::initial();
-    let runtime_share = match canonical_runtime_share(runtime_share) {
+    let runtime_share = match MacosRuntimeShare::open(runtime_share) {
         Ok(runtime_share) => runtime_share,
-        Err(reason) => return fail_worker(&mut evidence, reason),
+        Err(error) => return fail_worker(&mut evidence, error.to_string()),
     };
     let console = match resolve_console(console) {
         Ok(console) => console,
@@ -244,7 +245,7 @@ pub(crate) fn run_worker(
     if let Err(reason) = validate_marker_name(marker_name) {
         return fail_worker(&mut evidence, reason);
     }
-    let marker_path = runtime_share.join(marker_name);
+    let marker_path = runtime_share.path().join(marker_name);
     if let Err(reason) = require_absent(&marker_path, "smoke marker") {
         return fail_worker(&mut evidence, reason);
     }
@@ -261,10 +262,14 @@ pub(crate) fn run_worker(
         Ok(system_image) => system_image,
         Err(error) => return fail_worker(&mut evidence, error.to_string()),
     };
-    if system_image.image_path().starts_with(&runtime_share)
-        || runtime_share.starts_with(system_image.image_path())
-        || system_image.manifest_path().starts_with(&runtime_share)
-        || runtime_share.starts_with(system_image.manifest_path())
+    if system_image.image_path().starts_with(runtime_share.path())
+        || runtime_share.path().starts_with(system_image.image_path())
+        || system_image
+            .manifest_path()
+            .starts_with(runtime_share.path())
+        || runtime_share
+            .path()
+            .starts_with(system_image.manifest_path())
     {
         return fail_worker(
             &mut evidence,
@@ -290,7 +295,7 @@ pub(crate) fn run_worker(
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.rootfs_configured = true;
-    if let Err(error) = context.add_virtiofs(AGENT_RUNTIME_SHARE_TAG, &runtime_share) {
+    if let Err(error) = context.add_runtime_share(AGENT_RUNTIME_SHARE_TAG, runtime_share) {
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.runtime_share_configured = true;
@@ -327,27 +332,6 @@ pub(crate) fn run_worker(
         ),
         Err(error) => fail_worker(&mut evidence, error.to_string()),
     }
-}
-
-fn canonical_runtime_share(path: &Path) -> Result<std::path::PathBuf, String> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        format!(
-            "failed to inspect writable runtime share {}: {error}",
-            path.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
-        return Err(format!(
-            "writable runtime share must be a real directory, not a symlink: {}",
-            path.display()
-        ));
-    }
-    path.canonicalize().map_err(|error| {
-        format!(
-            "failed to canonicalize writable runtime share {}: {error}",
-            path.display()
-        )
-    })
 }
 
 fn validate_marker_name(marker_name: &str) -> Result<(), String> {

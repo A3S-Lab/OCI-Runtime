@@ -27,6 +27,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added descriptor-pinned macOS HVF writable runtime shares. The shim now
+  admits only same-UID mode-`0700` directories, retains no-follow handles
+  through virtio-fs configuration and VM entry, and rechecks the root and
+  guest-agent `run/` state directory against device/inode identity. The
+  macOS workflow, runtime preparation, smoke fixtures, and documentation now
+  carry the same private-share contract.
+
 - Added a self-verifying Linux release package manifest. Each staged archive
   now records the exact source, runtime profile, containerd Runtime V2
   contract, qualification report, and every regular file's relative path,
@@ -80,6 +87,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
   containerd runtime-v2 qualification path.
 
 ### Fixed
+
+- Preserved the resource description in retained macOS asset-open errors, so
+  missing or inaccessible system-image manifests continue to produce the
+  typed diagnostic context expected by the CLI regression contract.
 
 - Made the destructive real-containerd qualification reject transient
   `systemd-run` units and units using `KillMode=control-group` before creating

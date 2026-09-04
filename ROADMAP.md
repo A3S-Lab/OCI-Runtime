@@ -1384,8 +1384,9 @@ then may WHPX become `experimental`.
   without accepting pre-entry configuration as guest execution.
 - [x] Boot the same pinned A3S Linux kernel and immutable system root through
   HVF, retain their digests in the host report, keep the writable
-  per-generation share separate, and rerun the complete macOS SDK and soak
-  matrices against those exact assets. The retained Apple Silicon run used
+  per-generation share separate and descriptor-pinned through VM entry, and
+  rerun the complete macOS SDK and soak matrices against those exact assets.
+  The retained Apple Silicon run used
   manifest SHA-256
   `e7206ea5c645259fcc9f00d8b3042792d6a6b380436a0a38a1b85dda7c0d4284`,
   raw-image SHA-256
@@ -1401,7 +1402,7 @@ then may WHPX become `experimental`.
   by WHPX, including bounded running wait, exact repeated exit status,
   pause/resume, live process inventory, resource update, normalized stats, and
   the exact six-device privileged profile. Keep durable target-cleanup evidence
-  on the writable runtime share, create temporary source nodes only on
+  on the descriptor-pinned writable runtime share, create temporary source nodes only on
   Guest-local devtmpfs, and remove those sources at the Create barrier without
   weakening device identity validation.
 - [x] Prove deterministic VM, process, descriptor, and filesystem cleanup

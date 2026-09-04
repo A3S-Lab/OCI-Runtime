@@ -54,6 +54,15 @@ removes only the exact socket inode it created. Graceful SIGINT or SIGTERM
 closes active transports and invokes the idempotent HVF shutdown path so every
 live VM owner is reaped exactly once.
 
+The isolated shim admits each per-generation runtime share through a retained
+directory descriptor opened with `O_DIRECTORY` and no-follow semantics. It
+passes libkrun a descriptor-backed `/dev/fd/<n>/.` path, binds the path and
+descriptor to the same device/inode and private mode, and rechecks both the
+share and the required `run/` state directory before virtio-fs attachment and
+again immediately before VM entry. A directory-entry replacement or permission
+drift therefore fails closed instead of silently changing the guest's writable
+namespace.
+
 Inside each utility VM, durable Agent records and device-target cleanup
 manifests stay on the writable per-generation virtiofs share. Temporary
 privileged OCI device sources do not: the Agent creates them in a private
@@ -243,7 +252,7 @@ a3s-oci-krun-shim vm-smoke
         ├── spawn signed worker and read bounded setup evidence
         │       ├── reverify and load the pinned native bundle
         │       ├── create and configure the context
-        │       ├── configure rootfs, command, and console
+        │       ├── configure rootfs, descriptor-pinned share, command, and console
         │       └── krun_start_enter → Linux guest → marker → guest exit
         ├── enforce 30-second timeout and reap the worker
         ├── require natural guest exit code 0
@@ -297,7 +306,7 @@ asset_dir="$(mktemp -d)"
 runtime_share="$asset_dir/runtime-share"
 archive="$asset_dir/alpine-minirootfs-3.22.5-aarch64.tar.gz"
 system_image_manifest="$asset_dir/system-image/system-image.json"
-mkdir "$runtime_share"
+mkdir -m 700 "$runtime_share"
 curl --fail --location --output "$archive" \
   https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.5-aarch64.tar.gz
 printf '%s  %s\n' \

@@ -15,6 +15,7 @@ use crate::macos_assets::{
     KERNEL_ENTRY_ADDRESS, KERNEL_GUEST_LOAD_ADDRESS, LIBKRUNFW_NAME, LIBKRUNFW_SHA256,
     LIBKRUNFW_SIZE, LIBKRUN_NAME, LIBKRUN_SHA256, LIBKRUN_SIZE,
 };
+use crate::macos_runtime_share::MacosRuntimeShare;
 use crate::macos_system_image::MacosSystemImage;
 use crate::VmConfig;
 
@@ -189,6 +190,7 @@ pub(crate) struct KrunContext {
     id: Option<u32>,
     api: MacosKrunApi,
     system_image: Option<MacosSystemImage>,
+    runtime_share: Option<MacosRuntimeShare>,
     not_thread_safe: PhantomData<Rc<()>>,
 }
 
@@ -209,6 +211,7 @@ impl KrunContext {
             id: Some(id),
             api,
             system_image: None,
+            runtime_share: None,
             not_thread_safe: PhantomData,
         })
     }
@@ -278,18 +281,33 @@ impl KrunContext {
         Ok(())
     }
 
-    pub(crate) fn add_virtiofs(&mut self, tag: &str, host_path: &Path) -> Result<()> {
+    pub(crate) fn add_runtime_share(
+        &mut self,
+        tag: &str,
+        runtime_share: MacosRuntimeShare,
+    ) -> Result<()> {
         let id = self.active_id("krun_add_virtiofs")?;
+        if self.runtime_share.is_some() {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "macOS runtime share has already been configured",
+            )
+            .for_operation("krun_add_virtiofs"));
+        }
+        self.api.reverify_runtime()?;
+        runtime_share.reverify()?;
         let tag = value_to_cstring("krun_add_virtiofs", "virtio-fs tag", tag)?;
-        let host_path = path_to_cstring("krun_add_virtiofs", host_path)?;
-        // SAFETY: both strings remain live for the call, and this context is
-        // exclusively owned by `self`.
-        let status = unsafe { (self.api.add_virtiofs)(id, tag.as_ptr(), host_path.as_ptr()) };
+        let pinned_path = path_to_cstring("krun_add_virtiofs", &runtime_share.pinned_path())?;
+        // SAFETY: the context is exclusively owned and the descriptor-pinned
+        // share plus both C strings remain live through the complete call.
+        let status = unsafe { (self.api.add_virtiofs)(id, tag.as_ptr(), pinned_path.as_ptr()) };
         check_status(
             "krun_add_virtiofs",
             status,
             "failed to attach the writable macOS runtime share",
-        )
+        )?;
+        self.runtime_share = Some(runtime_share);
+        Ok(())
     }
 
     pub(crate) fn set_vm_config(&mut self, config: VmConfig) -> Result<()> {
@@ -400,6 +418,9 @@ impl KrunContext {
 
     pub(crate) fn start_enter(mut self) -> Result<i32> {
         let runtime = self.api.reverify_runtime()?;
+        if let Some(runtime_share) = self.runtime_share.as_ref() {
+            runtime_share.reverify()?;
+        }
         let system_image = self.system_image.as_ref().ok_or_else(|| {
             Error::new(
                 ErrorCode::FailedPrecondition,
