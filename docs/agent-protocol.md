@@ -543,12 +543,18 @@ sorted, unique, limited to 1,024 entries, encoded in at most 1 MiB, and
 authenticated with HMAC-SHA256 under the ephemeral session token. The token is
 not included in the artifact. The guest creates the fixed one-time report file
 with exclusive `0600` semantics and synchronizes both file and directory.
-Missing or partial cleanup produces no usable report. On Windows, the
+Missing or partial cleanup produces no usable report. The shim pins the
+recovery directory and `.pending` marker by device/inode on Unix (or
+volume/file identity on Windows), binds a report identity when the guest file
+appears, and refuses to remove a replacement entry during normal or owner-death
+cleanup. Report reads use no-follow handles and verify identity and size again
+after the read. On Windows, the
 owner-PID-aware shim stages the one-time path, preserves it throughout the
 bounded owner-death grace, rejects reparse points and destinations inside the
 per-generation writable share,
 verifies the HMAC, removes the guest copy, and atomically commits only the
-normalized report into the protected host recovery directory. A protected
+normalized report into the protected host recovery directory without replacing
+an incumbent destination. A protected
 empty `.pending` marker exists from VM launch until either that commit or
 terminal handoff failure. WHPX remains `probe-only` while real-host
 qualification remains pending. The durable

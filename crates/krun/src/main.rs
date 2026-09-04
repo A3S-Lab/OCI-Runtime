@@ -455,6 +455,15 @@ fn main() -> ExitCode {
                     owner_monitor.mark_vm_finished();
                     return ExitCode::FAILURE;
                 }
+                if let Some(recovery) = recovery.as_ref() {
+                    if let Err(error) = recovery.reverify() {
+                        eprintln!(
+                            "a3s-oci-krun-shim: refusing VM entry because the guest recovery handoff changed: {error}"
+                        );
+                        owner_monitor.mark_vm_finished();
+                        return ExitCode::FAILURE;
+                    }
+                }
                 let mut report = a3s_oci_krun::agent_vm_smoke(
                     &rootfs,
                     Some(&system_image_manifest),
@@ -564,6 +573,15 @@ fn main() -> ExitCode {
                     );
                     owner_monitor.mark_vm_finished();
                     return ExitCode::FAILURE;
+                }
+                if let Some(recovery) = recovery.as_ref() {
+                    if let Err(error) = recovery.reverify() {
+                        eprintln!(
+                            "a3s-oci-krun-shim: refusing VM entry because the guest recovery handoff changed: {error}"
+                        );
+                        owner_monitor.mark_vm_finished();
+                        return ExitCode::FAILURE;
+                    }
                 }
                 let mut report = a3s_oci_krun::agent_vm_smoke(
                     &rootfs,
