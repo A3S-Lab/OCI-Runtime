@@ -27,6 +27,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added device/inode-pinned Unix guest-agent endpoints for the macOS HVF and
+  Linux KVM bridges. The runtime rechecks the private directory and socket
+  before publishing credentials, accepting a peer, and consuming the endpoint;
+  cleanup refuses to remove a same-UID replacement entry and leaves it for its
+  current owner.
+
 - Added a retained descriptor for the Linux KVM writable runtime-state
   directory. The `run/` child is now opened with directory/no-follow flags,
   checked against its path identity during admission, and rechecked through

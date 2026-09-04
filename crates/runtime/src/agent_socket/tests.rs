@@ -197,6 +197,38 @@ async fn endpoint_modes_collisions_and_drop_cleanup_are_fail_closed() {
     assert!(!directory.exists());
 }
 
+#[tokio::test]
+async fn endpoint_replacement_is_rejected_without_deleting_the_replacement() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut listener = unique_listener();
+    let directory = listener.directory().to_path_buf();
+    let socket_path = listener.socket_path().to_path_buf();
+    std::fs::remove_file(&socket_path).expect("unlink original endpoint path");
+    let replacement =
+        tokio::net::UnixListener::bind(&socket_path).expect("bind replacement endpoint socket");
+    std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+        .expect("protect replacement endpoint socket");
+
+    let error = listener
+        .reverify()
+        .expect_err("replaced endpoint must fail closed");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    let cleanup_error = listener
+        .cleanup()
+        .expect_err("cleanup must refuse a replaced endpoint");
+    assert_eq!(cleanup_error.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(
+        socket_path.exists(),
+        "replacement endpoint must remain intact"
+    );
+
+    drop(listener);
+    drop(replacement);
+    std::fs::remove_file(&socket_path).expect("remove test replacement socket");
+    std::fs::remove_dir(&directory).expect("remove test endpoint directory");
+}
+
 #[test]
 fn agent_socket_child() {
     let Ok(socket_path) = std::env::var(CHILD_SOCKET_ENV) else {

@@ -306,15 +306,23 @@ mod tests {
         assert!(pinned.pinned_path().to_string_lossy().ends_with("/."));
         let path = CString::new(pinned.pinned_path().as_os_str().as_bytes())
             .expect("descriptor path must not contain NUL");
+        // `/dev/fd/<n>` is a kernel descriptor namespace on macOS rather than
+        // a user-controlled filesystem link. Applying `O_NOFOLLOW` to that
+        // magic component is rejected by some supported macOS runners, while
+        // the retained descriptor still pins the object being opened.
         // SAFETY: `path` is a live NUL-terminated path. The descriptor is
         // checked before ownership is transferred to `File`.
         let descriptor = unsafe {
             libc::open(
                 path.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
             )
         };
-        assert!(descriptor >= 0, "open descriptor-backed runtime share");
+        assert!(
+            descriptor >= 0,
+            "open descriptor-backed runtime share: {}",
+            std::io::Error::last_os_error()
+        );
         // SAFETY: `descriptor` was returned as an owned descriptor above.
         let descriptor = unsafe { fs::File::from_raw_fd(descriptor) };
         assert!(
