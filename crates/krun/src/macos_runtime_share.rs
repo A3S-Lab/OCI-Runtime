@@ -313,15 +313,12 @@ mod tests {
         // `/dev/fd/<n>` is a kernel descriptor namespace on macOS rather than
         // a user-controlled filesystem link. The fdesc implementation opens
         // the retained directory directly; appending `/.` is not supported
-        // consistently by current macOS runners.
+        // consistently by current macOS runners. libkrun likewise opens the
+        // supplied root with ordinary read-only/no-follow flags, so do not add
+        // `O_DIRECTORY` here (Darwin can report `ENOTDIR` for that fdesc form).
         // SAFETY: `path` is a live NUL-terminated path. The descriptor is
         // checked before ownership is transferred to `File`.
-        let descriptor = unsafe {
-            libc::open(
-                path.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
-            )
-        };
+        let descriptor = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
         assert!(
             descriptor >= 0,
             "open descriptor-backed runtime share: {}",
