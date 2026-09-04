@@ -627,7 +627,11 @@ handoff. A restarted host now parses only the normalized report, rechecks the
 exact target and durable configuration digest, commits `stopped`, and caches
 the real init result through the durable wait path. When only the marker is
 present it waits through the shim's bounded owner-death grace and fails
-retryably on overrun instead of racing ahead. The report is retained across
+retryably on overrun instead of racing ahead. Recovery report reads and
+cleanup use no-follow regular-file handles, bind the handle to the settled
+path identity, verify the handle after the bounded read, and recheck the final
+path before deletion; a replacement or reparse-point entry is left untouched
+and returned as a retryable recovery race. The report is retained across
 both sides of the recovery fault boundary and removed only by exact-generation
 delete. If neither authenticated evidence nor a pending handoff exists, the
 stopped tombstone remains usable for cleanup while `wait` still fails instead

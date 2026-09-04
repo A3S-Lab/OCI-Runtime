@@ -88,12 +88,16 @@ impl MacosRuntimeShare {
         &self.path
     }
 
-    /// Return a path whose intermediate component is backed by the retained
-    /// directory descriptor.  The final `/.` makes libkrun's no-follow open
-    /// treat the descriptor target as a directory rather than a proc-style
-    /// descriptor link.
+    /// Return the macOS fdesc path backed by the retained directory
+    /// descriptor.
+    ///
+    /// Unlike Linux `/proc/self/fd`, Darwin's `/dev/fd` entries duplicate the
+    /// referenced descriptor directly and are not symlink path components.
+    /// Keeping the entry as the final component is therefore portable across
+    /// supported macOS releases while still pinning the exact directory
+    /// retained by this object.
     pub(crate) fn pinned_path(&self) -> PathBuf {
-        PathBuf::from(format!("/dev/fd/{}/.", self.directory.as_raw_fd()))
+        PathBuf::from(format!("/dev/fd/{}", self.directory.as_raw_fd()))
     }
 
     /// Pin the required `run` child used for guest-agent state.
@@ -303,21 +307,18 @@ mod tests {
 
         assert_eq!(pinned.path(), share.canonicalize().unwrap());
         assert!(pinned.pinned_path().starts_with("/dev/fd/"));
-        assert!(pinned.pinned_path().to_string_lossy().ends_with("/."));
+        assert!(!pinned.pinned_path().to_string_lossy().ends_with("/."));
         let path = CString::new(pinned.pinned_path().as_os_str().as_bytes())
             .expect("descriptor path must not contain NUL");
         // `/dev/fd/<n>` is a kernel descriptor namespace on macOS rather than
-        // a user-controlled filesystem link. Applying `O_NOFOLLOW` to that
-        // magic component is rejected by some supported macOS runners, while
-        // the retained descriptor still pins the object being opened.
+        // a user-controlled filesystem link. The fdesc implementation opens
+        // the retained directory directly; appending `/.` is not supported
+        // consistently by current macOS runners. libkrun likewise opens the
+        // supplied root with ordinary read-only/no-follow flags, so do not add
+        // `O_DIRECTORY` here (Darwin can report `ENOTDIR` for that fdesc form).
         // SAFETY: `path` is a live NUL-terminated path. The descriptor is
         // checked before ownership is transferred to `File`.
-        let descriptor = unsafe {
-            libc::open(
-                path.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
-            )
-        };
+        let descriptor = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
         assert!(
             descriptor >= 0,
             "open descriptor-backed runtime share: {}",

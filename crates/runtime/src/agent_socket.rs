@@ -62,14 +62,12 @@ impl UnixAgentSocketListener {
                 error,
             ));
         }
-        let directory_identity =
-            match verify_owned_entry(&directory, EntryKind::Directory, PRIVATE_DIRECTORY_MODE) {
-                Ok(identity) => {
-                    cleanup_guard.set_directory_identity(identity);
-                    identity
-                }
-                Err(error) => return Err(error),
-            };
+        let directory_identity = {
+            let identity =
+                verify_owned_entry(&directory, EntryKind::Directory, PRIVATE_DIRECTORY_MODE)?;
+            cleanup_guard.set_directory_identity(identity);
+            identity
+        };
 
         let listener = match UnixListener::bind(&socket_path) {
             Ok(listener) => listener,
@@ -93,14 +91,12 @@ impl UnixAgentSocketListener {
                 error,
             ));
         }
-        let socket_identity =
-            match verify_owned_entry(&socket_path, EntryKind::Socket, PRIVATE_SOCKET_MODE) {
-                Ok(identity) => {
-                    cleanup_guard.set_socket_identity(identity);
-                    identity
-                }
-                Err(error) => return Err(error),
-            };
+        let socket_identity = {
+            let identity =
+                verify_owned_entry(&socket_path, EntryKind::Socket, PRIVATE_SOCKET_MODE)?;
+            cleanup_guard.set_socket_identity(identity);
+            identity
+        };
         let rebound_directory_identity =
             verify_owned_entry(&directory, EntryKind::Directory, PRIVATE_DIRECTORY_MODE)?;
         if rebound_directory_identity != directory_identity {
