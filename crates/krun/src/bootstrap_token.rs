@@ -703,20 +703,26 @@ mod tests {
 
     use super::BootstrapTokenFile;
 
-    fn protect_linux_handoff_root(path: &Path) {
-        #[cfg(all(
-            target_os = "linux",
-            any(target_arch = "x86_64", target_arch = "aarch64")
+    fn protect_handoff_root(path: &Path) {
+        #[cfg(any(
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ),
+            all(target_os = "macos", target_arch = "aarch64")
         ))]
         {
             use std::os::unix::fs::PermissionsExt;
 
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-                .expect("protect Linux handoff root");
+                .expect("protect handoff root");
         }
-        #[cfg(not(all(
-            target_os = "linux",
-            any(target_arch = "x86_64", target_arch = "aarch64")
+        #[cfg(not(any(
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ),
+            all(target_os = "macos", target_arch = "aarch64")
         )))]
         let _ = path;
     }
@@ -724,7 +730,7 @@ mod tests {
     #[test]
     fn creates_exact_one_time_file_and_removes_it() {
         let rootfs = tempfile::tempdir().expect("temporary rootfs");
-        protect_linux_handoff_root(rootfs.path());
+        protect_handoff_root(rootfs.path());
         let endpoint =
             AgentVsockEndpoint::new("a3s-oci-agent-bootstrap-test").expect("valid endpoint");
         let token = SessionToken::from_bytes([0x5a; 32]).expect("nonzero token");
@@ -751,7 +757,7 @@ mod tests {
     #[test]
     fn reports_the_fixed_runtime_share_guest_path() {
         let runtime_share = tempfile::tempdir().expect("temporary runtime share");
-        protect_linux_handoff_root(runtime_share.path());
+        protect_handoff_root(runtime_share.path());
         let endpoint =
             AgentVsockEndpoint::new("a3s-oci-agent-runtime-share").expect("valid endpoint");
         let token = SessionToken::from_bytes([0x3c; 32]).expect("nonzero token");
@@ -780,7 +786,7 @@ mod tests {
     #[test]
     fn cleanup_refuses_a_replaced_bootstrap_file() {
         let rootfs = tempfile::tempdir().expect("temporary rootfs");
-        protect_linux_handoff_root(rootfs.path());
+        protect_handoff_root(rootfs.path());
         let endpoint =
             AgentVsockEndpoint::new("a3s-oci-agent-bootstrap-replacement").expect("valid endpoint");
         let token = SessionToken::from_bytes([0x42; 32]).expect("nonzero token");
