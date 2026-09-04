@@ -164,7 +164,7 @@ async fn read_if_present(path: &Path) -> Result<Option<GuestSessionMarker>> {
     let Some(initial_metadata) = path_metadata(path).await? else {
         return Ok(None);
     };
-    match read(path).await {
+    match read_bound(path, &initial_metadata).await {
         Ok(retained) => Ok(Some(retained)),
         Err(error) => match path_metadata(path).await? {
             None => Ok(None),
@@ -348,7 +348,11 @@ async fn read(path: &Path) -> Result<GuestSessionMarker> {
             ),
         )
     })?;
-    if !is_private_file(&metadata) || metadata.len() > MAX_MARKER_BYTES as u64 {
+    read_bound(path, &metadata).await
+}
+
+async fn read_bound(path: &Path, metadata: &std::fs::Metadata) -> Result<GuestSessionMarker> {
+    if !is_private_file(metadata) || metadata.len() > MAX_MARKER_BYTES as u64 {
         return Err(session_error(
             ErrorCode::FailedPrecondition,
             format!(
@@ -357,18 +361,30 @@ async fn read(path: &Path) -> Result<GuestSessionMarker> {
             ),
         ));
     }
-    let mut file = atomic_publication::open_readonly_nofollow(path)
+    let mut verified = crate::file_security::open_verified_regular_file(path)
         .await
         .map_err(|error| {
-            session_error(
-                ErrorCode::FailedPrecondition,
-                format!(
-                    "failed to open reusable guest-session marker {}: {error}",
+            if error.kind() == io::ErrorKind::NotFound {
+                session_race_error(format!(
+                    "reusable guest-session marker disappeared while it was being opened: {}",
                     path.display()
-                ),
-            )
+                ))
+            } else if error.kind() == io::ErrorKind::InvalidData {
+                session_race_error(format!(
+                    "reusable guest-session marker changed while it was being opened: {} ({error})",
+                    path.display()
+                ))
+            } else {
+                session_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "failed to open reusable guest-session marker {}: {error}",
+                        path.display()
+                    ),
+                )
+            }
         })?;
-    let opened_metadata = file.metadata().await.map_err(|error| {
+    let opened_metadata = verified.file.metadata().await.map_err(|error| {
         session_error(
             ErrorCode::FailedPrecondition,
             format!(
@@ -378,7 +394,7 @@ async fn read(path: &Path) -> Result<GuestSessionMarker> {
         )
     })?;
     if opened_metadata.len() != metadata.len()
-        || !atomic_publication::same_file_identity(&metadata, &opened_metadata)
+        || !atomic_publication::same_file_identity(metadata, &opened_metadata)
     {
         return Err(session_error(
             ErrorCode::Unavailable,
@@ -399,7 +415,7 @@ async fn read(path: &Path) -> Result<GuestSessionMarker> {
         ));
     }
     let mut encoded = Vec::with_capacity(opened_metadata.len() as usize);
-    (&mut file)
+    (&mut verified.file)
         .take((MAX_MARKER_BYTES + 1) as u64)
         .read_to_end(&mut encoded)
         .await
@@ -412,7 +428,7 @@ async fn read(path: &Path) -> Result<GuestSessionMarker> {
                 ),
             )
         })?;
-    let final_metadata = file.metadata().await.map_err(|error| {
+    let final_metadata = verified.file.metadata().await.map_err(|error| {
         session_error(
             ErrorCode::FailedPrecondition,
             format!(
@@ -443,6 +459,24 @@ async fn read(path: &Path) -> Result<GuestSessionMarker> {
             ),
         ));
     }
+    verified
+        .verify_unchanged(encoded.len() as u64)
+        .await
+        .map_err(|error| {
+            session_race_error(format!(
+                "reusable guest-session marker changed while it was being read: {} ({error})",
+                path.display()
+            ))
+        })?;
+    verified
+        .verify_path_unchanged(path)
+        .await
+        .map_err(|error| {
+            session_race_error(format!(
+                "reusable guest-session marker path changed while it was being read: {} ({error})",
+                path.display()
+            ))
+        })?;
     let marker: GuestSessionMarker = serde_json::from_slice(&encoded).map_err(|error| {
         session_error(
             ErrorCode::FailedPrecondition,
@@ -500,15 +534,68 @@ fn invalid_root(path: &Path) -> Error {
 }
 
 async fn remove_private_file_if_present(path: &Path) -> Result<()> {
-    let Some(metadata) = path_metadata(path).await? else {
+    let Some(initial_metadata) = path_metadata(path).await? else {
         return Ok(());
     };
-    if !is_private_file(&metadata) {
+    remove_private_file_bound(path, &initial_metadata).await
+}
+
+async fn remove_private_file_bound(
+    path: &Path,
+    initial_metadata: &std::fs::Metadata,
+) -> Result<()> {
+    if !is_private_file(initial_metadata) {
         return Err(session_error(
             ErrorCode::FailedPrecondition,
             format!("refusing to remove a non-private file: {}", path.display()),
         ));
     }
+    let verified = match crate::file_security::open_verified_regular_file(path).await {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+            return Err(session_race_error(format!(
+                "refusing to remove replaced reusable guest-session marker {} ({error})",
+                path.display()
+            )))
+        }
+        Err(error) => {
+            return Err(session_error(
+                ErrorCode::Internal,
+                format!(
+                    "failed to open reusable guest-session marker {} for identity binding: {error}",
+                    path.display()
+                ),
+            ))
+        }
+    };
+    let opened_metadata = verified.file.metadata().await.map_err(|error| {
+        session_error(
+            ErrorCode::Internal,
+            format!(
+                "failed to inspect opened reusable guest-session marker {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if !is_private_file(&opened_metadata)
+        || opened_metadata.len() != initial_metadata.len()
+        || !atomic_publication::same_file_identity(initial_metadata, &opened_metadata)
+    {
+        return Err(session_race_error(format!(
+            "refusing to remove replaced reusable guest-session marker {}",
+            path.display()
+        )));
+    }
+    verified
+        .verify_path_unchanged(path)
+        .await
+        .map_err(|error| {
+            session_race_error(format!(
+                "refusing to remove changed reusable guest-session marker {} ({error})",
+                path.display()
+            ))
+        })?;
     match tokio::fs::remove_file(path).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -545,6 +632,10 @@ fn session_error(code: ErrorCode, message: impl Into<String>) -> Error {
     Error::new(code, message).for_operation("manage-utility-vm-guest-session")
 }
 
+fn session_race_error(message: impl Into<String>) -> Error {
+    session_error(ErrorCode::Unavailable, message).retryable(true)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -555,8 +646,9 @@ mod tests {
 
     use super::super::layout::PRIVATE_FILE_MODE;
     use super::{
-        ensure, marker_conflict, publish_marker, read, validate_root_identity, GuestSessionMarker,
-        MARKER_FILE, MARKER_SCHEMA, PENDING_MARKER_FILE, REUSABLE_GUEST_SESSION_DIRECTORY,
+        ensure, marker_conflict, publish_marker, read, read_bound, remove_private_file_bound,
+        validate_root_identity, GuestSessionMarker, MARKER_FILE, MARKER_SCHEMA,
+        PENDING_MARKER_FILE, REUSABLE_GUEST_SESSION_DIRECTORY,
     };
 
     fn attachment() -> GuestSessionAttachment {
@@ -752,6 +844,91 @@ mod tests {
         assert_eq!(
             tokio::fs::read(&marker_path).await.expect("read marker"),
             encoded
+        );
+    }
+
+    #[tokio::test]
+    async fn marker_reader_rejects_a_replaced_path_before_open() {
+        let temporary = tempdir().expect("temporary marker root");
+        let path = temporary.path().join(MARKER_FILE);
+        let retained = temporary.path().join("retained-original");
+        let replacement = temporary.path().join("replacement");
+        write_private_file(&path, b"original").await;
+        let original_metadata = tokio::fs::symlink_metadata(&path)
+            .await
+            .expect("inspect original marker");
+        tokio::fs::hard_link(&path, &retained)
+            .await
+            .expect("retain original marker identity");
+        write_private_file(&replacement, b"replacement").await;
+        tokio::fs::remove_file(&path)
+            .await
+            .expect("remove original marker path");
+        tokio::fs::hard_link(&replacement, &path)
+            .await
+            .expect("install replacement marker path");
+
+        let error = read_bound(&path, &original_metadata)
+            .await
+            .expect_err("replacement marker must be rejected");
+        assert!(error.retryable);
+        assert_eq!(
+            tokio::fs::read(&path)
+                .await
+                .expect("read replacement marker"),
+            b"replacement"
+        );
+    }
+
+    #[tokio::test]
+    async fn marker_cleanup_rejects_a_replaced_path_without_deleting_it() {
+        let temporary = tempdir().expect("temporary marker root");
+        let path = temporary.path().join(PENDING_MARKER_FILE);
+        let retained = temporary.path().join("retained-original");
+        let replacement = temporary.path().join("replacement");
+        write_private_file(&path, b"original").await;
+        let original_metadata = tokio::fs::symlink_metadata(&path)
+            .await
+            .expect("inspect original marker");
+        tokio::fs::hard_link(&path, &retained)
+            .await
+            .expect("retain original marker identity");
+        write_private_file(&replacement, b"replacement").await;
+        tokio::fs::remove_file(&path)
+            .await
+            .expect("remove original marker path");
+        tokio::fs::hard_link(&replacement, &path)
+            .await
+            .expect("install replacement marker path");
+
+        let error = remove_private_file_bound(&path, &original_metadata)
+            .await
+            .expect_err("replacement marker must not be deleted");
+        assert!(error.retryable);
+        assert_eq!(
+            tokio::fs::read(&path)
+                .await
+                .expect("read replacement marker"),
+            b"replacement"
+        );
+    }
+
+    #[tokio::test]
+    async fn marker_reader_rejects_a_final_component_symlink() {
+        let temporary = tempdir().expect("temporary marker root");
+        let victim = temporary.path().join("victim");
+        let path = temporary.path().join(MARKER_FILE);
+        write_private_file(&victim, b"victim").await;
+        std::os::unix::fs::symlink(&victim, &path).expect("create marker symlink");
+
+        let error = read(&path)
+            .await
+            .expect_err("symlink marker must be rejected");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert!(!error.retryable);
+        assert_eq!(
+            tokio::fs::read(&victim).await.expect("read marker victim"),
+            b"victim"
         );
     }
 
