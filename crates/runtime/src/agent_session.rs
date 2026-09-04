@@ -13,15 +13,6 @@ use a3s_oci_agent_protocol::{
 use a3s_oci_agent_protocol::{AGENT_SESSION_TOKEN_DIRECTORY_PREFIX, AGENT_SESSION_TOKEN_FILE_NAME};
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use serde_json::Value;
-#[cfg(any(
-    all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64"),
-    all(
-        target_os = "linux",
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    )
-))]
-use sha2::{Digest, Sha256};
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use tokio::net::windows::named_pipe::NamedPipeServer;
 #[cfg(unix)]
@@ -1977,49 +1968,14 @@ async fn prepare_linux_runtime_share(path: &Path) -> Result<PathBuf, String> {
     )
 ))]
 pub(crate) async fn sha256_path(path: &Path) -> Result<String, String> {
-    use tokio::io::AsyncReadExt;
-
-    let metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
-        format!(
-            "failed to inspect system-image manifest {}: {error}",
-            path.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        return Err(format!(
-            "system-image manifest must be a real regular file, not a symlink: {}",
-            path.display()
-        ));
-    }
-    let mut file = tokio::fs::File::open(path).await.map_err(|error| {
-        format!(
-            "failed to open system-image manifest {}: {error}",
-            path.display()
-        )
-    })?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    let mut size = 0_u64;
-    loop {
-        let read = file.read(&mut buffer).await.map_err(|error| {
+    crate::file_security::sha256_path(path, Some(64 * 1024))
+        .await
+        .map_err(|error| {
             format!(
-                "failed to read system-image manifest {}: {error}",
+                "failed to securely hash system-image manifest {}: {error}",
                 path.display()
             )
-        })?;
-        if read == 0 {
-            break;
-        }
-        size += read as u64;
-        if size > 64 * 1024 {
-            return Err(format!(
-                "system-image manifest exceeds 65536 bytes: {}",
-                path.display()
-            ));
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
+        })
 }
 
 fn expected_operations() -> Vec<AgentOperation> {

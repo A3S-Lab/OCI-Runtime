@@ -6,8 +6,6 @@ use a3s_oci_sdk::{
     runtime_bundle_handoff_root, ContainerTarget, Error, ErrorCode, Generation,
     GuestSessionAttachment, Result,
 };
-use sha2::{Digest, Sha256};
-use tokio::io::AsyncReadExt;
 
 pub(super) const CONSOLE_DIRECTORY: &str = "console";
 pub(super) const RECOVERY_DIRECTORY: &str = "recovery";
@@ -632,27 +630,14 @@ async fn directory_is_empty_if_present(path: &Path) -> Result<Option<bool>> {
 }
 
 async fn sha256_path(path: &Path) -> Result<String> {
-    let mut file = tokio::fs::File::open(path).await.map_err(|error| {
-        path_error(
-            ErrorCode::FailedPrecondition,
-            format!("failed to open {} for hashing: {error}", path.display()),
-        )
-    })?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer).await.map_err(|error| {
+    crate::file_security::sha256_path(path, Some(64 * 1024))
+        .await
+        .map_err(|error| {
             path_error(
                 ErrorCode::FailedPrecondition,
-                format!("failed to hash {}: {error}", path.display()),
+                format!("failed to securely hash {}: {error}", path.display()),
             )
-        })?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
+        })
 }
 
 fn path_error(code: ErrorCode, message: impl Into<String>) -> Error {
