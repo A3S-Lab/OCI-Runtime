@@ -199,6 +199,7 @@ impl LinuxVmAttachmentManifest {
             ));
         }
         let encoded = read_bounded(&mut file, &path)?;
+        verify_manifest_read(&path, &pinned_path, &file, &opened, encoded.len())?;
         verify_digest(&encoded, expected_digest)?;
         let manifest = AgentVmAttachmentManifest::from_bytes(&encoded).map_err(|error| {
             attachment_error(
@@ -281,6 +282,13 @@ impl LinuxVmAttachmentManifest {
             )
         })?;
         let encoded = read_bounded(&mut self.file, &self.path)?;
+        verify_manifest_read(
+            &self.path,
+            &self.pinned_path,
+            &self.file,
+            &opened,
+            encoded.len(),
+        )?;
         verify_digest(&encoded, &self.expected_digest)?;
         let retained = AgentVmAttachmentManifest::from_bytes(&encoded).map_err(|error| {
             attachment_error(
@@ -413,6 +421,61 @@ fn read_bounded(file: &mut File, path: &Path) -> Result<Vec<u8>> {
     Ok(encoded)
 }
 
+fn verify_manifest_read(
+    display_path: &Path,
+    pinned_path: &Path,
+    file: &File,
+    expected: &std::fs::Metadata,
+    bytes_read: usize,
+) -> Result<()> {
+    let file_metadata = file.metadata().map_err(|error| {
+        attachment_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect VM attachment manifest after reading {}: {error}",
+                display_path.display()
+            ),
+        )
+    })?;
+    validate_metadata(display_path, &file_metadata)?;
+    if file_metadata.dev() != expected.dev()
+        || file_metadata.ino() != expected.ino()
+        || file_metadata.len() != expected.len()
+        || bytes_read as u64 != expected.len()
+    {
+        return Err(attachment_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "VM attachment manifest changed while it was being read: {}",
+                display_path.display()
+            ),
+        ));
+    }
+    let path_metadata = std::fs::symlink_metadata(pinned_path).map_err(|error| {
+        attachment_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to re-inspect VM attachment manifest {} after reading: {error}",
+                display_path.display()
+            ),
+        )
+    })?;
+    validate_metadata(display_path, &path_metadata)?;
+    if path_metadata.dev() != expected.dev()
+        || path_metadata.ino() != expected.ino()
+        || path_metadata.len() != expected.len()
+    {
+        return Err(attachment_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "VM attachment manifest path changed while it was being read: {}",
+                display_path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn verify_digest(encoded: &[u8], expected: &str) -> Result<()> {
     let actual = format!("sha256:{:x}", Sha256::digest(encoded));
     if actual != expected {
@@ -446,6 +509,7 @@ fn attachment_error(code: ErrorCode, message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::path::{Path, PathBuf};
 
@@ -461,7 +525,10 @@ mod tests {
     };
     use serde_json::json;
 
-    use super::{AgentVmAttachmentManifest, LinuxRuntimeShare, LinuxVmAttachmentManifest};
+    use super::{
+        verify_manifest_read, AgentVmAttachmentManifest, LinuxRuntimeShare,
+        LinuxVmAttachmentManifest,
+    };
 
     fn private_directory(path: &Path) {
         std::fs::create_dir(path).expect("create private directory");
@@ -632,6 +699,30 @@ mod tests {
         std::fs::rename(&path, share.join("displaced-manifest")).expect("displace manifest");
         write_manifest(&share, &manifest);
         assert!(retained.reverify().is_err());
+    }
+
+    #[test]
+    fn read_revalidation_rejects_a_path_replacement_after_the_handle_read() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let share = runtime_share(temporary.path());
+        let manifest = manifest();
+        let path = write_manifest(&share, &manifest);
+        let runtime_share = LinuxRuntimeShare::open(&share).expect("runtime share");
+        let pinned_path = runtime_share
+            .pinned_path()
+            .join(AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME);
+        let mut file = std::fs::File::open(&pinned_path).expect("open pinned manifest");
+        let expected = file.metadata().expect("manifest metadata");
+        let mut encoded = Vec::new();
+        file.read_to_end(&mut encoded).expect("read manifest");
+
+        std::fs::rename(&path, temporary.path().join("displaced-manifest"))
+            .expect("displace manifest");
+        write_manifest(&share, &manifest);
+
+        let error = verify_manifest_read(&path, &pinned_path, &file, &expected, encoded.len())
+            .expect_err("replaced manifest path must be rejected");
+        assert!(error.message.contains("path changed"));
     }
 
     #[test]
