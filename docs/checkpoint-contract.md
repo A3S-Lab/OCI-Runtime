@@ -128,7 +128,7 @@ assertion; its SHA-256 is
 `66a4007e3a2194e1e6888c82f65be1b816ffb9443ce996ecf72412cf6f07d84a`. The
 matching static-musl Runtime and Agent digests were
 `532d02bc8a05d6c55a21a308524e2730cdbec21420eb26bc8b9049606bd6b33a` and
-`33c17e52657486e0887e5da8836ffb8dc11a673c2fa813edbf1a4d6edf0eca`.
+`33c17e52657486e8a0887e5da8836ffb8dc11a673c2fa813edbf1a4d6edf0eca`.
 Separate reports (SHA-256
 `89e9de6fb79584a51dc653a3484b5410ea0ed398589baddda3d45f754fc433bf` and
 `41bb0ad651995c8ee7be42120d3ac7e57528223dd926de44fedaf1d01959f0ec`) also
