@@ -187,7 +187,9 @@ the process-takeover libkrun call. Immediately before entry, that worker:
    static Guest Agent, target architecture, and runtime share before KVM-device
    access, then repeats the complete asset check at the final entry boundary;
 2. attaches the immutable root disk read-only and exports only the
-   descriptor-pinned, UID-owned, mode-`0700` generation share;
+   descriptor-pinned, UID-owned, mode-`0700` generation share. The required
+   `run/` state child is independently opened with directory/no-follow flags
+   and its device/inode identity is retained through VM entry;
 3. configures the fixed plain-vsock Agent port, Guest executable, environment,
    and bounded console;
 4. opens a real nonsymlink `/dev/kvm` character device read/write, pins its
