@@ -26,6 +26,7 @@ use crate::driver::{
 
 mod atomic_publication;
 mod delegate;
+mod directory_cleanup;
 mod handoff;
 #[cfg(all(
     target_os = "linux",

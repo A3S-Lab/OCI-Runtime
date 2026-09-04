@@ -6,9 +6,8 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 
 use super::atomic_publication;
-use super::layout::{
-    is_private_file, path_metadata, remove_directory_if_empty, REUSABLE_GUEST_SESSION_DIRECTORY,
-};
+use super::directory_cleanup::remove_directory_if_empty;
+use super::layout::{is_private_file, path_metadata, REUSABLE_GUEST_SESSION_DIRECTORY};
 
 const MARKER_FILE: &str = ".a3s-oci-guest-session.json";
 const PENDING_MARKER_FILE: &str = ".a3s-oci-guest-session.pending";

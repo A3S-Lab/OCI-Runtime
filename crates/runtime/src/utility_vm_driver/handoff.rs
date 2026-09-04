@@ -11,10 +11,13 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 
 use super::atomic_publication;
+use super::directory_cleanup::{
+    remove_directory_all_bound, remove_directory_if_empty, remove_directory_if_empty_bound,
+};
 use super::layout::{
     canonical_plain_directory, canonical_plain_file, canonical_private_directory,
     ensure_reusable_guest_session_root, ensure_runtime_share_paths, existing_runtime_share_paths,
-    is_private_file, path_metadata, remove_directory_if_empty,
+    is_private_directory, is_private_file, path_metadata,
 };
 use super::session_marker;
 use crate::DriverCreateRequest;
@@ -169,6 +172,42 @@ impl BundleHandoffStore {
             return Ok(());
         };
 
+        // Bind cleanup to the exact generation and container directories that
+        // were resolved before any marker or bundle validation.  A later
+        // pathname lookup alone could otherwise recursively remove a private
+        // replacement installed by a concurrent owner.
+        let container_share_metadata = path_metadata(&paths.container_share).await?;
+        if let Some(metadata) = container_share_metadata.as_ref() {
+            if !is_private_directory(metadata) {
+                return Err(handoff_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "utility-VM exact-generation share is not a private directory: {}",
+                        paths.container_share.display()
+                    ),
+                ));
+            }
+        }
+        let container_directory = paths.container_share.parent().map(Path::to_path_buf);
+        let container_directory_metadata = match container_directory.as_ref() {
+            Some(path) => path_metadata(path).await?,
+            None => None,
+        };
+        if let (Some(path), Some(metadata)) = (
+            container_directory.as_ref(),
+            container_directory_metadata.as_ref(),
+        ) {
+            if !is_private_directory(metadata) {
+                return Err(handoff_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "utility-VM container-share parent is not a private directory: {}",
+                        path.display()
+                    ),
+                ));
+            }
+        }
+
         if let Some(session) = guest_session {
             session_marker::validate(&paths.mount_root, session).await?;
         }
@@ -222,19 +261,14 @@ impl BundleHandoffStore {
         // The exact-generation share is wholly runtime-owned. Removing it as
         // one verified subtree also clears the guest's empty `run` directory
         // and any one-time handoff residue after the VM has been reaped.
-        tokio::fs::remove_dir_all(&paths.container_share)
-            .await
-            .map_err(|error| {
-                handoff_error(
-                    ErrorCode::Internal,
-                    format!(
-                        "failed to remove exact-generation utility-VM share {}: {error}",
-                        paths.container_share.display()
-                    ),
-                )
-            })?;
-        if let Some(container_directory) = paths.container_share.parent() {
-            remove_directory_if_empty(container_directory).await?;
+        if let Some(metadata) = container_share_metadata.as_ref() {
+            remove_directory_all_bound(&paths.container_share, metadata).await?;
+        }
+        if let (Some(path), Some(metadata)) = (
+            container_directory.as_ref(),
+            container_directory_metadata.as_ref(),
+        ) {
+            remove_directory_if_empty_bound(path, metadata).await?;
         }
         if remove_empty_session {
             if let Some(session) = guest_session {
