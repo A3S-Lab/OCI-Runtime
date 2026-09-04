@@ -42,6 +42,11 @@ mod linux_kvm_device;
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
+mod linux_runtime_asset;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 mod linux_runtime_share;
 #[cfg(all(
     target_os = "linux",
