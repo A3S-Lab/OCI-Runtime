@@ -95,8 +95,8 @@ The macOS HVF workers apply the same generation-fencing rule to the writable
 virtio-fs share. They require an absolute same-UID mode-`0700` directory,
 open it with `O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC`, and retain the handle
 through context configuration and VM entry. libkrun receives the stable
-`/dev/fd/<n>/.` descriptor path rather than a caller-controlled directory
-entry. The shim rechecks the path and retained device/inode before attachment
+Darwin fdesc `/dev/fd/<n>` descriptor path rather than a caller-controlled
+directory entry. The shim rechecks the path and retained device/inode before attachment
 and immediately before `krun_start_enter`; the guest-agent path additionally
 pins and rechecks its direct `run/` state child. Symlink, replacement, type,
 owner, and permission changes are rejected with the

@@ -56,8 +56,9 @@ live VM owner is reaped exactly once.
 
 The isolated shim admits each per-generation runtime share through a retained
 directory descriptor opened with `O_DIRECTORY` and no-follow semantics. It
-passes libkrun a descriptor-backed `/dev/fd/<n>/.` path, binds the path and
-descriptor to the same device/inode and private mode, and rechecks both the
+passes libkrun the Darwin fdesc `/dev/fd/<n>` path, which duplicates that
+retained directory descriptor, and binds the path and descriptor to the same
+device/inode and private mode, and rechecks both the
 share and the required `run/` state directory before virtio-fs attachment and
 again immediately before VM entry. A directory-entry replacement or permission
 drift therefore fails closed instead of silently changing the guest's writable
