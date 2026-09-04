@@ -310,10 +310,11 @@ ownership evidence.
 
 The Host-side read of the immutable system-image manifest uses the same
 handle-bound trust boundary before any Utility-VM launch. Unix reads pin
-device/inode identity with
-`O_NOFOLLOW|O_CLOEXEC`; Windows opens with reparse-point traversal disabled and
-compares the native volume/file identity. Both paths enforce a bounded manifest
-read and recheck type, identity, size, and byte count after hashing, so a
+device/inode identity with `O_NOFOLLOW|O_CLOEXEC`; this includes the macOS
+HVF/libkrun shim as well as Linux, while Windows opens with reparse-point
+traversal disabled and compares the native volume/file identity. Each path
+retains the opened manifest and image handles, enforces a bounded manifest
+read, and rechecks type, identity, size, and byte count after hashing, so a
 delete/recreate, link substitution, truncation, or growth cannot silently
 change the digest retained by the driver.
 

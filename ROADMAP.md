@@ -1372,7 +1372,9 @@ then may WHPX become `experimental`.
 - [x] Verify a signed round trip on a local Apple Silicon host and verify that
   a missing entitlement returns `HV_DENIED`.
 - [x] Stage a runtime-owned, checksum-verified macOS libkrun bundle only for
-  the isolated shim.
+  the isolated shim. The shim retains no-follow handles for both dylibs,
+  rechecks device/inode, size, and exact bytes after loading, and repeats the
+  same verification immediately before HVF entry.
 - [x] Create, configure plain agent vsock, and release one libkrun context
   without entering a VM.
 - [x] Enter a real HVF VM in an isolated, bounded worker and require a
