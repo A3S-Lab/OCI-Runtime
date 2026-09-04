@@ -120,6 +120,22 @@ artifact bytes, and removes all journal, staging, executor, and session state
 after resume, kill, wait, and delete. Published-package, broader-profile,
 cross-driver, multi-architecture, and production qualification remain open.
 
+On 2026-09-04, the current source revision
+`5b17c52d428776eb1f9be5aa10ad1449a39ec5a0` passed that positive gate on a
+rootful x86_64 Linux host with CRIU 4.2.1. The available report verified every
+checkpoint, restore, replay, replacement-owner, artifact-integrity, and cleanup
+assertion; its SHA-256 is
+`66a4007e3a2194e1e6888c82f65be1b816ffb9443ce996ecf72412cf6f07d84a`. The
+matching static-musl Runtime and Agent digests were
+`532d02bc8a05d6c55a21a308524e2730cdbec21420eb26bc8b9049606bd6b33a` and
+`33c17e52657486e0887e5da8836ffb8dc11a673c2fa813edbf1a4d6edf0eca`.
+Separate reports (SHA-256
+`89e9de6fb79584a51dc653a3484b5410ea0ed398589baddda3d45f754fc433bf` and
+`41bb0ad651995c8ee7be42120d3ac7e57528223dd926de44fedaf1d01959f0ec`) also
+confirmed deterministic rejection and cleanup for private PID and configured
+network namespaces. This is current-host development evidence, not a signed
+release or cross-driver qualification claim.
+
 ## Artifact And Reference
 
 One checkpoint is one immutable local file. `CheckpointArtifactPath` accepts

@@ -833,6 +833,22 @@ the repeated restart boundary required by this test. The qualification now
 checks both properties before creating a task and fails with an actionable
 error when either prerequisite is missing.
 
+### Current-source upstream lifecycle verification
+
+On 2026-09-04, the x86_64 static-musl Runtime and Agent built from source
+revision `5b17c52d428776eb1f9be5aa10ad1449a39ec5a0` passed the locked upstream
+OCI Runtime Tools 0.9.0 core lifecycle profile. Seven tests passed their
+original TAP assertions; `start` and `pidfile` were classified as conformant
+only under the two source-audited upstream harness defects already recorded in
+`compat/upstream-runtime-tools.json`. The service stopped cleanly and all CLI
+journals retired. The machine-readable report SHA-256 is
+`040d8f77feb43e5f17afd2a3bd172cc2a958452cafcaee34e325fa58c016dd95`; the
+Runtime and Agent digests are
+`532d02bc8a05d6c55a21a308524e2730cdbec21420eb26bc8b9049606bd6b33a` and
+`33c17e52657486e0887e5da8836ffb8dc11a673c2fa813edbf1a4d6edf0eca`.
+This remains development evidence for x86_64 and does not promote a driver or
+qualify a signed package.
+
 ## Open release gates
 
 - qualify the supported containerd version range from exact release packages;
