@@ -424,29 +424,7 @@ impl WhpxRuntimeDriver {
                 path.display()
             )));
         }
-        let file = tokio::fs::File::open(&path).await.map_err(|error| {
-            recovery_artifact_error(format!(
-                "failed to open WHPX recovery report {}: {error}",
-                path.display()
-            ))
-        })?;
-        let mut encoded = Vec::with_capacity(metadata.len() as usize);
-        file.take((AGENT_RECOVERY_REPORT_MAX_BYTES + 1) as u64)
-            .read_to_end(&mut encoded)
-            .await
-            .map_err(|error| {
-                recovery_artifact_error(format!(
-                    "failed to read WHPX recovery report {}: {error}",
-                    path.display()
-                ))
-            })?;
-        if encoded.len() > AGENT_RECOVERY_REPORT_MAX_BYTES {
-            return Err(recovery_artifact_error(format!(
-                "WHPX recovery report grew beyond {} bytes: {}",
-                AGENT_RECOVERY_REPORT_MAX_BYTES,
-                path.display()
-            )));
-        }
+        let encoded = read_whpx_recovery_report(&path, &metadata).await?;
         let report = AgentRecoveryReport::from_json(&encoded).map_err(|error| {
             recovery_artifact_error(format!(
                 "WHPX recovery report {} is invalid: {error}",
@@ -482,32 +460,7 @@ impl WhpxRuntimeDriver {
 
     async fn remove_recovery_report(&self, target: &ContainerTarget) -> Result<()> {
         let path = self.recovery_report_path(target)?;
-        match tokio::fs::symlink_metadata(&path).await {
-            Ok(metadata) => {
-                if !metadata.is_file()
-                    || metadata.file_type().is_symlink()
-                    || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-                {
-                    return Err(recovery_artifact_error(format!(
-                        "refusing to delete a non-plain WHPX recovery report: {}",
-                        path.display()
-                    )));
-                }
-                tokio::fs::remove_file(&path).await.map_err(|error| {
-                    recovery_artifact_error(format!(
-                        "failed to delete WHPX recovery report {}: {error}",
-                        path.display()
-                    ))
-                })?;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(recovery_artifact_error(format!(
-                    "failed to inspect WHPX recovery report {} before delete: {error}",
-                    path.display()
-                )))
-            }
-        }
+        remove_whpx_recovery_file(&path, "WHPX recovery report", false).await?;
         self.remove_recovery_pending(&path).await
     }
 
@@ -535,13 +488,14 @@ impl WhpxRuntimeDriver {
             }
             match tokio::fs::symlink_metadata(&pending).await {
                 Ok(metadata) => {
-                    if !metadata.is_file()
-                        || metadata.file_type().is_symlink()
-                        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-                        || metadata.len() != 0
-                    {
+                    ensure_plain_whpx_recovery_file(
+                        &metadata,
+                        &pending,
+                        "WHPX recovery pending marker",
+                    )?;
+                    if metadata.len() != 0 {
                         return Err(recovery_artifact_error(format!(
-                            "WHPX recovery pending marker must be a plain empty file: {}",
+                            "WHPX recovery pending marker must be empty: {}",
                             pending.display()
                         )));
                     }
@@ -580,31 +534,7 @@ impl WhpxRuntimeDriver {
 
     async fn remove_recovery_pending(&self, report: &Path) -> Result<()> {
         let pending = recovery_pending_path(report);
-        match tokio::fs::symlink_metadata(&pending).await {
-            Ok(metadata) => {
-                if !metadata.is_file()
-                    || metadata.file_type().is_symlink()
-                    || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-                    || metadata.len() != 0
-                {
-                    return Err(recovery_artifact_error(format!(
-                        "refusing to delete a non-plain WHPX recovery pending marker: {}",
-                        pending.display()
-                    )));
-                }
-                tokio::fs::remove_file(&pending).await.map_err(|error| {
-                    recovery_artifact_error(format!(
-                        "failed to delete WHPX recovery pending marker {}: {error}",
-                        pending.display()
-                    ))
-                })
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(recovery_artifact_error(format!(
-                "failed to inspect WHPX recovery pending marker {} before delete: {error}",
-                pending.display()
-            ))),
-        }
+        remove_whpx_recovery_file(&pending, "WHPX recovery pending marker", true).await
     }
 
     fn recovery_report_path(&self, target: &ContainerTarget) -> Result<PathBuf> {
@@ -2394,6 +2324,234 @@ fn recovery_artifact_error(message: impl Into<String>) -> Error {
     Error::new(ErrorCode::FailedPrecondition, message).for_operation("whpx-recover")
 }
 
+fn recovery_race_error(message: impl Into<String>) -> Error {
+    Error::new(ErrorCode::Unavailable, message)
+        .for_operation("whpx-recover")
+        .retryable(true)
+}
+
+fn ensure_plain_whpx_recovery_file(
+    metadata: &std::fs::Metadata,
+    path: &Path,
+    label: &str,
+) -> Result<()> {
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return Err(recovery_artifact_error(format!(
+            "{label} must be a plain file: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Read a recovery report through one no-follow handle and bind that handle
+/// to the path observed by the handoff poller. The pathname is checked again
+/// after the bounded read so a remove-and-recreate race cannot make recovery
+/// consume a different report.
+async fn read_whpx_recovery_report(path: &Path, metadata: &std::fs::Metadata) -> Result<Vec<u8>> {
+    let mut verified = match crate::file_security::open_verified_regular_file(path).await {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(recovery_race_error(format!(
+                "WHPX recovery report disappeared while it was being opened: {}",
+                path.display()
+            )))
+        }
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+            return Err(recovery_race_error(format!(
+                "WHPX recovery report changed while it was being opened: {} ({error})",
+                path.display()
+            )))
+        }
+        Err(error) => {
+            return Err(recovery_artifact_error(format!(
+                "failed to open WHPX recovery report {}: {error}",
+                path.display()
+            )))
+        }
+    };
+    let opened_metadata = verified.file.metadata().await.map_err(|error| {
+        recovery_artifact_error(format!(
+            "failed to inspect opened WHPX recovery report {}: {error}",
+            path.display()
+        ))
+    })?;
+    if !is_plain_whpx_recovery_file(&opened_metadata)
+        || opened_metadata.len() != metadata.len()
+        || !same_whpx_file_identity(metadata, &opened_metadata)
+    {
+        return Err(recovery_race_error(format!(
+            "WHPX recovery report changed while it was being opened: {}",
+            path.display()
+        )));
+    }
+
+    let mut encoded = Vec::with_capacity(opened_metadata.len() as usize);
+    (&mut verified.file)
+        .take((AGENT_RECOVERY_REPORT_MAX_BYTES + 1) as u64)
+        .read_to_end(&mut encoded)
+        .await
+        .map_err(|error| {
+            recovery_artifact_error(format!(
+                "failed to read WHPX recovery report {}: {error}",
+                path.display()
+            ))
+        })?;
+    if encoded.len() > AGENT_RECOVERY_REPORT_MAX_BYTES {
+        return Err(recovery_artifact_error(format!(
+            "WHPX recovery report grew beyond {} bytes: {}",
+            AGENT_RECOVERY_REPORT_MAX_BYTES,
+            path.display()
+        )));
+    }
+    verified
+        .verify_unchanged(encoded.len() as u64)
+        .await
+        .map_err(|error| {
+            recovery_race_error(format!(
+                "WHPX recovery report changed while it was being read: {} ({error})",
+                path.display()
+            ))
+        })?;
+
+    let final_path_metadata = match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(recovery_race_error(format!(
+                "WHPX recovery report disappeared while it was being read: {}",
+                path.display()
+            )))
+        }
+        Err(error) => {
+            return Err(recovery_artifact_error(format!(
+                "failed to recheck WHPX recovery report {} after reading: {error}",
+                path.display()
+            )))
+        }
+    };
+    if !is_plain_whpx_recovery_file(&final_path_metadata)
+        || !same_whpx_file_identity(&opened_metadata, &final_path_metadata)
+    {
+        return Err(recovery_race_error(format!(
+            "WHPX recovery report path changed while it was being read: {}",
+            path.display()
+        )));
+    }
+    Ok(encoded)
+}
+
+fn is_plain_whpx_recovery_file(metadata: &std::fs::Metadata) -> bool {
+    metadata.is_file()
+        && !metadata.file_type().is_symlink()
+        && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+}
+
+async fn remove_whpx_recovery_file(path: &Path, label: &str, require_empty: bool) -> Result<()> {
+    let initial_metadata = match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(recovery_artifact_error(format!(
+                "failed to inspect {label} {} before delete: {error}",
+                path.display()
+            )))
+        }
+    };
+    remove_whpx_recovery_file_bound(path, label, require_empty, &initial_metadata).await
+}
+
+async fn remove_whpx_recovery_file_bound(
+    path: &Path,
+    label: &str,
+    require_empty: bool,
+    initial_metadata: &std::fs::Metadata,
+) -> Result<()> {
+    ensure_plain_whpx_recovery_file(initial_metadata, path, label)?;
+    if require_empty && initial_metadata.len() != 0 {
+        return Err(recovery_artifact_error(format!(
+            "{label} must be empty: {}",
+            path.display()
+        )));
+    }
+
+    let verified = match crate::file_security::open_verified_regular_file(path).await {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+            return Err(recovery_race_error(format!(
+                "refusing to delete replaced {label} {} ({error})",
+                path.display()
+            )))
+        }
+        Err(error) => {
+            return Err(recovery_artifact_error(format!(
+                "failed to open {label} {} for identity binding: {error}",
+                path.display()
+            )))
+        }
+    };
+    let opened_metadata = verified.file.metadata().await.map_err(|error| {
+        recovery_artifact_error(format!(
+            "failed to inspect opened {label} {} for identity binding: {error}",
+            path.display()
+        ))
+    })?;
+    if !is_plain_whpx_recovery_file(&opened_metadata)
+        || opened_metadata.len() != initial_metadata.len()
+        || !same_whpx_file_identity(initial_metadata, &opened_metadata)
+    {
+        return Err(recovery_race_error(format!(
+            "refusing to delete replaced {label} {}",
+            path.display()
+        )));
+    }
+    if require_empty && opened_metadata.len() != 0 {
+        return Err(recovery_artifact_error(format!(
+            "{label} must be empty: {}",
+            path.display()
+        )));
+    }
+    verified
+        .verify_unchanged(opened_metadata.len())
+        .await
+        .map_err(|error| {
+            recovery_race_error(format!(
+                "refusing to delete changed {label} {} ({error})",
+                path.display()
+            ))
+        })?;
+
+    let current_metadata = match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(recovery_artifact_error(format!(
+                "failed to recheck {label} {} before deletion: {error}",
+                path.display()
+            )))
+        }
+    };
+    if !is_plain_whpx_recovery_file(&current_metadata)
+        || !same_whpx_file_identity(&opened_metadata, &current_metadata)
+    {
+        return Err(recovery_race_error(format!(
+            "refusing to delete replaced {label} {}",
+            path.display()
+        )));
+    }
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(recovery_artifact_error(format!(
+            "failed to delete {label} {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
 fn recovery_pending_path(report: &Path) -> PathBuf {
     let mut path = report.as_os_str().to_os_string();
     path.push(AGENT_RECOVERY_REPORT_PENDING_SUFFIX);
@@ -2467,11 +2625,12 @@ mod tests {
 
     use super::{
         bundle_handoff_marker_conflict, ensure_bundle_handoff_marker,
-        publish_bundle_handoff_marker, read_bundle_handoff_marker, recovery_pending_path,
-        AgentDriverClient, BundleHandoffMarker, DriverCreateRequest, DriverDeleteRequest,
-        DriverKillRequest, DriverWaitRequest, LaunchedUtilityVm, PreparedWhpxLayout, RuntimeDriver,
-        UtilityVmFactory, UtilityVmOwner, WhpxRuntimeDriver, WhpxRuntimeDriverConfig,
-        BUNDLE_HANDOFF_MARKER, BUNDLE_HANDOFF_MARKER_PENDING, BUNDLE_HANDOFF_MARKER_SCHEMA,
+        publish_bundle_handoff_marker, read_bundle_handoff_marker, read_whpx_recovery_report,
+        recovery_pending_path, remove_whpx_recovery_file_bound, AgentDriverClient,
+        BundleHandoffMarker, DriverCreateRequest, DriverDeleteRequest, DriverKillRequest,
+        DriverWaitRequest, LaunchedUtilityVm, PreparedWhpxLayout, RuntimeDriver, UtilityVmFactory,
+        UtilityVmOwner, WhpxRuntimeDriver, WhpxRuntimeDriverConfig, BUNDLE_HANDOFF_MARKER,
+        BUNDLE_HANDOFF_MARKER_PENDING, BUNDLE_HANDOFF_MARKER_SCHEMA,
     };
     use crate::DriverCreateAttachments;
 
@@ -3602,6 +3761,94 @@ mod tests {
             .await
             .expect("delete recovered evidence");
         assert!(!report_path.exists());
+    }
+
+    #[tokio::test]
+    async fn recovery_report_reader_rejects_a_replaced_path_before_open() {
+        let temporary = tempfile::tempdir().expect("temporary recovery root");
+        let path = temporary.path().join("report.json");
+        let retained = temporary.path().join("retained-original");
+        let replacement = temporary.path().join("replacement");
+        std::fs::write(&path, b"original").expect("write original report");
+        let original_metadata = std::fs::symlink_metadata(&path).expect("inspect original report");
+        std::fs::hard_link(&path, &retained).expect("retain original report identity");
+        std::fs::write(&replacement, b"replacement").expect("write replacement report");
+        std::fs::remove_file(&path).expect("remove original report path");
+        std::fs::hard_link(&replacement, &path).expect("install replacement report path");
+
+        let error = read_whpx_recovery_report(&path, &original_metadata)
+            .await
+            .expect_err("replacement report must be rejected");
+        assert!(error.retryable);
+        assert_eq!(
+            std::fs::read(&path).expect("read replacement report"),
+            b"replacement"
+        );
+        std::fs::remove_file(&path).expect("remove replacement report path");
+        std::fs::remove_file(&replacement).expect("remove replacement report");
+        std::fs::remove_file(retained).expect("remove retained original report");
+    }
+
+    #[tokio::test]
+    async fn recovery_cleanup_rejects_a_replaced_path_without_deleting_it() {
+        let temporary = tempfile::tempdir().expect("temporary recovery root");
+        let path = temporary.path().join("report.json");
+        let retained = temporary.path().join("retained-original");
+        let replacement = temporary.path().join("replacement");
+        std::fs::write(&path, b"original").expect("write original report");
+        let original_metadata = std::fs::symlink_metadata(&path).expect("inspect original report");
+        std::fs::hard_link(&path, &retained).expect("retain original report identity");
+        std::fs::write(&replacement, b"replacement").expect("write replacement report");
+        std::fs::remove_file(&path).expect("remove original report path");
+        std::fs::hard_link(&replacement, &path).expect("install replacement report path");
+
+        let error = remove_whpx_recovery_file_bound(
+            &path,
+            "WHPX recovery report",
+            false,
+            &original_metadata,
+        )
+        .await
+        .expect_err("replacement report must not be deleted");
+        assert!(error.retryable);
+        assert_eq!(
+            std::fs::read(&path).expect("read replacement report"),
+            b"replacement"
+        );
+        std::fs::remove_file(&path).expect("remove replacement report path");
+        std::fs::remove_file(&replacement).expect("remove replacement report");
+        std::fs::remove_file(retained).expect("remove retained original report");
+    }
+
+    #[tokio::test]
+    async fn recovery_report_reader_rejects_a_final_component_reparse_point() {
+        use std::os::windows::fs::symlink_file;
+
+        let fixture = Fixture::new();
+        let temporary = tempfile::tempdir().expect("temporary recovery victim root");
+        let victim = temporary.path().join("victim");
+        let path = fixture.recovery_directory.join("whpx-test-1.json");
+        std::fs::write(&victim, b"victim").expect("write victim report");
+        if let Err(error) = symlink_file(&victim, &path) {
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                // Windows without Developer Mode or the SeCreateSymbolicLink
+                // privilege cannot construct this fixture; the production
+                // no-follow path remains covered by the platform security suite.
+                return;
+            }
+            panic!("create report reparse point: {error}");
+        }
+        let error = fixture
+            .driver
+            .recover(&fixture.record(1, ContainerState::Running))
+            .await
+            .expect_err("reparse-point report must be rejected");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert!(!error.retryable);
+        assert_eq!(
+            std::fs::read(&victim).expect("read victim report"),
+            b"victim"
+        );
     }
 
     #[tokio::test]

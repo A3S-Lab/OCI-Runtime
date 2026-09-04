@@ -27,6 +27,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Hardened Windows WHPX recovery report reads and cleanup. Recovery now uses
+  no-follow regular-file handles, binds the handle to the settled path
+  metadata, verifies the handle after bounded reads, and rechecks the final
+  path before deletion; replacement or reparse-point races fail closed without
+  consuming or removing the replacement entry.
+
 - Hardened utility-VM recovery report reads and cleanup. Reports are opened
   without following final-component links, checked against the settled path
   identity before and after bounded reads, and rechecked before deletion;
