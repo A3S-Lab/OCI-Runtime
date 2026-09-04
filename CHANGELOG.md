@@ -38,6 +38,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
   again after every bounded read, so in-place growth, inode replacement, and
   path replacement cannot be decoded or passed into VM configuration.
 
+- Hardened the Linux Guest agent's attachment manifest and OCI configuration
+  reads. Both files now bind their initial device/inode to a no-follow handle
+  and revalidate the handle and pathname after bounded reads, preventing a
+  replacement or growth race from influencing Guest setup.
+
 - Made Windows WHPX pending-marker cleanup idempotent when a concurrent
   publisher consumes the exact inode between handle verification and the
   pathname check; replacement or reparse-point entries remain rejected.
