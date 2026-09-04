@@ -27,6 +27,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Hardened Windows WHPX bundle-handoff marker reads and cleanup. Marker
+  metadata is now bound to a no-follow regular-file handle, bounded reads are
+  revalidated through that handle and the final pathname, and cleanup refuses
+  to remove a replacement or reparse-point entry. The shared verified-file
+  hashing primitive now applies the same final-path identity fence.
+
 - Hardened Windows WHPX recovery report reads and cleanup. Recovery now uses
   no-follow regular-file handles, binds the handle to the settled path
   metadata, verifies the handle after bounded reads, and rechecks the final

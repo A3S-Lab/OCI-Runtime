@@ -84,6 +84,14 @@ same source or matching destination evidence, while cleanup removes only a
 marker-proven runtime-owned bundle. Requests without the extension retain the
 strict fixed-bundle containment behavior used by qualification gates.
 
+The handoff marker itself is treated as runtime-owned evidence, not as an
+ordinary pathname. WHPX opens each pending or final marker with no-follow
+semantics, binds it to the metadata observed at the race boundary, bounds the
+JSON read, and verifies both the retained handle and the final pathname before
+accepting its generation and digest. Cleanup uses the same identity fence and
+leaves a replacement or reparse-point entry untouched; a concurrent
+disappearance remains an idempotent retry boundary.
+
 For both bundle-handoff and pre-positioned qualification bundles, the driver
 creates and protects the exact share's `run` directory inside the serialized
 Create boundary immediately before the first VM launch. Callers own neither

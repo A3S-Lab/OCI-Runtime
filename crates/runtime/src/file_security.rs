@@ -148,6 +148,54 @@ impl VerifiedRegularFile {
 
         Ok(())
     }
+
+    /// Verify that `path` still names the exact regular file retained by this
+    /// handle.  On Windows the pathname is opened once more with no-follow
+    /// semantics and compared through the kernel file identity; portable
+    /// metadata fields alone are not strong enough to distinguish a rapid
+    /// remove-and-recreate cycle.
+    pub(crate) async fn verify_path_unchanged(&self, path: &Path) -> io::Result<()> {
+        let path_metadata = tokio::fs::symlink_metadata(path).await?;
+        if !is_plain_regular_file(&path_metadata) {
+            return Err(invalid_file(format!(
+                "path is no longer a regular non-link file: {}",
+                path.display()
+            )));
+        }
+        if path_metadata.len() != self.size {
+            return Err(invalid_file(format!(
+                "path file size changed (expected {}, observed {}): {}",
+                self.size,
+                path_metadata.len(),
+                path.display()
+            )));
+        }
+
+        #[cfg(unix)]
+        if unix_file_identity(&path_metadata) != self.identity {
+            return Err(invalid_file(format!(
+                "path file identity changed: {}",
+                path.display()
+            )));
+        }
+
+        #[cfg(windows)]
+        {
+            let path_file = open_readonly_nofollow(path).await?;
+            let opened_metadata = path_file.metadata().await?;
+            if !is_plain_regular_file(&opened_metadata)
+                || opened_metadata.len() != self.size
+                || windows_file_identity(&path_file)? != self.identity
+            {
+                return Err(invalid_file(format!(
+                    "path file identity changed: {}",
+                    path.display()
+                )));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Hash a previously verified regular file, enforcing an optional byte limit
@@ -196,6 +244,7 @@ pub(crate) async fn sha256_verified_file(
         hasher.update(&buffer[..read]);
     }
     verified.verify_unchanged(size).await?;
+    verified.verify_path_unchanged(path).await?;
     Ok(format!("{:x}", hasher.finalize()))
 }
 
@@ -343,6 +392,57 @@ mod tests {
             .verify_unchanged(5)
             .await
             .expect_err("size drift must fail closed");
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn rejects_a_path_replacement_after_open() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("manifest");
+        let displaced = temporary.path().join("manifest.displaced");
+        tokio::fs::write(&path, b"original")
+            .await
+            .expect("write original manifest");
+        let verified = open_verified_regular_file(&path)
+            .await
+            .expect("open verified manifest");
+
+        tokio::fs::rename(&path, &displaced)
+            .await
+            .expect("displace original manifest");
+        tokio::fs::write(&path, b"replacement")
+            .await
+            .expect("write replacement manifest");
+
+        let error = verified
+            .verify_path_unchanged(&path)
+            .await
+            .expect_err("path replacement must fail closed");
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn hashing_rejects_a_path_replacement_after_open() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("manifest");
+        let displaced = temporary.path().join("manifest.displaced");
+        tokio::fs::write(&path, b"original")
+            .await
+            .expect("write original manifest");
+        let verified = open_verified_regular_file(&path)
+            .await
+            .expect("open verified manifest");
+
+        tokio::fs::rename(&path, &displaced)
+            .await
+            .expect("displace original manifest");
+        tokio::fs::write(&path, b"replaced")
+            .await
+            .expect("write replacement manifest");
+
+        let error = sha256_verified_file(verified, None, &path)
+            .await
+            .expect_err("hashing must reject a replacement pathname");
         assert_eq!(error.kind(), ErrorKind::InvalidData);
     }
 
