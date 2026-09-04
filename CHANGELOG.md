@@ -27,6 +27,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Hardened Unix utility-VM bundle-handoff marker reads and cleanup. Pending
+  and final markers now bind to the no-follow verified inode, revalidate the
+  bounded read and final pathname, and refuse to remove a replacement entry;
+  disappearance remains idempotent and retryable races stay explicit.
+
 - Hardened Windows WHPX bundle-handoff marker reads and cleanup. Marker
   metadata is now bound to a no-follow regular-file handle, bounded reads are
   revalidated through that handle and the final pathname, and cleanup refuses
