@@ -12,14 +12,20 @@ The host must:
    system random source;
 2. bind the protected host transport before starting the VM;
 3. provision the token through the protected
-   `A3S_OCI_AGENT_SESSION_TOKEN` environment entry;
+   `A3S_OCI_AGENT_SESSION_TOKEN` environment entry, or through a one-time
+   `A3S_OCI_AGENT_SESSION_TOKEN_FILE` below the protected runtime share;
 4. execute `/usr/bin/a3s-oci-agent` as the fixed guest process.
 
-At startup the agent removes the environment entry, retains the encoded input
-in zeroizing memory only while decoding it, and connects to host CID 2 port
-4093 through Linux AF_VSOCK. Connection attempts and the complete retry window
-are bounded. The accepted token is zeroized when its last Rust owner is
-dropped.
+At startup the agent removes the selected environment entry, retains the
+encoded input in zeroizing memory only while decoding it, and connects to host
+CID 2 port 4093 through Linux AF_VSOCK. File-based bootstrap opens the private
+parent directory and token with descriptor-relative `openat`/`O_NOFOLLOW`,
+requires the exact `0700`/`0600` handoff modes and 64-byte shape, verifies the
+device/inode identity while reading, and consumes the secret through the
+opened descriptor before attempting identity-bound unlink cleanup. A replaced
+entry is never accepted as the original token file. Connection attempts and
+the complete retry window are bounded. The accepted token is zeroized when
+its last Rust owner is dropped.
 
 On Windows, the host verifies that the connected named-pipe client is the
 exact libkrun shim PID before it sends the token.

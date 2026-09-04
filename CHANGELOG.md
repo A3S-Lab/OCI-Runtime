@@ -27,6 +27,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Hardened Linux guest handoff filesystem operations. One-time token
+  consumption and recovery-report publication now use a descriptor-relative
+  private parent, `O_NOFOLLOW`, device/inode checks, exact `0700`/`0600`
+  contracts, bounded writes, and identity-bound failure cleanup; token bytes
+  are consumed through the opened descriptor before pathname cleanup, and
+  replacement entries are never treated as the original handoff.
+
 - Added device/inode-pinned Unix guest-agent endpoints for the macOS HVF and
   Linux KVM bridges. The runtime rechecks the private directory and socket
   before publishing credentials, accepting a peer, and consuming the endpoint;
