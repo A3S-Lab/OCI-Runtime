@@ -845,7 +845,7 @@ journals retired. The machine-readable report SHA-256 is
 `040d8f77feb43e5f17afd2a3bd172cc2a958452cafcaee34e325fa58c016dd95`; the
 Runtime and Agent digests are
 `532d02bc8a05d6c55a21a308524e2730cdbec21420eb26bc8b9049606bd6b33a` and
-`33c17e52657486e0887e5da8836ffb8dc11a673c2fa813edbf1a4d6edf0eca`.
+`33c17e52657486e8a0887e5da8836ffb8dc11a673c2fa813edbf1a4d6edf0eca`.
 This remains development evidence for x86_64 and does not promote a driver or
 qualify a signed package.
 
