@@ -12,6 +12,7 @@ use zeroize::Zeroizing;
 
 use crate::ffi::{path_to_cstring, value_to_cstring, FfiStringArray};
 use crate::linux_kvm_device::LinuxKvmDevice;
+use crate::linux_runtime_asset::PinnedRuntimeFile;
 use crate::linux_runtime_share::LinuxRuntimeShare;
 use crate::linux_system_image::LinuxSystemImage;
 use crate::linux_vm_attachment::LinuxVmStorageImage;
@@ -61,12 +62,14 @@ pub(crate) struct LinuxKrunApi {
     set_console_output: KrunSetConsoleOutput,
     start_enter: KrunStartEnter,
     get_kernel: KrunfwGetKernel,
-    runtime_dir: PathBuf,
     bundle: &'static RuntimeBundle,
     kernel_sha256: String,
     // Drop libkrun before its global firmware provider.
     _krun: Library,
     _firmware: Library,
+    // Keep the exact files used by the dynamic loader alive and re-verifiable.
+    runtime_krun: PinnedRuntimeFile,
+    runtime_firmware: PinnedRuntimeFile,
 }
 
 impl LinuxKrunApi {
@@ -92,34 +95,50 @@ impl LinuxKrunApi {
         let krun_file = required_file(bundle, RuntimeFileRole::Library)?;
         let firmware_path = runtime_dir.join(&firmware_file.name);
         let krun_path = runtime_dir.join(&krun_file.name);
+        let runtime_firmware = PinnedRuntimeFile::open(&firmware_path, firmware_file)?;
+        let runtime_krun = PinnedRuntimeFile::open(&krun_path, krun_file)?;
+        let firmware_loader_path = runtime_firmware.loader_path();
+        let krun_loader_path = runtime_krun.loader_path();
 
-        // SAFETY: both absolute paths name checksum-verified regular files.
-        // RTLD_GLOBAL makes the firmware's fixed SONAME available while the
-        // selected libkrun object resolves its dependency.
-        let firmware =
-            unsafe { Library::open(Some(firmware_path.as_os_str()), RTLD_NOW | RTLD_GLOBAL) }
+        // SAFETY: the descriptor-backed procfs path resolves to the exact
+        // checksum-verified firmware object retained above.  RTLD_GLOBAL
+        // makes its fixed SONAME available to the selected libkrun object.
+        let firmware = unsafe {
+            Library::open(
+                Some(firmware_loader_path.as_os_str()),
+                RTLD_NOW | RTLD_GLOBAL,
+            )
+        }
+        .map_err(|error| {
+            runtime_error(
+                "load-linux-libkrunfw",
+                format!(
+                    "failed to load checksum-verified firmware {}: {error}",
+                    firmware_path.display()
+                ),
+            )
+        })?;
+        runtime_firmware
+            .reverify()
+            .map_err(|error| error.for_operation("load-linux-libkrunfw"))?;
+
+        // SAFETY: the descriptor-backed procfs path resolves to the exact
+        // checksum-verified libkrun object retained above and stays loaded
+        // for the lifetime of every copied function pointer.
+        let krun =
+            unsafe { Library::open(Some(krun_loader_path.as_os_str()), RTLD_NOW | RTLD_LOCAL) }
                 .map_err(|error| {
                     runtime_error(
-                        "load-linux-libkrunfw",
+                        "load-linux-libkrun",
                         format!(
-                            "failed to load checksum-verified firmware {}: {error}",
-                            firmware_path.display()
+                            "failed to load checksum-verified libkrun {}: {error}",
+                            krun_path.display()
                         ),
                     )
                 })?;
-
-        // SAFETY: the exact runtime-owned libkrun object was verified above
-        // and stays loaded for the lifetime of every copied function pointer.
-        let krun = unsafe { Library::open(Some(krun_path.as_os_str()), RTLD_NOW | RTLD_LOCAL) }
-            .map_err(|error| {
-                runtime_error(
-                    "load-linux-libkrun",
-                    format!(
-                        "failed to load checksum-verified libkrun {}: {error}",
-                        krun_path.display()
-                    ),
-                )
-            })?;
+        runtime_krun
+            .reverify()
+            .map_err(|error| error.for_operation("load-linux-libkrun"))?;
 
         let get_kernel = load_symbol(&firmware, b"krunfw_get_kernel\0", "krunfw_get_kernel")?;
         let kernel_sha256 = verify_exported_kernel(get_kernel, &bundle.kernel)?;
@@ -151,11 +170,12 @@ impl LinuxKrunApi {
             )?,
             start_enter: load_symbol(&krun, b"krun_start_enter\0", "krun_start_enter")?,
             get_kernel,
-            runtime_dir,
             bundle,
             kernel_sha256,
             _krun: krun,
             _firmware: firmware,
+            runtime_krun,
+            runtime_firmware,
         };
         api.reverify_runtime()?;
         Ok(api)
@@ -166,7 +186,12 @@ impl LinuxKrunApi {
     }
 
     fn reverify_runtime(&self) -> Result<()> {
-        verify_runtime_dir(&self.runtime_dir, self.bundle)?;
+        self.runtime_firmware
+            .reverify()
+            .map_err(|error| error.for_operation("reverify-linux-libkrun-runtime"))?;
+        self.runtime_krun
+            .reverify()
+            .map_err(|error| error.for_operation("reverify-linux-libkrun-runtime"))?;
         let kernel_sha256 = verify_exported_kernel(self.get_kernel, &self.bundle.kernel)?;
         if kernel_sha256 != self.kernel_sha256 {
             return Err(runtime_error(

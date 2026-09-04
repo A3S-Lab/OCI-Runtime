@@ -27,6 +27,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Hardened Linux libkrun runtime loading. The firmware and libkrun shared
+  objects are now opened with no-follow, manifest-bound descriptors and loaded
+  through descriptor-backed `/proc/self/fd` paths; descriptor identity and
+  bytes are revalidated before native API use, closing the hash-then-`dlopen`
+  path replacement window.
+
 - Hardened the Linux KVM compatibility-drift qualification barrier. Ready and
   continue markers now use no-follow opens, bounded reads, ownership/mode
   checks, and device/inode revalidation; the barrier retains the opened marker
