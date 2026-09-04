@@ -48,6 +48,7 @@ mod box_whpx_service;
 mod cleanup_report;
 mod driver;
 mod fault;
+mod file_security;
 #[cfg(any(
     target_os = "linux",
     all(target_os = "windows", target_arch = "x86_64"),
