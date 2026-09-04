@@ -27,6 +27,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Pinned the Windows utility-VM shim through the process-creation boundary by
+  retaining a no-follow handle with write/delete sharing disabled and comparing
+  its kernel volume/file identity after canonicalization. A concurrent
+  executable replacement now fails closed instead of redirecting `CreateProcess`.
+
 - Hardened host-side trusted-path canonicalization. Rootfs, system-image
   manifests, per-generation runtime shares, console parents, and recovery
   parents now open their final component without following links and compare
