@@ -706,16 +706,12 @@ impl WhpxRuntimeDriver {
                 )
             })?;
         }
-        tokio::fs::remove_file(&marker).await.map_err(|error| {
-            bundle_handoff_error(
-                ErrorCode::Internal,
-                format!(
-                    "failed to remove WHPX bundle-handoff marker {}: {error}",
-                    marker.display()
-                ),
-            )
-        })?;
-        remove_plain_file_if_present(&runtime_share.join(BUNDLE_HANDOFF_MARKER_PENDING)).await?;
+        remove_plain_file_if_present(&marker, "WHPX bundle-handoff marker").await?;
+        remove_plain_file_if_present(
+            &runtime_share.join(BUNDLE_HANDOFF_MARKER_PENDING),
+            "WHPX bundle-handoff pending marker",
+        )
+        .await?;
         remove_directory_if_empty(&runtime_share.join("run")).await?;
         remove_directory_if_empty(&runtime_share).await?;
         if let Some(container_directory) = runtime_share.parent() {
@@ -1756,12 +1752,14 @@ async fn create_or_reuse_bundle_handoff_pending(
     match rename_private_file_noreplace(&staging, pending).await {
         Ok(()) => sync_whpx_directory(runtime_share).await,
         Err(error) if error.code == ErrorCode::AlreadyExists => {
-            let _ = remove_plain_file_if_present(&staging).await;
+            let _ =
+                remove_plain_file_if_present(&staging, "WHPX bundle-handoff staging marker").await;
             ensure_bundle_handoff_pending_matches(pending, expected).await
         }
         Err(error) => {
             let source_exists = path_metadata(&staging).await?.is_some();
-            let _ = remove_plain_file_if_present(&staging).await;
+            let _ =
+                remove_plain_file_if_present(&staging, "WHPX bundle-handoff staging marker").await;
             if !source_exists {
                 return Err(bundle_handoff_error(
                     ErrorCode::Unavailable,
@@ -1809,7 +1807,8 @@ async fn create_bundle_handoff_staging(
             }
         };
         if let Err(error) = file.write_all(encoded).await {
-            let _ = remove_plain_file_if_present(&staging).await;
+            let _ =
+                remove_plain_file_if_present(&staging, "WHPX bundle-handoff staging marker").await;
             return Err(bundle_handoff_error(
                 ErrorCode::Internal,
                 format!(
@@ -1819,7 +1818,8 @@ async fn create_bundle_handoff_staging(
             ));
         }
         if let Err(error) = file.flush().await {
-            let _ = remove_plain_file_if_present(&staging).await;
+            let _ =
+                remove_plain_file_if_present(&staging, "WHPX bundle-handoff staging marker").await;
             return Err(bundle_handoff_error(
                 ErrorCode::Internal,
                 format!(
@@ -1829,7 +1829,8 @@ async fn create_bundle_handoff_staging(
             ));
         }
         if let Err(error) = file.sync_all().await {
-            let _ = remove_plain_file_if_present(&staging).await;
+            let _ =
+                remove_plain_file_if_present(&staging, "WHPX bundle-handoff staging marker").await;
             return Err(bundle_handoff_error(
                 ErrorCode::Internal,
                 format!(
@@ -1954,7 +1955,7 @@ async fn read_bundle_handoff_marker_if_present(path: &Path) -> Result<Option<Bun
     let Some(initial_metadata) = path_metadata(path).await? else {
         return Ok(None);
     };
-    match read_bundle_handoff_marker(path).await {
+    match read_bundle_handoff_marker_bound(path, &initial_metadata).await {
         Ok(marker) => Ok(Some(marker)),
         Err(error) => match path_metadata(path).await? {
             None => Ok(None),
@@ -1983,7 +1984,7 @@ async fn remove_matching_bundle_handoff_pending(
         if retained != *expected {
             return Err(bundle_handoff_marker_conflict(expected));
         }
-        remove_plain_file_if_present(pending).await?;
+        remove_plain_file_if_present(pending, "WHPX bundle-handoff pending marker").await?;
     }
     Ok(())
 }
@@ -1996,6 +1997,10 @@ fn bundle_handoff_marker_conflict(expected: &BundleHandoffMarker) -> Error {
             expected.target.id, expected.target.generation
         ),
     )
+}
+
+fn bundle_handoff_race_error(message: impl Into<String>) -> Error {
+    bundle_handoff_error(ErrorCode::Unavailable, message).retryable(true)
 }
 
 fn same_whpx_file_identity(first: &std::fs::Metadata, second: &std::fs::Metadata) -> bool {
@@ -2018,7 +2023,17 @@ async fn read_bundle_handoff_marker(path: &Path) -> Result<BundleHandoffMarker> 
             ),
         )
     })?;
-    ensure_plain_file_metadata(&metadata, path, "WHPX bundle-handoff marker")?;
+    read_bundle_handoff_marker_bound(path, &metadata).await
+}
+
+/// Read one WHPX bundle-handoff marker through a no-follow handle bound to
+/// the caller's pathname observation. Both the retained handle and the final
+/// pathname are revalidated before any marker bytes are trusted.
+async fn read_bundle_handoff_marker_bound(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+) -> Result<BundleHandoffMarker> {
+    ensure_plain_file_metadata(metadata, path, "WHPX bundle-handoff marker")?;
     if metadata.len() > MAX_BUNDLE_HANDOFF_MARKER_BYTES as u64 {
         return Err(bundle_handoff_error(
             ErrorCode::FailedPrecondition,
@@ -2029,18 +2044,51 @@ async fn read_bundle_handoff_marker(path: &Path) -> Result<BundleHandoffMarker> 
             ),
         ));
     }
-    let mut encoded = Vec::with_capacity(metadata.len() as usize);
-    tokio::fs::File::open(path)
-        .await
-        .map_err(|error| {
-            bundle_handoff_error(
+    let mut verified = match crate::file_security::open_verified_regular_file(path).await {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(bundle_handoff_race_error(format!(
+                "WHPX bundle-handoff marker disappeared while it was being opened: {}",
+                path.display()
+            )))
+        }
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+            return Err(bundle_handoff_race_error(format!(
+                "WHPX bundle-handoff marker changed while it was being opened: {} ({error})",
+                path.display()
+            )))
+        }
+        Err(error) => {
+            return Err(bundle_handoff_error(
                 ErrorCode::FailedPrecondition,
                 format!(
                     "failed to open WHPX bundle-handoff marker {}: {error}",
                     path.display()
                 ),
-            )
-        })?
+            ))
+        }
+    };
+    let opened_metadata = verified.file.metadata().await.map_err(|error| {
+        bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect opened WHPX bundle-handoff marker {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if !is_plain_whpx_file(&opened_metadata)
+        || opened_metadata.len() != metadata.len()
+        || !same_whpx_file_identity(metadata, &opened_metadata)
+    {
+        return Err(bundle_handoff_race_error(format!(
+            "WHPX bundle-handoff marker changed while it was being opened: {}",
+            path.display()
+        )));
+    }
+
+    let mut encoded = Vec::with_capacity(opened_metadata.len() as usize);
+    (&mut verified.file)
         .take((MAX_BUNDLE_HANDOFF_MARKER_BYTES + 1) as u64)
         .read_to_end(&mut encoded)
         .await
@@ -2053,6 +2101,35 @@ async fn read_bundle_handoff_marker(path: &Path) -> Result<BundleHandoffMarker> 
                 ),
             )
         })?;
+    if encoded.len() > MAX_BUNDLE_HANDOFF_MARKER_BYTES {
+        return Err(bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "WHPX bundle-handoff marker grew beyond {} bytes: {}",
+                MAX_BUNDLE_HANDOFF_MARKER_BYTES,
+                path.display()
+            ),
+        ));
+    }
+    verified
+        .verify_unchanged(encoded.len() as u64)
+        .await
+        .map_err(|error| {
+            bundle_handoff_race_error(format!(
+                "WHPX bundle-handoff marker changed while it was being read: {} ({error})",
+                path.display()
+            ))
+        })?;
+    verified
+        .verify_path_unchanged(path)
+        .await
+        .map_err(|error| {
+            bundle_handoff_race_error(format!(
+                "WHPX bundle-handoff marker path changed while it was being read: {} ({error})",
+                path.display()
+            ))
+        })?;
+
     let marker: BundleHandoffMarker = serde_json::from_slice(&encoded).map_err(|error| {
         bundle_handoff_error(
             ErrorCode::FailedPrecondition,
@@ -2141,17 +2218,75 @@ fn is_transient_metadata_error(error: &io::Error) -> bool {
         })
 }
 
-async fn remove_plain_file_if_present(path: &Path) -> Result<()> {
-    let Some(metadata) = path_metadata(path).await? else {
+async fn remove_plain_file_if_present(path: &Path, label: &str) -> Result<()> {
+    let Some(initial_metadata) = path_metadata(path).await? else {
         return Ok(());
     };
-    ensure_plain_file_metadata(&metadata, path, "WHPX bundle-handoff temporary file")?;
+    remove_plain_file_bound(path, label, &initial_metadata).await
+}
+
+/// Remove one runtime-owned file only when the pathname still resolves to the
+/// regular file observed by the caller. The no-follow handle and final path
+/// identity check prevent a replacement file or reparse point from being
+/// consumed by cleanup.
+async fn remove_plain_file_bound(
+    path: &Path,
+    label: &str,
+    initial_metadata: &std::fs::Metadata,
+) -> Result<()> {
+    ensure_plain_file_metadata(initial_metadata, path, label)?;
+    let verified = match crate::file_security::open_verified_regular_file(path).await {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+            return Err(bundle_handoff_race_error(format!(
+                "refusing to remove replaced {label} {} ({error})",
+                path.display()
+            )))
+        }
+        Err(error) => {
+            return Err(bundle_handoff_error(
+                ErrorCode::Internal,
+                format!(
+                    "failed to open {label} {} for identity binding: {error}",
+                    path.display()
+                ),
+            ))
+        }
+    };
+    let opened_metadata = verified.file.metadata().await.map_err(|error| {
+        bundle_handoff_error(
+            ErrorCode::Internal,
+            format!(
+                "failed to inspect opened {label} {} for identity binding: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if !is_plain_whpx_file(&opened_metadata)
+        || opened_metadata.len() != initial_metadata.len()
+        || !same_whpx_file_identity(initial_metadata, &opened_metadata)
+    {
+        return Err(bundle_handoff_race_error(format!(
+            "refusing to remove replaced {label} {}",
+            path.display()
+        )));
+    }
+    verified
+        .verify_path_unchanged(path)
+        .await
+        .map_err(|error| {
+            bundle_handoff_race_error(format!(
+                "refusing to remove changed {label} {} ({error})",
+                path.display()
+            ))
+        })?;
     match tokio::fs::remove_file(path).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(bundle_handoff_error(
             ErrorCode::Internal,
-            format!("failed to remove {}: {error}", path.display()),
+            format!("failed to remove {label} {}: {error}", path.display()),
         )),
     }
 }
@@ -2379,7 +2514,7 @@ async fn read_whpx_recovery_report(path: &Path, metadata: &std::fs::Metadata) ->
             path.display()
         ))
     })?;
-    if !is_plain_whpx_recovery_file(&opened_metadata)
+    if !is_plain_whpx_file(&opened_metadata)
         || opened_metadata.len() != metadata.len()
         || !same_whpx_file_identity(metadata, &opened_metadata)
     {
@@ -2417,33 +2552,19 @@ async fn read_whpx_recovery_report(path: &Path, metadata: &std::fs::Metadata) ->
             ))
         })?;
 
-    let final_path_metadata = match tokio::fs::symlink_metadata(path).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Err(recovery_race_error(format!(
-                "WHPX recovery report disappeared while it was being read: {}",
+    verified
+        .verify_path_unchanged(path)
+        .await
+        .map_err(|error| {
+            recovery_race_error(format!(
+                "WHPX recovery report path changed while it was being read: {} ({error})",
                 path.display()
-            )))
-        }
-        Err(error) => {
-            return Err(recovery_artifact_error(format!(
-                "failed to recheck WHPX recovery report {} after reading: {error}",
-                path.display()
-            )))
-        }
-    };
-    if !is_plain_whpx_recovery_file(&final_path_metadata)
-        || !same_whpx_file_identity(&opened_metadata, &final_path_metadata)
-    {
-        return Err(recovery_race_error(format!(
-            "WHPX recovery report path changed while it was being read: {}",
-            path.display()
-        )));
-    }
+            ))
+        })?;
     Ok(encoded)
 }
 
-fn is_plain_whpx_recovery_file(metadata: &std::fs::Metadata) -> bool {
+fn is_plain_whpx_file(metadata: &std::fs::Metadata) -> bool {
     metadata.is_file()
         && !metadata.file_type().is_symlink()
         && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
@@ -2499,7 +2620,7 @@ async fn remove_whpx_recovery_file_bound(
             path.display()
         ))
     })?;
-    if !is_plain_whpx_recovery_file(&opened_metadata)
+    if !is_plain_whpx_file(&opened_metadata)
         || opened_metadata.len() != initial_metadata.len()
         || !same_whpx_file_identity(initial_metadata, &opened_metadata)
     {
@@ -2524,24 +2645,15 @@ async fn remove_whpx_recovery_file_bound(
             ))
         })?;
 
-    let current_metadata = match tokio::fs::symlink_metadata(path).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(recovery_artifact_error(format!(
-                "failed to recheck {label} {} before deletion: {error}",
+    verified
+        .verify_path_unchanged(path)
+        .await
+        .map_err(|error| {
+            recovery_race_error(format!(
+                "refusing to delete replaced {label} {} ({error})",
                 path.display()
-            )))
-        }
-    };
-    if !is_plain_whpx_recovery_file(&current_metadata)
-        || !same_whpx_file_identity(&opened_metadata, &current_metadata)
-    {
-        return Err(recovery_race_error(format!(
-            "refusing to delete replaced {label} {}",
-            path.display()
-        )));
-    }
+            ))
+        })?;
     match tokio::fs::remove_file(path).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -2625,8 +2737,9 @@ mod tests {
 
     use super::{
         bundle_handoff_marker_conflict, ensure_bundle_handoff_marker,
-        publish_bundle_handoff_marker, read_bundle_handoff_marker, read_whpx_recovery_report,
-        recovery_pending_path, remove_whpx_recovery_file_bound, AgentDriverClient,
+        publish_bundle_handoff_marker, read_bundle_handoff_marker,
+        read_bundle_handoff_marker_bound, read_whpx_recovery_report, recovery_pending_path,
+        remove_plain_file_bound, remove_whpx_recovery_file_bound, AgentDriverClient,
         BundleHandoffMarker, DriverCreateRequest, DriverDeleteRequest, DriverKillRequest,
         DriverWaitRequest, LaunchedUtilityVm, PreparedWhpxLayout, RuntimeDriver, UtilityVmFactory,
         UtilityVmOwner, WhpxRuntimeDriver, WhpxRuntimeDriverConfig, BUNDLE_HANDOFF_MARKER,
@@ -3201,6 +3314,88 @@ mod tests {
             names.push(entry.file_name());
         }
         assert_eq!(names, vec![std::ffi::OsString::from(BUNDLE_HANDOFF_MARKER)]);
+    }
+
+    #[tokio::test]
+    async fn bundle_handoff_marker_reader_rejects_a_replaced_path_before_open() {
+        let temporary = tempfile::tempdir().expect("temporary marker root");
+        let path = temporary.path().join(BUNDLE_HANDOFF_MARKER);
+        let retained = temporary.path().join("retained-original");
+        let replacement = temporary.path().join("replacement");
+        std::fs::write(&path, b"original").expect("write original marker");
+        let original_metadata = std::fs::symlink_metadata(&path).expect("inspect original marker");
+        std::fs::hard_link(&path, &retained).expect("retain original marker identity");
+        std::fs::write(&replacement, b"replacement").expect("write replacement marker");
+        std::fs::remove_file(&path).expect("remove original marker path");
+        std::fs::hard_link(&replacement, &path).expect("install replacement marker path");
+
+        let error = read_bundle_handoff_marker_bound(&path, &original_metadata)
+            .await
+            .expect_err("replacement marker must be rejected");
+        assert!(error.retryable);
+        assert_eq!(
+            std::fs::read(&path).expect("read replacement marker"),
+            b"replacement"
+        );
+        std::fs::remove_file(&path).expect("remove replacement marker path");
+        std::fs::remove_file(&replacement).expect("remove replacement marker");
+        std::fs::remove_file(retained).expect("remove retained original marker");
+    }
+
+    #[tokio::test]
+    async fn bundle_handoff_cleanup_rejects_a_replaced_path_without_deleting_it() {
+        let temporary = tempfile::tempdir().expect("temporary marker root");
+        let path = temporary.path().join(BUNDLE_HANDOFF_MARKER_PENDING);
+        let retained = temporary.path().join("retained-original");
+        let replacement = temporary.path().join("replacement");
+        std::fs::write(&path, b"original").expect("write original marker");
+        let original_metadata = std::fs::symlink_metadata(&path).expect("inspect original marker");
+        std::fs::hard_link(&path, &retained).expect("retain original marker identity");
+        std::fs::write(&replacement, b"replacement").expect("write replacement marker");
+        std::fs::remove_file(&path).expect("remove original marker path");
+        std::fs::hard_link(&replacement, &path).expect("install replacement marker path");
+
+        let error = remove_plain_file_bound(
+            &path,
+            "WHPX bundle-handoff pending marker",
+            &original_metadata,
+        )
+        .await
+        .expect_err("replacement marker must not be deleted");
+        assert!(error.retryable);
+        assert_eq!(
+            std::fs::read(&path).expect("read replacement marker"),
+            b"replacement"
+        );
+        std::fs::remove_file(&path).expect("remove replacement marker path");
+        std::fs::remove_file(&replacement).expect("remove replacement marker");
+        std::fs::remove_file(retained).expect("remove retained original marker");
+    }
+
+    #[tokio::test]
+    async fn bundle_handoff_marker_reader_rejects_a_final_component_reparse_point() {
+        use std::os::windows::fs::symlink_file;
+
+        let temporary = tempfile::tempdir().expect("temporary marker root");
+        let victim = temporary.path().join("victim");
+        let path = temporary.path().join(BUNDLE_HANDOFF_MARKER);
+        std::fs::write(&victim, b"victim").expect("write marker victim");
+        if let Err(error) = symlink_file(&victim, &path) {
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                return;
+            }
+            panic!("create marker reparse point: {error}");
+        }
+
+        let error = read_bundle_handoff_marker(&path)
+            .await
+            .expect_err("reparse-point marker must be rejected");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert!(!error.retryable);
+        assert_eq!(
+            std::fs::read(&victim).expect("read marker victim"),
+            b"victim"
+        );
     }
 
     fn delete_request(generation: u64) -> DriverDeleteRequest {
