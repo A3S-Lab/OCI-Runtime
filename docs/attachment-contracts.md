@@ -300,6 +300,14 @@ generation while members remain fails with no VM replacement. A newer
 generation may replace an empty retained incarnation only after the old owner
 and root are reaped.
 
+On Unix, every retained guest-session and bundle-handoff marker read opens the
+final component with `O_NOFOLLOW|O_CLOEXEC`, validates the opened inode against
+the pre-open device/inode snapshot, and reads from that handle. The reader also
+requires stable private-file metadata and an exact byte count before decoding;
+a symlink substitution, remove-and-recreate race, truncation, or growth is
+rejected (or surfaced as a bounded retryable race) rather than being treated as
+ownership evidence.
+
 The same no-replace publication invariant applies to every runtime-owned
 attachment marker. Bundle-handoff markers and Linux KVM attachment manifests
 are written to random, fully synced private staging inodes, adopted under
