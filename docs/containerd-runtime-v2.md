@@ -826,7 +826,12 @@ When the selected service is an isolated systemd unit, set
 `KillMode=process` (as in the upstream containerd unit). `KillMode=control-group`
 also terminates the runtime-v2 shim during a daemon restart, so the rehydration
 and response-replay assertions are no longer testing a live shim and the run
-must be treated as invalid.
+must be treated as invalid. The selected service must also be a persistent unit
+with `Transient=no` and a non-empty `FragmentPath`; transient units created only by
+`systemd-run --unit` are unloaded after a forced daemon exit and cannot provide
+the repeated restart boundary required by this test. The qualification now
+checks both properties before creating a task and fails with an actionable
+error when either prerequisite is missing.
 
 ## Open release gates
 

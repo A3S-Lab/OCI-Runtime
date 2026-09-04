@@ -78,6 +78,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
   dispatching a second driver request after the first caller acknowledges its
   guest replay record. The regression covers WriteStdin and the real
   containerd runtime-v2 qualification path.
+
+### Fixed
+
+- Made the destructive real-containerd qualification reject transient
+  `systemd-run` units and units using `KillMode=control-group` before creating
+  any task. Restart qualification now requires a persistent service fragment
+  and `KillMode=process`, preventing an infrastructure lifecycle mistake from
+  being reported as a late runtime failure.
 - Added the OAR-03 explicit rootful Native Linux CRIU checkpoint and restore
   backend without changing default capability advertisement. The opt-in
   constructor binds one exact root-owned CRIU executable and advertises both
