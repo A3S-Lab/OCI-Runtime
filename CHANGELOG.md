@@ -27,6 +27,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Hardened Unix utility-VM exact-generation cleanup. The runtime now snapshots
+  the generation and container directory identities before validating retained
+  ownership evidence, opens cleanup targets without following the final
+  component, and performs recursive or empty-parent removal through the
+  verified directory handle. A replaced directory or symlink fails closed
+  without deleting the replacement subtree, while concurrent disappearance
+  remains idempotent.
+
 - Hardened Unix reusable guest-session marker reads and cleanup. Pending and
   final markers now bind to a no-follow verified inode, revalidate the bounded
   read and final pathname, and refuse to remove a replacement entry while

@@ -433,6 +433,16 @@ the exact destination with matching container and session ownership evidence.
 Delete and terminal create failure remove only an exact digest- and
 generation-bound handoff.
 
+On Unix, terminal handoff cleanup snapshots the device/inode identity of the
+exact-generation share and its immediate container directory before validating
+the retained marker and bundle. Cleanup then opens the final directory
+component without following links, rechecks the same-UID mode-`0700` contract
+and captured identity, and performs recursive traversal or empty-parent
+removal through that verified handle. Symlink entries inside the generation
+share are unlinked rather than followed. A concurrent disappearance is
+idempotent; a pathname replacement or link substitution fails closed without
+deleting the replacement subtree.
+
 The public container record deliberately retains the caller's original bundle
 identity. The relocated path is an internal driver attachment and is never a
 substitute durable product record.
