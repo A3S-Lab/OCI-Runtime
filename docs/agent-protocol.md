@@ -477,6 +477,12 @@ executes the retained descriptor through `/proc/self/fd/<n>` on Linux or
 `/dev/fd/<n>` on macOS. Replacing the shim path after validation therefore
 cannot redirect the process that receives the authenticated session token.
 
+On Windows, the Host retains a no-follow executable handle with write/delete
+sharing disabled until `CreateProcess` has resolved the image, and compares its
+volume serial/file index with the canonical entry. A write, rename, or deletion
+racing the process-creation boundary is therefore rejected by the filesystem
+rather than redirecting the shim.
+
 Host preflight canonicalization applies the same identity rule to every
 trusted path it resolves: the rootfs, system-image manifest, per-generation
 runtime shares, console parent, and recovery parent are opened without

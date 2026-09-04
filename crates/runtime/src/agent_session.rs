@@ -1075,9 +1075,9 @@ impl AgentVmSession {
             }
         };
         drop(command);
-        // The child has resolved the descriptor-backed executable by the time
-        // `spawn` returns. Releasing the host copy avoids retaining an
-        // otherwise unrelated descriptor for the lifetime of the VM session.
+        // The child has resolved the validated executable by the time `spawn`
+        // returns. Releasing the host copy avoids retaining an otherwise
+        // unrelated pin for the lifetime of the VM session.
         drop(prepared_shim);
         drop(encoded_token);
         report.shim_spawned = true;
@@ -1411,14 +1411,17 @@ async fn canonical_file(path: &Path, description: &str) -> Result<PathBuf, Strin
     canonical_path(path, description, true).await
 }
 
-/// A shim executable pinned to one Unix file descriptor for the fork/exec
-/// boundary. A pathname is only a lookup key; retaining the descriptor makes
-/// the executable immune to a directory-entry replacement after validation.
+/// A shim executable pinned through the process-creation boundary. On Unix a
+/// retained descriptor is executed directly; on Windows a no-follow handle
+/// blocks writes and namespace replacement until `CreateProcess` resolves the
+/// image. A pathname is only a lookup key during validation.
 struct PreparedShim {
     command_path: PathBuf,
     display_path: PathBuf,
     #[cfg(unix)]
     _file: File,
+    #[cfg(windows)]
+    _file: tokio::fs::File,
 }
 
 impl PreparedShim {
@@ -1442,7 +1445,12 @@ async fn prepare_shim(path: &Path, description: &str) -> Result<PreparedShim, St
             .map_err(|error| format!("failed to pin {display_description}: {error}"))?
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        open_pinned_windows_shim(path, description).await
+    }
+
+    #[cfg(not(any(unix, windows)))]
     {
         let canonical = canonical_file(path, description).await?;
         Ok(PreparedShim {
@@ -1520,6 +1528,100 @@ fn open_pinned_shim(path: &Path, description: &str) -> Result<PreparedShim, Stri
     let command_path = PathBuf::from(format!("{descriptor_root}/{}", file.as_raw_fd()));
     Ok(PreparedShim {
         command_path,
+        display_path: canonical,
+        _file: file,
+    })
+}
+
+#[cfg(windows)]
+async fn open_pinned_windows_shim(path: &Path, description: &str) -> Result<PreparedShim, String> {
+    use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ};
+
+    let input_metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
+        format!(
+            "failed to inspect {description} {}: {error}",
+            path.display()
+        )
+    })?;
+    if input_metadata.file_type().is_symlink()
+        || is_reparse_point(&input_metadata)
+        || !input_metadata.is_file()
+    {
+        return Err(format!(
+            "{description} must be a real file, not a symlink: {}",
+            path.display()
+        ));
+    }
+
+    // Capture the requested entry before resolving it.  The no-follow handle
+    // gives us a kernel identity rather than relying on Windows' portable
+    // metadata, which does not distinguish a rapid remove-and-recreate cycle.
+    let input_identity = capture_path_identity(path, description, true).await?;
+    let canonical = tokio::fs::canonicalize(path).await.map_err(|error| {
+        format!(
+            "failed to resolve {description} {}: {error}",
+            path.display()
+        )
+    })?;
+    let canonical_metadata = tokio::fs::symlink_metadata(&canonical)
+        .await
+        .map_err(|error| {
+            format!(
+                "failed to inspect {description} {}: {error}",
+                canonical.display()
+            )
+        })?;
+    if canonical_metadata.file_type().is_symlink()
+        || is_reparse_point(&canonical_metadata)
+        || !canonical_metadata.is_file()
+    {
+        return Err(format!(
+            "{description} is not a regular file: {}",
+            canonical.display()
+        ));
+    }
+    let canonical_identity = capture_path_identity(&canonical, description, true).await?;
+    ensure_identity_unchanged(description, path, input_identity, canonical_identity)?;
+
+    // Keep a handle open with read sharing only until CreateProcess has
+    // resolved the image.  This prevents a concurrent write, rename, or
+    // deletion from changing the executable after the identity checks above.
+    let mut options = tokio::fs::OpenOptions::new();
+    options
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(&canonical).await.map_err(|error| {
+        format!(
+            "failed to open pinned {description} {}: {error}",
+            canonical.display()
+        )
+    })?;
+    let file_metadata = file.metadata().await.map_err(|error| {
+        format!(
+            "failed to inspect pinned {description} {}: {error}",
+            canonical.display()
+        )
+    })?;
+    if file_metadata.file_type().is_symlink()
+        || is_reparse_point(&file_metadata)
+        || !file_metadata.is_file()
+    {
+        return Err(format!(
+            "pinned {description} is not a regular file: {}",
+            canonical.display()
+        ));
+    }
+    let pinned_identity = file_identity(&file, &canonical, description)?;
+    if pinned_identity != canonical_identity {
+        return Err(format!(
+            "{description} changed while its executable handle was being pinned: {}",
+            canonical.display()
+        ));
+    }
+
+    Ok(PreparedShim {
+        command_path: canonical.clone(),
         display_path: canonical,
         _file: file,
     })
@@ -1660,31 +1762,7 @@ async fn capture_path_identity(
 
     #[cfg(windows)]
     {
-        use std::mem::MaybeUninit;
-        use windows_sys::Win32::Storage::FileSystem::{
-            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-        };
-
-        let mut information = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
-        // SAFETY: `file` owns a valid handle for the duration of this call,
-        // and the output pointer refers to writable storage of the exact
-        // structure required by the Windows API.
-        let succeeded =
-            unsafe { GetFileInformationByHandle(file.as_raw_handle(), information.as_mut_ptr()) };
-        if succeeded == 0 {
-            return Err(format!(
-                "failed to identify pinned {description} {}: {}",
-                path.display(),
-                io::Error::last_os_error()
-            ));
-        }
-        // SAFETY: the API returned success and initialized the complete
-        // `BY_HANDLE_FILE_INFORMATION` value.
-        let information = unsafe { information.assume_init() };
-        Ok((
-            u64::from(information.dwVolumeSerialNumber),
-            (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow),
-        ))
+        file_identity(&file, path, description)
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -1695,6 +1773,39 @@ async fn capture_path_identity(
             path.display()
         ))
     }
+}
+
+#[cfg(windows)]
+fn file_identity(
+    file: &tokio::fs::File,
+    path: &Path,
+    description: &str,
+) -> Result<PathIdentity, String> {
+    use std::mem::MaybeUninit;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    let mut information = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    // SAFETY: `file` owns a valid handle for the duration of this call, and
+    // the output pointer refers to writable storage of the exact structure
+    // required by the Windows API.
+    let succeeded =
+        unsafe { GetFileInformationByHandle(file.as_raw_handle(), information.as_mut_ptr()) };
+    if succeeded == 0 {
+        return Err(format!(
+            "failed to identify pinned {description} {}: {}",
+            path.display(),
+            io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: the API returned success and initialized the complete
+    // `BY_HANDLE_FILE_INFORMATION` value.
+    let information = unsafe { information.assume_init() };
+    Ok((
+        u64::from(information.dwVolumeSerialNumber),
+        (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow),
+    ))
 }
 
 fn ensure_identity_unchanged(

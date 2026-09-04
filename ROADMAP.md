@@ -1309,8 +1309,11 @@ real-driver coverage remains open for the other utility-VM backends.
   Box/libkrun/firmware source revisions in `a3s.oci.windows-system-image.v1`,
   pins the manifest, image, `krun.dll`, and `libkrunfw.dll` with read-only
   Windows handles, rejects reparse paths and identity changes, and rehashes
-  every asset immediately before VM entry. The shim attaches the image as a
-  read-only virtio-blk root and exports bundle/token/recovery data only through
+  every asset immediately before VM entry. The Host also retains a no-follow
+  Windows shim handle with write/delete sharing disabled through
+  `CreateProcess`, binding its volume/file identity before launch. The shim
+  attaches the image as a read-only virtio-blk root and exports
+  bundle/token/recovery data only through
   the separate writable runtime share. These two implementation items do not
   close the parent gate until a fresh WHPX host retains the full matrix.
 - [x] Establish the named-pipe/vsock bridge.

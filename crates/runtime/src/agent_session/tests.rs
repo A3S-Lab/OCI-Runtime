@@ -1,6 +1,8 @@
 use a3s_oci_core::HostPlatform;
 use serde_json::{json, Value};
 
+#[cfg(windows)]
+use super::prepare_shim;
 use super::{
     bounded_unverified_shim_report, capture_path_identity, ensure_identity_unchanged,
     parse_shim_report, paths_overlap, require_expected_manifest_digest,
@@ -393,4 +395,37 @@ async fn executes_the_pinned_shim_after_directory_entry_replacement() {
         std::fs::read(&shim).expect("read replacement executable"),
         b"#!/bin/sh\nprintf replacement\n"
     );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn retains_the_windows_shim_entry_until_spawn_resolves_it() {
+    let directory = tempfile::tempdir().expect("create pinned-shim fixture");
+    let shim = directory.path().join("shim.exe");
+    let replacement = directory.path().join("replacement.exe");
+    let command = std::env::var_os("ComSpec").expect("Windows command interpreter path");
+    std::fs::copy(&command, &shim).expect("copy a portable executable fixture");
+    std::fs::copy(&command, &replacement).expect("copy replacement executable");
+
+    let prepared = prepare_shim(&shim, "test shim")
+        .await
+        .expect("pin the original executable");
+    assert!(
+        std::fs::rename(&replacement, &shim).is_err(),
+        "the retained handle must prevent a replacement rename"
+    );
+    assert!(
+        std::fs::OpenOptions::new().write(true).open(&shim).is_err(),
+        "the retained handle must prevent an in-place executable write"
+    );
+
+    let output = tokio::process::Command::new(prepared.command_path())
+        .args(["/C", "exit", "0"])
+        .output()
+        .await
+        .expect("execute the retained executable");
+    assert!(output.status.success());
+
+    drop(prepared);
+    std::fs::rename(&replacement, &shim).expect("replacement is possible after the pin drops");
 }
