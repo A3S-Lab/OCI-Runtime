@@ -214,11 +214,13 @@ plus the applicable native license and corresponding-source notices.
 
 The OCI Runtime build script verifies the inner archive and both extracted
 files. The macOS shim pins both extracted files with no-follow, close-on-exec
-read handles, binds their device/inode identity and digest before loading the
-absolute paths, and rechecks those handles after each load and immediately
-before VM entry. It rejects symbolic links, loads firmware before libkrun, and
-resolves only the context and VM-entry ABI it uses. A modified or replaced
-staged library is rejected before `krun_create_ctx` or VM entry.
+read handles, binds their device/inode identity and digest before loading, and
+passes each retained object to `dlopen` through its Darwin `/dev/fd/<n>` path.
+It rechecks those handles after each load and immediately before VM entry. It
+rejects symbolic links, loads firmware before libkrun, and resolves only the
+context and VM-entry ABI it uses. A modified or replaced staged library is
+therefore rejected before `krun_create_ctx` or VM entry, and a runtime-directory
+replacement cannot redirect the native loader between verification and load.
 
 The real VM-entry qualification does not add a rootfs to the runtime archive.
 CI and local qualification download the upstream Alpine 3.22.5 aarch64
