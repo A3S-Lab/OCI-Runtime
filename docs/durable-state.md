@@ -391,7 +391,10 @@ through the same durable wait cache used by a live driver. The WHPX candidate
 loads that result only from its shim-authenticated, protected report after
 matching the exact generation and durable configuration digest. The source
 report remains available across before/after recovery faults and is removed
-only with container deletion. A host-only pending marker closes the race with
+only with container deletion. Utility-VM recovery reads use a no-follow handle
+bound to the settled report device/inode, enforce the private mode and byte
+limit through the complete read, and recheck the pathname before accepting the
+decoded evidence or deleting it. A host-only pending marker closes the race with
 an old shim still publishing its report: startup waits through the bounded
 owner-death grace and returns a retryable error if it overruns. If neither a
 report nor marker exists, recovery still yields a stopped cleanup tombstone
