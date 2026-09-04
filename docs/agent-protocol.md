@@ -438,15 +438,21 @@ manifest. Bundle paths, token files, and recovery-report paths are then
 validated below the fixed guest mount rather than below the system root.
 
 macOS tests create a random private directory below `/private/tmp` with mode
-`0700`, bind a `0600` Unix socket, reject collisions and symlinks, and remove
-both entries on success, rejection, timeout, or drop. After accept, the host
-reads `LOCAL_PEERPID` and uses `proc_pidinfo(PROC_PIDTBSDINFO)` to require that
-the connected process is the direct worker child of the exact public libkrun
-shim. An unrelated peer is rejected before protocol bytes are read. A direct
-child with the wrong token is rejected during the following authentication
-step.
+`0700`, bind a `0600` Unix socket, reject collisions and symlinks, and retain
+the device/inode identity of both entries. The host rechecks those identities
+before publishing the endpoint, accepting a peer, and consuming it; cleanup
+refuses to remove a same-UID replacement entry. The original entries are
+removed on success, rejection, timeout, or drop when their identities still
+match. After accept, the host reads `LOCAL_PEERPID` and uses
+`proc_pidinfo(PROC_PIDTBSDINFO)` to require that the connected process is the
+direct worker child of the exact public libkrun shim. An unrelated peer is
+rejected before protocol bytes are read. A direct child with the wrong token
+is rejected during the following authentication step.
 
 Linux KVM uses the same one-session Unix endpoint contract below `/tmp`.
+The host pins the private directory and socket device/inode identities and
+rechecks them before token publication, peer acceptance, and cleanup; a
+replacement path is rejected and never removed by the original owner.
 `SO_PEERCRED` supplies the kernel-authenticated UID and PID, and the host reads
 that PID's procfs status to require the direct worker child of the exact shim.
 The shim itself must be the host runtime's direct child and the leader of its

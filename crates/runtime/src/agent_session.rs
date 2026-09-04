@@ -969,6 +969,11 @@ impl AgentVmSession {
             Err(error) => return Err(failed(report, error.to_string())),
         };
 
+        #[cfg(unix)]
+        if let Err(error) = listener.reverify() {
+            return Err(failed(report, error.to_string()));
+        }
+
         let encoded_token = token.expose_hex();
         let encoded_qualification = match guest_qualification
             .map(AgentTransportQualificationRequest::to_json)

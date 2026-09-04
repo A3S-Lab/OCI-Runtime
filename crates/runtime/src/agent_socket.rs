@@ -21,12 +21,15 @@ const PRIVATE_SOCKET_MODE: u32 = 0o600;
 ///
 /// The endpoint lives in a random runtime-owned directory below the platform's
 /// private temporary root. The directory and socket are removed when the
-/// listener is consumed or dropped.
+/// listener is consumed or dropped only while their retained identities still
+/// match; a replacement entry is left for its current owner.
 #[derive(Debug)]
 pub struct UnixAgentSocketListener {
     endpoint: AgentVsockEndpoint,
     directory: PathBuf,
     socket_path: PathBuf,
+    directory_identity: EntryIdentity,
+    socket_identity: EntryIdentity,
     listener: UnixListener,
     cleaned: bool,
 }
@@ -52,7 +55,6 @@ impl UnixAgentSocketListener {
             &directory,
             fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE),
         ) {
-            let _ = fs::remove_dir(&directory);
             return Err(endpoint_setup_error(
                 ErrorCode::Internal,
                 "protect-agent-socket-directory",
@@ -60,17 +62,18 @@ impl UnixAgentSocketListener {
                 error,
             ));
         }
-        if let Err(error) =
-            verify_owned_entry(&directory, EntryKind::Directory, PRIVATE_DIRECTORY_MODE)
-        {
-            let _ = fs::remove_dir(&directory);
-            return Err(error);
-        }
+        let directory_identity =
+            match verify_owned_entry(&directory, EntryKind::Directory, PRIVATE_DIRECTORY_MODE) {
+                Ok(identity) => {
+                    cleanup_guard.set_directory_identity(identity);
+                    identity
+                }
+                Err(error) => return Err(error),
+            };
 
         let listener = match UnixListener::bind(&socket_path) {
             Ok(listener) => listener,
             Err(error) => {
-                let _ = cleanup_endpoint_paths(&socket_path, &directory);
                 return Err(endpoint_setup_error(
                     collision_code(&error),
                     "bind-agent-socket",
@@ -83,7 +86,6 @@ impl UnixAgentSocketListener {
             &socket_path,
             fs::Permissions::from_mode(PRIVATE_SOCKET_MODE),
         ) {
-            let _ = cleanup_endpoint_paths(&socket_path, &directory);
             return Err(endpoint_setup_error(
                 ErrorCode::Internal,
                 "protect-agent-socket",
@@ -91,16 +93,29 @@ impl UnixAgentSocketListener {
                 error,
             ));
         }
-        if let Err(error) = verify_owned_entry(&socket_path, EntryKind::Socket, PRIVATE_SOCKET_MODE)
-        {
-            let _ = cleanup_endpoint_paths(&socket_path, &directory);
-            return Err(error);
+        let socket_identity =
+            match verify_owned_entry(&socket_path, EntryKind::Socket, PRIVATE_SOCKET_MODE) {
+                Ok(identity) => {
+                    cleanup_guard.set_socket_identity(identity);
+                    identity
+                }
+                Err(error) => return Err(error),
+            };
+        let rebound_directory_identity =
+            verify_owned_entry(&directory, EntryKind::Directory, PRIVATE_DIRECTORY_MODE)?;
+        if rebound_directory_identity != directory_identity {
+            return Err(endpoint_identity_error(
+                &directory,
+                "agent socket directory changed while the endpoint was being bound",
+            ));
         }
 
         let listener = Self {
             endpoint,
             directory,
             socket_path,
+            directory_identity,
+            socket_identity,
             listener,
             cleaned: false,
         };
@@ -126,6 +141,31 @@ impl UnixAgentSocketListener {
         &self.directory
     }
 
+    /// Recheck that the published endpoint still names the exact directory
+    /// and socket inode created by this listener.
+    pub(crate) fn reverify(&self) -> Result<()> {
+        let directory_identity = verify_owned_entry(
+            &self.directory,
+            EntryKind::Directory,
+            PRIVATE_DIRECTORY_MODE,
+        )?;
+        let socket_identity =
+            verify_owned_entry(&self.socket_path, EntryKind::Socket, PRIVATE_SOCKET_MODE)?;
+        if directory_identity != self.directory_identity {
+            return Err(endpoint_identity_error(
+                &self.directory,
+                "agent socket directory identity changed",
+            ));
+        }
+        if socket_identity != self.socket_identity {
+            return Err(endpoint_identity_error(
+                &self.socket_path,
+                "agent socket identity changed",
+            ));
+        }
+        Ok(())
+    }
+
     /// Accept only a Unix peer whose parent is the previously spawned shim.
     ///
     /// libkrun enters the VM in a direct worker child because
@@ -143,6 +183,8 @@ impl UnixAgentSocketListener {
             )
             .for_operation("accept-agent-socket"));
         }
+
+        self.reverify()?;
 
         let (stream, _) = self.listener.accept().await.map_err(|error| {
             Error::new(
@@ -169,6 +211,8 @@ impl UnixAgentSocketListener {
             .for_operation("accept-agent-socket"));
         }
 
+        self.reverify()?;
+
         self.cleanup().map_err(|error| {
             Error::new(
                 ErrorCode::Internal,
@@ -186,7 +230,12 @@ impl UnixAgentSocketListener {
         if self.cleaned {
             return Ok(());
         }
-        cleanup_endpoint_paths(&self.socket_path, &self.directory)?;
+        cleanup_owned_endpoint_paths(
+            &self.socket_path,
+            self.socket_identity,
+            &self.directory,
+            self.directory_identity,
+        )?;
         self.cleaned = true;
         Ok(())
     }
@@ -195,6 +244,8 @@ impl UnixAgentSocketListener {
 struct EndpointCleanupGuard {
     socket_path: PathBuf,
     directory: PathBuf,
+    socket_identity: Option<EntryIdentity>,
+    directory_identity: Option<EntryIdentity>,
     armed: bool,
 }
 
@@ -203,8 +254,18 @@ impl EndpointCleanupGuard {
         Self {
             socket_path: socket_path.to_path_buf(),
             directory: directory.to_path_buf(),
+            socket_identity: None,
+            directory_identity: None,
             armed: true,
         }
+    }
+
+    fn set_socket_identity(&mut self, identity: EntryIdentity) {
+        self.socket_identity = Some(identity);
+    }
+
+    fn set_directory_identity(&mut self, identity: EntryIdentity) {
+        self.directory_identity = Some(identity);
     }
 
     fn disarm(&mut self) {
@@ -215,7 +276,22 @@ impl EndpointCleanupGuard {
 impl Drop for EndpointCleanupGuard {
     fn drop(&mut self) {
         if self.armed {
-            let _ = cleanup_endpoint_paths(&self.socket_path, &self.directory);
+            if let Some(identity) = self.socket_identity {
+                let _ = remove_owned_entry(
+                    &self.socket_path,
+                    EntryKind::Socket,
+                    PRIVATE_SOCKET_MODE,
+                    identity,
+                );
+            }
+            if let Some(identity) = self.directory_identity {
+                let _ = remove_owned_entry(
+                    &self.directory,
+                    EntryKind::Directory,
+                    PRIVATE_DIRECTORY_MODE,
+                    identity,
+                );
+            }
         }
     }
 }
@@ -232,7 +308,22 @@ enum EntryKind {
     Socket,
 }
 
-fn verify_owned_entry(path: &Path, kind: EntryKind, mode: u32) -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EntryIdentity {
+    device: u64,
+    inode: u64,
+}
+
+impl EntryIdentity {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }
+    }
+}
+
+fn verify_owned_entry(path: &Path, kind: EntryKind, mode: u32) -> Result<EntryIdentity> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         endpoint_setup_error(
             ErrorCode::Internal,
@@ -280,7 +371,101 @@ fn verify_owned_entry(path: &Path, kind: EntryKind, mode: u32) -> Result<()> {
         )
         .for_operation("verify-agent-socket-entry"));
     }
-    Ok(())
+    Ok(EntryIdentity::from_metadata(&metadata))
+}
+
+fn endpoint_identity_error(path: &Path, reason: &str) -> Error {
+    Error::new(
+        ErrorCode::FailedPrecondition,
+        format!("{reason}: {}", path.display()),
+    )
+    .for_operation("verify-agent-socket-entry")
+}
+
+fn verify_cleanup_entry(
+    path: &Path,
+    kind: EntryKind,
+    mode: u32,
+    expected: EntryIdentity,
+) -> io::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let observed = EntryIdentity::from_metadata(&metadata);
+    if observed != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing to remove replaced agent endpoint entry {}",
+                path.display()
+            ),
+        ));
+    }
+    // Reuse the admission checks so a changed type, mode, or owner also
+    // prevents cleanup. The returned identity was checked above.
+    verify_owned_entry(path, kind, mode)
+        .map(|_| ())
+        .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error.to_string()))
+}
+
+fn remove_owned_entry(
+    path: &Path,
+    kind: EntryKind,
+    mode: u32,
+    expected: EntryIdentity,
+) -> io::Result<()> {
+    verify_cleanup_entry(path, kind, mode, expected)?;
+    let result = match kind {
+        EntryKind::Directory => fs::remove_dir(path),
+        EntryKind::Socket => fs::remove_file(path),
+    };
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn cleanup_owned_endpoint_paths(
+    socket_path: &Path,
+    socket_identity: EntryIdentity,
+    directory: &Path,
+    directory_identity: EntryIdentity,
+) -> io::Result<()> {
+    let socket_result = remove_owned_entry(
+        socket_path,
+        EntryKind::Socket,
+        PRIVATE_SOCKET_MODE,
+        socket_identity,
+    );
+    let directory_result = remove_owned_entry(
+        directory,
+        EntryKind::Directory,
+        PRIVATE_DIRECTORY_MODE,
+        directory_identity,
+    );
+    match (socket_result, directory_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(socket_error), Ok(())) => Err(socket_error),
+        (Ok(()), Err(directory_error)) => Err(directory_error),
+        (Err(socket_error), Err(directory_error)) => {
+            let kind = if socket_error.kind() == io::ErrorKind::PermissionDenied
+                || directory_error.kind() == io::ErrorKind::PermissionDenied
+            {
+                io::ErrorKind::PermissionDenied
+            } else {
+                io::ErrorKind::Other
+            };
+            Err(io::Error::new(
+                kind,
+                format!(
+                    "socket cleanup failed: {socket_error}; directory cleanup failed: {directory_error}"
+                ),
+            ))
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -500,27 +685,6 @@ pub type MacosAgentSocketListener = UnixAgentSocketListener;
 
 #[cfg(target_os = "linux")]
 pub type LinuxAgentSocketListener = UnixAgentSocketListener;
-
-fn cleanup_endpoint_paths(socket_path: &Path, directory: &Path) -> io::Result<()> {
-    let socket_result = match fs::remove_file(socket_path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    };
-    let directory_result = match fs::remove_dir(directory) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    };
-    match (socket_result, directory_result) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(socket_error), Ok(())) => Err(socket_error),
-        (Ok(()), Err(directory_error)) => Err(directory_error),
-        (Err(socket_error), Err(directory_error)) => Err(io::Error::other(format!(
-            "socket removal failed: {socket_error}; directory removal failed: {directory_error}"
-        ))),
-    }
-}
 
 fn collision_code(error: &io::Error) -> ErrorCode {
     if error.kind() == io::ErrorKind::AlreadyExists {

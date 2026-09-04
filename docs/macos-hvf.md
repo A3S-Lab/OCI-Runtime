@@ -344,17 +344,20 @@ The host runtime establishes the trust chain in this order:
 
 1. generate an unguessable portable endpoint name and a one-time 256-bit
    session token;
-2. atomically create `/private/tmp/<endpoint>` with mode `0700`;
-3. bind `<endpoint>/agent.sock`, set mode `0600`, and verify that both entries
-   are non-symlinks owned by the effective runtime user;
+2. atomically create `/private/tmp/<endpoint>` with mode `0700` and retain its
+   device/inode identity;
+3. bind `<endpoint>/agent.sock`, set mode `0600`, and retain its device/inode
+   identity after verifying that both entries are non-symlinks owned by the
+   effective runtime user;
 4. start the public shim as an isolated process-group leader;
 5. let the shim spawn the direct worker that owns `krun_start_enter`;
 6. accept the libkrun Unix connection and read its PID through
    `LOCAL_PEERPID`;
 7. query `PROC_PIDTBSDINFO` through `proc_pidinfo` and require that the peer's
    parent is the exact public shim PID;
-8. remove the socket and private directory while retaining the accepted
-   stream;
+8. reverify both identities, then remove only the original socket and private
+   directory while retaining the accepted stream; a replaced path is left
+   untouched;
 9. send the token only after process identity verification, negotiate protocol
    version 10, and require the static arm64 guest to advertise exactly
    `create`, `state`, `start`, `kill`, `delete`, `wait`, `exec`,
