@@ -1,11 +1,7 @@
 //! Linux guest bootstrap for the authenticated OCI agent protocol.
 
-use std::fs::OpenOptions;
-use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
-#[cfg(target_os = "linux")]
-use std::io::Write;
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 
@@ -34,6 +30,8 @@ use zeroize::Zeroizing;
 
 #[cfg(target_os = "linux")]
 mod executor;
+#[cfg(target_os = "linux")]
+mod handoff_fs;
 mod linux_device;
 mod transport_qualification;
 #[cfg(any(target_os = "linux", test))]
@@ -293,76 +291,34 @@ pub fn take_session_token_from_file() -> Result<SessionToken> {
     std::env::remove_var(AGENT_SESSION_TOKEN_FILE_ENV);
     validate_token_path(&path)?;
 
-    let mut options = OpenOptions::new();
-    options.read(true);
     #[cfg(target_os = "linux")]
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
-    }
-    let mut file = options.open(&path).map_err(|error| {
-        Error::new(
-            ErrorCode::FailedPrecondition,
-            format!(
-                "failed to open guest bootstrap token file {}: {error}",
-                path.display()
-            ),
-        )
-        .for_operation("bootstrap-guest-agent")
-    })?;
-    let metadata = file.metadata().map_err(|error| {
-        Error::new(
-            ErrorCode::FailedPrecondition,
-            format!(
-                "failed to inspect guest bootstrap token file {}: {error}",
-                path.display()
-            ),
-        )
-        .for_operation("bootstrap-guest-agent")
-    })?;
-    if !metadata.is_file() || metadata.len() != 64 {
-        return Err(Error::new(
-            ErrorCode::FailedPrecondition,
-            "guest bootstrap token file must be a regular 64-byte file",
-        )
-        .for_operation("bootstrap-guest-agent"));
-    }
-
-    let mut encoded = Zeroizing::new(String::with_capacity(64));
-    (&mut file)
-        .take(65)
-        .read_to_string(&mut encoded)
-        .map_err(|error| {
+        let encoded = handoff_fs::consume_token_file(&path).map_err(|error| {
             Error::new(
                 ErrorCode::FailedPrecondition,
                 format!(
-                    "failed to read guest bootstrap token file {}: {error}",
+                    "failed to consume guest bootstrap token file {}: {error}",
                     path.display()
                 ),
             )
             .for_operation("bootstrap-guest-agent")
         })?;
-    drop(file);
-    std::fs::remove_file(&path).map_err(|error| {
-        Error::new(
-            ErrorCode::FailedPrecondition,
-            format!(
-                "failed to unlink guest bootstrap token file {}: {error}",
-                path.display()
-            ),
-        )
-        .for_operation("bootstrap-guest-agent")
-    })?;
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::remove_dir(parent);
+        SessionToken::from_hex(encoded.as_str()).map_err(|error| {
+            Error::new(
+                error.code,
+                format!("guest bootstrap token is invalid: {error}"),
+            )
+            .for_operation("bootstrap-guest-agent")
+        })
     }
-    SessionToken::from_hex(encoded.as_str()).map_err(|error| {
-        Error::new(
-            error.code,
-            format!("guest bootstrap token is invalid: {error}"),
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err(Error::new(
+            ErrorCode::Unsupported,
+            "file-based guest bootstrap is supported only by the Linux agent",
         )
-        .for_operation("bootstrap-guest-agent")
-    })
+        .for_operation("bootstrap-guest-agent"))
+    }
 }
 
 fn validate_token_path(path: &Path) -> Result<()> {
@@ -575,60 +531,15 @@ fn write_recovery_report(
     };
     let report = AgentRecoveryReport::new(records)?.authenticate(token)?;
     let encoded = report.to_json()?;
-    let parent = path.parent().ok_or_else(invalid_recovery_report_path)?;
-    let metadata = std::fs::symlink_metadata(parent).map_err(|error| {
+    handoff_fs::write_recovery_report_file(path, &encoded).map_err(|error| {
         recovery_io_error(
-            format!(
-                "failed to inspect guest recovery directory {}: {error}",
-                parent.display()
-            ),
-            ErrorCode::FailedPrecondition,
-        )
-    })?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(recovery_io_error(
-            format!(
-                "guest recovery directory must be a real directory: {}",
-                parent.display()
-            ),
-            ErrorCode::FailedPrecondition,
-        ));
-    }
-
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options
-            .mode(0o600)
-            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
-    }
-    let mut file = options.open(path).map_err(|error| {
-        recovery_io_error(
-            format!(
-                "failed to create guest recovery report {}: {error}",
-                path.display()
-            ),
-            ErrorCode::FailedPrecondition,
-        )
-    })?;
-    let write_result = file
-        .write_all(&encoded)
-        .and_then(|()| file.sync_all())
-        .and_then(|()| std::fs::File::open(parent)?.sync_all());
-    if let Err(error) = write_result {
-        drop(file);
-        let _ = std::fs::remove_file(path);
-        return Err(recovery_io_error(
             format!(
                 "failed to commit guest recovery report {}: {error}",
                 path.display()
             ),
             ErrorCode::Internal,
-        ));
-    }
-    Ok(())
+        )
+    })
 }
 
 #[cfg(target_os = "linux")]

@@ -542,7 +542,11 @@ cleanup succeeds, it records the exact target generation, canonical
 sorted, unique, limited to 1,024 entries, encoded in at most 1 MiB, and
 authenticated with HMAC-SHA256 under the ephemeral session token. The token is
 not included in the artifact. The guest creates the fixed one-time report file
-with exclusive `0600` semantics and synchronizes both file and directory.
+with exclusive `0600` semantics through a descriptor-pinned parent directory
+and synchronizes both file and directory. The Linux agent opens the report
+using `openat` with no-follow flags, verifies its inode and bounded length
+through the live descriptor, and removes a failed-write file only when its
+original identity still names the directory entry.
 Missing or partial cleanup produces no usable report. The shim pins the
 recovery directory and `.pending` marker by device/inode on Unix (or
 volume/file identity on Windows), binds a report identity when the guest file
