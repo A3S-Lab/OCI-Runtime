@@ -1010,15 +1010,20 @@ async fn remove_private_file_bound(
             path.display()
         )));
     }
-    verified
-        .verify_path_unchanged(path)
-        .await
-        .map_err(|error| {
-            handoff_race_error(format!(
+    match verified.verify_path_unchanged(path).await {
+        Ok(()) => {}
+        // Another concurrent publisher may have consumed the exact pending
+        // name after the handle was opened.  The object is already gone, so
+        // cleanup is idempotently complete; only a replacement must remain a
+        // retryable race.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(handoff_race_error(format!(
                 "refusing to remove changed utility-VM bundle-handoff marker {} ({error})",
                 path.display()
-            ))
-        })?;
+            )))
+        }
+    }
     match tokio::fs::remove_file(path).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),

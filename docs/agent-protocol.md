@@ -477,6 +477,16 @@ executes the retained descriptor through `/proc/self/fd/<n>` on Linux or
 `/dev/fd/<n>` on macOS. Replacing the shim path after validation therefore
 cannot redirect the process that receives the authenticated session token.
 
+Host preflight canonicalization applies the same identity rule to every
+trusted path it resolves: the rootfs, system-image manifest, per-generation
+runtime shares, console parent, and recovery parent are opened without
+following their final link and compared before and after resolution. Unix
+uses the device/inode pair; Windows uses the volume serial/file index returned
+by the no-follow handle. A replacement or reparse-point race is rejected
+before a platform driver sees the path. This is a preflight fence only;
+subsystems that subsequently consume a pathname retain their own descriptor or
+handle pinning requirements.
+
 The dedicated Linux KVM path can additionally carry the internal
 `a3s.oci.agent-vm-attachments.v2` bootstrap manifest for authorized v2 raw
 storage together with a v3 TAP contract. Network-only handoff retains the

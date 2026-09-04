@@ -27,6 +27,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Hardened host-side trusted-path canonicalization. Rootfs, system-image
+  manifests, per-generation runtime shares, console parents, and recovery
+  parents now open their final component without following links and compare
+  the kernel identity before and after canonicalization (Unix device/inode or
+  Windows volume/file index). A replacement or reparse-point race therefore
+  fails closed before the path is handed to a platform driver.
+
+- Made concurrent bundle-handoff cleanup idempotent when another publisher
+  removes the exact pending marker during final path revalidation; replacement
+  markers remain retryable and are never consumed.
+
 - Hardened Unix utility-VM shim launch. The host now opens the validated shim
   without following the final path component, verifies the requested and
   canonical entries against the retained inode, and executes through the

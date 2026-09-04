@@ -2,8 +2,9 @@ use a3s_oci_core::HostPlatform;
 use serde_json::{json, Value};
 
 use super::{
-    bounded_unverified_shim_report, parse_shim_report, paths_overlap,
-    require_expected_manifest_digest, validate_vm_attachment_manifest_digest, BoundedOutput,
+    bounded_unverified_shim_report, capture_path_identity, ensure_identity_unchanged,
+    parse_shim_report, paths_overlap, require_expected_manifest_digest,
+    validate_vm_attachment_manifest_digest, BoundedOutput,
 };
 #[cfg(unix)]
 use super::{canonical_file, prepare_shim};
@@ -310,6 +311,53 @@ async fn rejects_a_symlink_before_canonicalizing_a_trusted_file() {
         .await
         .expect_err("trusted file symlink must fail closed");
     assert!(error.contains("not a symlink"));
+}
+
+#[test]
+fn canonicalization_rejects_an_identity_change() {
+    let path = std::path::Path::new("/trusted/runtime/share");
+    ensure_identity_unchanged("runtime share", path, (1, 7), (1, 7))
+        .expect("the same inode remains valid");
+
+    let error = ensure_identity_unchanged("runtime share", path, (1, 7), (1, 8))
+        .expect_err("a replacement inode must fail closed");
+    assert!(error.contains("changed while it was being canonicalized"));
+}
+
+#[tokio::test]
+async fn captures_kernel_identity_for_plain_files_and_directories() {
+    let temporary = tempfile::tempdir().expect("create identity fixture");
+    let file = temporary.path().join("manifest");
+    let directory = temporary.path().join("share");
+    tokio::fs::write(&file, b"trusted")
+        .await
+        .expect("write fixture");
+    tokio::fs::create_dir(&directory)
+        .await
+        .expect("create directory fixture");
+
+    let file_identity = capture_path_identity(&file, "identity file", true)
+        .await
+        .expect("capture file identity");
+    let canonical_file = tokio::fs::canonicalize(&file)
+        .await
+        .expect("canonicalize identity file");
+    let canonical_file_identity = capture_path_identity(&canonical_file, "identity file", true)
+        .await
+        .expect("capture canonical file identity");
+    assert_eq!(file_identity, canonical_file_identity);
+
+    let directory_identity = capture_path_identity(&directory, "identity directory", false)
+        .await
+        .expect("capture directory identity");
+    let canonical_directory = tokio::fs::canonicalize(&directory)
+        .await
+        .expect("canonicalize identity directory");
+    let canonical_directory_identity =
+        capture_path_identity(&canonical_directory, "identity directory", false)
+            .await
+            .expect("capture canonical directory identity");
+    assert_eq!(directory_identity, canonical_directory_identity);
 }
 
 #[cfg(unix)]
