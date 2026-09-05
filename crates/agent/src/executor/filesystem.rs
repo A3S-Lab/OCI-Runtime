@@ -15,7 +15,10 @@ use a3s_oci_sdk::{
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use nix::dir::Dir;
 
-use super::state::{ContainerKey, ContainerRecord, MutationKind, RecordedOutcome, RecordedRequest};
+use super::state::{
+    ContainerKey, ContainerRecord, ExecutorState, FileOperationPreparation,
+    FilesystemOperationPreparation, MutationKind, RecordedRequest,
+};
 use super::{executor_error, validate_deadline, LinuxExecutor};
 
 mod helper;
@@ -40,7 +43,6 @@ struct OpenHow {
 impl LinuxExecutor {
     pub(super) async fn file_recorded(&self, request: FileRequest) -> Result<FileResponse> {
         request.validate()?;
-        let mut state = self.state.lock().await;
         if request.op == FileOp::Upload {
             let context = request.context.as_ref().ok_or_else(|| {
                 filesystem_error(
@@ -50,31 +52,32 @@ impl LinuxExecutor {
             })?;
             let operation = RecordedRequest::new(MutationKind::File, &request)?;
             let operation_id = context.operation_id.clone();
-            if let Some(result) = state.replay_file(&operation_id, &operation) {
-                return result;
-            }
-            state.reserve_operation(&operation_id)?;
-            let result = match validate_deadline(context) {
-                Ok(()) => match container_record(&mut state, &request.target) {
-                    Ok(record) => {
-                        helper::file(
-                            self.init_executable.command_path(),
-                            record.process.execution_context(),
-                            &request,
-                        )
-                        .await
-                    }
-                    Err(error) => Err(error),
-                },
-                Err(error) => Err(error),
+            let (completion, owner) = {
+                let mut state = std::sync::Arc::clone(&self.state).lock_owned().await;
+                match state.prepare_file_operation(&operation_id, &operation)? {
+                    FileOperationPreparation::Completed(result) => return result,
+                    FileOperationPreparation::Pending(completion) => (completion, None),
+                    FileOperationPreparation::Claimed(completion) => (completion, Some(state)),
+                }
             };
-            state.record(
-                operation_id,
-                operation,
-                RecordedOutcome::File(result.clone()),
-            );
-            result
+
+            if let Some(mut state) = owner {
+                match self.init_executable.duplicate_command_path() {
+                    Ok((executable, pinned_executable)) => {
+                        tokio::spawn(async move {
+                            let result = file_mutation_new(&executable, &mut state, &request).await;
+                            complete_file_operation(&mut state, operation_id, operation, result);
+                            drop(pinned_executable);
+                        });
+                    }
+                    Err(error) => {
+                        complete_file_operation(&mut state, operation_id, operation, Err(error));
+                    }
+                }
+            }
+            wait_for_file_operation(completion).await
         } else {
+            let mut state = self.state.lock().await;
             let record = container_record(&mut state, &request.target)?;
             helper::file(
                 self.init_executable.command_path(),
@@ -90,7 +93,6 @@ impl LinuxExecutor {
         request: FilesystemRequest,
     ) -> Result<FilesystemResponse> {
         request.validate()?;
-        let mut state = self.state.lock().await;
         if request.op.is_mutating() {
             let context = request.context.as_ref().ok_or_else(|| {
                 filesystem_error(
@@ -100,31 +102,45 @@ impl LinuxExecutor {
             })?;
             let operation = RecordedRequest::new(MutationKind::Filesystem, &request)?;
             let operation_id = context.operation_id.clone();
-            if let Some(result) = state.replay_filesystem(&operation_id, &operation) {
-                return result;
-            }
-            state.reserve_operation(&operation_id)?;
-            let result = match validate_deadline(context) {
-                Ok(()) => match container_record(&mut state, &request.target) {
-                    Ok(record) => {
-                        helper::filesystem(
-                            self.init_executable.command_path(),
-                            record.process.execution_context(),
-                            &request,
-                        )
-                        .await
+            let (completion, owner) = {
+                let mut state = std::sync::Arc::clone(&self.state).lock_owned().await;
+                match state.prepare_filesystem_operation(&operation_id, &operation)? {
+                    FilesystemOperationPreparation::Completed(result) => return *result,
+                    FilesystemOperationPreparation::Pending(completion) => (completion, None),
+                    FilesystemOperationPreparation::Claimed(completion) => {
+                        (completion, Some(state))
                     }
-                    Err(error) => Err(error),
-                },
-                Err(error) => Err(error),
+                }
             };
-            state.record(
-                operation_id,
-                operation,
-                RecordedOutcome::Filesystem(result.clone()),
-            );
-            result
+
+            if let Some(mut state) = owner {
+                match self.init_executable.duplicate_command_path() {
+                    Ok((executable, pinned_executable)) => {
+                        tokio::spawn(async move {
+                            let result =
+                                filesystem_mutation_new(&executable, &mut state, &request).await;
+                            complete_filesystem_operation(
+                                &mut state,
+                                operation_id,
+                                operation,
+                                result,
+                            );
+                            drop(pinned_executable);
+                        });
+                    }
+                    Err(error) => {
+                        complete_filesystem_operation(
+                            &mut state,
+                            operation_id,
+                            operation,
+                            Err(error),
+                        );
+                    }
+                }
+            }
+            wait_for_filesystem_operation(completion).await
         } else {
+            let mut state = self.state.lock().await;
             let record = container_record(&mut state, &request.target)?;
             helper::filesystem(
                 self.init_executable.command_path(),
@@ -132,6 +148,95 @@ impl LinuxExecutor {
                 &request,
             )
             .await
+        }
+    }
+}
+
+async fn file_mutation_new(
+    executable: &Path,
+    state: &mut ExecutorState,
+    request: &FileRequest,
+) -> Result<FileResponse> {
+    let context = request.context.as_ref().ok_or_else(|| {
+        filesystem_error(
+            ErrorCode::InvalidArgument,
+            "file upload requires an operation context",
+        )
+    })?;
+    validate_deadline(context)?;
+    let record = container_record(state, &request.target)?;
+    helper::file(executable, record.process.execution_context(), request).await
+}
+
+async fn filesystem_mutation_new(
+    executable: &Path,
+    state: &mut ExecutorState,
+    request: &FilesystemRequest,
+) -> Result<FilesystemResponse> {
+    let context = request.context.as_ref().ok_or_else(|| {
+        filesystem_error(
+            ErrorCode::InvalidArgument,
+            "filesystem mutation requires an operation context",
+        )
+    })?;
+    validate_deadline(context)?;
+    let record = container_record(state, &request.target)?;
+    helper::filesystem(executable, record.process.execution_context(), request).await
+}
+
+fn complete_file_operation(
+    state: &mut ExecutorState,
+    operation_id: a3s_oci_sdk::OperationId,
+    operation: RecordedRequest,
+    result: Result<FileResponse>,
+) {
+    if let Err(error) = state.complete_file_operation(operation_id, operation, result) {
+        debug_assert!(false, "failed to complete guest file operation: {error}");
+    }
+}
+
+async fn wait_for_file_operation(
+    mut completion: tokio::sync::watch::Receiver<Option<Result<FileResponse>>>,
+) -> Result<FileResponse> {
+    loop {
+        if let Some(result) = completion.borrow_and_update().clone() {
+            return result;
+        }
+        if completion.changed().await.is_err() {
+            return Err(executor_error(
+                ErrorCode::Internal,
+                "guest file operation owner disappeared before publishing its result",
+            ));
+        }
+    }
+}
+
+fn complete_filesystem_operation(
+    state: &mut ExecutorState,
+    operation_id: a3s_oci_sdk::OperationId,
+    operation: RecordedRequest,
+    result: Result<FilesystemResponse>,
+) {
+    if let Err(error) = state.complete_filesystem_operation(operation_id, operation, result) {
+        debug_assert!(
+            false,
+            "failed to complete guest filesystem operation: {error}"
+        );
+    }
+}
+
+async fn wait_for_filesystem_operation(
+    mut completion: tokio::sync::watch::Receiver<Option<Result<FilesystemResponse>>>,
+) -> Result<FilesystemResponse> {
+    loop {
+        if let Some(result) = completion.borrow_and_update().clone() {
+            return result;
+        }
+        if completion.changed().await.is_err() {
+            return Err(executor_error(
+                ErrorCode::Internal,
+                "guest filesystem operation owner disappeared before publishing its result",
+            ));
         }
     }
 }
