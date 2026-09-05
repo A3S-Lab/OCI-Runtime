@@ -3,6 +3,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
+
+use tokio::sync::Notify;
 
 use super::{
     AgentDriverClient, DriverCreateRequest, DriverDeleteRequest, LaunchedUtilityVm, RuntimeDriver,
@@ -287,11 +290,26 @@ impl UtilityVmOwner for FakeOwner {
     }
 }
 
+struct LaunchBarrier {
+    started: Notify,
+    release: Notify,
+}
+
+impl LaunchBarrier {
+    fn new() -> Self {
+        Self {
+            started: Notify::new(),
+            release: Notify::new(),
+        }
+    }
+}
+
 struct FakeFactory {
     launches: AtomicUsize,
     launch_shares: StdMutex<Vec<PathBuf>>,
     launch_contracts: StdMutex<Vec<CreateAttachments>>,
     next_launch_failure: StdMutex<Option<Error>>,
+    launch_barrier: StdMutex<Option<Arc<LaunchBarrier>>>,
     guest: Arc<FakeGuest>,
     owner: Arc<FakeOwner>,
 }
@@ -302,6 +320,12 @@ impl FakeFactory {
             .next_launch_failure
             .lock()
             .expect("launch failure lock") = Some(error);
+    }
+
+    fn block_next_launch(&self) -> Arc<LaunchBarrier> {
+        let barrier = Arc::new(LaunchBarrier::new());
+        *self.launch_barrier.lock().expect("launch barrier lock") = Some(Arc::clone(&barrier));
+        barrier
     }
 }
 
@@ -317,6 +341,15 @@ impl UtilityVmFactory for FakeFactory {
             .lock()
             .expect("launch contracts lock")
             .push(request.attachment_contract.clone());
+        let launch_barrier = self
+            .launch_barrier
+            .lock()
+            .expect("launch barrier lock")
+            .take();
+        if let Some(barrier) = launch_barrier {
+            barrier.started.notify_one();
+            barrier.release.notified().await;
+        }
         if let Some(error) = self
             .next_launch_failure
             .lock()
@@ -414,6 +447,7 @@ impl Fixture {
             launch_shares: StdMutex::new(Vec::new()),
             launch_contracts: StdMutex::new(Vec::new()),
             next_launch_failure: StdMutex::new(None),
+            launch_barrier: StdMutex::new(None),
             guest: guest.clone(),
             owner: owner.clone(),
         });
@@ -567,6 +601,7 @@ pub(crate) async fn shutdown_fixture(
         launch_shares: StdMutex::new(Vec::new()),
         launch_contracts: StdMutex::new(Vec::new()),
         next_launch_failure: StdMutex::new(None),
+        launch_barrier: StdMutex::new(None),
         guest: guest.clone(),
         owner: owner.clone(),
     });
@@ -862,6 +897,12 @@ async fn graceful_shutdown_is_bounded_to_one_owner_and_exposes_stopped_cleanup()
         .expect("idempotent shutdown");
     assert_eq!(fixture.owner.shutdown_calls.load(Ordering::Relaxed), 1);
     assert_eq!(fixture.driver.active_session_count().await, 0);
+    let rejected = fixture
+        .driver
+        .create(fixture.handoff_request("create-after-shutdown"))
+        .await
+        .expect_err("create must be fenced after driver shutdown");
+    assert_eq!(rejected.code, ErrorCode::FailedPrecondition);
     assert_eq!(
         fixture
             .driver
@@ -888,4 +929,41 @@ async fn graceful_shutdown_is_bounded_to_one_owner_and_exposes_stopped_cleanup()
         .await
         .expect("delete stopped tombstone");
     assert!(!fixture.generation_share().exists());
+}
+
+#[tokio::test]
+async fn shutdown_waits_for_an_in_flight_launch_before_snapshotting_guests() {
+    let fixture = Fixture::new();
+    let launch_barrier = fixture.factory.block_next_launch();
+    let request = fixture
+        .stage(fixture.handoff_request("shutdown-race"))
+        .await;
+    let driver = Arc::new(fixture.driver);
+
+    let create_driver = Arc::clone(&driver);
+    let create_task = tokio::spawn(async move { create_driver.create(request).await });
+    // Notify is permit-based, so this cannot miss a launch that happened just
+    // before the waiter was scheduled.
+    launch_barrier.started.notified().await;
+
+    let shutdown_driver = Arc::clone(&driver);
+    let shutdown_task = tokio::spawn(async move { shutdown_driver.shutdown().await });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(
+        !shutdown_task.is_finished(),
+        "shutdown must wait for an in-flight launch instead of taking an empty snapshot"
+    );
+
+    launch_barrier.release.notify_one();
+    create_task
+        .await
+        .expect("create task join")
+        .expect("create during shutdown race");
+    shutdown_task
+        .await
+        .expect("shutdown task join")
+        .expect("shutdown after in-flight launch");
+    assert_eq!(fixture.factory.launches.load(Ordering::Relaxed), 1);
+    assert_eq!(fixture.owner.shutdown_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(driver.active_session_count().await, 0);
 }

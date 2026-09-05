@@ -12,7 +12,7 @@ use a3s_oci_sdk::{
     GuestSessionReset, OciBundle, OperationId, OutputChunk, ProcessRecord, Result,
     RuntimeOperation, RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
 
 use crate::agent_driver::{AgentDriverClient, AGENT_DRIVER_HOOKS, AGENT_DRIVER_OPERATIONS};
@@ -67,6 +67,10 @@ pub(crate) struct UtilityVmRuntimeDriver {
     recovery: RecoveryStore,
     handoff: BundleHandoffStore,
     factory: Arc<dyn UtilityVmFactory>,
+    /// Coordinates owner shutdown with all operations that can touch a guest.
+    /// Read guards may run concurrently; shutdown takes the exclusive write
+    /// guard so its guest snapshot cannot race a launch or registry mutation.
+    lifecycle: RwLock<bool>,
     sessions: Mutex<UtilityVmRegistry>,
     create_gates: Mutex<BTreeMap<ContainerId, Weak<Mutex<()>>>>,
     session_gates: Mutex<BTreeMap<GuestSessionId, Weak<Mutex<()>>>>,
@@ -121,6 +125,7 @@ impl UtilityVmRuntimeDriver {
             recovery,
             handoff,
             factory,
+            lifecycle: RwLock::new(false),
             sessions: Mutex::new(UtilityVmRegistry::default()),
             create_gates: Mutex::new(BTreeMap::new()),
             session_gates: Mutex::new(BTreeMap::new()),
@@ -129,6 +134,12 @@ impl UtilityVmRuntimeDriver {
 
     /// Close every live guest connection and reap each driver-owned VM once.
     pub async fn shutdown(&self) -> Result<()> {
+        // Keep the exclusive guard until all owners have been stopped and the
+        // registry has been converted to exact stopped tombstones. A create
+        // already in progress therefore finishes before this snapshot, while
+        // any later create is rejected by `enter_operation`.
+        let mut lifecycle = self.lifecycle.write().await;
+        *lifecycle = true;
         let guests = {
             let mut sessions = self.sessions.lock().await;
             // A graceful owner shutdown invalidates any in-flight admission;
@@ -181,7 +192,24 @@ impl UtilityVmRuntimeDriver {
 
     /// Number of driver-owned utility VMs, including retained empty sessions.
     pub async fn active_session_count(&self) -> usize {
+        let _lifecycle = self.lifecycle.read().await;
         self.sessions.lock().await.active_guest_count()
+    }
+
+    async fn enter_operation(
+        &self,
+        operation: &'static str,
+        reject_closed: bool,
+    ) -> Result<tokio::sync::RwLockReadGuard<'_, bool>> {
+        let lifecycle = self.lifecycle.read().await;
+        if reject_closed && *lifecycle {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                format!("{} utility-VM driver has been shut down", self.backend_name),
+            )
+            .for_operation(operation));
+        }
+        Ok(lifecycle)
     }
 }
 
@@ -208,6 +236,9 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn acknowledge_operation(&self, operation_id: &OperationId) -> Result<()> {
+        let _lifecycle = self
+            .enter_operation("utility-vm-acknowledge-operation", false)
+            .await?;
         let guests = self.sessions.lock().await.live_guests();
         for guest in guests {
             guest.client.acknowledge_operation(operation_id).await?;
@@ -216,6 +247,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn prepare_create_bundle(&self, request: &DriverCreateRequest) -> Result<OciBundle> {
+        let _lifecycle = self.enter_operation("utility-vm-create", true).await?;
         self.validate_create_contract(request)?;
         let gate = self.create_gate_for(&request.target.id).await;
         let _guard = gate.lock().await;
@@ -251,6 +283,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn recover(&self, record: &ContainerRecord) -> Result<crate::DriverRecovery> {
+        let _lifecycle = self.enter_operation("utility-vm-recover", true).await?;
         let target =
             ContainerTarget::exact(ContainerId::new(record.state.id())?, record.generation);
         let guest_session = record.guest_session.as_ref();
@@ -369,6 +402,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {
+        let _lifecycle = self.enter_operation("utility-vm-create", true).await?;
         self.validate_create_contract(&request)?;
         let guest_session = request.attachment_contract.guest_session().cloned();
         let guest_directory = self
@@ -474,6 +508,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn state(&self, target: ContainerTarget) -> Result<DriverState> {
+        let _lifecycle = self.enter_operation("utility-vm-state", false).await?;
         match self.attachment_for(&target, "utility-vm-state").await? {
             UtilityVmAttachment::Live(container) => container.guest.client.state(target).await,
             UtilityVmAttachment::RecoveredStopped { .. } => Ok(DriverState::stopped()),
@@ -481,6 +516,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn start(&self, request: DriverStartRequest) -> Result<DriverState> {
+        let _lifecycle = self.enter_operation("utility-vm-start", false).await?;
         self.live_session_for(&request.target, "utility-vm-start")
             .await?
             .guest
@@ -490,6 +526,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn kill(&self, request: DriverKillRequest) -> Result<DriverState> {
+        let _lifecycle = self.enter_operation("utility-vm-kill", false).await?;
         match self
             .attachment_for(&request.target, "utility-vm-kill")
             .await?
@@ -500,6 +537,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn delete(&self, request: DriverDeleteRequest) -> Result<()> {
+        let _lifecycle = self.enter_operation("utility-vm-delete", false).await?;
         let initial = self
             .attachment_for(&request.target, "utility-vm-delete")
             .await?;
@@ -622,6 +660,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn wait(&self, request: DriverWaitRequest) -> Result<ExitStatus> {
+        let _lifecycle = self.enter_operation("utility-vm-wait", false).await?;
         match self
             .attachment_for(&request.target, "utility-vm-wait")
             .await?
@@ -638,6 +677,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn exec(&self, request: DriverExecRequest) -> Result<DriverProcess> {
+        let _lifecycle = self.enter_operation("utility-vm-exec", false).await?;
         self.live_session_for(&request.target.container, "utility-vm-exec")
             .await?
             .guest
@@ -647,6 +687,9 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn signal_process(&self, request: DriverSignalProcessRequest) -> Result<()> {
+        let _lifecycle = self
+            .enter_operation("utility-vm-signal-process", false)
+            .await?;
         self.live_session_for(&request.target.container, "utility-vm-signal-process")
             .await?
             .guest
@@ -656,6 +699,9 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn wait_process(&self, request: DriverWaitProcessRequest) -> Result<ExitStatus> {
+        let _lifecycle = self
+            .enter_operation("utility-vm-wait-process", false)
+            .await?;
         self.live_session_for(&request.target.container, "utility-vm-wait-process")
             .await?
             .guest
@@ -665,6 +711,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn pause(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
+        let _lifecycle = self.enter_operation("utility-vm-pause", false).await?;
         self.live_session_for(&request.target, "utility-vm-pause")
             .await?
             .guest
@@ -674,6 +721,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn resume(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
+        let _lifecycle = self.enter_operation("utility-vm-resume", false).await?;
         self.live_session_for(&request.target, "utility-vm-resume")
             .await?
             .guest
@@ -683,6 +731,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn processes(&self, target: ContainerTarget) -> Result<Vec<ProcessRecord>> {
+        let _lifecycle = self.enter_operation("utility-vm-processes", false).await?;
         match self.attachment_for(&target, "utility-vm-processes").await? {
             UtilityVmAttachment::Live(container) => container.guest.client.processes(target).await,
             UtilityVmAttachment::RecoveredStopped { .. } => Ok(Vec::new()),
@@ -690,6 +739,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn update(&self, request: DriverUpdateRequest) -> Result<DriverState> {
+        let _lifecycle = self.enter_operation("utility-vm-update", false).await?;
         self.live_session_for(&request.target, "utility-vm-update")
             .await?
             .guest
@@ -699,6 +749,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn stats(&self, target: ContainerTarget) -> Result<ContainerStats> {
+        let _lifecycle = self.enter_operation("utility-vm-stats", false).await?;
         self.live_session_for(&target, "utility-vm-stats")
             .await?
             .guest
@@ -708,6 +759,9 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn read_output(&self, request: DriverReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        let _lifecycle = self
+            .enter_operation("utility-vm-read-output", false)
+            .await?;
         self.live_session_for(&request.target.container, "utility-vm-read-output")
             .await?
             .guest
@@ -717,6 +771,9 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn write_stdin(&self, request: DriverWriteStdinRequest) -> Result<()> {
+        let _lifecycle = self
+            .enter_operation("utility-vm-write-stdin", false)
+            .await?;
         self.live_session_for(&request.target.container, "utility-vm-write-stdin")
             .await?
             .guest
@@ -726,6 +783,9 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn close_stdin(&self, request: DriverCloseStdinRequest) -> Result<()> {
+        let _lifecycle = self
+            .enter_operation("utility-vm-close-stdin", false)
+            .await?;
         self.live_session_for(&request.target.container, "utility-vm-close-stdin")
             .await?
             .guest
@@ -735,6 +795,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn resize(&self, request: DriverResizeRequest) -> Result<()> {
+        let _lifecycle = self.enter_operation("utility-vm-resize", false).await?;
         self.live_session_for(&request.target.container, "utility-vm-resize")
             .await?
             .guest
@@ -744,6 +805,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn file(&self, request: FileRequest) -> Result<FileResponse> {
+        let _lifecycle = self.enter_operation("utility-vm-file", false).await?;
         self.live_session_for(&request.target, "utility-vm-file")
             .await?
             .guest
@@ -753,6 +815,7 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
     }
 
     async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        let _lifecycle = self.enter_operation("utility-vm-filesystem", false).await?;
         self.live_session_for(&request.target, "utility-vm-filesystem")
             .await?
             .guest
