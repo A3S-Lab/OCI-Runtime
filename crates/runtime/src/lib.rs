@@ -44,6 +44,7 @@ mod agent_smoke_process;
     )
 ))]
 mod agent_socket;
+mod async_cleanup;
 mod box_whpx_service;
 mod cleanup_report;
 mod driver;

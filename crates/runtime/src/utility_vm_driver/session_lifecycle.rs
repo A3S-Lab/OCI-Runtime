@@ -340,6 +340,12 @@ impl UtilityVmRuntimeDriver {
             let guest = self
                 .launch_guest(target, bundle, guest_bundle, attachment_contract)
                 .await?;
+            let cleanup_guest = Arc::clone(&guest);
+            let mut launch_cleanup = super::DetachedAsyncCleanup::new(move || async move {
+                if let Err(error) = super::shutdown_guest(&cleanup_guest).await {
+                    eprintln!("a3s-oci-runtime: cancelled guest launch cleanup failed: {error}");
+                }
+            });
             let container = Arc::new(UtilityVmContainer {
                 target: target.clone(),
                 guest_session: None,
@@ -349,6 +355,7 @@ impl UtilityVmRuntimeDriver {
                 target.id.clone(),
                 UtilityVmAttachment::Live(Arc::clone(&container)),
             );
+            launch_cleanup.disarm();
             return Ok(container);
         };
 
@@ -425,6 +432,12 @@ impl UtilityVmRuntimeDriver {
         let guest = self
             .launch_guest(target, bundle, guest_bundle, attachment_contract)
             .await?;
+        let cleanup_guest = Arc::clone(&guest);
+        let mut launch_cleanup = super::DetachedAsyncCleanup::new(move || async move {
+            if let Err(error) = super::shutdown_guest(&cleanup_guest).await {
+                eprintln!("a3s-oci-runtime: cancelled guest launch cleanup failed: {error}");
+            }
+        });
         let container = Arc::new(UtilityVmContainer {
             target: target.clone(),
             guest_session: Some(binding.clone()),
@@ -439,6 +452,7 @@ impl UtilityVmRuntimeDriver {
             target.id.clone(),
             UtilityVmAttachment::Live(Arc::clone(&container)),
         );
+        launch_cleanup.disarm();
         Ok(container)
     }
 
