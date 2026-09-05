@@ -578,7 +578,55 @@ pub fn run_macos_vm_smoke_worker(
     console: &Path,
     marker_name: &str,
 ) -> bool {
-    macos_vm_smoke::run_worker(system_image_manifest, runtime_share, console, marker_name)
+    let runtime_share_identity = match macos_runtime_share_identity(runtime_share) {
+        Some(identity) => identity,
+        None => return false,
+    };
+    run_macos_vm_smoke_worker_with_runtime_share_identity(
+        system_image_manifest,
+        runtime_share,
+        console,
+        marker_name,
+        Some(runtime_share_identity),
+    )
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn macos_runtime_share_identity(path: &Path) -> Option<(u64, u64)> {
+    macos_runtime_share::MacosRuntimeShare::open(path)
+        .ok()
+        .map(|share| share.identity())
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn macos_runtime_share_identities(path: &Path) -> Option<((u64, u64), (u64, u64))> {
+    let mut share = macos_runtime_share::MacosRuntimeShare::open(path).ok()?;
+    share.require_state_directory().ok()?;
+    Some((share.identity(), share.state_identity()?))
+}
+
+/// Run the private macOS VM-entry worker while binding its runtime share to a
+/// directory identity captured by the launching process.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[doc(hidden)]
+#[must_use]
+pub fn run_macos_vm_smoke_worker_with_runtime_share_identity(
+    system_image_manifest: &Path,
+    runtime_share: &Path,
+    console: &Path,
+    marker_name: &str,
+    runtime_share_identity: Option<(u64, u64)>,
+) -> bool {
+    let Some(runtime_share_identity) = runtime_share_identity else {
+        return false;
+    };
+    macos_vm_smoke::run_worker(
+        system_image_manifest,
+        runtime_share,
+        console,
+        marker_name,
+        Some(runtime_share_identity),
+    )
 }
 
 /// Private macOS guest-agent worker handoff.
@@ -587,6 +635,8 @@ pub fn run_macos_vm_smoke_worker(
 pub struct MacosAgentVmWorkerHandoff<'a> {
     system_image_manifest: &'a Path,
     runtime_share: &'a Path,
+    runtime_share_identity: Option<(u64, u64)>,
+    runtime_state_identity: Option<(u64, u64)>,
     guest_token_file: &'a str,
     console: &'a Path,
     console_identity: Option<(u64, u64)>,
@@ -609,6 +659,8 @@ impl<'a> MacosAgentVmWorkerHandoff<'a> {
         Self {
             system_image_manifest,
             runtime_share,
+            runtime_share_identity: None,
+            runtime_state_identity: None,
             guest_token_file,
             console,
             console_identity: None,
@@ -621,6 +673,22 @@ impl<'a> MacosAgentVmWorkerHandoff<'a> {
     #[must_use]
     pub const fn with_console_identity(mut self, device: u64, inode: u64) -> Self {
         self.console_identity = Some((device, inode));
+        self
+    }
+
+    /// Bind the worker to the exact runtime-share directory opened by its
+    /// launching process.
+    #[must_use]
+    pub const fn with_runtime_share_identity(mut self, device: u64, inode: u64) -> Self {
+        self.runtime_share_identity = Some((device, inode));
+        self
+    }
+
+    /// Bind the worker to the exact `run/` state directory opened by its
+    /// launching process.
+    #[must_use]
+    pub const fn with_runtime_state_identity(mut self, device: u64, inode: u64) -> Self {
+        self.runtime_state_identity = Some((device, inode));
         self
     }
 
@@ -648,6 +716,8 @@ pub fn run_macos_agent_vm_worker_handoff(handoff: MacosAgentVmWorkerHandoff<'_>)
     let MacosAgentVmWorkerHandoff {
         system_image_manifest,
         runtime_share,
+        runtime_share_identity,
+        runtime_state_identity,
         guest_token_file,
         console,
         console_identity,
@@ -655,9 +725,16 @@ pub fn run_macos_agent_vm_worker_handoff(handoff: MacosAgentVmWorkerHandoff<'_>)
         guest_recovery_report,
         transport_qualification,
     } = handoff;
+    let (Some(runtime_share_identity), Some(runtime_state_identity)) =
+        (runtime_share_identity, runtime_state_identity)
+    else {
+        return false;
+    };
     macos_agent_smoke::run_worker(macos_agent_smoke::MacosAgentVmWorkerConfig {
         system_image_manifest,
         runtime_share,
+        runtime_share_identity: Some(runtime_share_identity),
+        runtime_state_identity: Some(runtime_state_identity),
         guest_token_file,
         console,
         console_identity,
@@ -682,6 +759,11 @@ pub fn run_macos_agent_vm_worker(
     guest_recovery_report: Option<&str>,
     transport_qualification: Option<&a3s_oci_agent_protocol::AgentTransportQualificationRequest>,
 ) -> bool {
+    let (runtime_share_identity, runtime_state_identity) =
+        match macos_runtime_share_identities(runtime_share) {
+            Some(identities) => identities,
+            None => return false,
+        };
     run_macos_agent_vm_worker_handoff(
         MacosAgentVmWorkerHandoff::new(
             system_image_manifest,
@@ -690,6 +772,8 @@ pub fn run_macos_agent_vm_worker(
             console,
             socket,
         )
+        .with_runtime_share_identity(runtime_share_identity.0, runtime_share_identity.1)
+        .with_runtime_state_identity(runtime_state_identity.0, runtime_state_identity.1)
         .with_guest_recovery_report(guest_recovery_report)
         .with_transport_qualification(transport_qualification),
     )
@@ -703,6 +787,8 @@ pub fn run_macos_agent_vm_worker(
 pub struct LinuxAgentVmWorkerHandoff<'a> {
     system_image_manifest: &'a Path,
     runtime_share: &'a Path,
+    runtime_share_identity: Option<(u64, u64)>,
+    runtime_state_identity: Option<(u64, u64)>,
     guest_token_file: &'a str,
     console: &'a Path,
     console_identity: Option<(u64, u64)>,
@@ -731,6 +817,8 @@ impl<'a> LinuxAgentVmWorkerHandoff<'a> {
         Self {
             system_image_manifest,
             runtime_share,
+            runtime_share_identity: None,
+            runtime_state_identity: None,
             guest_token_file,
             console,
             console_identity: None,
@@ -747,6 +835,22 @@ impl<'a> LinuxAgentVmWorkerHandoff<'a> {
     #[must_use]
     pub const fn with_console_identity(mut self, device: u64, inode: u64) -> Self {
         self.console_identity = Some((device, inode));
+        self
+    }
+
+    /// Bind the worker to the exact runtime-share directory opened by its
+    /// launching process.
+    #[must_use]
+    pub const fn with_runtime_share_identity(mut self, device: u64, inode: u64) -> Self {
+        self.runtime_share_identity = Some((device, inode));
+        self
+    }
+
+    /// Bind the worker to the exact `run/` state directory opened by its
+    /// launching process.
+    #[must_use]
+    pub const fn with_runtime_state_identity(mut self, device: u64, inode: u64) -> Self {
+        self.runtime_state_identity = Some((device, inode));
         self
     }
 
@@ -801,6 +905,8 @@ pub fn run_linux_agent_vm_worker_handoff(handoff: LinuxAgentVmWorkerHandoff<'_>)
     let LinuxAgentVmWorkerHandoff {
         system_image_manifest,
         runtime_share,
+        runtime_share_identity,
+        runtime_state_identity,
         guest_token_file,
         console,
         console_identity,
@@ -811,9 +917,16 @@ pub fn run_linux_agent_vm_worker_handoff(handoff: LinuxAgentVmWorkerHandoff<'_>)
         qualify_kvm_post_probe_failure,
         qualify_kvm_compatibility_drift,
     } = handoff;
+    let (Some(runtime_share_identity), Some(runtime_state_identity)) =
+        (runtime_share_identity, runtime_state_identity)
+    else {
+        return false;
+    };
     linux_agent_smoke::run_worker(linux_agent_smoke::LinuxAgentVmWorkerConfig {
         system_image_manifest,
         runtime_share,
+        runtime_share_identity: Some(runtime_share_identity),
+        runtime_state_identity: Some(runtime_state_identity),
         guest_token_file,
         console,
         console_identity,
@@ -824,6 +937,15 @@ pub fn run_linux_agent_vm_worker_handoff(handoff: LinuxAgentVmWorkerHandoff<'_>)
         qualify_kvm_post_probe_failure,
         qualify_kvm_compatibility_drift,
     })
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn linux_runtime_share_identities(path: &Path) -> Option<((u64, u64), (u64, u64))> {
+    let share = linux_runtime_share::LinuxRuntimeShare::open(path).ok()?;
+    Some((share.identity(), share.state_identity()))
 }
 
 /// Run the private Linux KVM guest-agent VM worker.
@@ -844,6 +966,11 @@ pub fn run_linux_agent_vm_worker(
     guest_recovery_report: Option<&str>,
     transport_qualification: Option<&a3s_oci_agent_protocol::AgentTransportQualificationRequest>,
 ) -> bool {
+    let (runtime_share_identity, runtime_state_identity) =
+        match linux_runtime_share_identities(runtime_share) {
+            Some(identities) => identities,
+            None => return false,
+        };
     run_linux_agent_vm_worker_handoff(
         LinuxAgentVmWorkerHandoff::new(
             system_image_manifest,
@@ -852,6 +979,8 @@ pub fn run_linux_agent_vm_worker(
             console,
             socket,
         )
+        .with_runtime_share_identity(runtime_share_identity.0, runtime_share_identity.1)
+        .with_runtime_state_identity(runtime_state_identity.0, runtime_state_identity.1)
         .with_guest_recovery_report(guest_recovery_report)
         .with_transport_qualification(transport_qualification),
     )
@@ -876,6 +1005,11 @@ pub fn run_linux_agent_vm_worker_with_kvm_post_probe_failure(
     guest_recovery_report: Option<&str>,
     transport_qualification: Option<&a3s_oci_agent_protocol::AgentTransportQualificationRequest>,
 ) -> bool {
+    let (runtime_share_identity, runtime_state_identity) =
+        match linux_runtime_share_identities(runtime_share) {
+            Some(identities) => identities,
+            None => return false,
+        };
     run_linux_agent_vm_worker_handoff(
         LinuxAgentVmWorkerHandoff::new(
             system_image_manifest,
@@ -884,6 +1018,8 @@ pub fn run_linux_agent_vm_worker_with_kvm_post_probe_failure(
             console,
             socket,
         )
+        .with_runtime_share_identity(runtime_share_identity.0, runtime_share_identity.1)
+        .with_runtime_state_identity(runtime_state_identity.0, runtime_state_identity.1)
         .with_guest_recovery_report(guest_recovery_report)
         .with_transport_qualification(transport_qualification)
         .with_kvm_post_probe_failure(),
@@ -909,6 +1045,11 @@ pub fn run_linux_agent_vm_worker_with_compatibility_drift(
     guest_recovery_report: Option<&str>,
     case: &str,
 ) -> bool {
+    let (runtime_share_identity, runtime_state_identity) =
+        match linux_runtime_share_identities(runtime_share) {
+            Some(identities) => identities,
+            None => return false,
+        };
     run_linux_agent_vm_worker_handoff(
         LinuxAgentVmWorkerHandoff::new(
             system_image_manifest,
@@ -917,6 +1058,8 @@ pub fn run_linux_agent_vm_worker_with_compatibility_drift(
             console,
             socket,
         )
+        .with_runtime_share_identity(runtime_share_identity.0, runtime_share_identity.1)
+        .with_runtime_state_identity(runtime_state_identity.0, runtime_state_identity.1)
         .with_guest_recovery_report(guest_recovery_report)
         .with_kvm_compatibility_drift(case),
     )

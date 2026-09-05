@@ -100,7 +100,13 @@ directory entry. The shim rechecks the path and retained device/inode before att
 and immediately before `krun_start_enter`; the guest-agent path additionally
 pins and rechecks its direct `run/` state child. Symlink, replacement, type,
 owner, and permission changes are rejected with the
-`verify-macos-runtime-share` operation.
+`verify-macos-runtime-share` operation. The parent process also carries the
+captured share and required `run/` state identities through the hidden worker
+handoff, so a replacement at either pathname is rejected before the worker can
+configure libkrun.
+When the worker creates a console itself (outside a Host reservation), its
+descriptor guard removes only that identity on failure; a replacement entry
+is never removed.
 
 ## Linux KVM writable runtime state
 
@@ -109,7 +115,10 @@ required `run/` child in addition to the descriptor-pinned generation root.
 Admission and the final VM-entry check compare both the path and descriptor
 device/inode identities, type, owner, and mode. Replacing or relaxing the
 state directory therefore fails before the guest can observe a different
-runtime-state namespace.
+runtime-state namespace. The isolated worker additionally requires the
+device/inode identities captured by its parent for both the generation root and
+the `run/` state child; a missing or mismatched handoff is rejected before KVM
+device access.
 
 ## Windows x86_64
 
