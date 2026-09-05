@@ -1,12 +1,11 @@
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Duration;
 
 use a3s_oci_agent_protocol::{
     AgentExecRequest, AgentProcess, AgentSignalProcessRequest, AgentWaitProcessRequest,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{ErrorCode, ExitStatus, OperationId, Result};
+use a3s_oci_sdk::{ErrorCode, ExitStatus, Result};
 use tokio::time::{sleep, Instant};
 
 use super::exec_process::ExecProcess;
@@ -25,30 +24,35 @@ impl LinuxExecutor {
     pub(super) async fn exec_recorded(&self, request: AgentExecRequest) -> Result<AgentProcess> {
         let operation = RecordedRequest::new(MutationKind::Exec, &request)?;
         let operation_id = request.context.operation_id.clone();
-        let (completion, claimed) = {
-            let mut state = self.state.lock().await;
+        let (completion, owner) = {
+            let mut state = std::sync::Arc::clone(&self.state).lock_owned().await;
             match state.prepare_process_operation(&operation_id, &operation)? {
                 ProcessOperationPreparation::Completed(result) => return result,
-                ProcessOperationPreparation::Pending(completion) => (completion, false),
-                ProcessOperationPreparation::Claimed(completion) => (completion, true),
+                ProcessOperationPreparation::Pending(completion) => (completion, None),
+                ProcessOperationPreparation::Claimed(completion) => (completion, Some(state)),
             }
         };
 
         // The process launch owns a reserved journal claim.  Run that claim
         // independently of the request waiter so cancellation cannot drop a
         // successfully spawned process before it is published into executor
-        // state.  Retries join the same watch channel and replay the exact
-        // recorded result once the owner task finishes.
-        if claimed {
-            let state = Arc::clone(&self.state);
+        // state.  Retries either observe the pending claim during handoff or
+        // serialize behind the owner guard, then replay the exact recorded
+        // result once the owner task finishes.
+        if let Some(mut state) = owner {
             match self.init_executable.duplicate_command_path() {
                 Ok((init_executable, pinned_executable)) => {
                     tokio::spawn(async move {
-                        let result = {
-                            let mut state = state.lock().await;
-                            LinuxExecutor::exec_new(&init_executable, &mut state, &request).await
-                        };
-                        complete_process_operation(state, operation_id, operation, result).await;
+                        let result =
+                            LinuxExecutor::exec_new(&init_executable, &mut state, &request).await;
+                        if let Err(error) =
+                            state.complete_process_operation(operation_id, operation, result)
+                        {
+                            debug_assert!(
+                                false,
+                                "failed to complete guest process operation: {error}"
+                            );
+                        }
                         // Keep the duplicated descriptor open until the
                         // journal claim is complete.  Otherwise `/proc/self`
                         // may recycle the descriptor while `Command::new`
@@ -59,13 +63,13 @@ impl LinuxExecutor {
                 Err(error) => {
                     // A claim must always reach a terminal journal state,
                     // including failures before the detached task can start.
-                    // Publish that failure from a detached task as well, so
-                    // cancellation cannot strand the claim while awaiting the
-                    // state mutex.
-                    tokio::spawn(async move {
-                        complete_process_operation(state, operation_id, operation, Err(error))
-                            .await;
-                    });
+                    // The owner guard is still held, so this synchronous
+                    // publication cannot be interrupted with a live claim.
+                    if let Err(error) =
+                        state.complete_process_operation(operation_id, operation, Err(error))
+                    {
+                        debug_assert!(false, "failed to complete guest process operation: {error}");
+                    }
                 }
             }
         }
@@ -356,22 +360,6 @@ impl LinuxExecutor {
             )?;
             sleep(delay).await;
         }
-    }
-}
-
-async fn complete_process_operation(
-    state: Arc<tokio::sync::Mutex<ExecutorState>>,
-    operation_id: OperationId,
-    operation: RecordedRequest,
-    result: Result<AgentProcess>,
-) {
-    let mut state = state.lock().await;
-    if let Err(error) = state.complete_process_operation(operation_id, operation, result) {
-        // The claim and request were validated before the detached process
-        // launch began; reaching this branch means the executor journal is
-        // corrupt.  Dropping the sender wakes every waiter with a bounded
-        // internal error instead of leaving the request hung forever.
-        debug_assert!(false, "failed to complete guest process operation: {error}");
     }
 }
 

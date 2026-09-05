@@ -167,6 +167,31 @@ impl BundleDirectoryScope {
             )?,
         }))
     }
+
+    /// Duplicate the scope descriptor for a detached create operation.
+    ///
+    /// The scope is immutable after executor construction, but a create
+    /// request may outlive its caller.  Retaining an independent protected
+    /// descriptor keeps the utility-VM bundle authority valid until the
+    /// detached operation has committed or rolled back.
+    pub(super) fn duplicate_for_detached(&self) -> Result<Self> {
+        match self {
+            Self::Unrestricted => Ok(Self::Unrestricted),
+            Self::UtilityVm {
+                share_root,
+                state_name,
+                share,
+            } => Ok(Self::UtilityVm {
+                share_root: share_root.clone(),
+                state_name: state_name.clone(),
+                share: protect_descriptor(
+                    share,
+                    "utility-VM runtime share",
+                    "duplicate-utility-vm-bundle-scope",
+                )?,
+            }),
+        }
+    }
 }
 
 impl PinnedBundleDirectory {
