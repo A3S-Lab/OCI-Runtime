@@ -22,6 +22,7 @@ use crate::linux_vm_attachment::LinuxVmAttachmentManifest;
 use crate::unix_process::{
     prepare_console_output, read_bounded_worker_output, resolve_agent_socket,
     resolve_console_with_identity, terminate_and_wait, wait_for_worker, ConsoleIdentity,
+    PinnedCurrentExecutable,
 };
 use crate::{KrunAgentVmSmokeReport, LinuxBootAssetsEvidence, VmConfig};
 
@@ -157,17 +158,15 @@ pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgent
         ));
         return report;
     }
-    let executable = match std::env::current_exe() {
+    let executable = match PinnedCurrentExecutable::current() {
         Ok(executable) => executable,
-        Err(error) => {
-            report.reason = Some(format!(
-                "failed to resolve the current shim executable: {error}"
-            ));
+        Err(reason) => {
+            report.reason = Some(reason);
             return report;
         }
     };
 
-    let mut command = Command::new(executable);
+    let mut command = Command::new(executable.command_path());
     command
         .arg(WORKER_COMMAND)
         .arg("--system-image-manifest")

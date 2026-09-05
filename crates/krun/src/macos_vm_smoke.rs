@@ -1,8 +1,6 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs;
 use std::io::{self, Write};
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -19,7 +17,7 @@ use crate::macos_vm_marker::{
 };
 use crate::unix_process::{
     prepare_console_output, read_bounded_worker_output, resolve_console, terminate_and_wait,
-    wait_for_worker,
+    wait_for_worker, PinnedCurrentExecutable,
 };
 use crate::{KrunVmSmokeReport, MacosBootAssetsEvidence, VmConfig};
 use a3s_oci_agent_protocol::{SessionToken, AGENT_RUNTIME_SHARE_TAG};
@@ -128,7 +126,7 @@ pub(crate) fn vm_smoke(
         return report;
     }
 
-    let executable = match PinnedWorkerExecutable::current() {
+    let executable = match PinnedCurrentExecutable::current() {
         Ok(executable) => executable,
         Err(reason) => {
             report.reason = Some(reason);
@@ -136,7 +134,7 @@ pub(crate) fn vm_smoke(
         }
     };
 
-    let mut child = match Command::new(&executable.command_path)
+    let mut child = match Command::new(executable.command_path())
         .arg(WORKER_COMMAND)
         .arg("--system-image-manifest")
         .arg(system_image_manifest)
@@ -430,83 +428,6 @@ pub(crate) fn run_worker(
             format!("krun_start_enter unexpectedly returned status {status}"),
         ),
         Err(error) => fail_worker(&mut evidence, error.to_string()),
-    }
-}
-
-#[derive(Debug)]
-struct PinnedWorkerExecutable {
-    command_path: PathBuf,
-    _file: File,
-}
-
-impl PinnedWorkerExecutable {
-    fn current() -> Result<Self, String> {
-        let requested = std::env::current_exe()
-            .map_err(|error| format!("failed to resolve the current shim executable: {error}"))?;
-        // Darwin may report the invocation symlink from `current_exe()`.  The
-        // process is already executing the image, so accepting that spelling
-        // is necessary for Homebrew/app-bundle aliases; pin the canonical
-        // target and compare the followed input identity to close replacement
-        // races while resolving it.
-        let input_metadata = fs::metadata(&requested).map_err(|error| {
-            format!(
-                "failed to inspect the current shim executable {}: {error}",
-                requested.display()
-            )
-        })?;
-        if !input_metadata.is_file() {
-            return Err(format!(
-                "current shim executable must resolve to a regular file: {}",
-                requested.display()
-            ));
-        }
-        let canonical = requested.canonicalize().map_err(|error| {
-            format!(
-                "failed to canonicalize the current shim executable {}: {error}",
-                requested.display()
-            )
-        })?;
-        let canonical_metadata = fs::symlink_metadata(&canonical).map_err(|error| {
-            format!(
-                "failed to inspect canonical shim executable {}: {error}",
-                canonical.display()
-            )
-        })?;
-        if canonical_metadata.file_type().is_symlink() || !canonical_metadata.is_file() {
-            return Err(format!(
-                "canonical shim executable is not a regular file: {}",
-                canonical.display()
-            ));
-        }
-        let mut options = OpenOptions::new();
-        options
-            .read(true)
-            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
-        let file = options.open(&canonical).map_err(|error| {
-            format!(
-                "failed to pin the current shim executable {}: {error}",
-                canonical.display()
-            )
-        })?;
-        let file_metadata = file.metadata().map_err(|error| {
-            format!(
-                "failed to inspect pinned shim executable {}: {error}",
-                canonical.display()
-            )
-        })?;
-        let same_identity = |metadata: &fs::Metadata| {
-            metadata.dev() == file_metadata.dev() && metadata.ino() == file_metadata.ino()
-        };
-        if !same_identity(&input_metadata) || !same_identity(&canonical_metadata) {
-            return Err(format!(
-                "current shim executable changed while it was being pinned: {}",
-                canonical.display()
-            ));
-        }
-        Ok(Self {
-            command_path: PathBuf::from(format!("/dev/fd/{}", file.as_raw_fd())),
-            _file: file,
-        })
     }
 }
 

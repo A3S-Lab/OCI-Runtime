@@ -32,6 +32,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
   its kernel volume/file identity after canonicalization. A concurrent
   executable replacement now fails closed instead of redirecting `CreateProcess`.
 
+- Pinned Unix utility-VM worker executables across the shim handoff. Linux KVM
+  and macOS HVF agent workers (and the macOS VM-smoke worker) now resolve the
+  running image through a shared canonical identity check, retain a no-follow
+  descriptor, and execute through `/proc/self/fd` or `/dev/fd`. Invocation
+  symlinks remain supported, while a replacement between resolution and spawn
+  fails closed instead of selecting a different worker image.
+
 - Closed the Unix utility-VM console pathname handoff race. The Host now
   atomically reserves each console entry with `openat`, retains that descriptor
   until the authenticated Agent session passes its contract checks, and carries
