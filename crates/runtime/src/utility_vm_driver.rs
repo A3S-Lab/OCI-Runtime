@@ -602,6 +602,18 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
                 };
 
                 container.guest.client.delete(request).await?;
+                let mut guest_cleanup = if remove_guest {
+                    let cleanup_guest = Arc::clone(&container.guest);
+                    Some(DetachedAsyncCleanup::new(move || async move {
+                        if let Err(error) = shutdown_guest(&cleanup_guest).await {
+                            eprintln!(
+                                "a3s-oci-runtime: cancelled utility-VM delete cleanup failed: {error}"
+                            );
+                        }
+                    }))
+                } else {
+                    None
+                };
                 if remove_guest {
                     shutdown_guest(&container.guest).await?;
                 }
@@ -628,6 +640,13 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
                             sessions.reusable.remove(binding.id());
                         }
                     }
+                }
+                if let Some(cleanup) = guest_cleanup.as_mut() {
+                    // The stopped tombstone and session membership are now
+                    // published.  Any later filesystem/recovery cleanup may
+                    // be retried independently without re-shutting down the
+                    // owner if this caller is cancelled.
+                    cleanup.disarm();
                 }
 
                 match container.guest_session.as_ref() {
