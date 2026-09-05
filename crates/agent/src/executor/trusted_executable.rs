@@ -112,6 +112,18 @@ impl PinnedExecutable {
         &self.command_path
     }
 
+    /// Duplicate the pinned descriptor for a detached child-process task.
+    ///
+    /// The executor normally owns the descriptor for its whole lifetime.  A
+    /// recorded `exec` operation can outlive the request future, however, so
+    /// its detached task must retain an independent descriptor until the
+    /// child has been spawned and the result has been journalled.
+    pub(super) fn duplicate_command_path(&self) -> Result<(PathBuf, File)> {
+        let file = duplicate_private_descriptor(&self._file, &self.canonical_path)?;
+        let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+        Ok((descriptor_path, file))
+    }
+
     /// Stable pathname used when an external tool must receive an argument.
     ///
     /// The descriptor namespace is private to this process.  External tools

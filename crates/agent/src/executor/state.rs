@@ -25,6 +25,7 @@ pub(super) struct ExecutorState {
     pub(super) highest_generations: BTreeMap<String, u64>,
     operations: BTreeMap<OperationId, OperationRecord>,
     pending_unit_operations: BTreeMap<OperationId, PendingUnitOperation>,
+    pending_process_operations: BTreeMap<OperationId, PendingProcessOperation>,
     pub(super) next_slot: u64,
     pub(super) cgroup_manager: Option<CgroupManager>,
 }
@@ -40,10 +41,10 @@ impl ExecutorState {
                 ),
             ));
         }
-        if let Some(operation_id) = operation_ids
-            .iter()
-            .find(|operation_id| self.pending_unit_operations.contains_key(*operation_id))
-        {
+        if let Some(operation_id) = operation_ids.iter().find(|operation_id| {
+            self.pending_unit_operations.contains_key(*operation_id)
+                || self.pending_process_operations.contains_key(*operation_id)
+        }) {
             return Err(executor_error(
                 ErrorCode::FailedPrecondition,
                 format!(
@@ -65,6 +66,7 @@ impl ExecutorState {
             .operations
             .len()
             .saturating_add(self.pending_unit_operations.len())
+            .saturating_add(self.pending_process_operations.len())
             >= MAX_OPERATION_RECORDS
         {
             Err(executor_error(
@@ -171,6 +173,62 @@ impl ExecutorState {
                 _ => Err(reused_operation(operation_id)),
             }
         })
+    }
+
+    pub(super) fn prepare_process_operation(
+        &mut self,
+        operation_id: &OperationId,
+        request: &RecordedRequest,
+    ) -> Result<ProcessOperationPreparation> {
+        if let Some(result) = self.replay_process(operation_id, request) {
+            return Ok(ProcessOperationPreparation::Completed(result));
+        }
+        if let Some(pending) = self.pending_process_operations.get(operation_id) {
+            pending.validate_request(request)?;
+            return Ok(ProcessOperationPreparation::Pending(
+                pending.completion.subscribe(),
+            ));
+        }
+        self.reserve_operation(operation_id)?;
+        let (completion, receiver) = watch::channel(None);
+        self.pending_process_operations.insert(
+            operation_id.clone(),
+            PendingProcessOperation {
+                request: request.clone(),
+                completion,
+            },
+        );
+        Ok(ProcessOperationPreparation::Claimed(receiver))
+    }
+
+    pub(super) fn complete_process_operation(
+        &mut self,
+        operation_id: OperationId,
+        request: RecordedRequest,
+        result: Result<AgentProcess>,
+    ) -> Result<()> {
+        let Some(pending) = self.pending_process_operations.remove(&operation_id) else {
+            return Err(executor_error(
+                ErrorCode::Internal,
+                format!("guest process operation {operation_id} completed without an active claim"),
+            ));
+        };
+        if let Err(error) = pending.validate_request(&request) {
+            self.record(
+                operation_id,
+                pending.request.clone(),
+                RecordedOutcome::Process(Err(error.clone())),
+            );
+            pending.completion.send_replace(Some(Err(error.clone())));
+            return Err(error);
+        }
+        self.record(
+            operation_id,
+            request,
+            RecordedOutcome::Process(result.clone()),
+        );
+        pending.completion.send_replace(Some(result));
+        Ok(())
     }
 
     pub(super) fn replay_file(
@@ -489,10 +547,35 @@ impl PendingUnitOperation {
     }
 }
 
+#[derive(Debug)]
+struct PendingProcessOperation {
+    request: RecordedRequest,
+    completion: watch::Sender<Option<Result<AgentProcess>>>,
+}
+
+impl PendingProcessOperation {
+    fn validate_request(&self, request: &RecordedRequest) -> Result<()> {
+        if &self.request == request {
+            Ok(())
+        } else {
+            Err(executor_error(
+                ErrorCode::Conflict,
+                "guest operation ID was reused for a different request",
+            ))
+        }
+    }
+}
+
 pub(super) enum UnitOperationPreparation {
     Completed(Result<()>),
     Pending(watch::Receiver<Option<Result<()>>>),
     Claimed(watch::Receiver<Option<Result<()>>>),
+}
+
+pub(super) enum ProcessOperationPreparation {
+    Completed(Result<AgentProcess>),
+    Pending(watch::Receiver<Option<Result<AgentProcess>>>),
+    Claimed(watch::Receiver<Option<Result<AgentProcess>>>),
 }
 
 impl OperationRecord {
@@ -554,13 +637,16 @@ fn process_record(
 
 #[cfg(test)]
 mod tests {
-    use a3s_oci_agent_protocol::AgentInheritedDescriptorSchema;
+    use a3s_oci_agent_protocol::{AgentInheritedDescriptorSchema, AgentProcess};
     use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
-    use a3s_oci_sdk::{ErrorCode, OperationId};
+    use a3s_oci_sdk::{
+        ContainerId, ContainerTarget, ErrorCode, Generation, OperationId, ProcessId, ProcessTarget,
+    };
     use serde_json::json;
 
     use super::{
-        ExecutorState, MutationKind, RecordedOutcome, RecordedRequest, UnitOperationPreparation,
+        ExecutorState, MutationKind, ProcessOperationPreparation, RecordedOutcome, RecordedRequest,
+        UnitOperationPreparation,
     };
 
     #[test]
@@ -673,6 +759,65 @@ mod tests {
                 .prepare_unit_operation(&operation_id, &request)
                 .expect("replay operation"),
             UnitOperationPreparation::Completed(Ok(()))
+        ));
+    }
+
+    #[tokio::test]
+    async fn concurrent_process_retries_join_one_claim_and_replay_one_result() {
+        let operation_id = OperationId::new("guest-pending-exec").expect("operation ID");
+        let request = RecordedRequest::new(
+            MutationKind::Exec,
+            &json!({"target": "worker", "args": ["/bin/true"]}),
+        )
+        .expect("fingerprint request");
+        let mut state = ExecutorState::default();
+
+        let ProcessOperationPreparation::Claimed(mut owner) = state
+            .prepare_process_operation(&operation_id, &request)
+            .expect("claim process operation")
+        else {
+            panic!("first request must own the process operation");
+        };
+        let ProcessOperationPreparation::Pending(mut retry) = state
+            .prepare_process_operation(&operation_id, &request)
+            .expect("join process operation")
+        else {
+            panic!("concurrent retry must join the process operation");
+        };
+        let changed = RecordedRequest::new(
+            MutationKind::Exec,
+            &json!({"target": "worker", "args": ["/bin/sh"]}),
+        )
+        .expect("fingerprint changed request");
+        assert_eq!(
+            state
+                .prepare_process_operation(&operation_id, &changed)
+                .err()
+                .expect("changed pending request must conflict")
+                .code,
+            ErrorCode::Conflict
+        );
+
+        let process_target = ProcessTarget {
+            container: ContainerTarget::exact(
+                ContainerId::new("guest-pending-exec").expect("container ID"),
+                Generation(1),
+            ),
+            process_id: ProcessId::new("worker").expect("process ID"),
+        };
+        let process = AgentProcess::new(process_target, 1234, false).expect("process result");
+        state
+            .complete_process_operation(operation_id.clone(), request.clone(), Ok(process.clone()))
+            .expect("complete exact process operation");
+        owner.changed().await.expect("owner result notification");
+        retry.changed().await.expect("retry result notification");
+        assert_eq!(owner.borrow().clone(), Some(Ok(process.clone())));
+        assert_eq!(retry.borrow().clone(), Some(Ok(process)));
+        assert!(matches!(
+            state
+                .prepare_process_operation(&operation_id, &request)
+                .expect("replay process operation"),
+            ProcessOperationPreparation::Completed(Ok(_))
         ));
     }
 
