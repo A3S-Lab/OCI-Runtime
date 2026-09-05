@@ -85,7 +85,7 @@ use a3s_oci_sdk::{
     OutputChunk, ProcessRecord, Result,
 };
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify, OwnedMutexGuard};
 use tokio::time::{sleep, Instant};
 
 use crate::AGENT_VERSION;
@@ -204,6 +204,47 @@ pub struct LinuxExecutor {
     rootless_cgroup_delegation: Option<RootlessCgroupDelegation>,
     vm_attachments: Option<crate::UtilityVmAttachmentBinding>,
     state: Arc<Mutex<ExecutorState>>,
+    shutdown: Arc<Mutex<Option<Arc<ExecutorShutdownCompletion>>>>,
+}
+
+/// Rendezvous for the executor's one destructive shutdown operation.
+///
+/// The state lock is intentionally moved into a detached task before the
+/// caller starts waiting.  This keeps process and filesystem cleanup alive if
+/// the RPC/request task is cancelled, while allowing concurrent callers to
+/// observe the exact same result instead of starting a second cleanup pass.
+#[derive(Debug)]
+struct ExecutorShutdownCompletion {
+    result: Mutex<Option<Result<Vec<AgentRecoveryRecord>>>>,
+    ready: Notify,
+}
+
+impl ExecutorShutdownCompletion {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            result: Mutex::new(None),
+            ready: Notify::new(),
+        })
+    }
+
+    async fn publish(&self, result: Result<Vec<AgentRecoveryRecord>>) {
+        *self.result.lock().await = Some(result);
+        self.ready.notify_waiters();
+    }
+
+    async fn wait(&self) -> Result<Vec<AgentRecoveryRecord>> {
+        loop {
+            // Register before checking so a publish between the check and the
+            // await cannot leave this waiter asleep forever.
+            let notified = self.ready.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(result) = self.result.lock().await.clone() {
+                return result;
+            }
+            notified.await;
+        }
+    }
 }
 
 impl LinuxExecutor {
@@ -523,6 +564,7 @@ impl LinuxExecutor {
             rootless_cgroup_delegation: None,
             vm_attachments,
             state: Arc::new(Mutex::new(ExecutorState::default())),
+            shutdown: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -553,98 +595,138 @@ impl LinuxExecutor {
     /// Evidence is returned only when the complete executor cleanup succeeds.
     /// Callers must not persist a partial vector from a failed cleanup.
     pub async fn shutdown_with_recovery(&self) -> Result<Vec<AgentRecoveryRecord>> {
-        let mut state = self.state.lock().await;
-        let mut first_error = None;
-        let mut poststop = Vec::new();
-        let mut recovery = Vec::with_capacity(state.containers.len());
-        for record in state.containers.values_mut() {
-            if let Err(error) = record.force_stop_all().await {
-                first_error.get_or_insert(error);
+        let completion = {
+            let mut shutdown = self.shutdown.lock().await;
+            if let Some(completion) = shutdown.as_ref() {
+                Arc::clone(completion)
             } else {
-                if let Err(error) = record.process.cleanup_intel_rdt() {
-                    first_error.get_or_insert(error);
-                }
-                match record.recovery_record() {
-                    Ok(record) => recovery.push(record),
-                    Err(error) => {
-                        first_error.get_or_insert(error);
-                    }
-                }
-            }
-            poststop.push(record.process.poststop_plan());
-        }
-        let device_targets_clean = match cleanup_shutdown_device_targets(
-            state
-                .containers
-                .values()
-                .map(|record| record.runtime_directory.as_path()),
-        ) {
-            Ok(()) => true,
-            Err(error) => {
-                first_error.get_or_insert(error);
-                false
+                // Acquire the owned state guard before spawning the task. The
+                // guard serializes shutdown with every in-flight executor
+                // operation, while its owned lifetime lets cleanup outlive
+                // this request task if the caller is cancelled.
+                let state = Arc::clone(&self.state).lock_owned().await;
+                let runtime_root = self.runtime_root.clone();
+                let device_source_root = self.device_source_root.clone();
+                let rootless_cgroup_delegation = self.rootless_cgroup_delegation.clone();
+                let completion = ExecutorShutdownCompletion::new();
+                let task_completion = Arc::clone(&completion);
+                tokio::spawn(async move {
+                    let result = shutdown_executor(
+                        state,
+                        rootless_cgroup_delegation,
+                        runtime_root,
+                        device_source_root,
+                    )
+                    .await;
+                    task_completion.publish(result).await;
+                });
+                *shutdown = Some(Arc::clone(&completion));
+                completion
             }
         };
-        state.containers.clear();
-        let cgroup_manager = state.cgroup_manager.take();
-        if let Some(delegation) = &self.rootless_cgroup_delegation {
-            if let Err(error) = delegation.shutdown_device_policy_authority() {
+
+        completion.wait().await
+    }
+}
+
+async fn shutdown_executor(
+    mut state: OwnedMutexGuard<ExecutorState>,
+    rootless_cgroup_delegation: Option<RootlessCgroupDelegation>,
+    runtime_root: PathBuf,
+    device_source_root: PathBuf,
+) -> Result<Vec<AgentRecoveryRecord>> {
+    let mut first_error = None;
+    let mut poststop = Vec::new();
+    let mut recovery = Vec::with_capacity(state.containers.len());
+    for record in state.containers.values_mut() {
+        if let Err(error) = record.force_stop_all().await {
+            first_error.get_or_insert(error);
+        } else {
+            if let Err(error) = record.process.cleanup_intel_rdt() {
                 first_error.get_or_insert(error);
             }
-        }
-        if let Some(manager) = cgroup_manager {
-            if let Err(error) = manager.remove() {
-                first_error.get_or_insert(error);
-            }
-        }
-        if device_targets_clean {
-            match tokio::fs::remove_dir_all(&self.runtime_root).await {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            match record.recovery_record() {
+                Ok(record) => recovery.push(record),
                 Err(error) => {
-                    first_error.get_or_insert_with(|| {
-                        executor_error(
-                            ErrorCode::Internal,
-                            format!(
-                                "failed to remove guest runtime root {}: {error}",
-                                self.runtime_root.display()
-                            ),
-                        )
-                    });
+                    first_error.get_or_insert(error);
                 }
             }
         }
-        if self.device_source_root != self.runtime_root {
-            match tokio::fs::remove_dir_all(&self.device_source_root).await {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    first_error.get_or_insert_with(|| {
-                        executor_error(
-                            ErrorCode::Internal,
-                            format!(
-                                "failed to remove guest device-source root {}: {error}",
-                                self.device_source_root.display()
-                            ),
-                        )
-                    });
-                }
-            }
+        poststop.push(record.process.poststop_plan());
+    }
+    let device_targets_clean = match cleanup_shutdown_device_targets(
+        state
+            .containers
+            .values()
+            .map(|record| record.runtime_directory.as_path()),
+    ) {
+        Ok(()) => true,
+        Err(error) => {
+            first_error.get_or_insert(error);
+            false
         }
-        for plan in poststop {
-            match plan {
-                Ok((hooks, hook_state)) => hooks.run_poststop(&hook_state).await,
-                Err(error) => {
-                    eprintln!("a3s-oci-agent: shutdown poststop hook state warning: {error}");
-                }
-            }
-        }
-        match first_error {
-            Some(error) => Err(error),
-            None => Ok(recovery),
+    };
+    state.containers.clear();
+    let cgroup_manager = state.cgroup_manager.take();
+    if let Some(delegation) = &rootless_cgroup_delegation {
+        if let Err(error) = delegation.shutdown_device_policy_authority() {
+            first_error.get_or_insert(error);
         }
     }
+    if let Some(manager) = cgroup_manager {
+        if let Err(error) = manager.remove() {
+            first_error.get_or_insert(error);
+        }
+    }
+    if device_targets_clean {
+        match tokio::fs::remove_dir_all(&runtime_root).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                first_error.get_or_insert_with(|| {
+                    executor_error(
+                        ErrorCode::Internal,
+                        format!(
+                            "failed to remove guest runtime root {}: {error}",
+                            runtime_root.display()
+                        ),
+                    )
+                });
+            }
+        }
+    }
+    if device_source_root != runtime_root {
+        match tokio::fs::remove_dir_all(&device_source_root).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                first_error.get_or_insert_with(|| {
+                    executor_error(
+                        ErrorCode::Internal,
+                        format!(
+                            "failed to remove guest device-source root {}: {error}",
+                            device_source_root.display()
+                        ),
+                    )
+                });
+            }
+        }
+    }
+    for plan in poststop {
+        match plan {
+            Ok((hooks, hook_state)) => hooks.run_poststop(&hook_state).await,
+            Err(error) => {
+                eprintln!("a3s-oci-agent: shutdown poststop hook state warning: {error}");
+            }
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(recovery),
+    }
+}
 
+impl LinuxExecutor {
     async fn create_new(
         &self,
         state: &mut ExecutorState,
@@ -1684,6 +1766,53 @@ mod shutdown_device_tests {
 }
 
 #[cfg(test)]
+mod shutdown_completion_tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use a3s_oci_sdk::Result;
+    use tokio::sync::{oneshot, Notify};
+
+    use super::ExecutorShutdownCompletion;
+
+    #[tokio::test]
+    async fn completion_remains_observable_after_waiter_cancellation() {
+        let completion = ExecutorShutdownCompletion::new();
+        let task_completion = Arc::clone(&completion);
+        let release = Arc::new(Notify::new());
+        let task_release = Arc::clone(&release);
+        let (started_sender, started_receiver) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            started_sender.send(()).expect("signal shutdown start");
+            task_release.notified().await;
+            task_completion.publish(Ok(Vec::new())).await;
+        });
+
+        started_receiver.await.expect("shutdown task started");
+        let waiter_completion = Arc::clone(&completion);
+        let waiter = tokio::spawn(async move { waiter_completion.wait().await });
+        tokio::task::yield_now().await;
+        waiter.abort();
+        assert!(waiter
+            .await
+            .expect_err("waiter must be cancelled")
+            .is_cancelled());
+
+        release.notify_one();
+        task.await.expect("detached shutdown task");
+        let result: Result<Vec<_>> = completion.wait().await;
+        assert_eq!(result.expect("published shutdown result"), Vec::<_>::new());
+
+        // Keep the test honest if a future implementation accidentally makes
+        // completion publication timing-dependent.
+        tokio::time::timeout(Duration::from_secs(1), completion.wait())
+            .await
+            .expect("completed result must remain immediately available")
+            .expect("published shutdown result");
+    }
+}
+
+#[cfg(test)]
 mod rootless_device_tests {
     use std::fs;
     use std::path::PathBuf;
@@ -1786,6 +1915,7 @@ mod rootless_device_tests {
             rootless_cgroup_delegation: None,
             vm_attachments: None,
             state: Arc::new(Mutex::new(ExecutorState::default())),
+            shutdown: Arc::new(Mutex::new(None)),
         };
 
         let error = executor
@@ -1877,6 +2007,7 @@ mod rootless_device_tests {
             rootless_cgroup_delegation: None,
             vm_attachments: None,
             state: Arc::new(Mutex::new(ExecutorState::default())),
+            shutdown: Arc::new(Mutex::new(None)),
         };
 
         let error = executor
