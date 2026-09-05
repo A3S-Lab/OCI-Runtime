@@ -564,6 +564,16 @@ impl UtilityVmRuntimeDriver {
             };
             remove_session = last_destroy_member;
         }
+        let mut guest_cleanup = if remove_session {
+            let cleanup_guest = Arc::clone(&container.guest);
+            Some(super::DetachedAsyncCleanup::new(move || async move {
+                if let Err(error) = super::shutdown_guest(&cleanup_guest).await {
+                    eprintln!("a3s-oci-runtime: cancelled terminal-create cleanup failed: {error}");
+                }
+            }))
+        } else {
+            None
+        };
         if remove_session {
             if let Err(cleanup) = shutdown_guest(&container.guest).await {
                 error.message = format!(
@@ -594,6 +604,13 @@ impl UtilityVmRuntimeDriver {
                     sessions.reusable.remove(binding.id());
                 }
             }
+        }
+        if let Some(cleanup) = guest_cleanup.as_mut() {
+            // The owner is no longer referenced by the live registry after
+            // this mutation.  Disarm before the next await so a cancelled
+            // recovery/handoff cleanup cannot issue an unnecessary second
+            // owner shutdown.
+            cleanup.disarm();
         }
 
         let recovery_cleanup = match container.guest_session.as_ref() {
