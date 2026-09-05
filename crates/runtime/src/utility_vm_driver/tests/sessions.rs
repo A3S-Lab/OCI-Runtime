@@ -308,6 +308,121 @@ async fn retained_empty_session_is_reused_then_rotated_by_a_new_generation() {
 }
 
 #[tokio::test]
+async fn cancelled_session_rotation_keeps_old_owner_reaping_alive() {
+    let fixture = Fixture::with_shared_guest_sessions();
+    let alpha = named_target("cancel-rotation-alpha", 1);
+    fixture
+        .driver
+        .create(
+            fixture
+                .stage(shared_request(
+                    &fixture,
+                    "cancel-rotation-alpha-create",
+                    alpha.clone(),
+                    2,
+                    GuestSessionReset::RetainWithinTrustDomain,
+                ))
+                .await,
+        )
+        .await
+        .expect("create retained member");
+    delete(&fixture, "cancel-rotation-alpha-delete", alpha)
+        .await
+        .expect("retain empty session");
+
+    let release = fixture.owner.block_shutdown();
+    let gamma = named_target("cancel-rotation-gamma", 1);
+    let request = fixture
+        .stage(fixture.shared_handoff_request(
+            "cancel-rotation-gamma-create",
+            gamma.clone(),
+            SharedSessionFixture {
+                id: SESSION_ID,
+                generation: 8,
+                trust_domain: TRUST_DOMAIN,
+                capacity: 2,
+                reset: GuestSessionReset::RetainWithinTrustDomain,
+            },
+        ))
+        .await;
+    let retry = request.clone();
+    let old_session_root = fixture.shared_session_root(SESSION_ID, 7);
+    let replacement_session_root = fixture.shared_session_root(SESSION_ID, 8);
+    let driver = Arc::new(fixture.driver);
+    let create_driver = Arc::clone(&driver);
+    let create_task = tokio::spawn(async move { create_driver.create(request).await });
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if fixture.owner.shutdown_calls.load(Ordering::Relaxed) == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("rotation should start reaping the retained owner");
+
+    create_task.abort();
+    assert!(create_task
+        .await
+        .expect_err("rotation caller must be cancelled")
+        .is_cancelled());
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if fixture.owner.shutdown_calls.load(Ordering::Relaxed) >= 2 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled rotation must detach old-owner cleanup");
+
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if fixture.owner.shutdown_completed.load(Ordering::Relaxed) == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("detached rotation cleanup should finish");
+    // Let the successful detached call be the last blocked call.  The retry
+    // below must not inherit the test barrier.
+    fixture
+        .owner
+        .shutdown_release
+        .lock()
+        .expect("shutdown release lock")
+        .take();
+
+    driver
+        .create(retry)
+        .await
+        .expect("retry should complete the session rotation");
+    assert_eq!(fixture.factory.launches.load(Ordering::Relaxed), 2);
+    assert!(!old_session_root.exists());
+    assert!(replacement_session_root.is_dir());
+    driver
+        .shutdown()
+        .await
+        .expect("shutdown replacement session");
+    driver
+        .delete(DriverDeleteRequest {
+            context: context("cancel-rotation-gamma-delete"),
+            target: gamma,
+            mode: DeleteMode::Force,
+        })
+        .await
+        .expect("delete replacement tombstone");
+    assert!(!replacement_session_root.exists());
+}
+
+#[tokio::test]
 async fn terminal_member_failure_does_not_reap_an_occupied_shared_vm() {
     let fixture = Fixture::with_shared_guest_sessions();
     let alpha = named_target("failure-alpha", 1);
