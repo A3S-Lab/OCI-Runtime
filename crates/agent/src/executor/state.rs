@@ -27,6 +27,8 @@ pub(super) struct ExecutorState {
     pending_state_operations: BTreeMap<OperationId, PendingStateOperation>,
     pending_unit_operations: BTreeMap<OperationId, PendingUnitOperation>,
     pending_process_operations: BTreeMap<OperationId, PendingProcessOperation>,
+    pending_file_operations: BTreeMap<OperationId, PendingFileOperation>,
+    pending_filesystem_operations: BTreeMap<OperationId, PendingFilesystemOperation>,
     pub(super) next_slot: u64,
     pub(super) cgroup_manager: Option<CgroupManager>,
 }
@@ -42,11 +44,10 @@ impl ExecutorState {
                 ),
             ));
         }
-        if let Some(operation_id) = operation_ids.iter().find(|operation_id| {
-            self.pending_state_operations.contains_key(*operation_id)
-                || self.pending_unit_operations.contains_key(*operation_id)
-                || self.pending_process_operations.contains_key(*operation_id)
-        }) {
+        if let Some(operation_id) = operation_ids
+            .iter()
+            .find(|operation_id| self.has_pending_operation(operation_id))
+        {
             return Err(executor_error(
                 ErrorCode::FailedPrecondition,
                 format!(
@@ -61,10 +62,7 @@ impl ExecutorState {
     }
 
     pub(super) fn reserve_operation(&self, operation_id: &OperationId) -> Result<()> {
-        if self.pending_unit_operations.contains_key(operation_id) {
-            return Err(reused_operation(operation_id));
-        }
-        if self.pending_state_operations.contains_key(operation_id) {
+        if self.has_pending_operation(operation_id) {
             return Err(reused_operation(operation_id));
         }
         if self
@@ -73,6 +71,8 @@ impl ExecutorState {
             .saturating_add(self.pending_state_operations.len())
             .saturating_add(self.pending_unit_operations.len())
             .saturating_add(self.pending_process_operations.len())
+            .saturating_add(self.pending_file_operations.len())
+            .saturating_add(self.pending_filesystem_operations.len())
             >= MAX_OPERATION_RECORDS
         {
             Err(executor_error(
@@ -85,6 +85,16 @@ impl ExecutorState {
         } else {
             Ok(())
         }
+    }
+
+    fn has_pending_operation(&self, operation_id: &OperationId) -> bool {
+        self.pending_state_operations.contains_key(operation_id)
+            || self.pending_unit_operations.contains_key(operation_id)
+            || self.pending_process_operations.contains_key(operation_id)
+            || self.pending_file_operations.contains_key(operation_id)
+            || self
+                .pending_filesystem_operations
+                .contains_key(operation_id)
     }
 
     pub(super) fn replay_state(
@@ -288,6 +298,116 @@ impl ExecutorState {
             operation_id,
             request,
             RecordedOutcome::Process(result.clone()),
+        );
+        pending.completion.send_replace(Some(result));
+        Ok(())
+    }
+
+    pub(super) fn prepare_file_operation(
+        &mut self,
+        operation_id: &OperationId,
+        request: &RecordedRequest,
+    ) -> Result<FileOperationPreparation> {
+        if let Some(result) = self.replay_file(operation_id, request) {
+            return Ok(FileOperationPreparation::Completed(result));
+        }
+        if let Some(pending) = self.pending_file_operations.get(operation_id) {
+            pending.validate_request(request)?;
+            return Ok(FileOperationPreparation::Pending(
+                pending.completion.subscribe(),
+            ));
+        }
+        self.reserve_operation(operation_id)?;
+        let (completion, receiver) = watch::channel(None);
+        self.pending_file_operations.insert(
+            operation_id.clone(),
+            PendingFileOperation {
+                request: request.clone(),
+                completion,
+            },
+        );
+        Ok(FileOperationPreparation::Claimed(receiver))
+    }
+
+    pub(super) fn complete_file_operation(
+        &mut self,
+        operation_id: OperationId,
+        request: RecordedRequest,
+        result: Result<FileResponse>,
+    ) -> Result<()> {
+        let Some(pending) = self.pending_file_operations.remove(&operation_id) else {
+            return Err(executor_error(
+                ErrorCode::Internal,
+                format!("guest file operation {operation_id} completed without an active claim"),
+            ));
+        };
+        if let Err(error) = pending.validate_request(&request) {
+            self.record(
+                operation_id,
+                pending.request.clone(),
+                RecordedOutcome::File(Err(error.clone())),
+            );
+            pending.completion.send_replace(Some(Err(error.clone())));
+            return Err(error);
+        }
+        self.record(operation_id, request, RecordedOutcome::File(result.clone()));
+        pending.completion.send_replace(Some(result));
+        Ok(())
+    }
+
+    pub(super) fn prepare_filesystem_operation(
+        &mut self,
+        operation_id: &OperationId,
+        request: &RecordedRequest,
+    ) -> Result<FilesystemOperationPreparation> {
+        if let Some(result) = self.replay_filesystem(operation_id, request) {
+            return Ok(FilesystemOperationPreparation::Completed(Box::new(result)));
+        }
+        if let Some(pending) = self.pending_filesystem_operations.get(operation_id) {
+            pending.validate_request(request)?;
+            return Ok(FilesystemOperationPreparation::Pending(
+                pending.completion.subscribe(),
+            ));
+        }
+        self.reserve_operation(operation_id)?;
+        let (completion, receiver) = watch::channel(None);
+        self.pending_filesystem_operations.insert(
+            operation_id.clone(),
+            PendingFilesystemOperation {
+                request: request.clone(),
+                completion,
+            },
+        );
+        Ok(FilesystemOperationPreparation::Claimed(receiver))
+    }
+
+    pub(super) fn complete_filesystem_operation(
+        &mut self,
+        operation_id: OperationId,
+        request: RecordedRequest,
+        result: Result<FilesystemResponse>,
+    ) -> Result<()> {
+        let Some(pending) = self.pending_filesystem_operations.remove(&operation_id) else {
+            return Err(executor_error(
+                ErrorCode::Internal,
+                format!(
+                    "guest filesystem operation {operation_id} completed without an active claim"
+                ),
+            ));
+        };
+        if let Err(error) = pending.validate_request(&request) {
+            self.record(
+                operation_id,
+                pending.request.clone(),
+                RecordedOutcome::Filesystem(Err(error.clone())),
+            );
+            pending.completion.send_replace(Some(Err(error.clone())));
+            return Err(error);
+        }
+        self.record(
+            operation_id,
+            request,
+            RecordedOutcome::Filesystem(result.clone()),
         );
         pending.completion.send_replace(Some(result));
         Ok(())
@@ -647,6 +767,44 @@ impl PendingProcessOperation {
     }
 }
 
+#[derive(Debug)]
+struct PendingFileOperation {
+    request: RecordedRequest,
+    completion: watch::Sender<Option<Result<FileResponse>>>,
+}
+
+impl PendingFileOperation {
+    fn validate_request(&self, request: &RecordedRequest) -> Result<()> {
+        if &self.request == request {
+            Ok(())
+        } else {
+            Err(executor_error(
+                ErrorCode::Conflict,
+                "guest operation ID was reused for a different request",
+            ))
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PendingFilesystemOperation {
+    request: RecordedRequest,
+    completion: watch::Sender<Option<Result<FilesystemResponse>>>,
+}
+
+impl PendingFilesystemOperation {
+    fn validate_request(&self, request: &RecordedRequest) -> Result<()> {
+        if &self.request == request {
+            Ok(())
+        } else {
+            Err(executor_error(
+                ErrorCode::Conflict,
+                "guest operation ID was reused for a different request",
+            ))
+        }
+    }
+}
+
 pub(super) enum UnitOperationPreparation {
     Completed(Result<()>),
     Pending(watch::Receiver<Option<Result<()>>>),
@@ -663,6 +821,20 @@ pub(super) enum ProcessOperationPreparation {
     Completed(Result<AgentProcess>),
     Pending(watch::Receiver<Option<Result<AgentProcess>>>),
     Claimed(watch::Receiver<Option<Result<AgentProcess>>>),
+}
+
+#[derive(Debug)]
+pub(super) enum FileOperationPreparation {
+    Completed(Result<FileResponse>),
+    Pending(watch::Receiver<Option<Result<FileResponse>>>),
+    Claimed(watch::Receiver<Option<Result<FileResponse>>>),
+}
+
+#[derive(Debug)]
+pub(super) enum FilesystemOperationPreparation {
+    Completed(Box<Result<FilesystemResponse>>),
+    Pending(watch::Receiver<Option<Result<FilesystemResponse>>>),
+    Claimed(watch::Receiver<Option<Result<FilesystemResponse>>>),
 }
 
 impl OperationRecord {
@@ -727,13 +899,15 @@ mod tests {
     use a3s_oci_agent_protocol::{AgentInheritedDescriptorSchema, AgentProcess, AgentState};
     use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
     use a3s_oci_sdk::{
-        ContainerId, ContainerTarget, ErrorCode, Generation, OperationId, ProcessId, ProcessTarget,
+        ContainerId, ContainerTarget, ErrorCode, FileResponse, FilesystemResponse, Generation,
+        OperationId, ProcessId, ProcessTarget,
     };
     use serde_json::json;
 
     use super::{
-        ExecutorState, MutationKind, ProcessOperationPreparation, RecordedOutcome, RecordedRequest,
-        StateOperationPreparation, UnitOperationPreparation,
+        ExecutorState, FileOperationPreparation, FilesystemOperationPreparation, MutationKind,
+        ProcessOperationPreparation, RecordedOutcome, RecordedRequest, StateOperationPreparation,
+        UnitOperationPreparation,
     };
 
     #[test]
@@ -969,6 +1143,133 @@ mod tests {
                 .expect("replay process operation"),
             ProcessOperationPreparation::Completed(Ok(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn concurrent_file_retries_join_one_claim_and_replay_one_result() {
+        let operation_id = OperationId::new("guest-pending-upload").expect("operation ID");
+        let request = RecordedRequest::new(
+            MutationKind::File,
+            &json!({"target": "worker", "op": "upload", "path": "/tmp/state", "data": "YQ=="}),
+        )
+        .expect("fingerprint request");
+        let mut state = ExecutorState::default();
+
+        let FileOperationPreparation::Claimed(mut owner) = state
+            .prepare_file_operation(&operation_id, &request)
+            .expect("claim file operation")
+        else {
+            panic!("first request must own the file operation");
+        };
+        let FileOperationPreparation::Pending(mut retry) = state
+            .prepare_file_operation(&operation_id, &request)
+            .expect("join file operation")
+        else {
+            panic!("concurrent retry must join the file operation");
+        };
+
+        let target = ContainerTarget::exact(
+            ContainerId::new("guest-pending-upload").expect("container ID"),
+            Generation(1),
+        );
+        let result = FileResponse {
+            target,
+            data: None,
+            size: 1,
+        };
+        state
+            .complete_file_operation(operation_id.clone(), request.clone(), Ok(result.clone()))
+            .expect("complete exact file operation");
+        owner.changed().await.expect("owner result notification");
+        retry.changed().await.expect("retry result notification");
+        assert_eq!(owner.borrow().clone(), Some(Ok(result.clone())));
+        assert_eq!(retry.borrow().clone(), Some(Ok(result)));
+        assert!(matches!(
+            state
+                .prepare_file_operation(&operation_id, &request)
+                .expect("replay file operation"),
+            FileOperationPreparation::Completed(Ok(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn concurrent_filesystem_retries_join_one_claim_and_replay_one_result() {
+        let operation_id = OperationId::new("guest-pending-mkdir").expect("operation ID");
+        let request = RecordedRequest::new(
+            MutationKind::Filesystem,
+            &json!({"target": "worker", "op": "make-dir", "path": "/tmp/state"}),
+        )
+        .expect("fingerprint request");
+        let mut state = ExecutorState::default();
+
+        let FilesystemOperationPreparation::Claimed(mut owner) = state
+            .prepare_filesystem_operation(&operation_id, &request)
+            .expect("claim filesystem operation")
+        else {
+            panic!("first request must own the filesystem operation");
+        };
+        let FilesystemOperationPreparation::Pending(mut retry) = state
+            .prepare_filesystem_operation(&operation_id, &request)
+            .expect("join filesystem operation")
+        else {
+            panic!("concurrent retry must join the filesystem operation");
+        };
+
+        let target = ContainerTarget::exact(
+            ContainerId::new("guest-pending-mkdir").expect("container ID"),
+            Generation(1),
+        );
+        let result = FilesystemResponse {
+            target,
+            entry: None,
+            entries: Vec::new(),
+        };
+        state
+            .complete_filesystem_operation(
+                operation_id.clone(),
+                request.clone(),
+                Ok(result.clone()),
+            )
+            .expect("complete exact filesystem operation");
+        owner.changed().await.expect("owner result notification");
+        retry.changed().await.expect("retry result notification");
+        assert_eq!(owner.borrow().clone(), Some(Ok(result.clone())));
+        assert_eq!(retry.borrow().clone(), Some(Ok(result)));
+        assert!(matches!(
+            state
+                .prepare_filesystem_operation(&operation_id, &request)
+                .expect("replay filesystem operation"),
+            FilesystemOperationPreparation::Completed(result) if result.is_ok()
+        ));
+    }
+
+    #[test]
+    fn pending_operation_ids_are_reserved_across_all_operation_kinds() {
+        let operation_id = OperationId::new("guest-pending-cross-kind").expect("operation ID");
+        let file_request = RecordedRequest::new(
+            MutationKind::File,
+            &json!({"path": "/tmp/state", "data": "YQ=="}),
+        )
+        .expect("file fingerprint");
+        let filesystem_request = RecordedRequest::new(
+            MutationKind::Filesystem,
+            &json!({"path": "/tmp/state", "op": "remove"}),
+        )
+        .expect("filesystem fingerprint");
+        let mut state = ExecutorState::default();
+        assert!(matches!(
+            state
+                .prepare_file_operation(&operation_id, &file_request)
+                .expect("claim file operation"),
+            FileOperationPreparation::Claimed(_)
+        ));
+        assert_eq!(
+            state
+                .prepare_filesystem_operation(&operation_id, &filesystem_request)
+                .expect_err("cross-kind pending reuse must fail")
+                .code,
+            ErrorCode::Conflict
+        );
     }
 
     #[test]
