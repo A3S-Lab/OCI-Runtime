@@ -494,6 +494,7 @@ pub(crate) fn read_bounded_worker_output(mut input: impl Read, limit: u64) -> io
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io::Read;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::process::{Command, Stdio};
     use std::time::Duration;
@@ -600,19 +601,28 @@ mod tests {
         let temporary = tempfile::tempdir().expect("create replacement fixture");
         let console = temporary.path().join("console.log");
         let prepared = prepare_console_output(&console, None).expect("prepare console");
+        // Keep an independent read-only handle to the original inode. The
+        // descriptor retained by `PreparedConsoleOutput` is intentionally
+        // write-only, and macOS rejects reopening its `/dev/fd` path for read.
+        let mut original = fs::OpenOptions::new()
+            .read(true)
+            .open(&console)
+            .expect("open original console for verification");
         fs::remove_file(&console).expect("unlink prepared console");
         fs::write(&console, b"replacement").expect("write replacement");
 
         fs::write(prepared.pinned_path(), b"original inode").expect("write pinned console");
 
+        let mut original_contents = Vec::new();
+        original
+            .read_to_end(&mut original_contents)
+            .expect("read original console through retained handle");
+
         assert_eq!(
             fs::read(&console).expect("read replacement"),
             b"replacement"
         );
-        assert_eq!(
-            fs::read(prepared.pinned_path()).expect("read pinned console"),
-            b"original inode"
-        );
+        assert_eq!(original_contents, b"original inode");
     }
 
     #[test]
