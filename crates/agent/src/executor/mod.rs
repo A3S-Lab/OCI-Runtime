@@ -66,6 +66,7 @@ mod trusted_executable;
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -88,6 +89,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, Notify, OwnedMutexGuard};
 use tokio::time::{sleep, Instant};
 
+use crate::vm_attachment::UtilityVmStorageSources;
 use crate::AGENT_VERSION;
 use bundle_scope::{BundleDirectoryScope, PinnedBundleDirectory};
 use cgroup::{CgroupManager, RootlessCgroupDelegation};
@@ -96,7 +98,8 @@ use pidfd::SignalOutcome;
 use plan::InitPlan;
 use process::{PreparedProcess, ProcessSpawnContext};
 use state::{
-    ContainerKey, ContainerRecord, ExecutorState, MutationKind, RecordedOutcome, RecordedRequest,
+    ContainerKey, ContainerRecord, ExecutorState, MutationKind, RecordedRequest,
+    StateOperationPreparation, UnitOperationPreparation,
 };
 use trusted_executable::PinnedExecutable;
 
@@ -205,6 +208,26 @@ pub struct LinuxExecutor {
     vm_attachments: Option<crate::UtilityVmAttachmentBinding>,
     state: Arc<Mutex<ExecutorState>>,
     shutdown: Arc<Mutex<Option<Arc<ExecutorShutdownCompletion>>>>,
+}
+
+/// Immutable executor authority retained by a detached create operation.
+///
+/// A create spans filesystem setup, helper handshakes, and process startup.
+/// Keeping these exact descriptors and policy values in an owned context lets
+/// the operation finish even when its RPC waiter is cancelled or the service
+/// drops its primary executor handle.
+#[derive(Debug)]
+struct CreateOperationContext {
+    init_executable: PathBuf,
+    _init_executable_file: File,
+    runtime_root: PathBuf,
+    device_source_root: PathBuf,
+    owner_identity: Option<recovery::ProcessIdentity>,
+    rootfs_scope: RootfsScope,
+    bundle_directory_scope: BundleDirectoryScope,
+    user_mapping_runtime: namespace::UserMappingRuntime,
+    rootless_cgroup_delegation: Option<RootlessCgroupDelegation>,
+    vm_storage_sources: UtilityVmStorageSources,
 }
 
 /// Rendezvous for the executor's one destructive shutdown operation.
@@ -727,8 +750,32 @@ async fn shutdown_executor(
 }
 
 impl LinuxExecutor {
+    fn create_operation_context(&self) -> Result<CreateOperationContext> {
+        let (init_executable, init_executable_file) =
+            self.init_executable.duplicate_command_path()?;
+        let bundle_directory_scope = self.bundle_directory_scope.duplicate_for_detached()?;
+        let vm_storage_sources = self
+            .vm_attachments
+            .as_ref()
+            .map(crate::UtilityVmAttachmentBinding::storage_sources)
+            .cloned()
+            .unwrap_or_default();
+        Ok(CreateOperationContext {
+            init_executable,
+            _init_executable_file: init_executable_file,
+            runtime_root: self.runtime_root.clone(),
+            device_source_root: self.device_source_root.clone(),
+            owner_identity: self.owner_identity,
+            rootfs_scope: self.rootfs_scope,
+            bundle_directory_scope,
+            user_mapping_runtime: self.user_mapping_runtime.clone(),
+            rootless_cgroup_delegation: self.rootless_cgroup_delegation.clone(),
+            vm_storage_sources,
+        })
+    }
+
     async fn create_new(
-        &self,
+        context: &CreateOperationContext,
         state: &mut ExecutorState,
         request: &AgentCreateRequest,
         inherited_descriptors: InheritedDescriptorPlan,
@@ -759,7 +806,7 @@ impl LinuxExecutor {
             ));
         }
 
-        let pinned_bundle = self
+        let pinned_bundle = context
             .bundle_directory_scope
             .pin(request.bundle.guest_directory())?;
         let bundle = request.bundle.to_guest_bundle()?;
@@ -767,19 +814,15 @@ impl LinuxExecutor {
             Some(process) => request.io.resolve_for_process(process)?,
             None => request.io.clone(),
         };
-        let rootless = self.user_mapping_runtime.is_rootless();
-        let vm_storage_sources = self
-            .vm_attachments
-            .as_ref()
-            .map(crate::UtilityVmAttachmentBinding::storage_sources)
-            .cloned()
-            .unwrap_or_default();
+        let rootless = context.user_mapping_runtime.is_rootless();
+        let vm_storage_sources = &context.vm_storage_sources;
         let mut plan = InitPlan::from_bundle(&bundle, &process_io)?;
-        mount::rewrite_vm_storage_sources(&mut plan.mounts, &vm_storage_sources)?;
-        mount::validate_bundle_source_syntax(&plan.mounts, self.rootfs_scope)?;
+        mount::rewrite_vm_storage_sources(&mut plan.mounts, vm_storage_sources)?;
+        mount::validate_bundle_source_syntax(&plan.mounts, context.rootfs_scope)?;
         plan.cgroup.ensure_runtime_path(&key.id, key.generation)?;
         plan.resolve_cgroup_ownership(
-            self.user_mapping_runtime
+            context
+                .user_mapping_runtime
                 .effective_ids()
                 .map(|(uid, _)| uid),
         )?;
@@ -802,7 +845,7 @@ impl LinuxExecutor {
                     "rootless linux.netDevices requires network-device authority in the runtime user namespace",
                 ));
             }
-            if plan.cgroup.has_cgroup() && self.rootless_cgroup_delegation.is_none() {
+            if plan.cgroup.has_cgroup() && context.rootless_cgroup_delegation.is_none() {
                 return Err(executor_error(
                     ErrorCode::Unsupported,
                     "rootless OCI device isolation requires an explicit verified cgroup-v2 delegation",
@@ -810,7 +853,7 @@ impl LinuxExecutor {
             }
             let device_support_requested = plan.devices.has_device_filter();
             if device_support_requested
-                && self
+                && context
                     .rootless_cgroup_delegation
                     .as_ref()
                     .is_none_or(|delegation| !delegation.has_device_policy_authority())
@@ -821,7 +864,7 @@ impl LinuxExecutor {
                 ));
             }
             if device_support_requested
-                && self
+                && context
                     .rootless_cgroup_delegation
                     .as_ref()
                     .is_some_and(RootlessCgroupDelegation::has_device_policy_authority)
@@ -836,7 +879,7 @@ impl LinuxExecutor {
             plan.annotations.clone(),
         )?;
         if plan.cgroup.has_cgroup() && state.cgroup_manager.is_none() {
-            state.cgroup_manager = Some(match &self.rootless_cgroup_delegation {
+            state.cgroup_manager = Some(match &context.rootless_cgroup_delegation {
                 Some(delegation) => CgroupManager::create_delegated(delegation)?,
                 None => CgroupManager::create()?,
             });
@@ -848,50 +891,51 @@ impl LinuxExecutor {
             )
         })?;
         state.next_slot = slot;
-        let runtime_directory = self.runtime_root.join(format!("c-{slot:016x}"));
+        let runtime_directory = context.runtime_root.join(format!("c-{slot:016x}"));
         create_private_directory(&runtime_directory).await?;
         let config_snapshot = runtime_directory.join("config.json");
         if let Err(error) =
             write_private_snapshot(&config_snapshot, request.bundle.config_json()).await
         {
-            let _ = remove_container_directory(&self.runtime_root, &runtime_directory).await;
+            let _ = remove_container_directory(&context.runtime_root, &runtime_directory).await;
             return Err(error);
         }
-        let rootless_device_mounts =
-            if self.user_mapping_runtime.is_rootless() && plan.devices.has_node_setup() {
-                match self
-                    .rootless_cgroup_delegation
-                    .as_ref()
-                    .ok_or_else(|| {
-                        executor_error(
+        let rootless_device_mounts = if context.user_mapping_runtime.is_rootless()
+            && plan.devices.has_node_setup()
+        {
+            match context
+                .rootless_cgroup_delegation
+                .as_ref()
+                .ok_or_else(|| {
+                    executor_error(
                         ErrorCode::Internal,
                         "rootless device-policy delegation disappeared before mount preparation",
                     )
-                    })
-                    .and_then(RootlessCgroupDelegation::prepare_device_mounts)
-                {
-                    Ok(mounts) => mounts,
-                    Err(error) => {
-                        let _ = remove_container_directory(&self.runtime_root, &runtime_directory)
-                            .await;
-                        return Err(error);
-                    }
+                })
+                .and_then(RootlessCgroupDelegation::prepare_device_mounts)
+            {
+                Ok(mounts) => mounts,
+                Err(error) => {
+                    let _ =
+                        remove_container_directory(&context.runtime_root, &runtime_directory).await;
+                    return Err(error);
                 }
-            } else {
-                Vec::new()
-            };
-        let device_source_directory = self.device_source_root.join(format!("c-{slot:016x}"));
+            }
+        } else {
+            Vec::new()
+        };
+        let device_source_directory = context.device_source_root.join(format!("c-{slot:016x}"));
         let separate_device_source_directory = device_source_directory != runtime_directory;
         if separate_device_source_directory {
             if let Err(error) = create_private_directory(&device_source_directory).await {
-                let _ = remove_container_directory(&self.runtime_root, &runtime_directory).await;
+                let _ = remove_container_directory(&context.runtime_root, &runtime_directory).await;
                 return Err(error);
             }
         }
         let mut process = match PreparedProcess::spawn(
             &plan,
             &config_snapshot,
-            self.init_executable.command_path(),
+            &context.init_executable,
             state.cgroup_manager.as_ref(),
             &process_io,
             &hook_state,
@@ -899,10 +943,10 @@ impl LinuxExecutor {
                 inherited_descriptors,
                 rootless_device_mounts,
                 pinned_bundle,
-                rootfs_scope: self.rootfs_scope,
-                user_mapping_runtime: &self.user_mapping_runtime,
+                rootfs_scope: context.rootfs_scope,
+                user_mapping_runtime: &context.user_mapping_runtime,
                 device_source_directory: &device_source_directory,
-                vm_storage_sources: &vm_storage_sources,
+                vm_storage_sources,
             },
         )
         .await
@@ -911,7 +955,7 @@ impl LinuxExecutor {
             Err(mut error) => {
                 if separate_device_source_directory {
                     if let Err(cleanup) = remove_container_directory(
-                        &self.device_source_root,
+                        &context.device_source_root,
                         &device_source_directory,
                     )
                     .await
@@ -924,26 +968,27 @@ impl LinuxExecutor {
                 }
                 if cleanup_device_targets(&runtime_directory).is_ok() {
                     let _ =
-                        remove_container_directory(&self.runtime_root, &runtime_directory).await;
+                        remove_container_directory(&context.runtime_root, &runtime_directory).await;
                 }
                 return Err(error);
             }
         };
         if separate_device_source_directory {
             if let Err(error) =
-                remove_container_directory(&self.device_source_root, &device_source_directory).await
+                remove_container_directory(&context.device_source_root, &device_source_directory)
+                    .await
             {
                 let _ = process.rollback_network_devices().await;
                 let _ = process.force_stop().await;
                 let _ = process.cleanup_intel_rdt();
                 if cleanup_device_targets(&runtime_directory).is_ok() {
                     let _ =
-                        remove_container_directory(&self.runtime_root, &runtime_directory).await;
+                        remove_container_directory(&context.runtime_root, &runtime_directory).await;
                 }
                 return Err(error);
             }
         }
-        if let Some(owner) = self.owner_identity {
+        if let Some(owner) = context.owner_identity {
             if let Err(error) = recovery::write_container_record(
                 &runtime_directory,
                 &config_snapshot,
@@ -960,7 +1005,7 @@ impl LinuxExecutor {
                 let _ = process.cleanup_intel_rdt();
                 if cleanup_device_targets(&runtime_directory).is_ok() {
                     let _ =
-                        remove_container_directory(&self.runtime_root, &runtime_directory).await;
+                        remove_container_directory(&context.runtime_root, &runtime_directory).await;
                 }
                 return Err(error);
             }
@@ -978,7 +1023,7 @@ impl LinuxExecutor {
                 let _ = process.cleanup_intel_rdt();
                 if cleanup_device_targets(&runtime_directory).is_ok() {
                     let _ =
-                        remove_container_directory(&self.runtime_root, &runtime_directory).await;
+                        remove_container_directory(&context.runtime_root, &runtime_directory).await;
                 }
                 return Err(error);
             }
@@ -1043,20 +1088,30 @@ impl LinuxExecutor {
     ) -> Result<AgentState> {
         let operation = RecordedRequest::create(&request, inherited_descriptors.schema())?;
         let operation_id = request.context.operation_id.clone();
-        let mut state = self.state.lock().await;
-        if let Some(result) = state.replay_state(&operation_id, &operation) {
-            return result;
+        let (completion, owner) = {
+            let mut state = Arc::clone(&self.state).lock_owned().await;
+            match state.prepare_state_operation(&operation_id, &operation)? {
+                StateOperationPreparation::Completed(result) => return result,
+                StateOperationPreparation::Pending(completion) => (completion, None),
+                StateOperationPreparation::Claimed(completion) => (completion, Some(state)),
+            }
+        };
+        if let Some(mut state) = owner {
+            match self.create_operation_context() {
+                Ok(context) => {
+                    tokio::spawn(async move {
+                        let result =
+                            Self::create_new(&context, &mut state, &request, inherited_descriptors)
+                                .await;
+                        complete_state_operation(&mut state, operation_id, operation, result);
+                    });
+                }
+                Err(error) => {
+                    complete_state_operation(&mut state, operation_id, operation, Err(error));
+                }
+            }
         }
-        state.reserve_operation(&operation_id)?;
-        let result = self
-            .create_new(&mut state, &request, inherited_descriptors)
-            .await;
-        state.record(
-            operation_id,
-            operation,
-            RecordedOutcome::State(result.clone()),
-        );
-        result
+        wait_for_state_operation(completion).await
     }
 
     async fn start_new(
@@ -1225,7 +1280,7 @@ impl LinuxExecutor {
     }
 
     async fn delete_new(
-        &self,
+        runtime_root: &Path,
         state: &mut ExecutorState,
         request: &AgentDeleteRequest,
     ) -> Result<()> {
@@ -1260,7 +1315,7 @@ impl LinuxExecutor {
             )
         };
         cleanup_device_targets(&runtime_directory)?;
-        remove_container_directory(&self.runtime_root, &runtime_directory).await?;
+        remove_container_directory(runtime_root, &runtime_directory).await?;
         state.containers.remove(&key);
         match poststop {
             Ok((hooks, hook_state)) => hooks.run_poststop(&hook_state).await,
@@ -1344,52 +1399,62 @@ impl GuestAgentService for LinuxExecutor {
     async fn start(&self, request: AgentStartRequest) -> Result<AgentState> {
         let operation = RecordedRequest::new(MutationKind::Start, &request)?;
         let operation_id = request.context.operation_id.clone();
-        let mut state = self.state.lock().await;
-        if let Some(result) = state.replay_state(&operation_id, &operation) {
-            return result;
+        let (completion, owner) = {
+            let mut state = Arc::clone(&self.state).lock_owned().await;
+            match state.prepare_state_operation(&operation_id, &operation)? {
+                StateOperationPreparation::Completed(result) => return result,
+                StateOperationPreparation::Pending(completion) => (completion, None),
+                StateOperationPreparation::Claimed(completion) => (completion, Some(state)),
+            }
+        };
+        if let Some(mut state) = owner {
+            tokio::spawn(async move {
+                let result = Self::start_new(&mut state, &request).await;
+                complete_state_operation(&mut state, operation_id, operation, result);
+            });
         }
-        state.reserve_operation(&operation_id)?;
-        let result = Self::start_new(&mut state, &request).await;
-        state.record(
-            operation_id,
-            operation,
-            RecordedOutcome::State(result.clone()),
-        );
-        result
+        wait_for_state_operation(completion).await
     }
 
     async fn kill(&self, request: AgentKillRequest) -> Result<AgentState> {
         let operation = RecordedRequest::new(MutationKind::Kill, &request)?;
         let operation_id = request.context.operation_id.clone();
-        let mut state = self.state.lock().await;
-        if let Some(result) = state.replay_state(&operation_id, &operation) {
-            return result;
+        let (completion, owner) = {
+            let mut state = Arc::clone(&self.state).lock_owned().await;
+            match state.prepare_state_operation(&operation_id, &operation)? {
+                StateOperationPreparation::Completed(result) => return result,
+                StateOperationPreparation::Pending(completion) => (completion, None),
+                StateOperationPreparation::Claimed(completion) => (completion, Some(state)),
+            }
+        };
+        if let Some(mut state) = owner {
+            tokio::spawn(async move {
+                let result = Self::kill_new(&mut state, &request).await;
+                complete_state_operation(&mut state, operation_id, operation, result);
+            });
         }
-        state.reserve_operation(&operation_id)?;
-        let result = Self::kill_new(&mut state, &request).await;
-        state.record(
-            operation_id,
-            operation,
-            RecordedOutcome::State(result.clone()),
-        );
-        result
+        wait_for_state_operation(completion).await
     }
 
     async fn delete(&self, request: AgentDeleteRequest) -> Result<()> {
         let operation = RecordedRequest::new(MutationKind::Delete, &request)?;
         let operation_id = request.context.operation_id.clone();
-        let mut state = self.state.lock().await;
-        if let Some(result) = state.replay_unit(&operation_id, &operation) {
-            return result;
+        let (completion, owner) = {
+            let mut state = Arc::clone(&self.state).lock_owned().await;
+            match state.prepare_unit_operation(&operation_id, &operation)? {
+                UnitOperationPreparation::Completed(result) => return result,
+                UnitOperationPreparation::Pending(completion) => (completion, None),
+                UnitOperationPreparation::Claimed(completion) => (completion, Some(state)),
+            }
+        };
+        if let Some(mut state) = owner {
+            let runtime_root = self.runtime_root.clone();
+            tokio::spawn(async move {
+                let result = Self::delete_new(&runtime_root, &mut state, &request).await;
+                complete_unit_operation(&mut state, operation_id, operation, result);
+            });
         }
-        state.reserve_operation(&operation_id)?;
-        let result = self.delete_new(&mut state, &request).await;
-        state.record(
-            operation_id,
-            operation,
-            RecordedOutcome::Unit(result.clone()),
-        );
-        result
+        wait_for_unit_operation(completion).await
     }
 
     async fn wait(&self, request: AgentWaitRequest) -> Result<ExitStatus> {
@@ -1411,35 +1476,41 @@ impl GuestAgentService for LinuxExecutor {
     async fn pause(&self, request: AgentContainerOperationRequest) -> Result<AgentState> {
         let operation = RecordedRequest::new(MutationKind::Pause, &request)?;
         let operation_id = request.context.operation_id.clone();
-        let mut state = self.state.lock().await;
-        if let Some(result) = state.replay_state(&operation_id, &operation) {
-            return result;
+        let (completion, owner) = {
+            let mut state = Arc::clone(&self.state).lock_owned().await;
+            match state.prepare_state_operation(&operation_id, &operation)? {
+                StateOperationPreparation::Completed(result) => return result,
+                StateOperationPreparation::Pending(completion) => (completion, None),
+                StateOperationPreparation::Claimed(completion) => (completion, Some(state)),
+            }
+        };
+        if let Some(mut state) = owner {
+            tokio::spawn(async move {
+                let result = Self::freezer_new(&mut state, &request, true).await;
+                complete_state_operation(&mut state, operation_id, operation, result);
+            });
         }
-        state.reserve_operation(&operation_id)?;
-        let result = Self::freezer_new(&mut state, &request, true).await;
-        state.record(
-            operation_id,
-            operation,
-            RecordedOutcome::State(result.clone()),
-        );
-        result
+        wait_for_state_operation(completion).await
     }
 
     async fn resume(&self, request: AgentContainerOperationRequest) -> Result<AgentState> {
         let operation = RecordedRequest::new(MutationKind::Resume, &request)?;
         let operation_id = request.context.operation_id.clone();
-        let mut state = self.state.lock().await;
-        if let Some(result) = state.replay_state(&operation_id, &operation) {
-            return result;
+        let (completion, owner) = {
+            let mut state = Arc::clone(&self.state).lock_owned().await;
+            match state.prepare_state_operation(&operation_id, &operation)? {
+                StateOperationPreparation::Completed(result) => return result,
+                StateOperationPreparation::Pending(completion) => (completion, None),
+                StateOperationPreparation::Claimed(completion) => (completion, Some(state)),
+            }
+        };
+        if let Some(mut state) = owner {
+            tokio::spawn(async move {
+                let result = Self::freezer_new(&mut state, &request, false).await;
+                complete_state_operation(&mut state, operation_id, operation, result);
+            });
         }
-        state.reserve_operation(&operation_id)?;
-        let result = Self::freezer_new(&mut state, &request, false).await;
-        state.record(
-            operation_id,
-            operation,
-            RecordedOutcome::State(result.clone()),
-        );
-        result
+        wait_for_state_operation(completion).await
     }
 
     async fn processes(&self, request: AgentProcessesRequest) -> Result<Vec<ProcessRecord>> {
@@ -1450,18 +1521,21 @@ impl GuestAgentService for LinuxExecutor {
     async fn update(&self, request: AgentUpdateRequest) -> Result<AgentState> {
         let operation = RecordedRequest::new(MutationKind::Update, &request)?;
         let operation_id = request.context.operation_id.clone();
-        let mut state = self.state.lock().await;
-        if let Some(result) = state.replay_state(&operation_id, &operation) {
-            return result;
+        let (completion, owner) = {
+            let mut state = Arc::clone(&self.state).lock_owned().await;
+            match state.prepare_state_operation(&operation_id, &operation)? {
+                StateOperationPreparation::Completed(result) => return result,
+                StateOperationPreparation::Pending(completion) => (completion, None),
+                StateOperationPreparation::Claimed(completion) => (completion, Some(state)),
+            }
+        };
+        if let Some(mut state) = owner {
+            tokio::spawn(async move {
+                let result = Self::update_new(&mut state, &request).await;
+                complete_state_operation(&mut state, operation_id, operation, result);
+            });
         }
-        state.reserve_operation(&operation_id)?;
-        let result = Self::update_new(&mut state, &request).await;
-        state.record(
-            operation_id,
-            operation,
-            RecordedOutcome::State(result.clone()),
-        );
-        result
+        wait_for_state_operation(completion).await
     }
 
     async fn stats(&self, request: AgentStatsRequest) -> Result<ContainerStats> {
@@ -1491,6 +1565,63 @@ impl GuestAgentService for LinuxExecutor {
 
     async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
         self.filesystem_recorded(request).await
+    }
+}
+
+fn complete_state_operation(
+    state: &mut ExecutorState,
+    operation_id: OperationId,
+    operation: RecordedRequest,
+    result: Result<AgentState>,
+) {
+    if let Err(error) = state.complete_state_operation(operation_id, operation, result) {
+        // Every detached owner is created only after its exact claim is
+        // installed. A missing or mismatched claim therefore indicates
+        // executor-journal corruption, not a caller error.
+        debug_assert!(false, "failed to complete guest state operation: {error}");
+    }
+}
+
+async fn wait_for_state_operation(
+    mut completion: tokio::sync::watch::Receiver<Option<Result<AgentState>>>,
+) -> Result<AgentState> {
+    loop {
+        if let Some(result) = completion.borrow_and_update().clone() {
+            return result;
+        }
+        if completion.changed().await.is_err() {
+            return Err(executor_error(
+                ErrorCode::Internal,
+                "guest state operation owner disappeared before publishing its result",
+            ));
+        }
+    }
+}
+
+fn complete_unit_operation(
+    state: &mut ExecutorState,
+    operation_id: OperationId,
+    operation: RecordedRequest,
+    result: Result<()>,
+) {
+    if let Err(error) = state.complete_unit_operation(operation_id, operation, result) {
+        debug_assert!(false, "failed to complete guest unit operation: {error}");
+    }
+}
+
+async fn wait_for_unit_operation(
+    mut completion: tokio::sync::watch::Receiver<Option<Result<()>>>,
+) -> Result<()> {
+    loop {
+        if let Some(result) = completion.borrow_and_update().clone() {
+            return result;
+        }
+        if completion.changed().await.is_err() {
+            return Err(executor_error(
+                ErrorCode::Internal,
+                "guest unit operation owner disappeared before publishing its result",
+            ));
+        }
     }
 }
 
