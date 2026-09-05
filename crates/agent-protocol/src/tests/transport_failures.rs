@@ -150,3 +150,90 @@ async fn request_write_failure_releases_the_transport_while_client_clones_remain
         .expect("request-failure server task")
         .expect("request-failure server observed transport release");
 }
+
+#[tokio::test]
+async fn cancelled_request_poisons_and_releases_the_transport() {
+    let (host, mut guest) = tokio::io::duplex(1024 * 1024);
+    let dropped = Arc::new(AtomicBool::new(false));
+    let host = DropObservedStream::new(host, Arc::clone(&dropped));
+    let (request_seen_send, request_seen_receive) = tokio::sync::oneshot::channel();
+    let peer = tokio::spawn(async move {
+        let _: HostHello = read_frame(&mut guest)
+            .await?
+            .ok_or_else(|| Error::new(ErrorCode::Unavailable, "missing hello"))?;
+        write_frame(
+            &mut guest,
+            &HelloOutcome::Accepted {
+                hello: AgentHello::new(
+                    1,
+                    AgentCapabilities::core("cancel-test", std::env::consts::ARCH)?,
+                ),
+            },
+        )
+        .await?;
+        let _request: RequestEnvelope = read_frame(&mut guest)
+            .await?
+            .ok_or_else(|| Error::new(ErrorCode::Unavailable, "missing request"))?;
+        request_seen_send
+            .send(())
+            .map_err(|_| Error::new(ErrorCode::Internal, "request observer was dropped"))?;
+        // A correct client drops the stream when its call is cancelled, so
+        // this read observes EOF. A client that merely drops its mutex guard
+        // will send a second request; answer it successfully so the test can
+        // distinguish unsafe stream reuse without a wall-clock timeout.
+        let Some(request) = read_frame::<RequestEnvelope, _>(&mut guest).await? else {
+            return Ok(());
+        };
+        let AgentRequest::Create(create) = request.request else {
+            return Err(Error::new(
+                ErrorCode::Internal,
+                "cancellation peer received an unexpected second request",
+            ));
+        };
+        let state = AgentState::new(
+            create.target,
+            ContainerState::Created,
+            Some(101),
+            create.bundle.config_digest(),
+        )?;
+        write_frame(
+            &mut guest,
+            &ResponseEnvelope {
+                version: 1,
+                request_id: request.request_id,
+                outcome: ResponseOutcome::Succeeded {
+                    response: Box::new(AgentResponse::State(state)),
+                },
+            },
+        )
+        .await
+    });
+
+    let client = AgentClient::connect(host, token(36))
+        .await
+        .expect("connect cancellation-test peer");
+    let clone = client.clone();
+    let request = tokio::spawn(async move { client.create(create_request()).await });
+    request_seen_receive
+        .await
+        .expect("peer observed the in-flight request");
+    request.abort();
+    assert!(request
+        .await
+        .expect_err("cancelled request task")
+        .is_cancelled());
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "cancelling an in-flight call must release its unknown-boundary transport"
+    );
+
+    let error = clone
+        .create(create_request())
+        .await
+        .expect_err("cancelled transport must reject the next request");
+    assert_eq!(error.code, ErrorCode::Unavailable);
+    clone.close().await.expect("close cancelled client");
+    peer.await
+        .expect("cancellation peer task")
+        .expect("cancellation peer completed");
+}
