@@ -25,6 +25,16 @@ host translation is the identity function. Created and joined user namespaces
 still require explicit UID and GID mappings; the executor never invents a
 mapping for either boundary.
 
+The executor binds its configured init image when the executor opens. It
+canonicalizes the invocation (including an optional symlink), verifies the
+resolved regular-file identity, and retains a no-follow descriptor in the
+private descriptor range. Every internal create, exec, filesystem, and native
+restore-helper launch uses `/proc/self/fd/<descriptor>` instead of reopening
+the caller's pathname. A pathname replacement or unlink therefore leaves the
+already-selected image unchanged. Native CRIU restore receives the canonical
+path only at its explicit external-tool boundary, where the CRIU integration
+performs its own tool and artifact verification.
+
 ## Multi-container host owner
 
 The explicit development command below opens one long-lived Native Linux SDK

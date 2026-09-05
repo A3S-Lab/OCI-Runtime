@@ -272,6 +272,10 @@ Completed:
   and namespace descriptors, per-process pidfds and replay journals, stable
   process wait, cgroup-v2 pause/resume, live process inventory, init-exit
   supervision, and complete session cleanup;
+- Linux executor init-image handoffs are descriptor-bound at executor open:
+  create, exec, filesystem, and native-restore helper children execute the
+  retained private inode through `/proc/self/fd`, while the external CRIU
+  boundary receives a canonical path for its independent verification contract;
 - helper-backed rootless native Linux create/start/exec/signal/wait/kill/delete
   evidence on x86_64 and aarch64, with container root mapped exactly to the
   nonzero effective host UID/GID, subordinate UID/GID ranges installed through

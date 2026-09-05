@@ -21,6 +21,7 @@ use super::super::process_group::ProcessGroupLease;
 use super::super::restore::{
     LinuxRestoreSpawnRequest, LinuxRestoreSpawner, RestoreExternalMount, RestoreRootfsMount,
 };
+use super::super::trusted_executable::PinnedExecutable;
 use super::super::{restore_cgroup_namespace, restore_supervisor};
 use super::launch::{
     bind_control_listener, cleanup_uncommitted_create, cleanup_unstarted_cgroup,
@@ -34,7 +35,7 @@ impl PreparedProcess {
     pub(in crate::executor) async fn restore(
         plan: &InitPlan,
         config_snapshot: &Path,
-        supervisor_executable: &Path,
+        supervisor_executable: &PinnedExecutable,
         cgroup_manager: Option<&CgroupManager>,
         hook_state: &HookStateTemplate,
         external_mounts: Vec<RestoreExternalMount>,
@@ -70,7 +71,7 @@ impl PreparedProcess {
             Err(error) => return Err(cleanup_unstarted_cgroup(&mut cgroup, error)),
         };
         let cgroup_namespace = match prepare_restore_cgroup_namespace(
-            supervisor_executable,
+            supervisor_executable.command_path(),
             expected_owner_pid,
             management_cgroup_procs,
             cgroup.as_ref().ok_or_else(|| {
@@ -116,7 +117,7 @@ impl PreparedProcess {
             Err(error) => return Err(cleanup_unstarted_cgroup(&mut cgroup, error)),
         };
         let spawn_request = LinuxRestoreSpawnRequest {
-            supervisor_executable: supervisor_executable.to_path_buf(),
+            supervisor_executable: supervisor_executable.canonical_path().to_path_buf(),
             config_snapshot: config_snapshot.to_path_buf(),
             control_name,
             expected_owner_pid,
