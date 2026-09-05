@@ -232,7 +232,7 @@ if [[ "$kvm_status" == "available" ]]; then
      and .shim_report.console_configured
      and (.shim_report.vm_entered | not)
      and .shim_report.guest_exit_code == null
-     and (.shim_report.console_created | not)
+     and .shim_report.console_created
      and .shim_report.linux_boot_assets.target_arch == $architecture
      and .shim_report.linux_boot_assets.manifest_sha256 == $manifest_sha256
      and .shim_report.linux_boot_assets.root_disk_read_only
