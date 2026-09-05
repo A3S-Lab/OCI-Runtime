@@ -62,6 +62,7 @@ mod secret_env;
 mod state;
 mod sysctl;
 mod terminal;
+mod trusted_executable;
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -97,6 +98,7 @@ use process::{PreparedProcess, ProcessSpawnContext};
 use state::{
     ContainerKey, ContainerRecord, ExecutorState, MutationKind, RecordedOutcome, RecordedRequest,
 };
+use trusted_executable::PinnedExecutable;
 
 pub use checkpoint::LinuxExecutorCheckpointSource;
 pub use inherited_descriptor::InheritedDescriptorPlan;
@@ -191,7 +193,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
 #[derive(Debug)]
 pub struct LinuxExecutor {
     capabilities: AgentCapabilities,
-    init_executable: PathBuf,
+    init_executable: PinnedExecutable,
     runtime_parent: PathBuf,
     runtime_root: PathBuf,
     device_source_root: PathBuf,
@@ -460,37 +462,7 @@ impl LinuxExecutor {
             }
             None => None,
         };
-        let init_executable = tokio::fs::canonicalize(init_executable.as_ref())
-            .await
-            .map_err(|error| {
-                executor_error(
-                    ErrorCode::FailedPrecondition,
-                    format!(
-                        "failed to resolve Linux executor init executable {}: {error}",
-                        init_executable.as_ref().display()
-                    ),
-                )
-            })?;
-        let init_metadata = tokio::fs::metadata(&init_executable)
-            .await
-            .map_err(|error| {
-                executor_error(
-                    ErrorCode::FailedPrecondition,
-                    format!(
-                        "failed to inspect Linux executor init executable {}: {error}",
-                        init_executable.display()
-                    ),
-                )
-            })?;
-        if !init_metadata.is_file() {
-            return Err(executor_error(
-                ErrorCode::FailedPrecondition,
-                format!(
-                    "Linux executor init executable must be a regular file: {}",
-                    init_executable.display()
-                ),
-            ));
-        }
+        let init_executable = PinnedExecutable::open(init_executable.as_ref()).await?;
         let user_mapping_runtime = namespace::UserMappingRuntime::detect()?;
         let runtime_parent = parent.to_path_buf();
         let (runtime_root, owner_identity) =
@@ -837,7 +809,7 @@ impl LinuxExecutor {
         let mut process = match PreparedProcess::spawn(
             &plan,
             &config_snapshot,
-            &self.init_executable,
+            self.init_executable.command_path(),
             state.cgroup_manager.as_ref(),
             &process_io,
             &hook_state,
@@ -1794,7 +1766,11 @@ mod rootless_device_tests {
         let executor = LinuxExecutor {
             capabilities: AgentCapabilities::handshake_only("test", "x86_64")
                 .expect("capabilities"),
-            init_executable: std::env::current_exe().expect("test executable"),
+            init_executable: super::trusted_executable::PinnedExecutable::open(
+                &std::env::current_exe().expect("test executable"),
+            )
+            .await
+            .expect("pin test executable"),
             runtime_parent,
             device_source_root: runtime_root.clone(),
             runtime_root,
@@ -1881,7 +1857,11 @@ mod rootless_device_tests {
         let executor = LinuxExecutor {
             capabilities: AgentCapabilities::handshake_only("test", "x86_64")
                 .expect("capabilities"),
-            init_executable: std::env::current_exe().expect("test executable"),
+            init_executable: super::trusted_executable::PinnedExecutable::open(
+                &std::env::current_exe().expect("test executable"),
+            )
+            .await
+            .expect("pin test executable"),
             runtime_parent,
             device_source_root: runtime_root.clone(),
             runtime_root,

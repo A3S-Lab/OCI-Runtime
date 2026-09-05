@@ -39,6 +39,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
   symlinks remain supported, while a replacement between resolution and spawn
   fails closed instead of selecting a different worker image.
 
+- Pinned the Linux Guest executor's configured init image for its complete
+  internal handoff graph. Create, exec, filesystem, and native-restore helper
+  launches now execute through a retained private `/proc/self/fd` descriptor,
+  so replacing or unlinking the configured pathname cannot redirect a later
+  child. The CRIU integration receives only the canonical pathname because its
+  external process boundary owns a separate executable-verification contract.
+
 - Closed the Unix utility-VM console pathname handoff race. The Host now
   atomically reserves each console entry with `openat`, retains that descriptor
   until the authenticated Agent session passes its contract checks, and carries

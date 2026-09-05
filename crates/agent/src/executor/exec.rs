@@ -139,7 +139,7 @@ impl LinuxExecutor {
                 .ok_or_else(|| missing_locked_container(&key))?;
             match ExecProcess::spawn(
                 &snapshot,
-                &self.init_executable,
+                self.init_executable.command_path(),
                 &record.process,
                 request.process.terminal().unwrap_or(false),
                 &process_io,

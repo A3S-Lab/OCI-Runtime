@@ -58,7 +58,7 @@ impl LinuxExecutor {
                 Ok(()) => match container_record(&mut state, &request.target) {
                     Ok(record) => {
                         helper::file(
-                            &self.init_executable,
+                            self.init_executable.command_path(),
                             record.process.execution_context(),
                             &request,
                         )
@@ -77,7 +77,7 @@ impl LinuxExecutor {
         } else {
             let record = container_record(&mut state, &request.target)?;
             helper::file(
-                &self.init_executable,
+                self.init_executable.command_path(),
                 record.process.execution_context(),
                 &request,
             )
@@ -108,7 +108,7 @@ impl LinuxExecutor {
                 Ok(()) => match container_record(&mut state, &request.target) {
                     Ok(record) => {
                         helper::filesystem(
-                            &self.init_executable,
+                            self.init_executable.command_path(),
                             record.process.execution_context(),
                             &request,
                         )
@@ -127,7 +127,7 @@ impl LinuxExecutor {
         } else {
             let record = container_record(&mut state, &request.target)?;
             helper::filesystem(
-                &self.init_executable,
+                self.init_executable.command_path(),
                 record.process.execution_context(),
                 &request,
             )
