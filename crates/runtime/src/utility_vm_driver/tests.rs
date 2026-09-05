@@ -280,6 +280,7 @@ impl GuestAgentService for FakeGuest {
 #[derive(Default)]
 struct FakeOwner {
     shutdown_calls: Arc<AtomicUsize>,
+    shutdown_completed: Arc<AtomicUsize>,
     shutdown_release: StdMutex<Option<Arc<Notify>>>,
 }
 
@@ -303,6 +304,7 @@ impl UtilityVmOwner for FakeOwner {
         if let Some(release) = release {
             release.notified().await;
         }
+        self.shutdown_completed.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 }

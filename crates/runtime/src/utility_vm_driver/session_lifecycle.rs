@@ -403,6 +403,21 @@ impl UtilityVmRuntimeDriver {
                 ));
             }
 
+            // Reaping the previous incarnation is destructive, but the
+            // remainder of rotation still has several asynchronous
+            // publication/cleanup boundaries.  Keep an idempotent detached
+            // fallback armed until the old session has been removed from the
+            // in-memory registry.  If the create caller disappears at any
+            // point in that window, the old owner is still reaped and a later
+            // retry can finish the metadata transition.
+            let cleanup_guest = Arc::clone(&guest);
+            let mut rotation_cleanup = super::DetachedAsyncCleanup::new(move || async move {
+                if let Err(error) = super::shutdown_guest(&cleanup_guest).await {
+                    eprintln!(
+                        "a3s-oci-runtime: cancelled reusable-session rotation cleanup failed: {error}"
+                    );
+                }
+            });
             shutdown_guest(&guest).await?;
             self.recovery.remove_session(&retained_binding).await?;
             self.handoff
@@ -417,6 +432,7 @@ impl UtilityVmRuntimeDriver {
                         && Arc::ptr_eq(&current.guest, &guest)
             ) {
                 sessions.reusable.remove(binding.id());
+                rotation_cleanup.disarm();
             } else {
                 return Err(Error::new(
                     ErrorCode::Conflict,
