@@ -181,7 +181,11 @@ The Host first validates a separate owner-only runtime share and binds a
 same-UID Unix socket. It starts the shim as the direct child and leader of a
 private process group. The shim pins the Host owner with a pidfd, writes the
 one-time token below the exact runtime share, and starts a separate worker for
-the process-takeover libkrun call. Immediately before entry, that worker:
+the process-takeover libkrun call. The worker image is resolved through a
+canonical device/inode check, opened without following its final path
+component, and started through the retained `/proc/self/fd/<n>` descriptor
+path; an invocation alias is accepted only when it resolves to that same
+regular file. Immediately before entry, that worker:
 
 1. revalidates the manifest, raw image, libkrun, firmware, exported kernel,
    static Guest Agent, target architecture, and runtime share before KVM-device

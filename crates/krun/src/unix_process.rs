@@ -90,6 +90,99 @@ pub(crate) struct WorkerExit {
     pub(crate) timed_out: bool,
 }
 
+/// The currently running shim executable pinned to a descriptor-backed path.
+///
+/// Worker processes are launched after several filesystem validations. Keeping
+/// the executable open and passing its descriptor namespace path prevents a
+/// replacement of the path returned by `current_exe()` from changing the
+/// image that crosses the worker boundary.
+pub(crate) struct PinnedCurrentExecutable {
+    command_path: PathBuf,
+    _file: File,
+}
+
+impl PinnedCurrentExecutable {
+    pub(crate) fn current() -> Result<Self, String> {
+        let requested = std::env::current_exe()
+            .map_err(|error| format!("failed to resolve the current shim executable: {error}"))?;
+        Self::from_path(&requested)
+    }
+
+    fn from_path(requested: &Path) -> Result<Self, String> {
+        // Darwin may report the invocation symlink from `current_exe()`. The
+        // process is already executing the image, so accept that spelling and
+        // pin its canonical target while comparing identities at each step.
+        let input_metadata = fs::metadata(requested).map_err(|error| {
+            format!(
+                "failed to inspect the current shim executable {}: {error}",
+                requested.display()
+            )
+        })?;
+        if !input_metadata.is_file() {
+            return Err(format!(
+                "current shim executable must resolve to a regular file: {}",
+                requested.display()
+            ));
+        }
+        let canonical = requested.canonicalize().map_err(|error| {
+            format!(
+                "failed to canonicalize the current shim executable {}: {error}",
+                requested.display()
+            )
+        })?;
+        let canonical_metadata = fs::symlink_metadata(&canonical).map_err(|error| {
+            format!(
+                "failed to inspect canonical shim executable {}: {error}",
+                canonical.display()
+            )
+        })?;
+        if canonical_metadata.file_type().is_symlink() || !canonical_metadata.is_file() {
+            return Err(format!(
+                "canonical shim executable is not a regular file: {}",
+                canonical.display()
+            ));
+        }
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+        let file = options.open(&canonical).map_err(|error| {
+            format!(
+                "failed to pin the current shim executable {}: {error}",
+                canonical.display()
+            )
+        })?;
+        let file_metadata = file.metadata().map_err(|error| {
+            format!(
+                "failed to inspect pinned shim executable {}: {error}",
+                canonical.display()
+            )
+        })?;
+        let same_identity = |metadata: &fs::Metadata| {
+            metadata.dev() == file_metadata.dev() && metadata.ino() == file_metadata.ino()
+        };
+        if !same_identity(&input_metadata) || !same_identity(&canonical_metadata) {
+            return Err(format!(
+                "current shim executable changed while it was being pinned: {}",
+                canonical.display()
+            ));
+        }
+
+        #[cfg(target_os = "linux")]
+        let descriptor_root = "/proc/self/fd";
+        #[cfg(target_os = "macos")]
+        let descriptor_root = "/dev/fd";
+        Ok(Self {
+            command_path: Path::new(descriptor_root).join(file.as_raw_fd().to_string()),
+            _file: file,
+        })
+    }
+
+    pub(crate) fn command_path(&self) -> &Path {
+        &self.command_path
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn resolve_console(console: &Path) -> Result<PathBuf, String> {
     resolve_console_with_identity(console, None)
@@ -528,11 +621,47 @@ pub(crate) fn read_bounded_worker_output(mut input: impl Read, limit: u64) -> io
 mod tests {
     use std::fs;
     use std::io::Read;
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
     use std::process::{Command, Stdio};
     use std::time::Duration;
 
-    use super::{prepare_console_output, wait_for_worker, ConsoleIdentity, PRIVATE_CONSOLE_MODE};
+    use super::{
+        prepare_console_output, wait_for_worker, ConsoleIdentity, PinnedCurrentExecutable,
+        PRIVATE_CONSOLE_MODE,
+    };
+
+    #[test]
+    fn current_executable_is_pinned_through_the_descriptor_namespace() {
+        let pinned = PinnedCurrentExecutable::current().expect("pin current executable");
+        let metadata = fs::metadata(pinned.command_path()).expect("inspect pinned executable");
+        assert!(metadata.is_file());
+        #[cfg(target_os = "linux")]
+        assert!(pinned.command_path().starts_with("/proc/self/fd/"));
+        #[cfg(target_os = "macos")]
+        assert!(pinned.command_path().starts_with("/dev/fd/"));
+
+        let status = Command::new(pinned.command_path())
+            .arg("--list")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("execute the descriptor-pinned test binary");
+        assert!(status.success());
+    }
+
+    #[test]
+    fn current_executable_pin_accepts_an_invocation_symlink() {
+        let temporary = tempfile::tempdir().expect("create executable fixture");
+        let alias = temporary.path().join("shim-alias");
+        let executable = std::env::current_exe().expect("resolve test executable");
+        symlink(&executable, &alias).expect("create executable symlink");
+
+        let pinned = PinnedCurrentExecutable::from_path(&alias)
+            .expect("pin the executable behind the invocation symlink");
+        assert!(fs::metadata(pinned.command_path())
+            .expect("inspect symlink-pinned executable")
+            .is_file());
+    }
 
     #[test]
     fn prepared_console_is_private_and_uses_the_pinned_descriptor() {
