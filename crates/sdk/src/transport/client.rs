@@ -1,10 +1,11 @@
 use std::fmt;
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
 use crate::{
     CheckpointRequest, CheckpointResponse, CloseStdinRequest, ContainerOperationRequest,
@@ -43,6 +44,52 @@ struct TransportClientInner {
     connector: Option<Arc<dyn TransportConnector>>,
     protocol: AtomicU16,
     next_request_id: AtomicU64,
+}
+
+/// Owns one serialized SDK request and drops the physical stream if the
+/// request future is cancelled before a complete, correlated response.
+///
+/// A cancelled write/read can leave a framed stream between boundaries. The
+/// next caller must never reuse that stream, because it could consume a
+/// partial frame or a response for the cancelled request.
+struct InFlightCall<'a> {
+    connection: MutexGuard<'a, Option<Box<dyn AsyncTransportIo>>>,
+    completed: bool,
+}
+
+impl<'a> InFlightCall<'a> {
+    fn new(connection: MutexGuard<'a, Option<Box<dyn AsyncTransportIo>>>) -> Self {
+        Self {
+            connection,
+            completed: false,
+        }
+    }
+
+    fn complete(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl Deref for InFlightCall<'_> {
+    type Target = Option<Box<dyn AsyncTransportIo>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.connection
+    }
+}
+
+impl DerefMut for InFlightCall<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.connection
+    }
+}
+
+impl Drop for InFlightCall<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            drop(self.connection.take());
+        }
+    }
 }
 
 impl fmt::Debug for RuntimeTransportClient {
@@ -136,37 +183,41 @@ impl RuntimeTransportClient {
             )
             .for_operation("sdk-transport"));
         }
-        let connection = connection_guard
-            .as_mut()
-            .expect("reconnect_locked publishes a negotiated connection");
-        if let Err(error) = write_frame(
-            &mut **connection,
+        let mut connection = InFlightCall::new(connection_guard);
+        let Some(stream) = connection.as_mut() else {
+            return Err(super::transport_error(
+                "sdk-transport",
+                "SDK transport has no negotiated connection",
+            ));
+        };
+        write_frame(
+            &mut **stream,
             &ClientMessage::Request {
                 protocol,
                 request_id,
                 request: Box::new(request),
             },
         )
-        .await
-        {
-            *connection_guard = None;
-            return Err(error);
-        }
-        let response = match read_frame::<ServerMessage>(&mut **connection).await {
+        .await?;
+        let Some(stream) = connection.as_mut() else {
+            return Err(super::transport_error(
+                "sdk-transport",
+                "SDK transport disappeared after request write",
+            ));
+        };
+        let response = match read_frame::<ServerMessage>(&mut **stream).await {
             Ok(Some(response)) => response,
             Ok(None) => {
-                *connection_guard = None;
                 return Err(super::transport_error(
                     "sdk-transport",
                     "SDK transport closed while awaiting a response",
                 ));
             }
             Err(error) => {
-                *connection_guard = None;
                 return Err(error);
             }
         };
-        match response {
+        let result = match response {
             ServerMessage::Response {
                 protocol: response_protocol,
                 request_id: response_id,
@@ -180,19 +231,19 @@ impl RuntimeTransportClient {
                 request_id: response_id,
                 ..
             } => {
-                *connection_guard = None;
-                Err(protocol_error(format!(
+                return Err(protocol_error(format!(
                     "SDK response correlation mismatch: expected protocol {protocol} request {request_id}, \
                      received protocol {response_protocol} request {response_id}",
-                )))
+                )));
             }
             ServerMessage::Welcome { .. } | ServerMessage::Reject { .. } => {
-                *connection_guard = None;
-                Err(protocol_error(
+                return Err(protocol_error(
                     "server sent a handshake message after SDK negotiation",
-                ))
+                ));
             }
-        }
+        };
+        connection.complete();
+        result
     }
 }
 

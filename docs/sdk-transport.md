@@ -67,9 +67,11 @@ resize:
 5. every request and response carries the negotiated version and a nonzero
    request ID;
 6. stable SDK errors cross the boundary without being converted to strings;
-7. framing, version, or correlation failures poison the current byte stream;
-   a local-endpoint client reconnects and renegotiates only when the caller
-   makes a later request, while `from_io` streams remain permanently closed;
+7. framing, version, correlation, or caller-cancellation failures poison the
+   current byte stream; a local-endpoint client reconnects and renegotiates
+   only when the caller makes a later request, while `from_io` streams remain
+   permanently closed. A cancelled request is never replayed by the transport;
+   callers must explicitly retry or reconcile the original operation;
 8. every decoded request is validated before service dispatch.
 
 Calls from cloned clients are serialized on one connection. This guarantees
