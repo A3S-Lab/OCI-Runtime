@@ -589,8 +589,21 @@ impl WhpxRuntimeDriver {
         session: &Arc<WhpxContainer>,
         mut error: Error,
     ) -> Error {
+        let cleanup_owner = Arc::clone(&session.owner);
+        let mut owner_cleanup = DetachedAsyncCleanup::new(move || async move {
+            if let Err(error) = cleanup_owner.shutdown().await {
+                eprintln!(
+                    "a3s-oci-runtime: cancelled WHPX terminal-create cleanup failed: {error}"
+                );
+            }
+        });
         match session.owner.shutdown().await {
-            Ok(()) => self.remove_live_session(session).await,
+            Ok(()) => {
+                self.remove_live_session(session).await;
+                // The live attachment is no longer published. Subsequent
+                // recovery/handoff cleanup is independent of owner reaping.
+                owner_cleanup.disarm();
+            }
             Err(cleanup) => {
                 error.message = format!(
                     "{}; failed to reap the dedicated utility VM: {}",
@@ -966,8 +979,15 @@ impl RuntimeDriver for WhpxRuntimeDriver {
         match self.attachment_for(&request.target, "whpx-delete").await? {
             WhpxAttachment::Live(session) => {
                 session.client.delete(request).await?;
+                let cleanup_owner = Arc::clone(&session.owner);
+                let mut owner_cleanup = DetachedAsyncCleanup::new(move || async move {
+                    if let Err(error) = cleanup_owner.shutdown().await {
+                        eprintln!("a3s-oci-runtime: cancelled WHPX delete cleanup failed: {error}");
+                    }
+                });
                 session.owner.shutdown().await?;
                 self.replace_with_stopped(&session).await;
+                owner_cleanup.disarm();
                 self.remove_recovery_report(&session.target).await?;
                 self.cleanup_runtime_bundle_handoff(&session.target).await?;
                 self.remove_stopped(&session.target).await;
@@ -2955,6 +2975,7 @@ mod tests {
     #[derive(Default)]
     struct FakeOwner {
         shutdown_calls: AtomicUsize,
+        shutdown_completed: AtomicUsize,
         active_shutdowns: AtomicUsize,
         max_active_shutdowns: AtomicUsize,
         shutdown_barrier: StdMutex<Option<Arc<tokio::sync::Barrier>>>,
@@ -2999,6 +3020,7 @@ mod tests {
             } else {
                 tokio::task::yield_now().await;
             }
+            self.shutdown_completed.fetch_add(1, Ordering::Relaxed);
             self.active_shutdowns.fetch_sub(1, Ordering::Relaxed);
             Ok(())
         }
@@ -3809,6 +3831,152 @@ mod tests {
 
         assert_eq!(fixture.owner.shutdown_calls.load(Ordering::Relaxed), 1);
         assert_eq!(fixture.driver.active_session_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn cancelled_terminal_create_keeps_owner_reaping_alive() {
+        let fixture = Fixture::new();
+        fixture.guest.fail_next_create(Error::new(
+            ErrorCode::FailedPrecondition,
+            "cancelled terminal create",
+        ));
+        let request = fixture.create_request(1, "cancelled-terminal-create");
+        let target = request.target.clone();
+        let owner = Arc::clone(&fixture.owner);
+        let driver = Arc::new(fixture.driver);
+        let release = owner.block_shutdown();
+
+        let create_driver = Arc::clone(&driver);
+        let create_task = tokio::spawn(async move { create_driver.create(request).await });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if owner.shutdown_calls.load(Ordering::Relaxed) == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("terminal-create cleanup should start owner shutdown");
+
+        create_task.abort();
+        assert!(create_task
+            .await
+            .expect_err("terminal create caller must be cancelled")
+            .is_cancelled());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if owner.shutdown_calls.load(Ordering::Relaxed) >= 2 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cancelled terminal-create cleanup must detach owner shutdown");
+
+        release.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if owner.shutdown_completed.load(Ordering::Relaxed) == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detached terminal-create cleanup should finish");
+        owner
+            .shutdown_release
+            .lock()
+            .expect("shutdown release lock")
+            .take();
+
+        driver
+            .shutdown()
+            .await
+            .expect("reap cancelled terminal create");
+        driver
+            .delete(DriverDeleteRequest {
+                context: context("cancelled-terminal-create-delete"),
+                target,
+                mode: DeleteMode::Force,
+            })
+            .await
+            .expect("delete stopped terminal-create tombstone");
+    }
+
+    #[tokio::test]
+    async fn cancelled_delete_keeps_owner_reaping_alive() {
+        let fixture = Fixture::new();
+        let request = fixture.create_request(1, "cancelled-delete-create");
+        let target = request.target.clone();
+        fixture
+            .driver
+            .create(request)
+            .await
+            .expect("create before cancelled delete");
+        let delete_request = DriverDeleteRequest {
+            context: context("cancelled-delete"),
+            target: target.clone(),
+            mode: DeleteMode::Force,
+        };
+        let retry = delete_request.clone();
+        let owner = Arc::clone(&fixture.owner);
+        let driver = Arc::new(fixture.driver);
+        let release = owner.block_shutdown();
+
+        let delete_driver = Arc::clone(&driver);
+        let delete_task = tokio::spawn(async move { delete_driver.delete(delete_request).await });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if owner.shutdown_calls.load(Ordering::Relaxed) == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("delete should start owner shutdown");
+
+        delete_task.abort();
+        assert!(delete_task
+            .await
+            .expect_err("delete caller must be cancelled")
+            .is_cancelled());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if owner.shutdown_calls.load(Ordering::Relaxed) >= 2 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cancelled delete must detach owner shutdown");
+
+        release.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if owner.shutdown_completed.load(Ordering::Relaxed) == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detached delete cleanup should finish");
+        owner
+            .shutdown_release
+            .lock()
+            .expect("shutdown release lock")
+            .take();
+
+        driver
+            .delete(retry)
+            .await
+            .expect("retry should finish cancelled delete");
+        assert_eq!(driver.active_session_count().await, 0);
     }
 
     #[tokio::test]
