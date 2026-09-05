@@ -9,6 +9,7 @@ use a3s_oci_sdk::{
     WaitRequest,
 };
 use serde_json::json;
+use tokio::sync::Notify;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Call {
@@ -31,6 +32,79 @@ enum FailurePoint {
 struct RecordingService {
     calls: Mutex<Vec<Call>>,
     failure: FailurePoint,
+}
+
+struct CancellationService {
+    calls: Arc<Mutex<Vec<Call>>>,
+    started: Arc<Notify>,
+    deleted: Arc<Notify>,
+}
+
+impl CancellationService {
+    fn new() -> Self {
+        Self {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            started: Arc::new(Notify::new()),
+            deleted: Arc::new(Notify::new()),
+        }
+    }
+
+    fn calls(&self) -> Vec<Call> {
+        self.calls.lock().expect("call journal lock").clone()
+    }
+}
+
+#[async_trait]
+impl OciRuntimeService for CancellationService {
+    async fn features(&self) -> Result<RuntimeInfo> {
+        Err(Error::unsupported("features"))
+    }
+
+    async fn create(&self, request: CreateRequest) -> Result<ContainerRecord> {
+        self.calls
+            .lock()
+            .expect("call journal lock")
+            .push(Call::Create(request.context.operation_id));
+        record(&request.id, Generation(7), ContainerState::Created)
+    }
+
+    async fn state(&self, _request: StateRequest) -> Result<ContainerRecord> {
+        Err(Error::unsupported("state"))
+    }
+
+    async fn start(&self, request: StartRequest) -> Result<ContainerRecord> {
+        self.calls
+            .lock()
+            .expect("call journal lock")
+            .push(Call::Start(request.context.operation_id));
+        self.started.notify_one();
+        let generation = request
+            .target
+            .generation
+            .ok_or_else(|| Error::new(ErrorCode::Internal, "run start target was not exact"))?;
+        record(&request.target.id, generation, ContainerState::Running)
+    }
+
+    async fn kill(&self, _request: KillRequest) -> Result<ContainerRecord> {
+        Err(Error::unsupported("kill"))
+    }
+
+    async fn wait(&self, _request: WaitRequest) -> Result<ExitStatus> {
+        self.calls
+            .lock()
+            .expect("call journal lock")
+            .push(Call::Wait);
+        std::future::pending().await
+    }
+
+    async fn delete(&self, request: DeleteRequest) -> Result<()> {
+        self.calls
+            .lock()
+            .expect("call journal lock")
+            .push(Call::Delete(request.context.operation_id, request.mode));
+        self.deleted.notify_one();
+        Ok(())
+    }
 }
 
 impl RecordingService {
@@ -198,6 +272,31 @@ async fn cleanup_failure_is_attached_without_hiding_the_primary_error() {
     assert!(error.message.contains("forced run cleanup"));
     assert!(error.message.contains("delete failed"));
     assert!(error.retryable);
+}
+
+#[tokio::test]
+async fn cancelled_run_schedules_force_delete_after_create() {
+    let service = Arc::new(CancellationService::new());
+    let client = RuntimeClient::from_arc(service.clone());
+    let run = tokio::spawn(async move { client.run(run_request()).await });
+
+    service.started.notified().await;
+    run.abort();
+    assert!(run
+        .await
+        .expect_err("cancelled run must be aborted")
+        .is_cancelled());
+
+    service.deleted.notified().await;
+    assert_eq!(
+        service.calls(),
+        vec![
+            Call::Create(operation_id("run-create")),
+            Call::Start(operation_id("run-start")),
+            Call::Wait,
+            Call::Delete(operation_id("run-delete"), DeleteMode::Force),
+        ]
+    );
 }
 
 #[tokio::test]

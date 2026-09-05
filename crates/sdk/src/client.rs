@@ -19,6 +19,51 @@ pub struct RuntimeClient {
     service: Arc<dyn OciRuntimeService>,
 }
 
+/// Keeps the container owned by [`RuntimeClient::run`] from being leaked when
+/// its future is cancelled after `create` has succeeded.
+struct RunCleanupGuard {
+    client: RuntimeClient,
+    request: DeleteRequest,
+    armed: bool,
+}
+
+impl RunCleanupGuard {
+    fn new(client: &RuntimeClient, request: DeleteRequest) -> Self {
+        Self {
+            client: client.clone(),
+            request,
+            armed: true,
+        }
+    }
+
+    async fn execute(&mut self) -> Result<()> {
+        let result = self.client.delete(self.request.clone()).await;
+        // There is no cancellation point between the response and this
+        // assignment, so a completed cleanup cannot be scheduled twice.
+        self.armed = false;
+        result
+    }
+}
+
+impl Drop for RunCleanupGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+
+        let client = self.client.clone();
+        let request = self.request.clone();
+        // `run` is normally polled inside Tokio. Avoid panicking if a caller
+        // drops a future while tearing down its runtime; in that case there is
+        // no executor on which an asynchronous cleanup could be performed.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            drop(handle.spawn(async move {
+                let _ = client.delete(request).await;
+            }));
+        }
+    }
+}
+
 impl RuntimeClient {
     /// Connect to an out-of-process runtime over a validated local IPC endpoint.
     ///
@@ -58,7 +103,10 @@ impl RuntimeClient {
     /// Once create succeeds, the SDK always submits the same force-delete
     /// request before returning, including when start or wait fails. This
     /// prevents the convenience operation from creating a second lifecycle
-    /// or leaving ownership of partial cleanup ambiguous.
+    /// or leaving ownership of partial cleanup ambiguous. If the `run` future
+    /// is cancelled after create succeeds, an armed cleanup guard schedules
+    /// that same force-delete on the current Tokio runtime; the cancellation
+    /// itself has no cleanup result to return to the caller.
     pub async fn run(&self, request: RunRequest) -> Result<ExitStatus> {
         request.validate()?;
         let RunRequest {
@@ -69,6 +117,14 @@ impl RuntimeClient {
         let expected_id = create.id.clone();
         let created = self.create(create).await?;
         let target = ContainerTarget::exact(expected_id, created.generation);
+        let mut cleanup = RunCleanupGuard::new(
+            self,
+            DeleteRequest {
+                context: delete_context,
+                target: target.clone(),
+                mode: DeleteMode::Force,
+            },
+        );
 
         let lifecycle = async {
             validate_run_record(&created, &target, ContainerState::Created, "create")?;
@@ -90,13 +146,7 @@ impl RuntimeClient {
         }
         .await;
 
-        let cleanup = self
-            .delete(DeleteRequest {
-                context: delete_context,
-                target,
-                mode: DeleteMode::Force,
-            })
-            .await;
+        let cleanup = cleanup.execute().await;
         match (lifecycle, cleanup) {
             (Ok(status), Ok(())) => Ok(status),
             (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
