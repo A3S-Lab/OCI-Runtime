@@ -154,25 +154,33 @@ impl AgentDriverClient {
         // Keep the derived-ID mapping coupled to the acknowledgement request.
         // Without this guard, concurrent callers can race between removing the
         // mapping and sending the Guest acknowledgement, causing one caller to
-        // fall back to the parent ID and leave chunk records retained.
+        // fall back to the parent ID and leave chunk records retained.  Read
+        // the mapping first and remove it only after the Guest call succeeds:
+        // cancellation must leave the exact derived identities available for
+        // the caller's retry.
         let _gate = self.acknowledgement_gates.acquire(operation_id).await;
         let guest_operation_ids = self
             .guest_operation_ids
             .lock()
             .await
-            .remove(operation_id)
+            .get(operation_id)
+            .cloned()
             .unwrap_or_else(|| vec![operation_id.clone()]);
-        if let Err(error) = self
-            .service
+        self.service
             .acknowledge_operations(&guest_operation_ids)
-            .await
+            .await?;
+
+        // Do not remove a mapping that was changed by a future extension of
+        // the dispatch path while the Guest call was in flight.  Today the
+        // per-operation gate already serializes those paths, but retaining
+        // this equality check makes the ownership rule explicit and keeps a
+        // successful retry idempotent if that implementation evolves.
+        let mut retained = self.guest_operation_ids.lock().await;
+        if retained
+            .get(operation_id)
+            .is_some_and(|existing| existing == &guest_operation_ids)
         {
-            self.guest_operation_ids
-                .lock()
-                .await
-                .entry(operation_id.clone())
-                .or_insert(guest_operation_ids);
-            return Err(error);
+            retained.remove(operation_id);
         }
         Ok(())
     }
@@ -903,6 +911,77 @@ mod tests {
         second
             .await
             .expect("second acknowledgement task")
+            .expect("retry acknowledgement");
+
+        let expected = vec![
+            process_io_chunk_context(&context, 0)
+                .expect("first context")
+                .operation_id,
+            process_io_chunk_context(&context, 1)
+                .expect("second context")
+                .operation_id,
+        ];
+        assert_eq!(
+            *guest
+                .acknowledgements
+                .lock()
+                .expect("captured acknowledgements"),
+            vec![expected.clone(), expected]
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_acknowledgement_preserves_derived_chunk_identities() {
+        let control = Arc::new(AcknowledgementControl {
+            calls: AtomicUsize::new(0),
+            fail_first: AtomicBool::new(false),
+            first_started: Notify::new(),
+            release_first: Notify::new(),
+            second_started: Notify::new(),
+        });
+        let guest = Arc::new(MappingOnlyGuest {
+            writes: StdMutex::new(Vec::new()),
+            acknowledgements: StdMutex::new(Vec::new()),
+            ack_control: Some(Arc::clone(&control)),
+        });
+        let client = AgentDriverClient::new(guest.clone(), "test guest", "test-agent");
+        let context = OperationContext::new(
+            OperationId::new("cancelled-chunked-stdin").expect("operation ID"),
+        );
+        let target = ProcessTarget {
+            container: ContainerTarget::exact(
+                ContainerId::new("cancelled-chunked-stdin").expect("container ID"),
+                Generation(1),
+            ),
+            process_id: ProcessId::init(),
+        };
+        client
+            .write_stdin(DriverWriteStdinRequest {
+                context: context.clone(),
+                target,
+                data: vec![0x5a; AGENT_MAX_IO_PAYLOAD_BYTES as usize + 1],
+            })
+            .await
+            .expect("dispatch chunked stdin");
+
+        let operation = context.operation_id.clone();
+        let first_client = client.clone();
+        let first =
+            tokio::spawn(async move { first_client.acknowledge_operation(&operation).await });
+        control.first_started.notified().await;
+
+        // Dropping the in-flight Guest call must not discard the derived-ID
+        // mapping.  The retry below is the only acknowledgement that can
+        // release both Guest chunk journals.
+        first.abort();
+        assert!(first
+            .await
+            .expect_err("cancelled acknowledgement")
+            .is_cancelled());
+
+        client
+            .acknowledge_operation(&context.operation_id)
+            .await
             .expect("retry acknowledgement");
 
         let expected = vec![

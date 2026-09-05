@@ -611,10 +611,20 @@ impl QualificationKvmOperationDriver {
     }
 
     pub(super) async fn shutdown(&self) -> AgentVmSmokeReport {
-        let active = self.session.lock().await.take();
-        if let Some(active) = active {
-            let report = active.owner.shutdown().await;
+        // Keep the active owner published until its destructive shutdown has
+        // completed.  If this caller is cancelled while the VM is being
+        // reaped, a replacement caller can resume the same idempotent owner
+        // shutdown instead of observing an empty slot and losing the handle.
+        let owner = self
+            .session
+            .lock()
+            .await
+            .as_ref()
+            .map(|active| Arc::clone(&active.owner));
+        if let Some(owner) = owner {
+            let report = owner.shutdown().await;
             *self.completed_report.lock().await = Some(report.clone());
+            self.session.lock().await.take();
             return report;
         }
         self.completed_report
