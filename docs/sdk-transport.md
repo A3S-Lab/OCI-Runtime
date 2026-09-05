@@ -382,7 +382,10 @@ the local replay record directly. Protocol-v10 utility-VM drivers send a
 bounded `acknowledge-operations` maintenance request; large stdin writes map
 the parent Host identity back to every derived Guest chunk identity. A lost
 acknowledgement is retryable, and replaying the completed Host operation sends
-it again without redispatching the workload mutation. Protocol-v1 through
+it again without redispatching the workload mutation. A cancelled
+acknowledgement also retains every derived stdin identity until the Guest
+accepts the maintenance request, so a retry cannot accidentally acknowledge
+only the parent operation. Protocol-v1 through
 protocol-v9 Guests retain a compatibility no-op. File upload and Filesystem
 mkdir/move/remove retain their exact v3 request and typed response. New Host
 mutations use v6; checkpoint retains its v4-compatible exact normalized path,

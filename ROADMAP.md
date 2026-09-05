@@ -739,7 +739,8 @@ enforce it. No property is silently ignored.
 - [x] Reclaim completed Native Linux guest mutation records only after the Host
   durably commits success or terminal failure. Keep prepared, retryable, and
   asynchronous in-flight effects replayable; acknowledge every derived stdin
-  chunk identity; and reject mixed pending/completed acknowledgement batches
+  chunk identity (retaining the mapping across caller cancellation); and reject
+  mixed pending/completed acknowledgement batches
   atomically. Unit evidence fills all 4,096 guest slots before releasing them,
   and three complete containerd matrices pass through one unchanged Host PID.
 - [x] Carry the same post-commit reclamation boundary across utility-VM

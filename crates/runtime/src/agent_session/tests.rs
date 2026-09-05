@@ -1,12 +1,14 @@
 use a3s_oci_core::HostPlatform;
 use serde_json::{json, Value};
+use std::sync::Arc;
+use tokio::sync::Notify;
 
 #[cfg(windows)]
 use super::prepare_shim;
 use super::{
     bounded_unverified_shim_report, capture_path_identity, ensure_identity_unchanged,
     parse_shim_report, paths_overlap, require_expected_manifest_digest,
-    validate_vm_attachment_manifest_digest, BoundedOutput,
+    validate_vm_attachment_manifest_digest, BoundedOutput, ShutdownCompletion,
 };
 #[cfg(unix)]
 use super::{canonical_file, prepare_shim};
@@ -296,6 +298,37 @@ fn vm_attachment_manifest_digest_requires_canonical_sha256() {
     assert!(validate_vm_attachment_manifest_digest(&"a".repeat(64)).is_err());
     assert!(validate_vm_attachment_manifest_digest(&format!("sha256:{}", "A".repeat(64))).is_err());
     assert!(validate_vm_attachment_manifest_digest(&format!("sha256:{}", "a".repeat(63))).is_err());
+}
+
+#[tokio::test]
+async fn shutdown_completion_survives_a_cancelled_waiter() {
+    let completion = ShutdownCompletion::new();
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let producer_completion = Arc::clone(&completion);
+    let producer_started = Arc::clone(&started);
+    let producer_release = Arc::clone(&release);
+    let producer = tokio::spawn(async move {
+        producer_started.notify_one();
+        producer_release.notified().await;
+        producer_completion
+            .publish(super::AgentVmSmokeReport::initial(HostPlatform::current()))
+            .await;
+    });
+    started.notified().await;
+
+    let waiter_completion = Arc::clone(&completion);
+    let waiter = tokio::spawn(async move { waiter_completion.wait().await });
+    waiter.abort();
+    assert!(waiter
+        .await
+        .expect_err("cancelled shutdown waiter")
+        .is_cancelled());
+
+    release.notify_one();
+    producer.await.expect("shutdown producer");
+    let report = completion.wait().await;
+    assert_eq!(report.platform, HostPlatform::current());
 }
 
 #[cfg(unix)]

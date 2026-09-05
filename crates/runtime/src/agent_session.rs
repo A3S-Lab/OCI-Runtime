@@ -30,7 +30,7 @@ use tokio::net::windows::named_pipe::NamedPipeServer;
 #[cfg(unix)]
 use tokio::net::UnixStream;
 use tokio::process::Command;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use tokio::time::timeout;
 
 use crate::agent_launch_cleanup::FailedAgentVmLaunchCleanup;
@@ -85,6 +85,48 @@ pub(crate) struct UtilityVmSession {
 struct UtilityVmSessionState {
     owner: Option<AgentVmSession>,
     completed: Option<AgentVmSmokeReport>,
+    shutdown: Option<Arc<ShutdownCompletion>>,
+}
+
+/// Result rendezvous for the one destructive VM shutdown operation.
+///
+/// A shutdown must outlive cancellation of the task that requested it.  The
+/// owner has already been detached from the session by the time shutdown
+/// starts, so keeping only an ordinary future in that caller would leak the
+/// shim when the caller is dropped.  The completion is intentionally shared:
+/// the spawned cleanup task publishes exactly one report and every later
+/// caller observes that same report.
+struct ShutdownCompletion {
+    report: Mutex<Option<AgentVmSmokeReport>>,
+    ready: Notify,
+}
+
+impl ShutdownCompletion {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            report: Mutex::new(None),
+            ready: Notify::new(),
+        })
+    }
+
+    async fn publish(&self, report: AgentVmSmokeReport) {
+        *self.report.lock().await = Some(report);
+        self.ready.notify_waiters();
+    }
+
+    async fn wait(&self) -> AgentVmSmokeReport {
+        loop {
+            // Register before checking so a publish between the check and the
+            // await cannot leave this waiter asleep forever.
+            let notified = self.ready.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(report) = self.report.lock().await.clone() {
+                return report;
+            }
+            notified.await;
+        }
+    }
 }
 
 struct AgentVmConnectOptions<'a> {
@@ -155,6 +197,7 @@ impl UtilityVmSession {
             state: Mutex::new(UtilityVmSessionState {
                 owner: Some(owner),
                 completed: None,
+                shutdown: None,
             }),
         })
     }
@@ -181,6 +224,7 @@ impl UtilityVmSession {
             state: Mutex::new(UtilityVmSessionState {
                 owner: Some(owner),
                 completed: None,
+                shutdown: None,
             }),
         })
     }
@@ -231,6 +275,7 @@ impl UtilityVmSession {
             state: Mutex::new(UtilityVmSessionState {
                 owner: Some(owner),
                 completed: None,
+                shutdown: None,
             }),
         })
     }
@@ -308,6 +353,7 @@ impl UtilityVmSession {
             state: Mutex::new(UtilityVmSessionState {
                 owner: Some(owner),
                 completed: None,
+                shutdown: None,
             }),
         })
     }
@@ -333,6 +379,7 @@ impl UtilityVmSession {
             state: Mutex::new(UtilityVmSessionState {
                 owner: Some(owner),
                 completed: None,
+                shutdown: None,
             }),
         })
     }
@@ -358,6 +405,7 @@ impl UtilityVmSession {
             state: Mutex::new(UtilityVmSessionState {
                 owner: Some(owner),
                 completed: None,
+                shutdown: None,
             }),
         })
     }
@@ -400,6 +448,7 @@ impl UtilityVmSession {
             state: Mutex::new(UtilityVmSessionState {
                 owner: Some(owner),
                 completed: None,
+                shutdown: None,
             }),
         })
     }
@@ -442,6 +491,7 @@ impl UtilityVmSession {
             state: Mutex::new(UtilityVmSessionState {
                 owner: Some(owner),
                 completed: None,
+                shutdown: None,
             }),
         })
     }
@@ -471,6 +521,7 @@ impl UtilityVmSession {
             state: Mutex::new(UtilityVmSessionState {
                 owner: Some(owner),
                 completed: None,
+                shutdown: None,
             }),
         })
     }
@@ -499,23 +550,45 @@ impl UtilityVmSession {
     }
 
     async fn shutdown_inner(&self, reason: Option<String>) -> AgentVmSmokeReport {
+        let completion = {
+            let mut state = self.state.lock().await;
+            if let Some(report) = &state.completed {
+                return report.clone();
+            }
+            if let Some(completion) = &state.shutdown {
+                Arc::clone(completion)
+            } else {
+                let Some(owner) = state.owner.take() else {
+                    let report = failed(
+                        AgentVmSmokeReport::initial(HostPlatform::current()),
+                        "utility-VM session lost its sole owner before shutdown",
+                    );
+                    state.completed = Some(report.clone());
+                    return report;
+                };
+                let completion = ShutdownCompletion::new();
+                let task_completion = Arc::clone(&completion);
+                // The destructive owner operation runs in a detached task so
+                // dropping this caller cannot abort it after the owner has
+                // been removed from the session state.  The completion stays
+                // in `state` and is therefore available to a later retry.
+                tokio::spawn(async move {
+                    let report = match reason {
+                        Some(reason) => owner.finish_with_failure(reason).await,
+                        None => owner.finish().await,
+                    };
+                    task_completion.publish(report).await;
+                });
+                state.shutdown = Some(Arc::clone(&completion));
+                completion
+            }
+        };
+
+        let report = completion.wait().await;
         let mut state = self.state.lock().await;
-        if let Some(report) = &state.completed {
-            return report.clone();
-        }
-        let Some(owner) = state.owner.take() else {
-            let report = failed(
-                AgentVmSmokeReport::initial(HostPlatform::current()),
-                "utility-VM session lost its sole owner before shutdown",
-            );
+        if state.completed.is_none() {
             state.completed = Some(report.clone());
-            return report;
-        };
-        let report = match reason {
-            Some(reason) => owner.finish_with_failure(reason).await,
-            None => owner.finish().await,
-        };
-        state.completed = Some(report.clone());
+        }
         report
     }
 }

@@ -558,6 +558,12 @@ error and every retained clone observes the permanently poisoned connection.
 The host wraps that owner in one shareable session:
 operations receive cloned clients, while concurrent shutdown callers observe
 the same cached cleanup report and can never reap the VM more than once.
+Shutdown execution is detached from the requesting task after the owner is
+claimed; cancelling a shutdown waiter therefore leaves the owner cleanup
+running and makes the same report available to a later retry.  The Host-side
+acknowledgement map follows the same rule for chunked stdin: derived Guest
+operation identities are removed only after a successful maintenance
+acknowledgement, so cancellation cannot reduce a retry to the parent identity.
 The WHPX driver converts a successfully reaped live session, or a durable
 generation recovered in a new owner process, into a stopped tombstone. This
 preserves safe state and delete semantics after owner death. When the shim
