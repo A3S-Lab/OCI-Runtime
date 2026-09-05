@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use oci_spec::runtime::{ContainerState, Features, State, StateBuilder};
 use serde_json::json;
+use tokio::sync::oneshot;
 
 use crate::{
     AttachmentCapabilities, CheckpointArtifactPath, CheckpointCompatibility, CheckpointDigest,
@@ -1307,6 +1308,71 @@ async fn client_rejects_a_mismatched_response_id() {
         .expect_err("protocol failure must poison the connection");
     assert_eq!(closed.code, ErrorCode::Unavailable);
     assert!(closed.retryable);
+    server.await.expect("server task must join");
+}
+
+#[tokio::test]
+async fn cancelled_request_discards_the_sdk_transport() {
+    let (client_io, mut server_io) = tokio::io::duplex(4096);
+    let (request_seen_tx, request_seen_rx) = oneshot::channel();
+    let (observation_tx, observation_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let hello = read_frame::<ClientMessage>(&mut server_io)
+            .await
+            .expect("read client hello")
+            .expect("client hello frame");
+        assert!(matches!(hello, ClientMessage::Hello { .. }));
+        write_frame(&mut server_io, &ServerMessage::Welcome { protocol: 3 })
+            .await
+            .expect("write server welcome");
+
+        let request = read_frame::<ClientMessage>(&mut server_io)
+            .await
+            .expect("read in-flight request")
+            .expect("in-flight request frame");
+        assert!(matches!(request, ClientMessage::Request { .. }));
+        request_seen_tx
+            .send(())
+            .expect("the client must observe that the request was written");
+
+        let observation = read_frame::<ClientMessage>(&mut server_io)
+            .await
+            .expect("observe the cancelled client transport");
+        observation_tx
+            .send(observation)
+            .expect("the test must receive the disconnect observation");
+    });
+
+    let client = RuntimeTransportClient::from_io(client_io)
+        .await
+        .expect("negotiate SDK transport");
+    let in_flight = tokio::spawn({
+        let client = client.clone();
+        async move { client.features().await }
+    });
+    request_seen_rx
+        .await
+        .expect("the server must observe the request before cancellation");
+    in_flight.abort();
+    assert!(in_flight
+        .await
+        .expect_err("cancelled request must be aborted")
+        .is_cancelled());
+
+    let error = client
+        .features()
+        .await
+        .expect_err("a from-io client must fail closed after cancellation");
+    assert_eq!(error.code, ErrorCode::Unavailable);
+    assert!(error.retryable);
+
+    let observation = observation_rx
+        .await
+        .expect("the server must observe the dropped stream");
+    assert!(
+        observation.is_none(),
+        "cancelled client sent a second request"
+    );
     server.await.expect("server task must join");
 }
 
