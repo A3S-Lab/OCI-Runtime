@@ -21,7 +21,7 @@ use a3s_oci_sdk::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
 use tokio::time::{sleep, Instant};
 use windows_sys::Win32::Foundation::{
@@ -139,6 +139,10 @@ pub struct WhpxRuntimeDriver {
     runtime_share_root: PathBuf,
     recovery_directory: PathBuf,
     factory: Arc<dyn UtilityVmFactory>,
+    /// Coordinates driver shutdown with every operation that can use or
+    /// mutate an attached guest. Shutdown takes the exclusive write guard so
+    /// its live-session snapshot cannot race a concurrent launch or cleanup.
+    lifecycle: RwLock<bool>,
     sessions: Mutex<BTreeMap<ContainerId, WhpxAttachment>>,
     create_gates: Mutex<BTreeMap<ContainerId, Weak<Mutex<()>>>>,
 }
@@ -225,6 +229,7 @@ impl WhpxRuntimeDriver {
             runtime_share_root: prepared.runtime_share_root,
             recovery_directory: prepared.recovery_directory,
             factory,
+            lifecycle: RwLock::new(false),
             sessions: Mutex::new(BTreeMap::new()),
             create_gates: Mutex::new(BTreeMap::new()),
         })
@@ -270,6 +275,11 @@ impl WhpxRuntimeDriver {
     /// Close every attached guest transport, reap each owned VM once, and
     /// retain stopped tombstones for durable host reconciliation.
     pub async fn shutdown(&self) -> Result<()> {
+        // Hold the exclusive lifecycle guard through owner shutdown and
+        // tombstone publication. A create already in progress finishes before
+        // this snapshot; any later create is rejected by `enter_operation`.
+        let mut lifecycle = self.lifecycle.write().await;
+        *lifecycle = true;
         let sessions = {
             let sessions = self.sessions.lock().await;
             sessions
@@ -312,12 +322,29 @@ impl WhpxRuntimeDriver {
 
     /// Number of container generations with an attached utility VM.
     pub async fn active_session_count(&self) -> usize {
+        let _lifecycle = self.lifecycle.read().await;
         self.sessions
             .lock()
             .await
             .values()
             .filter(|attachment| matches!(attachment, WhpxAttachment::Live(_)))
             .count()
+    }
+
+    async fn enter_operation(
+        &self,
+        operation: &'static str,
+        reject_closed: bool,
+    ) -> Result<tokio::sync::RwLockReadGuard<'_, bool>> {
+        let lifecycle = self.lifecycle.read().await;
+        if reject_closed && *lifecycle {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "WHPX utility-VM driver has been shut down",
+            )
+            .for_operation(operation));
+        }
+        Ok(lifecycle)
     }
 
     async fn attachment_for(
@@ -749,6 +776,9 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn acknowledge_operation(&self, operation_id: &OperationId) -> Result<()> {
+        let _lifecycle = self
+            .enter_operation("whpx-acknowledge-operation", false)
+            .await?;
         let clients = self
             .sessions
             .lock()
@@ -766,6 +796,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn prepare_create_bundle(&self, request: &DriverCreateRequest) -> Result<OciBundle> {
+        let _lifecycle = self.enter_operation("whpx-create", true).await?;
         if request.attachment_contract.uses_runtime_bundle_handoff() {
             self.prepare_runtime_bundle_handoff(request).await
         } else {
@@ -774,6 +805,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn recover(&self, record: &ContainerRecord) -> Result<crate::DriverRecovery> {
+        let _lifecycle = self.enter_operation("whpx-recover", true).await?;
         let target =
             ContainerTarget::exact(ContainerId::new(record.state.id())?, record.generation);
         let can_commit_stopped =
@@ -830,6 +862,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {
+        let _lifecycle = self.enter_operation("whpx-create", true).await?;
         if request.isolation.class() != IsolationClass::DedicatedVm {
             return Err(Error::new(
                 ErrorCode::Unsupported,
@@ -882,6 +915,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn state(&self, target: ContainerTarget) -> Result<DriverState> {
+        let _lifecycle = self.enter_operation("whpx-state", false).await?;
         match self.attachment_for(&target, "whpx-state").await? {
             WhpxAttachment::Live(session) => session.client.state(target).await,
             WhpxAttachment::RecoveredStopped { .. } => Ok(DriverState::stopped()),
@@ -889,6 +923,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn start(&self, request: DriverStartRequest) -> Result<DriverState> {
+        let _lifecycle = self.enter_operation("whpx-start", false).await?;
         self.session_for(&request.target, "whpx-start")
             .await?
             .client
@@ -897,6 +932,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn kill(&self, request: DriverKillRequest) -> Result<DriverState> {
+        let _lifecycle = self.enter_operation("whpx-kill", false).await?;
         match self.attachment_for(&request.target, "whpx-kill").await? {
             WhpxAttachment::Live(session) => session.client.kill(request).await,
             WhpxAttachment::RecoveredStopped { .. } => Ok(DriverState::stopped()),
@@ -904,6 +940,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn delete(&self, request: DriverDeleteRequest) -> Result<()> {
+        let _lifecycle = self.enter_operation("whpx-delete", false).await?;
         match self.attachment_for(&request.target, "whpx-delete").await? {
             WhpxAttachment::Live(session) => {
                 session.client.delete(request).await?;
@@ -924,6 +961,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn wait(&self, request: DriverWaitRequest) -> Result<ExitStatus> {
+        let _lifecycle = self.enter_operation("whpx-wait", false).await?;
         match self.attachment_for(&request.target, "whpx-wait").await? {
             WhpxAttachment::Live(session) => session.client.wait(request).await,
             WhpxAttachment::RecoveredStopped {
@@ -938,6 +976,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn exec(&self, request: DriverExecRequest) -> Result<DriverProcess> {
+        let _lifecycle = self.enter_operation("whpx-exec", false).await?;
         self.session_for(&request.target.container, "whpx-exec")
             .await?
             .client
@@ -946,6 +985,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn signal_process(&self, request: DriverSignalProcessRequest) -> Result<()> {
+        let _lifecycle = self.enter_operation("whpx-signal-process", false).await?;
         self.session_for(&request.target.container, "whpx-signal-process")
             .await?
             .client
@@ -954,6 +994,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn wait_process(&self, request: DriverWaitProcessRequest) -> Result<ExitStatus> {
+        let _lifecycle = self.enter_operation("whpx-wait-process", false).await?;
         self.session_for(&request.target.container, "whpx-wait-process")
             .await?
             .client
@@ -962,6 +1003,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn pause(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
+        let _lifecycle = self.enter_operation("whpx-pause", false).await?;
         self.session_for(&request.target, "whpx-pause")
             .await?
             .client
@@ -970,6 +1012,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn resume(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
+        let _lifecycle = self.enter_operation("whpx-resume", false).await?;
         self.session_for(&request.target, "whpx-resume")
             .await?
             .client
@@ -978,6 +1021,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn processes(&self, target: ContainerTarget) -> Result<Vec<ProcessRecord>> {
+        let _lifecycle = self.enter_operation("whpx-processes", false).await?;
         match self.attachment_for(&target, "whpx-processes").await? {
             WhpxAttachment::Live(session) => session.client.processes(target).await,
             WhpxAttachment::RecoveredStopped { .. } => Ok(Vec::new()),
@@ -985,6 +1029,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn update(&self, request: DriverUpdateRequest) -> Result<DriverState> {
+        let _lifecycle = self.enter_operation("whpx-update", false).await?;
         self.session_for(&request.target, "whpx-update")
             .await?
             .client
@@ -993,6 +1038,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn stats(&self, target: ContainerTarget) -> Result<ContainerStats> {
+        let _lifecycle = self.enter_operation("whpx-stats", false).await?;
         self.session_for(&target, "whpx-stats")
             .await?
             .client
@@ -1001,6 +1047,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn read_output(&self, request: DriverReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        let _lifecycle = self.enter_operation("whpx-read-output", false).await?;
         self.session_for(&request.target.container, "whpx-read-output")
             .await?
             .client
@@ -1009,6 +1056,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn write_stdin(&self, request: DriverWriteStdinRequest) -> Result<()> {
+        let _lifecycle = self.enter_operation("whpx-write-stdin", false).await?;
         self.session_for(&request.target.container, "whpx-write-stdin")
             .await?
             .client
@@ -1017,6 +1065,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn close_stdin(&self, request: DriverCloseStdinRequest) -> Result<()> {
+        let _lifecycle = self.enter_operation("whpx-close-stdin", false).await?;
         self.session_for(&request.target.container, "whpx-close-stdin")
             .await?
             .client
@@ -1025,6 +1074,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn resize(&self, request: DriverResizeRequest) -> Result<()> {
+        let _lifecycle = self.enter_operation("whpx-resize", false).await?;
         self.session_for(&request.target.container, "whpx-resize")
             .await?
             .client
@@ -1033,6 +1083,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn file(&self, request: FileRequest) -> Result<FileResponse> {
+        let _lifecycle = self.enter_operation("whpx-file", false).await?;
         self.session_for(&request.target, "whpx-file")
             .await?
             .client
@@ -1041,6 +1092,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        let _lifecycle = self.enter_operation("whpx-filesystem", false).await?;
         self.session_for(&request.target, "whpx-filesystem")
             .await?
             .client
@@ -2737,7 +2789,7 @@ mod tests {
         RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
     };
     use tokio::io::AsyncWriteExt;
-    use tokio::sync::Mutex;
+    use tokio::sync::{Mutex, Notify, RwLock};
 
     use super::{
         bundle_handoff_marker_conflict, ensure_bundle_handoff_marker,
@@ -2923,11 +2975,18 @@ mod tests {
         launch_shares: StdMutex<Vec<PathBuf>>,
         launch_state_directories: StdMutex<Vec<bool>>,
         launch_barrier: StdMutex<Option<Arc<tokio::sync::Barrier>>>,
+        launch_started: Arc<Notify>,
         guest: Arc<FakeGuest>,
         owner: Arc<FakeOwner>,
     }
 
     impl FakeFactory {
+        fn block_next_launch(&self) -> Arc<tokio::sync::Barrier> {
+            let barrier = Arc::new(tokio::sync::Barrier::new(2));
+            *self.launch_barrier.lock().expect("launch barrier lock") = Some(Arc::clone(&barrier));
+            barrier
+        }
+
         fn synchronize_two_launches(&self) {
             *self.launch_barrier.lock().expect("launch barrier lock") =
                 Some(Arc::new(tokio::sync::Barrier::new(2)));
@@ -2953,6 +3012,7 @@ mod tests {
             let active = self.active_launches.fetch_add(1, Ordering::Relaxed) + 1;
             self.max_active_launches
                 .fetch_max(active, Ordering::Relaxed);
+            self.launch_started.notify_one();
             let barrier = self
                 .launch_barrier
                 .lock()
@@ -3015,6 +3075,7 @@ mod tests {
                 launch_shares: StdMutex::new(Vec::new()),
                 launch_state_directories: StdMutex::new(Vec::new()),
                 launch_barrier: StdMutex::new(None),
+                launch_started: Arc::new(Notify::new()),
                 guest: guest.clone(),
                 owner: owner.clone(),
             });
@@ -3028,6 +3089,7 @@ mod tests {
                 runtime_share_root: runtime_share_root.clone(),
                 recovery_directory: recovery_directory.clone(),
                 factory: factory_dyn,
+                lifecycle: RwLock::new(false),
                 sessions: Mutex::new(BTreeMap::new()),
                 create_gates: Mutex::new(BTreeMap::new()),
             };
@@ -4187,6 +4249,12 @@ mod tests {
         fixture.driver.shutdown().await.expect("first shutdown");
         assert_eq!(fixture.driver.active_session_count().await, 0);
         assert_eq!(fixture.owner.shutdown_calls.load(Ordering::Relaxed), 1);
+        let rejected = fixture
+            .driver
+            .create(fixture.create_request(1, "create-after-shutdown"))
+            .await
+            .expect_err("create must be fenced after driver shutdown");
+        assert_eq!(rejected.code, ErrorCode::FailedPrecondition);
         assert_eq!(
             fixture
                 .driver
@@ -4201,6 +4269,43 @@ mod tests {
             .await
             .expect("idempotent shutdown");
         assert_eq!(fixture.owner.shutdown_calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_an_in_flight_launch_before_snapshotting_sessions() {
+        let fixture = Fixture::new();
+        let launch_barrier = fixture.factory.block_next_launch();
+        let launch_started = fixture.factory.launch_started.clone();
+        let launch_started_wait = launch_started.notified();
+        let request = fixture.create_request(1, "shutdown-race");
+        let driver = Arc::new(fixture.driver);
+
+        let create_driver = Arc::clone(&driver);
+        let create_task = tokio::spawn(async move { create_driver.create(request).await });
+        // The waiter is created before Create starts, so the permit cannot be
+        // lost even if the launch reaches the factory immediately.
+        launch_started_wait.await;
+
+        let shutdown_driver = Arc::clone(&driver);
+        let shutdown_task = tokio::spawn(async move { shutdown_driver.shutdown().await });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(
+            !shutdown_task.is_finished(),
+            "shutdown must wait for an in-flight launch instead of taking an empty snapshot"
+        );
+
+        launch_barrier.wait().await;
+        create_task
+            .await
+            .expect("create task join")
+            .expect("create during shutdown race");
+        shutdown_task
+            .await
+            .expect("shutdown task join")
+            .expect("shutdown after in-flight launch");
+        assert_eq!(fixture.factory.launches.load(Ordering::Relaxed), 1);
+        assert_eq!(fixture.owner.shutdown_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(driver.active_session_count().await, 0);
     }
 
     #[test]
