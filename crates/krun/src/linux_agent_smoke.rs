@@ -121,12 +121,15 @@ pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgent
     // public shim parent or the host runtime.
     report.runtime_bundle_loaded = false;
     let runtime_share = match LinuxRuntimeShare::open(runtime_share) {
-        Ok(runtime_share) => runtime_share.path().to_path_buf(),
+        Ok(runtime_share) => runtime_share,
         Err(error) => {
             report.reason = Some(error.to_string());
             return report;
         }
     };
+    let runtime_share_identity = runtime_share.identity();
+    let runtime_state_identity = runtime_share.state_identity();
+    let runtime_share = runtime_share.path().to_path_buf();
     report.runtime_share_configured = true;
     let console = match resolve_console_with_identity(
         console,
@@ -171,6 +174,14 @@ pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgent
         .arg(system_image_manifest)
         .arg("--runtime-share")
         .arg(&runtime_share)
+        .arg("--runtime-share-device")
+        .arg(runtime_share_identity.0.to_string())
+        .arg("--runtime-share-inode")
+        .arg(runtime_share_identity.1.to_string())
+        .arg("--runtime-state-device")
+        .arg(runtime_state_identity.0.to_string())
+        .arg("--runtime-state-inode")
+        .arg(runtime_state_identity.1.to_string())
         .arg("--guest-token-file")
         .arg(guest_token_file)
         .arg("--console")
@@ -340,6 +351,8 @@ pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgent
 pub(crate) struct LinuxAgentVmWorkerConfig<'a> {
     pub(crate) system_image_manifest: &'a Path,
     pub(crate) runtime_share: &'a Path,
+    pub(crate) runtime_share_identity: Option<(u64, u64)>,
+    pub(crate) runtime_state_identity: Option<(u64, u64)>,
     pub(crate) guest_token_file: &'a str,
     pub(crate) console: &'a Path,
     pub(crate) console_identity: Option<(u64, u64)>,
@@ -355,6 +368,8 @@ pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
     let LinuxAgentVmWorkerConfig {
         system_image_manifest,
         runtime_share,
+        runtime_share_identity,
+        runtime_state_identity,
         guest_token_file,
         console,
         console_identity,
@@ -370,6 +385,24 @@ pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
         Ok(runtime_share) => runtime_share,
         Err(error) => return fail_worker(&mut evidence, error.to_string()),
     };
+    let Some(expected) = runtime_share_identity else {
+        return fail_worker(
+            &mut evidence,
+            "Linux KVM runtime-share handoff identity is missing".to_string(),
+        );
+    };
+    if let Err(error) = runtime_share.verify_identity(expected) {
+        return fail_worker(&mut evidence, error.to_string());
+    }
+    let Some(expected) = runtime_state_identity else {
+        return fail_worker(
+            &mut evidence,
+            "Linux KVM runtime-state handoff identity is missing".to_string(),
+        );
+    };
+    if let Err(error) = runtime_share.verify_state_identity(expected) {
+        return fail_worker(&mut evidence, error.to_string());
+    }
     let runtime_share_path = runtime_share.path().to_path_buf();
     let mut vm_attachments =
         match LinuxVmAttachmentManifest::open(&runtime_share, vm_attachment_manifest_sha256) {
@@ -377,7 +410,7 @@ pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
             Err(error) => return fail_worker(&mut evidence, error.to_string()),
         };
     evidence.vm_attachment_manifest_verified = vm_attachments.is_some();
-    let prepared_console = match prepare_console_output(
+    let mut prepared_console = match prepare_console_output(
         console,
         console_identity.map(|(device, inode)| ConsoleIdentity::new(device, inode)),
     ) {
@@ -548,7 +581,13 @@ pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
         return false;
     }
     match context.start_enter(&kvm_device) {
-        Ok(0) => emit_worker_evidence(&evidence).is_ok(),
+        Ok(0) => {
+            let emitted = emit_worker_evidence(&evidence).is_ok();
+            if emitted {
+                prepared_console.keep();
+            }
+            emitted
+        }
         Ok(status) => fail_worker(
             &mut evidence,
             format!("Linux KVM guest agent returned non-zero status {status}"),

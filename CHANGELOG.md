@@ -41,6 +41,18 @@ All notable changes to A3S OCI Runtime are documented in this file.
   cleanup is identity-bound and leaves a concurrently replaced console
   untouched.
 
+- Bound Linux KVM and macOS HVF runtime-share handoffs across the isolated
+  worker process boundary. The parent now captures both the private generation
+  directory and its required `run/` state child's device/inode identities and
+  passes them through hidden worker arguments; each worker rejects a same-path
+  replacement before configuring libkrun. Missing or partial identity
+  arguments fail closed rather than reverting to pathname-only admission.
+
+- Made worker-created Unix console files cleanup-safe. A failed standalone
+  worker now removes only the inode it created, while a Host-reserved console
+  remains owned by the Host for authenticated-session and owner-death cleanup.
+  Replacement races leave the newer pathname entry untouched.
+
 - Hardened host-side trusted-path canonicalization. Rootfs, system-image
   manifests, per-generation runtime shares, console parents, and recovery
   parents now open their final component without following links and compare

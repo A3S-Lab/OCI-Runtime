@@ -205,6 +205,10 @@ enum Command {
         system_image_manifest: PathBuf,
         #[arg(long, value_name = "DIR")]
         runtime_share: PathBuf,
+        #[arg(long, hide = true, value_name = "DEVICE")]
+        runtime_share_device: Option<u64>,
+        #[arg(long, hide = true, value_name = "INODE")]
+        runtime_share_inode: Option<u64>,
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
         #[arg(long, value_name = "NAME")]
@@ -218,6 +222,14 @@ enum Command {
         system_image_manifest: PathBuf,
         #[arg(long, value_name = "DIR")]
         runtime_share: PathBuf,
+        #[arg(long, hide = true, value_name = "DEVICE")]
+        runtime_share_device: Option<u64>,
+        #[arg(long, hide = true, value_name = "INODE")]
+        runtime_share_inode: Option<u64>,
+        #[arg(long, hide = true, value_name = "DEVICE")]
+        runtime_state_device: Option<u64>,
+        #[arg(long, hide = true, value_name = "INODE")]
+        runtime_state_inode: Option<u64>,
         #[arg(long, value_name = "FILE")]
         guest_token_file: String,
         #[arg(long, value_name = "FILE")]
@@ -242,6 +254,14 @@ enum Command {
         system_image_manifest: PathBuf,
         #[arg(long, value_name = "DIR")]
         runtime_share: PathBuf,
+        #[arg(long, hide = true, value_name = "DEVICE")]
+        runtime_share_device: Option<u64>,
+        #[arg(long, hide = true, value_name = "INODE")]
+        runtime_share_inode: Option<u64>,
+        #[arg(long, hide = true, value_name = "DEVICE")]
+        runtime_state_device: Option<u64>,
+        #[arg(long, hide = true, value_name = "INODE")]
+        runtime_state_inode: Option<u64>,
         #[arg(long, value_name = "FILE")]
         guest_token_file: String,
         #[arg(long, value_name = "FILE")]
@@ -710,14 +730,25 @@ fn main() -> ExitCode {
         Command::MacosVmSmokeWorker {
             system_image_manifest,
             runtime_share,
+            runtime_share_device,
+            runtime_share_inode,
             console,
             marker_name,
         } => {
-            if a3s_oci_krun::run_macos_vm_smoke_worker(
+            let runtime_share_identity =
+                match parse_runtime_share_identity(runtime_share_device, runtime_share_inode) {
+                    Ok(identity) => identity,
+                    Err(error) => {
+                        eprintln!("a3s-oci-krun-shim: {error}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+            if a3s_oci_krun::run_macos_vm_smoke_worker_with_runtime_share_identity(
                 &system_image_manifest,
                 &runtime_share,
                 &console,
                 &marker_name,
+                Some(runtime_share_identity),
             ) {
                 ExitCode::SUCCESS
             } else {
@@ -728,6 +759,10 @@ fn main() -> ExitCode {
         Command::MacosAgentVmWorker {
             system_image_manifest,
             runtime_share,
+            runtime_share_device,
+            runtime_share_inode,
+            runtime_state_device,
+            runtime_state_inode,
             guest_token_file,
             console,
             console_device,
@@ -735,6 +770,19 @@ fn main() -> ExitCode {
             socket_path,
             guest_recovery_report,
         } => {
+            let (runtime_share_identity, runtime_state_identity) =
+                match parse_runtime_share_identities(
+                    runtime_share_device,
+                    runtime_share_inode,
+                    runtime_state_device,
+                    runtime_state_inode,
+                ) {
+                    Ok(identities) => identities,
+                    Err(error) => {
+                        eprintln!("a3s-oci-krun-shim: {error}");
+                        return ExitCode::FAILURE;
+                    }
+                };
             let transport_qualification = match take_transport_qualification() {
                 Ok(request) => request,
                 Err(error) => {
@@ -761,6 +809,8 @@ fn main() -> ExitCode {
             } else {
                 handoff
             }
+            .with_runtime_share_identity(runtime_share_identity.0, runtime_share_identity.1)
+            .with_runtime_state_identity(runtime_state_identity.0, runtime_state_identity.1)
             .with_guest_recovery_report(guest_recovery_report.as_deref())
             .with_transport_qualification(transport_qualification.as_ref());
             if a3s_oci_krun::run_macos_agent_vm_worker_handoff(handoff) {
@@ -776,6 +826,10 @@ fn main() -> ExitCode {
         Command::LinuxAgentVmWorker {
             system_image_manifest,
             runtime_share,
+            runtime_share_device,
+            runtime_share_inode,
+            runtime_state_device,
+            runtime_state_inode,
             guest_token_file,
             console,
             console_device,
@@ -786,6 +840,19 @@ fn main() -> ExitCode {
             qualify_kvm_compatibility_drift,
             vm_attachment_manifest_sha256,
         } => {
+            let (runtime_share_identity, runtime_state_identity) =
+                match parse_runtime_share_identities(
+                    runtime_share_device,
+                    runtime_share_inode,
+                    runtime_state_device,
+                    runtime_state_inode,
+                ) {
+                    Ok(identities) => identities,
+                    Err(error) => {
+                        eprintln!("a3s-oci-krun-shim: {error}");
+                        return ExitCode::FAILURE;
+                    }
+                };
             let transport_qualification = match take_transport_qualification() {
                 Ok(request) => request,
                 Err(error) => {
@@ -812,6 +879,8 @@ fn main() -> ExitCode {
             } else {
                 handoff
             }
+            .with_runtime_share_identity(runtime_share_identity.0, runtime_share_identity.1)
+            .with_runtime_state_identity(runtime_state_identity.0, runtime_state_identity.1)
             .with_guest_recovery_report(guest_recovery_report.as_deref())
             .with_vm_attachment_manifest_sha256(vm_attachment_manifest_sha256.as_deref())
             .with_transport_qualification(transport_qualification.as_ref());
@@ -878,6 +947,55 @@ fn parse_console_identity(
     }
 }
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn parse_runtime_share_identity(
+    device: Option<u64>,
+    inode: Option<u64>,
+) -> Result<(u64, u64), String> {
+    match (device, inode) {
+        (Some(device), Some(inode)) => Ok((device, inode)),
+        _ => Err(
+            "runtime-share reservation identity requires both --runtime-share-device and \
+             --runtime-share-inode"
+                .to_string(),
+        ),
+    }
+}
+
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
+type RuntimeShareIdentities = ((u64, u64), (u64, u64));
+
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
+fn parse_runtime_share_identities(
+    share_device: Option<u64>,
+    share_inode: Option<u64>,
+    state_device: Option<u64>,
+    state_inode: Option<u64>,
+) -> Result<RuntimeShareIdentities, String> {
+    match (share_device, share_inode, state_device, state_inode) {
+        (Some(share_device), Some(share_inode), Some(state_device), Some(state_inode)) => {
+            Ok(((share_device, share_inode), (state_device, state_inode)))
+        }
+        _ => Err(
+            "runtime-share reservation identity requires --runtime-share-device and \
+             --runtime-share-inode plus --runtime-state-device and --runtime-state-inode"
+                .to_string(),
+        ),
+    }
+}
+
 fn write_json(value: &impl Serialize) -> Result<(), serde_json::Error> {
     let stdout = io::stdout();
     let mut output = stdout.lock();
@@ -897,7 +1015,9 @@ fn write_json(value: &impl Serialize) -> Result<(), serde_json::Error> {
     )
 ))]
 mod tests {
-    use super::parse_console_identity;
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    use super::parse_runtime_share_identity;
+    use super::{parse_console_identity, parse_runtime_share_identities};
 
     #[test]
     fn console_identity_requires_both_kernel_components() {
@@ -905,5 +1025,24 @@ mod tests {
         assert_eq!(parse_console_identity(Some(7), Some(11)), Ok(Some((7, 11))));
         assert!(parse_console_identity(Some(7), None).is_err());
         assert!(parse_console_identity(None, Some(11)).is_err());
+    }
+
+    #[test]
+    fn runtime_share_identities_require_all_kernel_components() {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            assert_eq!(parse_runtime_share_identity(Some(7), Some(11)), Ok((7, 11)));
+            assert!(parse_runtime_share_identity(None, None).is_err());
+            assert!(parse_runtime_share_identity(Some(7), None).is_err());
+            assert!(parse_runtime_share_identity(None, Some(11)).is_err());
+        }
+        assert_eq!(
+            parse_runtime_share_identities(Some(7), Some(11), Some(13), Some(17)),
+            Ok(((7, 11), (13, 17)))
+        );
+        assert!(parse_runtime_share_identities(None, None, None, None).is_err());
+        assert!(parse_runtime_share_identities(Some(7), None, Some(13), Some(17)).is_err());
+        assert!(parse_runtime_share_identities(Some(7), Some(11), None, Some(17)).is_err());
+        assert!(parse_runtime_share_identities(Some(7), Some(11), Some(13), None).is_err());
     }
 }

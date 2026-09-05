@@ -88,6 +88,55 @@ impl MacosRuntimeShare {
         &self.path
     }
 
+    /// Return the kernel identity captured when this generation share was
+    /// opened.  The isolated worker receives this value across the process
+    /// boundary and must prove that it reopened the same directory rather
+    /// than a replacement at the same pathname.
+    pub(crate) const fn identity(&self) -> (u64, u64) {
+        (self.identity.device, self.identity.inode)
+    }
+
+    /// Return the kernel identity captured for the required `run/` state
+    /// directory, when that child has been pinned by `require_state_directory`.
+    pub(crate) fn state_identity(&self) -> Option<(u64, u64)> {
+        match self.state_identity {
+            Some(identity) => Some((identity.device, identity.inode)),
+            None => None,
+        }
+    }
+
+    pub(crate) fn verify_identity(&self, expected: (u64, u64)) -> Result<()> {
+        if self.identity() != expected {
+            return Err(share_error(format!(
+                "macOS HVF runtime share identity changed across the worker handoff: expected device {} inode {}, found device {} inode {}",
+                expected.0,
+                expected.1,
+                self.identity.device,
+                self.identity.inode,
+            )));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn verify_state_identity(&self, expected: (u64, u64)) -> Result<()> {
+        let actual = self.state_identity().ok_or_else(|| {
+            share_error(
+                "macOS HVF runtime-state identity is unavailable across the worker handoff"
+                    .to_string(),
+            )
+        })?;
+        if actual != expected {
+            return Err(share_error(format!(
+                "macOS HVF runtime-state identity changed across the worker handoff: expected device {} inode {}, found device {} inode {}",
+                expected.0,
+                expected.1,
+                actual.0,
+                actual.1,
+            )));
+        }
+        Ok(())
+    }
+
     /// Return the macOS fdesc path backed by the retained directory
     /// descriptor.
     ///
@@ -362,6 +411,50 @@ mod tests {
         let _replacement = runtime_share(temporary.path());
 
         assert!(pinned.reverify().is_err());
+    }
+
+    #[test]
+    fn rejects_a_different_worker_handoff_identity() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let share = runtime_share(temporary.path());
+        let original = MacosRuntimeShare::open(&share).expect("pin original runtime share");
+        let identity = original.identity();
+
+        original
+            .verify_identity(identity)
+            .expect("the captured identity must verify");
+        let displaced = temporary.path().join("displaced");
+        std::fs::rename(&share, &displaced).expect("displace original runtime share");
+        let _replacement = runtime_share(temporary.path());
+        let reopened = MacosRuntimeShare::open(&share).expect("open replacement runtime share");
+        assert!(reopened.verify_identity(identity).is_err());
+    }
+
+    #[test]
+    fn rejects_a_different_worker_handoff_state_identity() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let share = runtime_share(temporary.path());
+        let state = share.join("run");
+        private_directory(&state);
+        let mut original = MacosRuntimeShare::open(&share).expect("pin original runtime share");
+        original
+            .require_state_directory()
+            .expect("pin original runtime state");
+        let identity = original
+            .state_identity()
+            .expect("state identity must be available");
+        original
+            .verify_state_identity(identity)
+            .expect("the captured state identity must verify");
+
+        let displaced = share.join("run.displaced");
+        std::fs::rename(&state, &displaced).expect("displace original runtime state");
+        private_directory(&state);
+        let mut reopened = MacosRuntimeShare::open(&share).expect("open replacement runtime share");
+        reopened
+            .require_state_directory()
+            .expect("pin replacement runtime state");
+        assert!(reopened.verify_state_identity(identity).is_err());
     }
 
     #[test]

@@ -45,6 +45,9 @@ impl ConsoleIdentity {
 /// even if the original pathname is unlinked or replaced in the meantime.
 pub(crate) struct PreparedConsoleOutput {
     file: File,
+    path: PathBuf,
+    identity: ConsoleIdentity,
+    cleanup_on_drop: bool,
 }
 
 impl PreparedConsoleOutput {
@@ -54,6 +57,31 @@ impl PreparedConsoleOutput {
         #[cfg(target_os = "macos")]
         let root = "/dev/fd";
         Path::new(root).join(self.file.as_raw_fd().to_string())
+    }
+
+    /// Keep a worker-created console after the worker has completed
+    /// successfully. Host-reserved consoles are never armed for cleanup.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn keep(&mut self) {
+        self.cleanup_on_drop = false;
+    }
+
+    fn cleanup(&self) -> io::Result<()> {
+        let (parent_path, name) = split_entry(&self.path)?;
+        let parent = open_directory_nofollow(parent_path)?;
+        verify_parent_binding(&parent, parent_path)?;
+        remove_bound_file_at(&parent, &name, self.identity, &self.path)
+    }
+}
+
+impl Drop for PreparedConsoleOutput {
+    fn drop(&mut self) {
+        if self.cleanup_on_drop {
+            // Cleanup is deliberately best effort. Identity-bound removal
+            // leaves a replacement untouched when another process won the
+            // pathname race, and Drop cannot return an error to its caller.
+            let _ = self.cleanup();
+        }
     }
 }
 
@@ -141,7 +169,12 @@ pub(crate) fn prepare_console_output(
         ));
     }
 
-    Ok(PreparedConsoleOutput { file })
+    Ok(PreparedConsoleOutput {
+        file,
+        path: console,
+        identity: opened_identity,
+        cleanup_on_drop: expected.is_none(),
+    })
 }
 
 fn resolve_console_path(console: &Path, create_parent: bool) -> Result<PathBuf, String> {
@@ -580,6 +613,55 @@ mod tests {
 
         assert!(error.contains("exclusively"));
         assert_eq!(fs::read(&console).expect("read incumbent"), b"incumbent");
+    }
+
+    #[test]
+    fn worker_created_console_is_removed_when_the_guard_drops() {
+        let temporary = tempfile::tempdir().expect("create cleanup fixture");
+        let console = temporary.path().join("console.log");
+
+        {
+            let prepared = prepare_console_output(&console, None).expect("prepare console");
+            fs::write(prepared.pinned_path(), b"failed worker").expect("write console");
+            assert!(console.exists());
+        }
+
+        assert!(!console.exists());
+    }
+
+    #[test]
+    fn cleanup_leaves_a_replacement_console_untouched() {
+        let temporary = tempfile::tempdir().expect("create replacement cleanup fixture");
+        let console = temporary.path().join("console.log");
+        let prepared = prepare_console_output(&console, None).expect("prepare console");
+        fs::remove_file(&console).expect("unlink worker console");
+        fs::write(&console, b"replacement").expect("write replacement console");
+
+        drop(prepared);
+
+        assert_eq!(
+            fs::read(&console).expect("read replacement console"),
+            b"replacement"
+        );
+    }
+
+    #[test]
+    fn host_reserved_console_is_not_removed_by_worker_drop() {
+        let temporary = tempfile::tempdir().expect("create host reservation fixture");
+        let console = temporary.path().join("console.log");
+        fs::write(&console, b"host reservation").expect("reserve console");
+        fs::set_permissions(&console, fs::Permissions::from_mode(PRIVATE_CONSOLE_MODE))
+            .expect("protect host reservation");
+        let metadata = fs::metadata(&console).expect("identify host reservation");
+        let expected = ConsoleIdentity::new(metadata.dev(), metadata.ino());
+
+        let prepared = prepare_console_output(&console, Some(expected)).expect("open reservation");
+        drop(prepared);
+
+        assert_eq!(
+            fs::read(&console).expect("read host reservation"),
+            b"host reservation"
+        );
     }
 
     #[test]

@@ -128,6 +128,47 @@ impl LinuxRuntimeShare {
         &self.path
     }
 
+    /// Return the kernel identity captured when this generation share was
+    /// opened.  The isolated worker receives this value across the process
+    /// boundary and must prove that it reopened the same directory rather
+    /// than a replacement at the same pathname.
+    pub(crate) const fn identity(&self) -> (u64, u64) {
+        (self.identity.device, self.identity.inode)
+    }
+
+    /// Return the kernel identity captured for the required `run/` state
+    /// directory. The isolated Guest Agent worker receives this value across
+    /// the process boundary and must prove that it reopened the same child.
+    pub(crate) const fn state_identity(&self) -> (u64, u64) {
+        (self.state_identity.device, self.state_identity.inode)
+    }
+
+    pub(crate) fn verify_identity(&self, expected: (u64, u64)) -> Result<()> {
+        if self.identity() != expected {
+            return Err(share_error(format!(
+                "Linux KVM runtime share identity changed across the worker handoff: expected device {} inode {}, found device {} inode {}",
+                expected.0,
+                expected.1,
+                self.identity.device,
+                self.identity.inode,
+            )));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn verify_state_identity(&self, expected: (u64, u64)) -> Result<()> {
+        if self.state_identity() != expected {
+            return Err(share_error(format!(
+                "Linux KVM runtime-state identity changed across the worker handoff: expected device {} inode {}, found device {} inode {}",
+                expected.0,
+                expected.1,
+                self.state_identity.device,
+                self.state_identity.inode,
+            )));
+        }
+        Ok(())
+    }
+
     /// Stable procfs path backed by the retained directory descriptor.
     ///
     /// The final `/.` is required because libkrun opens the configured
@@ -347,5 +388,40 @@ mod tests {
         private_directory(&state);
 
         assert!(pinned.reverify().is_err());
+    }
+
+    #[test]
+    fn rejects_a_different_worker_handoff_identity() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let share = runtime_share(temporary.path());
+        let original = LinuxRuntimeShare::open(&share).expect("pin original runtime share");
+        let identity = original.identity();
+
+        original
+            .verify_identity(identity)
+            .expect("the captured identity must verify");
+        let displaced = temporary.path().join("displaced");
+        std::fs::rename(&share, &displaced).expect("displace original runtime share");
+        let _replacement = runtime_share(temporary.path());
+        let reopened = LinuxRuntimeShare::open(&share).expect("open replacement runtime share");
+        assert!(reopened.verify_identity(identity).is_err());
+    }
+
+    #[test]
+    fn rejects_a_different_worker_handoff_state_identity() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let share = runtime_share(temporary.path());
+        let original = LinuxRuntimeShare::open(&share).expect("pin original runtime share");
+        let identity = original.state_identity();
+
+        original
+            .verify_state_identity(identity)
+            .expect("the captured state identity must verify");
+        let state = share.join("run");
+        let displaced = share.join("run.displaced");
+        std::fs::rename(&state, &displaced).expect("displace original runtime state");
+        private_directory(&state);
+        let reopened = LinuxRuntimeShare::open(&share).expect("open replacement runtime share");
+        assert!(reopened.verify_state_identity(identity).is_err());
     }
 }

@@ -62,7 +62,12 @@ device/inode and private mode, and rechecks both the
 share and the required `run/` state directory before virtio-fs attachment and
 again immediately before VM entry. A directory-entry replacement or permission
 drift therefore fails closed instead of silently changing the guest's writable
-namespace.
+namespace. The parent carries the captured share and `run/` state
+device/inode identities through the hidden worker command, and the worker
+rejects a same-path replacement of either entry before opening libkrun; the
+worker command also rejects missing identity arguments.
+If the worker created the console without a Host reservation, its failure
+cleanup is identity-bound and leaves any replacement pathname untouched.
 
 Inside each utility VM, durable Agent records and device-target cleanup
 manifests stay on the writable per-generation virtiofs share. Temporary

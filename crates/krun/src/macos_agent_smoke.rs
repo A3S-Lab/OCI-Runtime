@@ -107,6 +107,15 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
         report.reason = Some(error.to_string());
         return report;
     }
+    let runtime_share_identity = runtime_share.identity();
+    let runtime_state_identity = match runtime_share.state_identity() {
+        Some(identity) => identity,
+        None => {
+            report.reason =
+                Some("macOS HVF runtime-state identity was unavailable after pinning".to_string());
+            return report;
+        }
+    };
     let runtime_share = runtime_share.path().to_path_buf();
     report.runtime_share_configured = true;
     let console = match resolve_console_with_identity(
@@ -152,6 +161,14 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
         .arg(system_image_manifest)
         .arg("--runtime-share")
         .arg(&runtime_share)
+        .arg("--runtime-share-device")
+        .arg(runtime_share_identity.0.to_string())
+        .arg("--runtime-share-inode")
+        .arg(runtime_share_identity.1.to_string())
+        .arg("--runtime-state-device")
+        .arg(runtime_state_identity.0.to_string())
+        .arg("--runtime-state-inode")
+        .arg(runtime_state_identity.1.to_string())
         .arg("--guest-token-file")
         .arg(guest_token_file)
         .arg("--console")
@@ -300,6 +317,8 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
 pub(crate) struct MacosAgentVmWorkerConfig<'a> {
     pub(crate) system_image_manifest: &'a Path,
     pub(crate) runtime_share: &'a Path,
+    pub(crate) runtime_share_identity: Option<(u64, u64)>,
+    pub(crate) runtime_state_identity: Option<(u64, u64)>,
     pub(crate) guest_token_file: &'a str,
     pub(crate) console: &'a Path,
     pub(crate) console_identity: Option<(u64, u64)>,
@@ -312,6 +331,8 @@ pub(crate) fn run_worker(configuration: MacosAgentVmWorkerConfig<'_>) -> bool {
     let MacosAgentVmWorkerConfig {
         system_image_manifest,
         runtime_share,
+        runtime_share_identity,
+        runtime_state_identity,
         guest_token_file,
         console,
         console_identity,
@@ -324,7 +345,25 @@ pub(crate) fn run_worker(configuration: MacosAgentVmWorkerConfig<'_>) -> bool {
         Ok(runtime_share) => runtime_share,
         Err(error) => return fail_worker(&mut evidence, error.to_string()),
     };
+    let Some(expected) = runtime_share_identity else {
+        return fail_worker(
+            &mut evidence,
+            "macOS HVF runtime-share handoff identity is missing".to_string(),
+        );
+    };
+    if let Err(error) = runtime_share.verify_identity(expected) {
+        return fail_worker(&mut evidence, error.to_string());
+    }
     if let Err(error) = runtime_share.require_state_directory() {
+        return fail_worker(&mut evidence, error.to_string());
+    }
+    let Some(expected) = runtime_state_identity else {
+        return fail_worker(
+            &mut evidence,
+            "macOS HVF runtime-state handoff identity is missing".to_string(),
+        );
+    };
+    if let Err(error) = runtime_share.verify_state_identity(expected) {
         return fail_worker(&mut evidence, error.to_string());
     }
     let prepared_console = match prepare_console_output(

@@ -1522,9 +1522,11 @@ release-promotion gates above.
   session without falling back to host-kernel execution.
 
   The current candidate implements the isolated worker, descriptor-pinned
-  runtime share and KVM device, pidfd-bound direct shim owner, kernel-verified
-  direct Unix peer, one-time token handoff, protocol-v10 negotiation, exact
-  immutable boot evidence, and process/endpoint/handoff cleanup. The x86_64
+  runtime share and required `run/` state child, parent-to-worker device/inode
+  identity binding for both share entries, and KVM device, pidfd-bound direct
+  shim owner, kernel-verified direct Unix peer, one-time token handoff,
+  protocol-v10 negotiation, exact immutable boot evidence, and
+  process/endpoint/handoff cleanup. The x86_64
   and AArch64 CI lanes require real authenticated entry whenever their KVM
   probe is available and otherwise retain explicit post-configuration KVM
   failure evidence. This parent remains open until both advertised
