@@ -9,8 +9,8 @@ use crate::macos_context::{KrunContext, MacosKrunApi};
 use crate::macos_runtime_share::MacosRuntimeShare;
 use crate::macos_system_image::MacosSystemImage;
 use crate::unix_process::{
-    read_bounded_worker_output, resolve_agent_socket, resolve_console, terminate_and_wait,
-    wait_for_worker,
+    prepare_console_output, read_bounded_worker_output, resolve_agent_socket,
+    resolve_console_with_identity, terminate_and_wait, wait_for_worker, ConsoleIdentity,
 };
 use crate::{KrunAgentVmSmokeReport, MacosBootAssetsEvidence, VmConfig};
 use a3s_oci_agent_protocol::{
@@ -71,6 +71,7 @@ pub(crate) struct MacosAgentVmConfig<'a> {
     pub(crate) runtime_share: &'a Path,
     pub(crate) guest_token_file: &'a str,
     pub(crate) console: &'a Path,
+    pub(crate) console_identity: Option<(u64, u64)>,
     pub(crate) endpoint: &'a AgentVsockEndpoint,
     pub(crate) socket: &'a Path,
     pub(crate) guest_recovery_report: Option<&'a str>,
@@ -84,6 +85,7 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
         runtime_share,
         guest_token_file,
         console,
+        console_identity,
         endpoint,
         socket,
         guest_recovery_report,
@@ -107,7 +109,10 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
     }
     let runtime_share = runtime_share.path().to_path_buf();
     report.runtime_share_configured = true;
-    let console = match resolve_console(console) {
+    let console = match resolve_console_with_identity(
+        console,
+        console_identity.map(|(device, inode)| ConsoleIdentity::new(device, inode)),
+    ) {
         Ok(console) => console,
         Err(reason) => {
             report.reason = Some(reason);
@@ -156,6 +161,13 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
         .env_remove(AGENT_TRANSPORT_QUALIFICATION_ENV)
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    if let Some((device, inode)) = console_identity {
+        command
+            .arg("--console-device")
+            .arg(device.to_string())
+            .arg("--console-inode")
+            .arg(inode.to_string());
+    }
     if let Some(path) = guest_recovery_report {
         command.arg("--guest-recovery-report").arg(path);
     }
@@ -285,15 +297,28 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
     report
 }
 
-pub(crate) fn run_worker(
-    system_image_manifest: &Path,
-    runtime_share: &Path,
-    guest_token_file: &str,
-    console: &Path,
-    socket: &Path,
-    guest_recovery_report: Option<&str>,
-    transport_qualification: Option<&AgentTransportQualificationRequest>,
-) -> bool {
+pub(crate) struct MacosAgentVmWorkerConfig<'a> {
+    pub(crate) system_image_manifest: &'a Path,
+    pub(crate) runtime_share: &'a Path,
+    pub(crate) guest_token_file: &'a str,
+    pub(crate) console: &'a Path,
+    pub(crate) console_identity: Option<(u64, u64)>,
+    pub(crate) socket: &'a Path,
+    pub(crate) guest_recovery_report: Option<&'a str>,
+    pub(crate) transport_qualification: Option<&'a AgentTransportQualificationRequest>,
+}
+
+pub(crate) fn run_worker(configuration: MacosAgentVmWorkerConfig<'_>) -> bool {
+    let MacosAgentVmWorkerConfig {
+        system_image_manifest,
+        runtime_share,
+        guest_token_file,
+        console,
+        console_identity,
+        socket,
+        guest_recovery_report,
+        transport_qualification,
+    } = configuration;
     let mut evidence = WorkerEvidence::initial();
     let mut runtime_share = match MacosRuntimeShare::open(runtime_share) {
         Ok(runtime_share) => runtime_share,
@@ -302,10 +327,14 @@ pub(crate) fn run_worker(
     if let Err(error) = runtime_share.require_state_directory() {
         return fail_worker(&mut evidence, error.to_string());
     }
-    let console = match resolve_console(console) {
+    let prepared_console = match prepare_console_output(
+        console,
+        console_identity.map(|(device, inode)| ConsoleIdentity::new(device, inode)),
+    ) {
         Ok(console) => console,
         Err(reason) => return fail_worker(&mut evidence, reason),
     };
+    let console_path = prepared_console.pinned_path();
     let socket = match resolve_agent_socket(socket) {
         Ok(socket) => socket,
         Err(reason) => return fail_worker(&mut evidence, reason),
@@ -392,7 +421,7 @@ pub(crate) fn run_worker(
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.workload_configured = true;
-    if let Err(error) = context.set_console_output(&console) {
+    if let Err(error) = context.set_console_output(&console_path) {
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.console_configured = true;

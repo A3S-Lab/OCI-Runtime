@@ -101,6 +101,26 @@ enum Command {
         /// Host file that receives the guest console stream.
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
+        /// Device number of the atomically reserved Unix console file.
+        #[cfg(any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
+        ))]
+        #[arg(long, hide = true, value_name = "DEVICE")]
+        console_device: Option<u64>,
+        /// Inode number of the atomically reserved Unix console file.
+        #[cfg(any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
+        ))]
+        #[arg(long, hide = true, value_name = "INODE")]
+        console_inode: Option<u64>,
         /// Portable endpoint name used as the pipe or private-directory basename.
         #[arg(long, value_name = "NAME")]
         pipe_name: String,
@@ -202,6 +222,10 @@ enum Command {
         guest_token_file: String,
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
+        #[arg(long, hide = true, value_name = "DEVICE")]
+        console_device: Option<u64>,
+        #[arg(long, hide = true, value_name = "INODE")]
+        console_inode: Option<u64>,
         #[arg(long, value_name = "FILE")]
         socket_path: PathBuf,
         #[arg(long, value_name = "FILE")]
@@ -222,6 +246,10 @@ enum Command {
         guest_token_file: String,
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
+        #[arg(long, hide = true, value_name = "DEVICE")]
+        console_device: Option<u64>,
+        #[arg(long, hide = true, value_name = "INODE")]
+        console_inode: Option<u64>,
         #[arg(long, value_name = "FILE")]
         socket_path: PathBuf,
         #[arg(long, value_name = "FILE")]
@@ -314,6 +342,22 @@ fn main() -> ExitCode {
             ))]
             system_image_manifest,
             console,
+            #[cfg(any(
+                all(target_os = "macos", target_arch = "aarch64"),
+                all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )
+            ))]
+            console_device,
+            #[cfg(any(
+                all(target_os = "macos", target_arch = "aarch64"),
+                all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )
+            ))]
+            console_inode,
             pipe_name,
             #[cfg(any(
                 all(target_os = "macos", target_arch = "aarch64"),
@@ -383,6 +427,20 @@ fn main() -> ExitCode {
             };
             let transport_qualification = match take_transport_qualification() {
                 Ok(request) => request,
+                Err(error) => {
+                    eprintln!("a3s-oci-krun-shim: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            #[cfg(any(
+                all(target_os = "macos", target_arch = "aarch64"),
+                all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )
+            ))]
+            let console_identity = match parse_console_identity(console_device, console_inode) {
+                Ok(identity) => identity,
                 Err(error) => {
                     eprintln!("a3s-oci-krun-shim: {error}");
                     return ExitCode::FAILURE;
@@ -550,6 +608,18 @@ fn main() -> ExitCode {
                     recovery.as_ref().map(|recovery| recovery.guest_path()),
                 )
                 .with_transport_qualification(transport_qualification.as_ref());
+                #[cfg(any(
+                    all(target_os = "macos", target_arch = "aarch64"),
+                    all(
+                        target_os = "linux",
+                        any(target_arch = "x86_64", target_arch = "aarch64")
+                    )
+                ))]
+                let handoff = if let Some((device, inode)) = console_identity {
+                    handoff.with_console_identity(device, inode)
+                } else {
+                    handoff
+                };
                 #[cfg(all(
                     target_os = "linux",
                     any(target_arch = "x86_64", target_arch = "aarch64")
@@ -660,6 +730,8 @@ fn main() -> ExitCode {
             runtime_share,
             guest_token_file,
             console,
+            console_device,
+            console_inode,
             socket_path,
             guest_recovery_report,
         } => {
@@ -670,15 +742,28 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            if a3s_oci_krun::run_macos_agent_vm_worker(
+            let console_identity = match parse_console_identity(console_device, console_inode) {
+                Ok(identity) => identity,
+                Err(error) => {
+                    eprintln!("a3s-oci-krun-shim: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let handoff = a3s_oci_krun::MacosAgentVmWorkerHandoff::new(
                 &system_image_manifest,
                 &runtime_share,
                 &guest_token_file,
                 &console,
                 &socket_path,
-                guest_recovery_report.as_deref(),
-                transport_qualification.as_ref(),
-            ) {
+            );
+            let handoff = if let Some((device, inode)) = console_identity {
+                handoff.with_console_identity(device, inode)
+            } else {
+                handoff
+            }
+            .with_guest_recovery_report(guest_recovery_report.as_deref())
+            .with_transport_qualification(transport_qualification.as_ref());
+            if a3s_oci_krun::run_macos_agent_vm_worker_handoff(handoff) {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::from(2)
@@ -693,6 +778,8 @@ fn main() -> ExitCode {
             runtime_share,
             guest_token_file,
             console,
+            console_device,
+            console_inode,
             socket_path,
             guest_recovery_report,
             qualify_kvm_post_probe_failure,
@@ -706,13 +793,25 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
+            let console_identity = match parse_console_identity(console_device, console_inode) {
+                Ok(identity) => identity,
+                Err(error) => {
+                    eprintln!("a3s-oci-krun-shim: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
             let handoff = a3s_oci_krun::LinuxAgentVmWorkerHandoff::new(
                 &system_image_manifest,
                 &runtime_share,
                 &guest_token_file,
                 &console,
                 &socket_path,
-            )
+            );
+            let handoff = if let Some((device, inode)) = console_identity {
+                handoff.with_console_identity(device, inode)
+            } else {
+                handoff
+            }
             .with_guest_recovery_report(guest_recovery_report.as_deref())
             .with_vm_attachment_manifest_sha256(vm_attachment_manifest_sha256.as_deref())
             .with_transport_qualification(transport_qualification.as_ref());
@@ -758,10 +857,53 @@ fn take_transport_qualification(
         .map_err(|error| error.to_string())
 }
 
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
+fn parse_console_identity(
+    device: Option<u64>,
+    inode: Option<u64>,
+) -> Result<Option<(u64, u64)>, String> {
+    match (device, inode) {
+        (Some(device), Some(inode)) => Ok(Some((device, inode))),
+        (None, None) => Ok(None),
+        _ => Err(
+            "console reservation identity requires both --console-device and --console-inode"
+                .to_string(),
+        ),
+    }
+}
+
 fn write_json(value: &impl Serialize) -> Result<(), serde_json::Error> {
     let stdout = io::stdout();
     let mut output = stdout.lock();
     serde_json::to_writer_pretty(&mut output, value)?;
     println!();
     Ok(())
+}
+
+#[cfg(all(
+    test,
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    )
+))]
+mod tests {
+    use super::parse_console_identity;
+
+    #[test]
+    fn console_identity_requires_both_kernel_components() {
+        assert_eq!(parse_console_identity(None, None), Ok(None));
+        assert_eq!(parse_console_identity(Some(7), Some(11)), Ok(Some((7, 11))));
+        assert!(parse_console_identity(Some(7), None).is_err());
+        assert!(parse_console_identity(None, Some(11)).is_err());
+    }
 }

@@ -23,6 +23,8 @@ pub struct AgentVmHandoff<'a> {
     runtime_share: Option<&'a Path>,
     guest_token_file: Option<&'a str>,
     guest_recovery_report: Option<&'a str>,
+    #[cfg(unix)]
+    console_identity: Option<(u64, u64)>,
     transport_qualification: Option<&'a AgentTransportQualificationRequest>,
     #[cfg(all(
         target_os = "linux",
@@ -53,6 +55,8 @@ impl<'a> AgentVmHandoff<'a> {
             runtime_share,
             guest_token_file,
             guest_recovery_report,
+            #[cfg(unix)]
+            console_identity: None,
             transport_qualification: None,
             #[cfg(all(
                 target_os = "linux",
@@ -70,6 +74,16 @@ impl<'a> AgentVmHandoff<'a> {
             ))]
             vm_attachment_manifest_sha256: None,
         }
+    }
+
+    /// Bind the console path to the Unix host reservation created for this
+    /// launch. The worker rejects any path whose device/inode no longer
+    /// matches this identity before handing it to libkrun.
+    #[cfg(unix)]
+    #[must_use]
+    pub const fn with_console_identity(mut self, device: u64, inode: u64) -> Self {
+        self.console_identity = Some((device, inode));
+        self
     }
 
     /// Attach an explicit guest transport qualification request.
@@ -192,6 +206,7 @@ pub fn agent_vm_smoke(
             endpoint,
             socket: socket_path,
             guest_recovery_report: handoff.guest_recovery_report,
+            console_identity: handoff.console_identity,
             transport_qualification: handoff.transport_qualification,
             vm: config,
         })
@@ -236,6 +251,7 @@ pub fn agent_vm_smoke(
             endpoint,
             socket: socket_path,
             guest_recovery_report: handoff.guest_recovery_report,
+            console_identity: handoff.console_identity,
             transport_qualification: handoff.transport_qualification,
             qualify_kvm_post_probe_failure: handoff.qualify_kvm_post_probe_failure,
             qualify_kvm_compatibility_drift: handoff.qualify_kvm_compatibility_drift,
