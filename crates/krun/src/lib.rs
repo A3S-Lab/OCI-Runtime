@@ -69,6 +69,8 @@ mod macos_runtime_share;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_system_image;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod macos_vm_marker;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_vm_smoke;
 mod report;
 #[cfg(any(
@@ -617,6 +619,60 @@ pub fn run_macos_vm_smoke_worker_with_runtime_share_identity(
     marker_name: &str,
     runtime_share_identity: Option<(u64, u64)>,
 ) -> bool {
+    let marker_token = match a3s_oci_agent_protocol::SessionToken::generate() {
+        Ok(token) => token.expose_hex(),
+        Err(_) => return false,
+    };
+    run_macos_vm_smoke_worker_with_runtime_share_identity_and_marker_token(
+        system_image_manifest,
+        runtime_share,
+        console,
+        marker_name,
+        marker_token.as_str(),
+        runtime_share_identity,
+    )
+}
+
+/// Run the private macOS VM-entry worker with a marker nonce received from
+/// its parent over the one-shot stdin handoff.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[doc(hidden)]
+#[must_use]
+pub fn run_macos_vm_smoke_worker_with_runtime_share_identity_from_stdin(
+    system_image_manifest: &Path,
+    runtime_share: &Path,
+    console: &Path,
+    marker_name: &str,
+    runtime_share_identity: Option<(u64, u64)>,
+) -> bool {
+    let marker_token = match macos_vm_marker::read_marker_token_from_stdin() {
+        Ok(token) => token,
+        Err(_) => return false,
+    };
+    run_macos_vm_smoke_worker_with_runtime_share_identity_and_marker_token(
+        system_image_manifest,
+        runtime_share,
+        console,
+        marker_name,
+        marker_token.as_str(),
+        runtime_share_identity,
+    )
+}
+
+/// Run the private macOS VM-entry worker with an explicit, validated marker
+/// nonce. This remains hidden because the nonce is part of the shim-only
+/// parent/worker protocol rather than the public SDK.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[doc(hidden)]
+#[must_use]
+pub fn run_macos_vm_smoke_worker_with_runtime_share_identity_and_marker_token(
+    system_image_manifest: &Path,
+    runtime_share: &Path,
+    console: &Path,
+    marker_name: &str,
+    marker_token: &str,
+    runtime_share_identity: Option<(u64, u64)>,
+) -> bool {
     let Some(runtime_share_identity) = runtime_share_identity else {
         return false;
     };
@@ -625,6 +681,7 @@ pub fn run_macos_vm_smoke_worker_with_runtime_share_identity(
         runtime_share,
         console,
         marker_name,
+        marker_token,
         Some(runtime_share_identity),
     )
 }

@@ -53,6 +53,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
   remains owned by the Host for authenticated-session and owner-death cleanup.
   Replacement races leave the newer pathname entry untouched.
 
+- Replaced the predictable macOS HVF VM-smoke marker with a per-run,
+  nonce-bound handshake. The parent sends the 256-bit nonce over a one-shot
+  stdin pipe, and both parent and worker operate relative to a retained
+  runtime-share descriptor. Marker reads use no-follow, bounded,
+  owner/mode/type/hard-link checks plus device/inode revalidation; cleanup
+  removes only the verified entry and leaves symlinks, FIFOs, and replacements
+  untouched.
+
 - Hardened host-side trusted-path canonicalization. Rootfs, system-image
   manifests, per-generation runtime shares, console parents, and recovery
   parents now open their final component without following links and compare

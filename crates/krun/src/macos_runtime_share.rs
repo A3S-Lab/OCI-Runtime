@@ -99,10 +99,8 @@ impl MacosRuntimeShare {
     /// Return the kernel identity captured for the required `run/` state
     /// directory, when that child has been pinned by `require_state_directory`.
     pub(crate) fn state_identity(&self) -> Option<(u64, u64)> {
-        match self.state_identity {
-            Some(identity) => Some((identity.device, identity.inode)),
-            None => None,
-        }
+        self.state_identity
+            .map(|identity| (identity.device, identity.inode))
     }
 
     pub(crate) fn verify_identity(&self, expected: (u64, u64)) -> Result<()> {
@@ -147,6 +145,15 @@ impl MacosRuntimeShare {
     /// retained by this object.
     pub(crate) fn pinned_path(&self) -> PathBuf {
         PathBuf::from(format!("/dev/fd/{}", self.directory.as_raw_fd()))
+    }
+
+    /// Duplicate the retained directory descriptor for host-side operations.
+    ///
+    /// Callers should use this instead of reopening [`Self::pinned_path`]
+    /// when they need descriptor-relative access; the duplicate remains bound
+    /// to the same directory even if the public pathname is replaced.
+    pub(crate) fn duplicate_directory(&self) -> std::io::Result<File> {
+        self.directory.try_clone()
     }
 
     /// Pin the required `run` child used for guest-agent state.
