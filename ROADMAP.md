@@ -1381,8 +1381,8 @@ then may WHPX become `experimental`.
 - [x] Create, configure plain agent vsock, and release one libkrun context
   without entering a VM.
 - [x] Enter a real HVF VM in an isolated, bounded worker and require a
-  guest-written host marker, natural zero exit, worker reap, and marker
-  cleanup.
+  per-run nonce-bound guest marker, natural zero exit, worker reap, and
+  descriptor-relative identity-safe marker cleanup.
 - [x] Retain fail-closed unavailable-HVF and missing-entitlement evidence
   without accepting pre-entry configuration as guest execution.
 - [x] Boot the same pinned A3S Linux kernel and immutable system root through

@@ -68,6 +68,14 @@ rejects a same-path replacement of either entry before opening libkrun; the
 worker command also rejects missing identity arguments.
 If the worker created the console without a Host reservation, its failure
 cleanup is identity-bound and leaves any replacement pathname untouched.
+The standalone `vm-smoke` marker follows the same boundary: its name carries a
+fresh 128-bit nonce, its contents carry an independent 256-bit nonce delivered
+over a closed-after-write stdin pipe, and the parent consumes it only through a
+descriptor-relative no-follow open. Regular-file type, effective-user
+ownership, mode `0600`, single-link count, bounded size, and device/inode
+identity must all remain stable across the read and cleanup; a symlink, FIFO,
+hard link, replacement, or stale/static token is rejected without deleting the
+replacement entry.
 
 Inside each utility VM, durable Agent records and device-target cleanup
 manifests stay on the writable per-generation virtiofs share. Temporary
@@ -247,7 +255,10 @@ The `vm-smoke` command crosses the guest-execution boundary through the
 manifest-bound immutable system image. It attaches the raw ext4 system disk
 read-only, pins the A3S Linux kernel and guest agent through the manifest, keeps
 the writable runtime share separate, executes `/bin/sh`, and requires an exact
-guest-written marker to be visible on the host.
+guest-written marker to be visible on the host. Each invocation generates a
+fresh 128-bit marker name and a separate 256-bit marker nonce; the nonce is
+handed to the isolated worker over a one-shot stdin pipe and is never placed
+in the worker's command line or console output.
 
 Standard macOS libkrun consumes the process in `krun_start_enter`. The shim
 therefore keeps verification in a parent process and performs all libkrun work
@@ -256,7 +267,7 @@ in a hidden child:
 ```text
 a3s-oci-krun-shim vm-smoke
         │
-        ├── validate rootfs, /bin/sh, console, and absent marker
+        ├── validate rootfs, /bin/sh, console, and nonce marker absence
         ├── spawn signed worker and read bounded setup evidence
         │       ├── reverify and load the pinned native bundle
         │       ├── create and configure the context
@@ -264,7 +275,8 @@ a3s-oci-krun-shim vm-smoke
         │       └── krun_start_enter → Linux guest → marker → guest exit
         ├── enforce 30-second timeout and reap the worker
         ├── require natural guest exit code 0
-        └── verify and remove the exact marker
+        └── open the marker relative to the retained share, verify its nonce,
+            device/inode, owner, mode, size, and remove only that exact entry
 ```
 
 The parent never treats pre-entry evidence or a successful libkrun API call as
@@ -329,11 +341,12 @@ printf '%s  %s\n' \
 ```
 
 On the local Apple Silicon qualification host, the signed worker booted the
-guest, returned exit code zero, verified and removed
-`a3s-oci-hvf-vm-smoke-v1`, and left no smoke marker in the rootfs. The same
-build without the Hypervisor entitlement reached the complete context
-configuration boundary, failed `krun_start_enter`, returned status `2`, wrote
-no marker, and reported no false VM entry.
+guest, returned exit code zero, verified and removed the fresh nonce-bound
+marker, and left no smoke marker in the runtime share. The same build without
+the Hypervisor entitlement reached the complete context configuration boundary,
+failed `krun_start_enter`, returned status `2`, wrote no marker, and reported no
+false VM entry. A symlink, FIFO, hard-link, replacement inode, unexpected mode,
+oversized marker, or wrong nonce fails closed and is never followed or consumed.
 
 macOS CI downloads and verifies the same immutable image artifact. When
 `kern.hv_support = 1`, it requires the complete positive report. On hosted

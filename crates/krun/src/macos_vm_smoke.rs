@@ -1,29 +1,33 @@
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::path::Path;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use crate::macos_context::{KrunContext, MacosKrunApi};
 use crate::macos_runtime_share::MacosRuntimeShare;
 use crate::macos_system_image::MacosSystemImage;
+use crate::macos_vm_marker::{
+    generate_marker_name, validate_marker_name, validate_marker_token, PinnedMarkerDirectory,
+};
 use crate::unix_process::{
-    prepare_console_output, read_bounded_worker_output, require_absent, resolve_console,
-    terminate_and_wait, wait_for_worker,
+    prepare_console_output, read_bounded_worker_output, resolve_console, terminate_and_wait,
+    wait_for_worker,
 };
 use crate::{KrunVmSmokeReport, MacosBootAssetsEvidence, VmConfig};
-use a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_TAG;
+use a3s_oci_agent_protocol::{SessionToken, AGENT_RUNTIME_SHARE_TAG};
 
-const MACOS_VM_SMOKE_TOKEN: &str = "a3s-oci-hvf-vm-smoke-v1";
 const WORKER_COMMAND: &str = "__macos-vm-smoke-worker";
 const WORKER_SCHEMA_VERSION: &str = "a3s.oci.macos-vm-smoke-worker.v1";
 const WORKER_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_WORKER_OUTPUT_BYTES: u64 = 64 * 1024;
-const MARKER_PREFIX: &str = ".a3s-oci-hvf-vm-smoke-";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct WorkerEvidence {
@@ -78,7 +82,7 @@ pub(crate) fn vm_smoke(
         }
     };
     let runtime_share_identity = runtime_share.identity();
-    let runtime_share = runtime_share.path().to_path_buf();
+    let runtime_share_path = runtime_share.path().to_path_buf();
     report.runtime_share_configured = true;
     let console = match resolve_console(console) {
         Ok(console) => console,
@@ -88,29 +92,56 @@ pub(crate) fn vm_smoke(
         }
     };
 
-    let marker_name = format!("{MARKER_PREFIX}{}", std::process::id());
-    let marker_path = runtime_share.join(&marker_name);
-    if let Err(reason) = require_absent(&marker_path, "smoke marker") {
-        report.reason = Some(reason);
-        return report;
-    }
-
-    let executable = match std::env::current_exe() {
-        Ok(executable) => executable,
+    let marker_name = match generate_marker_name() {
+        Ok(name) => name,
+        Err(reason) => {
+            report.reason = Some(reason);
+            return report;
+        }
+    };
+    let marker_token = match SessionToken::generate() {
+        Ok(token) => token.expose_hex(),
         Err(error) => {
             report.reason = Some(format!(
-                "failed to resolve the current shim executable: {error}"
+                "failed to generate the macOS VM smoke nonce: {error}"
             ));
             return report;
         }
     };
+    if let Err(error) = runtime_share.reverify() {
+        report.reason = Some(error.to_string());
+        return report;
+    }
+    let marker_directory = match PinnedMarkerDirectory::open(&runtime_share) {
+        Ok(directory) => directory,
+        Err(error) => {
+            report.reason = Some(format!(
+                "failed to pin macOS VM smoke marker directory: {error}"
+            ));
+            return report;
+        }
+    };
+    if let Err(error) = marker_directory.require_absent(&marker_name) {
+        report.reason = Some(format!(
+            "macOS VM smoke marker is not absent before worker launch: {error}"
+        ));
+        return report;
+    }
 
-    let mut child = match Command::new(executable)
+    let executable = match PinnedWorkerExecutable::current() {
+        Ok(executable) => executable,
+        Err(reason) => {
+            report.reason = Some(reason);
+            return report;
+        }
+    };
+
+    let mut child = match Command::new(&executable.command_path)
         .arg(WORKER_COMMAND)
         .arg("--system-image-manifest")
         .arg(system_image_manifest)
         .arg("--runtime-share")
-        .arg(&runtime_share)
+        .arg(&runtime_share_path)
         .arg("--runtime-share-device")
         .arg(runtime_share_identity.0.to_string())
         .arg("--runtime-share-inode")
@@ -120,6 +151,7 @@ pub(crate) fn vm_smoke(
         .arg("--marker-name")
         .arg(&marker_name)
         .stdout(Stdio::piped())
+        .stdin(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
     {
@@ -133,18 +165,40 @@ pub(crate) fn vm_smoke(
     let output_reader = child.stdout.take().map(|stdout| {
         thread::spawn(move || read_bounded_worker_output(stdout, MAX_WORKER_OUTPUT_BYTES))
     });
-    let worker_exit = match wait_for_worker(&mut child, WORKER_TIMEOUT) {
-        Ok(worker_exit) => Some(worker_exit),
-        Err(error) => {
-            let cleanup_error = terminate_and_wait(&mut child).err();
-            report.reason = Some(match cleanup_error {
-                Some(cleanup_error) => format!(
-                    "failed to wait for the macOS VM worker: {error}; \
-                     worker cleanup also failed: {cleanup_error}"
-                ),
-                None => format!("failed to wait for the macOS VM worker: {error}"),
-            });
-            None
+    // Close the one-shot input immediately after writing the exact nonce. The
+    // worker treats EOF as the end of its private handoff and never accepts an
+    // unbounded secret stream.
+    let nonce_write = match child.stdin.take() {
+        Some(mut stdin) => stdin.write_all(marker_token.as_bytes()),
+        None => Err(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "macOS VM worker did not expose a nonce input",
+        )),
+    };
+    let worker_exit = if let Err(error) = nonce_write {
+        let cleanup_error = terminate_and_wait(&mut child).err();
+        report.reason = Some(match cleanup_error {
+            Some(cleanup_error) => format!(
+                "failed to provision the macOS VM smoke nonce: {error}; \
+                 worker cleanup also failed: {cleanup_error}"
+            ),
+            None => format!("failed to provision the macOS VM smoke nonce: {error}"),
+        });
+        None
+    } else {
+        match wait_for_worker(&mut child, WORKER_TIMEOUT) {
+            Ok(worker_exit) => Some(worker_exit),
+            Err(error) => {
+                let cleanup_error = terminate_and_wait(&mut child).err();
+                report.reason = Some(match cleanup_error {
+                    Some(cleanup_error) => format!(
+                        "failed to wait for the macOS VM worker: {error}; \
+                         worker cleanup also failed: {cleanup_error}"
+                    ),
+                    None => format!("failed to wait for the macOS VM worker: {error}"),
+                });
+                None
+            }
         }
     };
 
@@ -194,7 +248,13 @@ pub(crate) fn vm_smoke(
         }
     }
 
-    verify_and_remove_marker(&marker_path, &mut report);
+    verify_and_remove_marker(
+        &runtime_share,
+        &marker_directory,
+        &marker_name,
+        marker_token.as_str(),
+        &mut report,
+    );
     report.vm_entered |= report.marker_verified;
     report.console_created =
         fs::symlink_metadata(&console).is_ok_and(|metadata| metadata.file_type().is_file());
@@ -238,6 +298,7 @@ pub(crate) fn run_worker(
     runtime_share: &Path,
     console: &Path,
     marker_name: &str,
+    marker_token: &str,
     runtime_share_identity: Option<(u64, u64)>,
 ) -> bool {
     let mut evidence = WorkerEvidence::initial();
@@ -254,6 +315,21 @@ pub(crate) fn run_worker(
     if let Err(error) = runtime_share.verify_identity(expected) {
         return fail_worker(&mut evidence, error.to_string());
     }
+    if let Err(reason) = validate_marker_token(marker_token) {
+        return fail_worker(&mut evidence, reason);
+    }
+    if let Err(error) = runtime_share.reverify() {
+        return fail_worker(&mut evidence, error.to_string());
+    }
+    let marker_directory = match PinnedMarkerDirectory::open(&runtime_share) {
+        Ok(directory) => directory,
+        Err(error) => {
+            return fail_worker(
+                &mut evidence,
+                format!("failed to pin macOS VM smoke marker directory: {error}"),
+            )
+        }
+    };
     let prepared_console = match prepare_console_output(console, None) {
         Ok(console) => console,
         Err(reason) => return fail_worker(&mut evidence, reason),
@@ -262,9 +338,11 @@ pub(crate) fn run_worker(
     if let Err(reason) = validate_marker_name(marker_name) {
         return fail_worker(&mut evidence, reason);
     }
-    let marker_path = runtime_share.path().join(marker_name);
-    if let Err(reason) = require_absent(&marker_path, "smoke marker") {
-        return fail_worker(&mut evidence, reason);
+    if let Err(error) = marker_directory.require_absent(marker_name) {
+        return fail_worker(
+            &mut evidence,
+            format!("macOS VM smoke marker is not absent in the pinned share: {error}"),
+        );
     }
 
     let api = match MacosKrunApi::load() {
@@ -321,10 +399,14 @@ pub(crate) fn run_worker(
     }
 
     let marker_guest_path = format!("/run/a3s-oci-runtime/{marker_name}");
+    // `marker_name` and `marker_token` have both been reduced to lowercase
+    // hexadecimal values above, so embedding them in this single-quoted
+    // command cannot introduce a path or shell metacharacter.
     let command = format!(
         "mount -t virtiofs {AGENT_RUNTIME_SHARE_TAG} /run/a3s-oci-runtime && \
-         printf '%s\\n' '{MACOS_VM_SMOKE_TOKEN}' > '{marker_guest_path}' && \
-         printf '%s\\n' '{MACOS_VM_SMOKE_TOKEN}'"
+         umask 077 && set -C && \
+         printf '%s\\n' '{marker_token}' > '{marker_guest_path}' && \
+         printf '%s\\n' 'a3s-oci-hvf-vm-smoke-complete-v1'"
     );
     let arguments = vec!["-c".to_string(), command];
     if let Err(error) = context.set_exec("/bin/sh", &arguments, &[]) {
@@ -351,14 +433,81 @@ pub(crate) fn run_worker(
     }
 }
 
-fn validate_marker_name(marker_name: &str) -> Result<(), String> {
-    let suffix = marker_name
-        .strip_prefix(MARKER_PREFIX)
-        .ok_or_else(|| "macOS VM smoke marker has an invalid prefix".to_string())?;
-    if suffix.is_empty() || suffix.len() > 20 || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err("macOS VM smoke marker has an invalid process identifier".into());
+#[derive(Debug)]
+struct PinnedWorkerExecutable {
+    command_path: PathBuf,
+    _file: File,
+}
+
+impl PinnedWorkerExecutable {
+    fn current() -> Result<Self, String> {
+        let requested = std::env::current_exe()
+            .map_err(|error| format!("failed to resolve the current shim executable: {error}"))?;
+        // Darwin may report the invocation symlink from `current_exe()`.  The
+        // process is already executing the image, so accepting that spelling
+        // is necessary for Homebrew/app-bundle aliases; pin the canonical
+        // target and compare the followed input identity to close replacement
+        // races while resolving it.
+        let input_metadata = fs::metadata(&requested).map_err(|error| {
+            format!(
+                "failed to inspect the current shim executable {}: {error}",
+                requested.display()
+            )
+        })?;
+        if !input_metadata.is_file() {
+            return Err(format!(
+                "current shim executable must resolve to a regular file: {}",
+                requested.display()
+            ));
+        }
+        let canonical = requested.canonicalize().map_err(|error| {
+            format!(
+                "failed to canonicalize the current shim executable {}: {error}",
+                requested.display()
+            )
+        })?;
+        let canonical_metadata = fs::symlink_metadata(&canonical).map_err(|error| {
+            format!(
+                "failed to inspect canonical shim executable {}: {error}",
+                canonical.display()
+            )
+        })?;
+        if canonical_metadata.file_type().is_symlink() || !canonical_metadata.is_file() {
+            return Err(format!(
+                "canonical shim executable is not a regular file: {}",
+                canonical.display()
+            ));
+        }
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+        let file = options.open(&canonical).map_err(|error| {
+            format!(
+                "failed to pin the current shim executable {}: {error}",
+                canonical.display()
+            )
+        })?;
+        let file_metadata = file.metadata().map_err(|error| {
+            format!(
+                "failed to inspect pinned shim executable {}: {error}",
+                canonical.display()
+            )
+        })?;
+        let same_identity = |metadata: &fs::Metadata| {
+            metadata.dev() == file_metadata.dev() && metadata.ino() == file_metadata.ino()
+        };
+        if !same_identity(&input_metadata) || !same_identity(&canonical_metadata) {
+            return Err(format!(
+                "current shim executable changed while it was being pinned: {}",
+                canonical.display()
+            ));
+        }
+        Ok(Self {
+            command_path: PathBuf::from(format!("/dev/fd/{}", file.as_raw_fd())),
+            _file: file,
+        })
     }
-    Ok(())
 }
 
 fn collect_worker_evidence(
@@ -408,68 +557,50 @@ fn fail_worker(evidence: &mut WorkerEvidence, reason: String) -> bool {
     false
 }
 
-fn verify_and_remove_marker(marker_path: &Path, report: &mut KrunVmSmokeReport) {
-    match fs::read_to_string(marker_path) {
-        Ok(contents) if contents == format!("{MACOS_VM_SMOKE_TOKEN}\n") => {
-            report.marker_verified = true;
-        }
-        Ok(contents) => {
-            report.reason.get_or_insert_with(|| {
-                format!(
-                    "guest marker had unexpected contents ({} bytes)",
-                    contents.len()
-                )
-            });
+fn verify_and_remove_marker(
+    runtime_share: &MacosRuntimeShare,
+    marker_directory: &PinnedMarkerDirectory,
+    marker_name: &str,
+    marker_token: &str,
+    report: &mut KrunVmSmokeReport,
+) {
+    if let Err(error) = runtime_share.reverify() {
+        report.reason.get_or_insert(error.to_string());
+        return;
+    }
+    let expected = Zeroizing::new(format!("{marker_token}\n"));
+    match marker_directory.consume(marker_name, expected.as_bytes()) {
+        Ok(consumption) => {
+            report.marker_verified = consumption.verified;
+            report.marker_removed = consumption.removed;
+            if !consumption.verified {
+                report.reason.get_or_insert_with(|| {
+                    format!(
+                        "guest marker had unexpected contents ({} bytes)",
+                        consumption.content_len
+                    )
+                });
+            }
         }
         Err(error) => {
             report.reason.get_or_insert_with(|| {
-                format!(
-                    "failed to read guest marker {}: {error}",
-                    marker_path.display()
-                )
+                format!("failed to verify and remove the guest marker: {error}")
             });
         }
     }
-
-    match fs::symlink_metadata(marker_path) {
-        Ok(metadata) if metadata.file_type().is_file() || metadata.file_type().is_symlink() => {
-            match fs::remove_file(marker_path) {
-                Ok(()) => report.marker_removed = true,
-                Err(error) => {
-                    report.reason.get_or_insert_with(|| {
-                        format!(
-                            "failed to remove guest marker {}: {error}",
-                            marker_path.display()
-                        )
-                    });
-                }
-            }
-        }
-        Ok(_) => {
-            report.reason.get_or_insert_with(|| {
-                format!(
-                    "guest marker is not a removable file: {}",
-                    marker_path.display()
-                )
-            });
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => {
-            report.reason.get_or_insert_with(|| {
-                format!(
-                    "failed to inspect guest marker {} for cleanup: {error}",
-                    marker_path.display()
-                )
-            });
-        }
+    if let Err(error) = runtime_share.reverify() {
+        // A successful descriptor-relative cleanup is not sufficient evidence
+        // if the public runtime-share pathname was replaced during the same
+        // operation. Downgrade both marker claims and fail closed.
+        report.marker_verified = false;
+        report.marker_removed = false;
+        report.reason.get_or_insert(error.to_string());
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        parse_worker_evidence, validate_marker_name, WorkerEvidence, WORKER_SCHEMA_VERSION,
-    };
+    use super::{parse_worker_evidence, WorkerEvidence, WORKER_SCHEMA_VERSION};
 
     #[test]
     fn worker_evidence_uses_the_latest_valid_record() {
@@ -486,12 +617,5 @@ mod tests {
         let parsed = parse_worker_evidence(output.as_bytes()).expect("worker evidence must parse");
         assert_eq!(parsed.schema_version, WORKER_SCHEMA_VERSION);
         assert_eq!(parsed.reason.as_deref(), Some("entry failed"));
-    }
-
-    #[test]
-    fn marker_name_rejects_path_and_shell_injection() {
-        validate_marker_name(".a3s-oci-hvf-vm-smoke-123").expect("generated marker must pass");
-        assert!(validate_marker_name("../marker").is_err());
-        assert!(validate_marker_name(".a3s-oci-hvf-vm-smoke-1';reboot").is_err());
     }
 }

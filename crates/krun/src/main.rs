@@ -743,7 +743,7 @@ fn main() -> ExitCode {
                         return ExitCode::FAILURE;
                     }
                 };
-            if a3s_oci_krun::run_macos_vm_smoke_worker_with_runtime_share_identity(
+            if a3s_oci_krun::run_macos_vm_smoke_worker_with_runtime_share_identity_from_stdin(
                 &system_image_manifest,
                 &runtime_share,
                 &console,
