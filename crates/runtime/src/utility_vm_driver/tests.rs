@@ -280,12 +280,29 @@ impl GuestAgentService for FakeGuest {
 #[derive(Default)]
 struct FakeOwner {
     shutdown_calls: Arc<AtomicUsize>,
+    shutdown_release: StdMutex<Option<Arc<Notify>>>,
+}
+
+impl FakeOwner {
+    fn block_shutdown(&self) -> Arc<Notify> {
+        let release = Arc::new(Notify::new());
+        *self.shutdown_release.lock().expect("shutdown release lock") = Some(Arc::clone(&release));
+        release
+    }
 }
 
 #[async_trait]
 impl UtilityVmOwner for FakeOwner {
     async fn shutdown(&self) -> Result<()> {
         self.shutdown_calls.fetch_add(1, Ordering::Relaxed);
+        let release = self
+            .shutdown_release
+            .lock()
+            .expect("shutdown release lock")
+            .clone();
+        if let Some(release) = release {
+            release.notified().await;
+        }
         Ok(())
     }
 }
@@ -929,6 +946,59 @@ async fn graceful_shutdown_is_bounded_to_one_owner_and_exposes_stopped_cleanup()
         .await
         .expect("delete stopped tombstone");
     assert!(!fixture.generation_share().exists());
+}
+
+#[tokio::test]
+async fn cancelled_shutdown_keeps_owner_reaping_alive() {
+    let fixture = Fixture::new();
+    let request = fixture
+        .stage(fixture.handoff_request("cancelled-shutdown"))
+        .await;
+    fixture
+        .driver
+        .create(request)
+        .await
+        .expect("create before cancelled shutdown");
+    let release = fixture.owner.block_shutdown();
+
+    let driver = Arc::new(fixture.driver);
+    let shutdown_driver = Arc::clone(&driver);
+    let shutdown_task = tokio::spawn(async move { shutdown_driver.shutdown().await });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if fixture.owner.shutdown_calls.load(Ordering::Relaxed) == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("shutdown owner should start");
+
+    shutdown_task.abort();
+    assert!(
+        shutdown_task
+            .await
+            .expect_err("shutdown task must be cancelled")
+            .is_cancelled(),
+        "the caller cancellation must be observable"
+    );
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if fixture.owner.shutdown_calls.load(Ordering::Relaxed) >= 2 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled shutdown must detach a replacement cleanup task");
+
+    release.notify_one();
+    tokio::task::yield_now().await;
+    assert_eq!(fixture.owner.shutdown_calls.load(Ordering::Relaxed), 2);
+    assert_eq!(driver.active_session_count().await, 1);
 }
 
 #[tokio::test]
