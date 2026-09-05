@@ -149,10 +149,22 @@ impl UtilityVmRuntimeDriver {
             sessions.pending.clear();
             sessions.live_guests()
         };
+        // JoinSet aborts its children when this caller is cancelled. Each
+        // worker therefore carries a detached fallback so owner reaping does
+        // not depend on the lifetime of this waiter.
         let mut shutdowns = JoinSet::new();
         for guest in guests {
             shutdowns.spawn(async move {
+                let cleanup_guest = Arc::clone(&guest);
+                let mut cleanup = DetachedAsyncCleanup::new(move || async move {
+                    if let Err(error) = shutdown_guest(&cleanup_guest).await {
+                        eprintln!(
+                            "a3s-oci-runtime: cancelled utility-VM shutdown cleanup failed: {error}"
+                        );
+                    }
+                });
                 let result = shutdown_guest(&guest).await;
+                cleanup.disarm();
                 (guest, result)
             });
         }

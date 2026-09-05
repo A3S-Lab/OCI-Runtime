@@ -291,10 +291,22 @@ impl WhpxRuntimeDriver {
                 })
                 .collect::<Vec<_>>()
         };
+        // JoinSet aborts its children when this caller is cancelled. Each
+        // worker carries a detached fallback so owner reaping does not depend
+        // on the lifetime of this waiter.
         let mut shutdowns = JoinSet::new();
         for session in sessions {
             shutdowns.spawn(async move {
+                let cleanup_owner = Arc::clone(&session.owner);
+                let mut cleanup = DetachedAsyncCleanup::new(move || async move {
+                    if let Err(error) = cleanup_owner.shutdown().await {
+                        eprintln!(
+                            "a3s-oci-runtime: cancelled WHPX shutdown cleanup failed: {error}"
+                        );
+                    }
+                });
                 let result = session.owner.shutdown().await;
+                cleanup.disarm();
                 (session, result)
             });
         }
@@ -2946,12 +2958,20 @@ mod tests {
         active_shutdowns: AtomicUsize,
         max_active_shutdowns: AtomicUsize,
         shutdown_barrier: StdMutex<Option<Arc<tokio::sync::Barrier>>>,
+        shutdown_release: StdMutex<Option<Arc<Notify>>>,
     }
 
     impl FakeOwner {
         fn synchronize_two_shutdowns(&self) {
             *self.shutdown_barrier.lock().expect("shutdown barrier lock") =
                 Some(Arc::new(tokio::sync::Barrier::new(2)));
+        }
+
+        fn block_shutdown(&self) -> Arc<Notify> {
+            let release = Arc::new(Notify::new());
+            *self.shutdown_release.lock().expect("shutdown release lock") =
+                Some(Arc::clone(&release));
+            release
         }
     }
 
@@ -2967,11 +2987,17 @@ mod tests {
                 .lock()
                 .expect("shutdown barrier lock")
                 .clone();
-            match barrier {
-                Some(barrier) => {
-                    barrier.wait().await;
-                }
-                None => tokio::task::yield_now().await,
+            let release = self
+                .shutdown_release
+                .lock()
+                .expect("shutdown release lock")
+                .clone();
+            if let Some(release) = release {
+                release.notified().await;
+            } else if let Some(barrier) = barrier {
+                barrier.wait().await;
+            } else {
+                tokio::task::yield_now().await;
             }
             self.active_shutdowns.fetch_sub(1, Ordering::Relaxed);
             Ok(())
@@ -4279,6 +4305,59 @@ mod tests {
             .await
             .expect("idempotent shutdown");
         assert_eq!(fixture.owner.shutdown_calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelled_shutdown_keeps_owner_reaping_alive() {
+        let fixture = Fixture::new();
+        fixture
+            .driver
+            .create(fixture.create_request(1, "cancelled-shutdown"))
+            .await
+            .expect("create before cancelled shutdown");
+        let release = fixture.owner.block_shutdown();
+
+        let driver = Arc::new(fixture.driver);
+        let shutdown_driver = Arc::clone(&driver);
+        let shutdown_task = tokio::spawn(async move { shutdown_driver.shutdown().await });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if fixture.owner.shutdown_calls.load(Ordering::Relaxed) == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("shutdown owner should start");
+
+        shutdown_task.abort();
+        assert!(
+            shutdown_task
+                .await
+                .expect_err("shutdown task must be cancelled")
+                .is_cancelled(),
+            "the caller cancellation must be observable"
+        );
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if fixture.owner.shutdown_calls.load(Ordering::Relaxed) >= 2 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cancelled shutdown must detach a replacement cleanup task");
+
+        // Release the detached owner cleanup. The registry remains available
+        // for a later shutdown retry; this assertion proves the VM owner was
+        // not abandoned when the original waiter was cancelled.
+        release.notify_one();
+        tokio::task::yield_now().await;
+        assert_eq!(fixture.owner.shutdown_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(driver.active_session_count().await, 1);
     }
 
     #[tokio::test]
