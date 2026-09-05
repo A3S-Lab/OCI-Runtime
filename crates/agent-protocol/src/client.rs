@@ -1,4 +1,5 @@
 use std::fmt;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -8,7 +9,7 @@ use a3s_oci_sdk::{
     FilesystemRequest, FilesystemResponse, OperationId, OutputChunk, ProcessRecord, Result,
 };
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
 use crate::fault::{
     AgentTransportFaultInjector, AgentTransportFaultPoint, AgentTransportOperationStage,
@@ -51,6 +52,53 @@ struct ClientConnection<T> {
     next_request_id: u64,
     poisoned: bool,
     closed: bool,
+}
+
+/// Owns one serialized protocol call and poisons the stream if the future is
+/// cancelled before it reaches a valid response boundary.
+///
+/// A dropped `MutexGuard` alone would leave a partially written or partially
+/// read frame available to the next caller. Reusing that stream can then
+/// mis-correlate responses or wait forever. The guard makes cancellation the
+/// same fail-closed boundary as every explicit transport error.
+struct InFlightCall<'a, T> {
+    connection: MutexGuard<'a, ClientConnection<T>>,
+    completed: bool,
+}
+
+impl<'a, T> InFlightCall<'a, T> {
+    fn new(connection: MutexGuard<'a, ClientConnection<T>>) -> Self {
+        Self {
+            connection,
+            completed: false,
+        }
+    }
+
+    fn complete(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl<T> Deref for InFlightCall<'_, T> {
+    type Target = ClientConnection<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.connection
+    }
+}
+
+impl<T> DerefMut for InFlightCall<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.connection
+    }
+}
+
+impl<T> Drop for InFlightCall<'_, T> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.connection.poison_and_release();
+        }
+    }
 }
 
 impl<T> ClientConnection<T> {
@@ -461,7 +509,7 @@ where
         ensure_advertised(self.hello.capabilities().operations(), &request)?;
         let operation = request.operation();
 
-        let mut connection = self.connection.lock().await;
+        let mut connection = InFlightCall::new(self.connection.lock().await);
         if connection.closed {
             return Err(protocol_error(
                 ErrorCode::Unavailable,
@@ -561,7 +609,7 @@ where
             connection.poison_and_release();
             return Err(error);
         }
-        match response.outcome {
+        let result = match response.outcome {
             ResponseOutcome::Succeeded { response } => {
                 let response = *response;
                 if let Err(error) = validate_response_for_request(&request, &response) {
@@ -571,7 +619,12 @@ where
                 Ok(response)
             }
             ResponseOutcome::Failed { error } => Err(error),
-        }
+        };
+        // A Guest-level failure is a complete, correlated response; the
+        // transport remains safe for the next caller. Every other exit path
+        // leaves `completed` false and is poisoned by `Drop`.
+        connection.complete();
+        result
     }
 }
 
