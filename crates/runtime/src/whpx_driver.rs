@@ -31,6 +31,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
 use crate::agent_driver::{AgentDriverClient, AGENT_DRIVER_HOOKS, AGENT_DRIVER_OPERATIONS};
 use crate::agent_session::UtilityVmSession;
+use crate::async_cleanup::DetachedAsyncCleanup;
 use crate::driver::{
     DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateRequest,
     DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
@@ -894,6 +895,14 @@ impl RuntimeDriver for WhpxRuntimeDriver {
                         return Err(error);
                     }
                 };
+                let cleanup_owner = Arc::clone(&launched.owner);
+                let mut launch_cleanup = DetachedAsyncCleanup::new(move || async move {
+                    if let Err(error) = cleanup_owner.shutdown().await {
+                        eprintln!(
+                            "a3s-oci-runtime: cancelled WHPX guest launch cleanup failed: {error}"
+                        );
+                    }
+                });
                 let session = Arc::new(WhpxContainer {
                     target: target.clone(),
                     client: launched.client,
@@ -903,6 +912,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
                     target.id.clone(),
                     WhpxAttachment::Live(Arc::clone(&session)),
                 );
+                launch_cleanup.disarm();
                 session
             }
         };

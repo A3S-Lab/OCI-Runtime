@@ -16,6 +16,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
 
 use crate::agent_driver::{AgentDriverClient, AGENT_DRIVER_HOOKS, AGENT_DRIVER_OPERATIONS};
+use crate::async_cleanup::DetachedAsyncCleanup;
 use crate::driver::{
     DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateRequest,
     DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
