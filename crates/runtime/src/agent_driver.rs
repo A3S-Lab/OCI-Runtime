@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 #[cfg(any(
     target_os = "linux",
@@ -28,7 +28,7 @@ use a3s_oci_sdk::{
     ProcessRecord, Result,
 };
 use sha2::{Digest, Sha256};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 #[cfg(any(
     target_os = "linux",
@@ -84,6 +84,35 @@ pub(crate) const AGENT_DRIVER_OPERATIONS: [RuntimeOperation; 20] = [
 ))]
 pub(crate) const AGENT_DRIVER_HOOKS: [OciHookPhase; 6] = OciHookPhase::ALL;
 
+/// Single-flights acknowledgement of one Host operation identity.
+///
+/// A chunked process-I/O mutation can retain several Guest operation IDs. If
+/// two Host owners acknowledge the same operation concurrently, one caller
+/// must not observe the temporary absence of that mapping and acknowledge only
+/// the parent ID. The weak map keeps the coordination state bounded after the
+/// operation completes.
+#[derive(Default)]
+struct AcknowledgementGates {
+    entries: Mutex<BTreeMap<OperationId, Weak<Mutex<()>>>>,
+}
+
+impl AcknowledgementGates {
+    async fn acquire(&self, operation_id: &OperationId) -> OwnedMutexGuard<()> {
+        let gate = {
+            let mut entries = self.entries.lock().await;
+            entries.retain(|_, gate| gate.strong_count() > 0);
+            if let Some(gate) = entries.get(operation_id).and_then(Weak::upgrade) {
+                gate
+            } else {
+                let gate = Arc::new(Mutex::new(()));
+                entries.insert(operation_id.clone(), Arc::downgrade(&gate));
+                gate
+            }
+        };
+        gate.lock_owned().await
+    }
+}
+
 /// Driver-facing mapping around either an in-process executor or one
 /// authenticated utility-VM connection.
 #[derive(Clone)]
@@ -92,6 +121,7 @@ pub(crate) struct AgentDriverClient {
     source: &'static str,
     mapping_scope: &'static str,
     guest_operation_ids: Arc<Mutex<BTreeMap<OperationId, Vec<OperationId>>>>,
+    acknowledgement_gates: Arc<AcknowledgementGates>,
 }
 
 impl fmt::Debug for AgentDriverClient {
@@ -116,10 +146,16 @@ impl AgentDriverClient {
             source,
             mapping_scope,
             guest_operation_ids: Arc::new(Mutex::new(BTreeMap::new())),
+            acknowledgement_gates: Arc::new(AcknowledgementGates::default()),
         }
     }
 
     pub(crate) async fn acknowledge_operation(&self, operation_id: &OperationId) -> Result<()> {
+        // Keep the derived-ID mapping coupled to the acknowledgement request.
+        // Without this guard, concurrent callers can race between removing the
+        // mapping and sending the Guest acknowledgement, causing one caller to
+        // fall back to the parent ID and leave chunk records retained.
+        let _gate = self.acknowledgement_gates.acquire(operation_id).await;
         let guest_operation_ids = self
             .guest_operation_ids
             .lock()
@@ -398,6 +434,13 @@ impl AgentDriverClient {
     }
 
     pub(crate) async fn write_stdin(&self, request: DriverWriteStdinRequest) -> Result<()> {
+        // Hold the same per-operation gate as acknowledgement so a Host
+        // reconnect cannot acknowledge a chunked mutation before all derived
+        // Guest writes have been dispatched.
+        let _gate = self
+            .acknowledgement_gates
+            .acquire(&request.context.operation_id)
+            .await;
         if request.data.is_empty() {
             return self
                 .service
@@ -548,6 +591,7 @@ fn process_io_chunk_context(parent: &OperationContext, index: usize) -> Result<O
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::sync::Mutex as StdMutex;
 
@@ -560,6 +604,7 @@ mod tests {
         async_trait, ContainerId, ContainerTarget, Error, Generation, OperationContext,
         OperationId, ProcessId, ProcessTarget, Result, RuntimeOperation,
     };
+    use tokio::sync::Notify;
 
     use crate::driver::DriverWriteStdinRequest;
 
@@ -578,6 +623,15 @@ mod tests {
     struct MappingOnlyGuest {
         writes: StdMutex<Vec<OperationId>>,
         acknowledgements: StdMutex<Vec<Vec<OperationId>>>,
+        ack_control: Option<Arc<AcknowledgementControl>>,
+    }
+
+    struct AcknowledgementControl {
+        calls: AtomicUsize,
+        fail_first: AtomicBool,
+        first_started: Notify,
+        release_first: Notify,
+        second_started: Notify,
     }
 
     #[async_trait]
@@ -591,6 +645,22 @@ mod tests {
                 .lock()
                 .expect("acknowledgement capture")
                 .push(operation_ids.to_vec());
+            if let Some(control) = &self.ack_control {
+                match control.calls.fetch_add(1, Ordering::SeqCst) {
+                    0 => {
+                        control.first_started.notify_one();
+                        control.release_first.notified().await;
+                        if control.fail_first.swap(false, Ordering::SeqCst) {
+                            return Err(Error::new(
+                                a3s_oci_sdk::ErrorCode::Unavailable,
+                                "injected acknowledgement failure",
+                            ));
+                        }
+                    }
+                    1 => control.second_started.notify_one(),
+                    _ => {}
+                }
+            }
             Ok(())
         }
 
@@ -765,6 +835,90 @@ mod tests {
                 .lock()
                 .expect("captured acknowledgements"),
             vec![expected]
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_acknowledgements_retry_the_same_derived_chunk_identities() {
+        let control = Arc::new(AcknowledgementControl {
+            calls: AtomicUsize::new(0),
+            fail_first: AtomicBool::new(true),
+            first_started: Notify::new(),
+            release_first: Notify::new(),
+            second_started: Notify::new(),
+        });
+        let guest = Arc::new(MappingOnlyGuest {
+            writes: StdMutex::new(Vec::new()),
+            acknowledgements: StdMutex::new(Vec::new()),
+            ack_control: Some(Arc::clone(&control)),
+        });
+        let client = AgentDriverClient::new(guest.clone(), "test guest", "test-agent");
+        let context = OperationContext::new(
+            OperationId::new("concurrent-chunked-stdin").expect("operation ID"),
+        );
+        let target = ProcessTarget {
+            container: ContainerTarget::exact(
+                ContainerId::new("concurrent-chunked-stdin").expect("container ID"),
+                Generation(1),
+            ),
+            process_id: ProcessId::init(),
+        };
+        client
+            .write_stdin(DriverWriteStdinRequest {
+                context: context.clone(),
+                target,
+                data: vec![0x5a; AGENT_MAX_IO_PAYLOAD_BYTES as usize + 1],
+            })
+            .await
+            .expect("dispatch chunked stdin");
+
+        let first_client = client.clone();
+        let first_operation = context.operation_id.clone();
+        let first =
+            tokio::spawn(async move { first_client.acknowledge_operation(&first_operation).await });
+        control.first_started.notified().await;
+
+        let second_client = client.clone();
+        let second_operation = context.operation_id.clone();
+        let second =
+            tokio::spawn(
+                async move { second_client.acknowledge_operation(&second_operation).await },
+            );
+
+        // The second call must remain behind the first call's in-flight Guest
+        // acknowledgement. A buggy implementation enters the Guest here and
+        // acknowledges only the parent operation ID.
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                control.second_started.notified(),
+            )
+            .await
+            .is_err(),
+            "duplicate acknowledgement bypassed the per-operation gate"
+        );
+        control.release_first.notify_one();
+
+        assert!(first.await.expect("first acknowledgement task").is_err());
+        second
+            .await
+            .expect("second acknowledgement task")
+            .expect("retry acknowledgement");
+
+        let expected = vec![
+            process_io_chunk_context(&context, 0)
+                .expect("first context")
+                .operation_id,
+            process_io_chunk_context(&context, 1)
+                .expect("second context")
+                .operation_id,
+        ];
+        assert_eq!(
+            *guest
+                .acknowledgements
+                .lock()
+                .expect("captured acknowledgements"),
+            vec![expected.clone(), expected]
         );
     }
 }
