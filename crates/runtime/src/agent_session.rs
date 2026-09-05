@@ -958,6 +958,8 @@ impl AgentVmSession {
             Ok(cleanup) => cleanup,
             Err(reason) => return Err(failed(report, reason)),
         };
+        #[cfg(unix)]
+        let console_identity = failed_launch_cleanup.console_identity();
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         let bootstrap_cleanup = BootstrapTokenCleanup::new(runtime_share_path, &endpoint);
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -1014,6 +1016,11 @@ impl AgentVmSession {
                 .arg(listener.socket_path())
                 .arg("--owner-pid")
                 .arg(std::process::id().to_string());
+            command
+                .arg("--console-device")
+                .arg(console_identity.0.to_string())
+                .arg("--console-inode")
+                .arg(console_identity.1.to_string());
             if let Some(path) = recovery_report {
                 command.arg("--recovery-report").arg(path);
             }

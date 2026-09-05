@@ -581,9 +581,95 @@ pub fn run_macos_vm_smoke_worker(
     macos_vm_smoke::run_worker(system_image_manifest, runtime_share, console, marker_name)
 }
 
-/// Run the private macOS guest-agent VM worker.
+/// Private macOS guest-agent worker handoff.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[doc(hidden)]
+pub struct MacosAgentVmWorkerHandoff<'a> {
+    system_image_manifest: &'a Path,
+    runtime_share: &'a Path,
+    guest_token_file: &'a str,
+    console: &'a Path,
+    console_identity: Option<(u64, u64)>,
+    socket: &'a Path,
+    guest_recovery_report: Option<&'a str>,
+    transport_qualification: Option<&'a a3s_oci_agent_protocol::AgentTransportQualificationRequest>,
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[doc(hidden)]
+impl<'a> MacosAgentVmWorkerHandoff<'a> {
+    #[must_use]
+    pub const fn new(
+        system_image_manifest: &'a Path,
+        runtime_share: &'a Path,
+        guest_token_file: &'a str,
+        console: &'a Path,
+        socket: &'a Path,
+    ) -> Self {
+        Self {
+            system_image_manifest,
+            runtime_share,
+            guest_token_file,
+            console,
+            console_identity: None,
+            socket,
+            guest_recovery_report: None,
+            transport_qualification: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_console_identity(mut self, device: u64, inode: u64) -> Self {
+        self.console_identity = Some((device, inode));
+        self
+    }
+
+    #[must_use]
+    pub const fn with_guest_recovery_report(mut self, path: Option<&'a str>) -> Self {
+        self.guest_recovery_report = path;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_transport_qualification(
+        mut self,
+        request: Option<&'a a3s_oci_agent_protocol::AgentTransportQualificationRequest>,
+    ) -> Self {
+        self.transport_qualification = request;
+        self
+    }
+}
+
+/// Run one exact private macOS guest-agent worker handoff.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[doc(hidden)]
+#[must_use]
+pub fn run_macos_agent_vm_worker_handoff(handoff: MacosAgentVmWorkerHandoff<'_>) -> bool {
+    let MacosAgentVmWorkerHandoff {
+        system_image_manifest,
+        runtime_share,
+        guest_token_file,
+        console,
+        console_identity,
+        socket,
+        guest_recovery_report,
+        transport_qualification,
+    } = handoff;
+    macos_agent_smoke::run_worker(macos_agent_smoke::MacosAgentVmWorkerConfig {
+        system_image_manifest,
+        runtime_share,
+        guest_token_file,
+        console,
+        console_identity,
+        socket,
+        guest_recovery_report,
+        transport_qualification,
+    })
+}
+
+/// Run the private macOS guest-agent VM worker without a host console identity.
 ///
-/// This is exported only for the hidden shim process boundary.
+/// This compatibility entry point is retained for existing hidden shim callers.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[doc(hidden)]
 #[must_use]
@@ -596,14 +682,16 @@ pub fn run_macos_agent_vm_worker(
     guest_recovery_report: Option<&str>,
     transport_qualification: Option<&a3s_oci_agent_protocol::AgentTransportQualificationRequest>,
 ) -> bool {
-    macos_agent_smoke::run_worker(
-        system_image_manifest,
-        runtime_share,
-        guest_token_file,
-        console,
-        socket,
-        guest_recovery_report,
-        transport_qualification,
+    run_macos_agent_vm_worker_handoff(
+        MacosAgentVmWorkerHandoff::new(
+            system_image_manifest,
+            runtime_share,
+            guest_token_file,
+            console,
+            socket,
+        )
+        .with_guest_recovery_report(guest_recovery_report)
+        .with_transport_qualification(transport_qualification),
     )
 }
 
@@ -617,6 +705,7 @@ pub struct LinuxAgentVmWorkerHandoff<'a> {
     runtime_share: &'a Path,
     guest_token_file: &'a str,
     console: &'a Path,
+    console_identity: Option<(u64, u64)>,
     socket: &'a Path,
     guest_recovery_report: Option<&'a str>,
     vm_attachment_manifest_sha256: Option<&'a str>,
@@ -644,6 +733,7 @@ impl<'a> LinuxAgentVmWorkerHandoff<'a> {
             runtime_share,
             guest_token_file,
             console,
+            console_identity: None,
             socket,
             guest_recovery_report: None,
             vm_attachment_manifest_sha256: None,
@@ -651,6 +741,13 @@ impl<'a> LinuxAgentVmWorkerHandoff<'a> {
             qualify_kvm_post_probe_failure: false,
             qualify_kvm_compatibility_drift: None,
         }
+    }
+
+    /// Bind the worker to the host's atomically reserved console inode.
+    #[must_use]
+    pub const fn with_console_identity(mut self, device: u64, inode: u64) -> Self {
+        self.console_identity = Some((device, inode));
+        self
     }
 
     #[must_use]
@@ -706,6 +803,7 @@ pub fn run_linux_agent_vm_worker_handoff(handoff: LinuxAgentVmWorkerHandoff<'_>)
         runtime_share,
         guest_token_file,
         console,
+        console_identity,
         socket,
         guest_recovery_report,
         vm_attachment_manifest_sha256,
@@ -718,6 +816,7 @@ pub fn run_linux_agent_vm_worker_handoff(handoff: LinuxAgentVmWorkerHandoff<'_>)
         runtime_share,
         guest_token_file,
         console,
+        console_identity,
         socket,
         guest_recovery_report,
         vm_attachment_manifest_sha256,

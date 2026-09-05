@@ -182,10 +182,10 @@ impl PreparedRun {
             ..=MAX_MACOS_HVF_HOST_SERVICE_SOAK_ITERATIONS)
             .contains(&config.iterations)
         {
+            let minimum = MIN_MACOS_HVF_HOST_SERVICE_SOAK_ITERATIONS;
+            let maximum = MAX_MACOS_HVF_HOST_SERVICE_SOAK_ITERATIONS;
             return Err(format!(
-                "public Host Service soak iterations must be in {}..={}",
-                MIN_MACOS_HVF_HOST_SERVICE_SOAK_ITERATIONS,
-                MAX_MACOS_HVF_HOST_SERVICE_SOAK_ITERATIONS
+                "public Host Service soak iterations must be in {minimum}..={maximum}"
             ));
         }
         let work_parent =

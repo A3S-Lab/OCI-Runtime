@@ -12,8 +12,8 @@ use crate::macos_context::{KrunContext, MacosKrunApi};
 use crate::macos_runtime_share::MacosRuntimeShare;
 use crate::macos_system_image::MacosSystemImage;
 use crate::unix_process::{
-    read_bounded_worker_output, require_absent, resolve_console, terminate_and_wait,
-    wait_for_worker,
+    prepare_console_output, read_bounded_worker_output, require_absent, resolve_console,
+    terminate_and_wait, wait_for_worker,
 };
 use crate::{KrunVmSmokeReport, MacosBootAssetsEvidence, VmConfig};
 use a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_TAG;
@@ -238,10 +238,11 @@ pub(crate) fn run_worker(
         Ok(runtime_share) => runtime_share,
         Err(error) => return fail_worker(&mut evidence, error.to_string()),
     };
-    let console = match resolve_console(console) {
+    let prepared_console = match prepare_console_output(console, None) {
         Ok(console) => console,
         Err(reason) => return fail_worker(&mut evidence, reason),
     };
+    let console_path = prepared_console.pinned_path();
     if let Err(reason) = validate_marker_name(marker_name) {
         return fail_worker(&mut evidence, reason);
     }
@@ -314,7 +315,7 @@ pub(crate) fn run_worker(
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.workload_configured = true;
-    if let Err(error) = context.set_console_output(&console) {
+    if let Err(error) = context.set_console_output(&console_path) {
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.console_configured = true;

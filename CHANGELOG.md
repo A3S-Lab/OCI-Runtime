@@ -32,6 +32,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
   its kernel volume/file identity after canonicalization. A concurrent
   executable replacement now fails closed instead of redirecting `CreateProcess`.
 
+- Closed the Unix utility-VM console pathname handoff race. The Host now
+  atomically reserves each console entry with `openat`, retains that descriptor
+  until the authenticated Agent session passes its contract checks, and carries
+  its device/inode identity through the shim and worker. The worker retains a
+  no-follow descriptor and passes `/proc/self/fd` (Linux) or `/dev/fd` (macOS)
+  to libkrun. This prevents inode recycling during handoff; failed-launch
+  cleanup is identity-bound and leaves a concurrently replaced console
+  untouched.
+
 - Hardened host-side trusted-path canonicalization. Rootfs, system-image
   manifests, per-generation runtime shares, console parents, and recovery
   parents now open their final component without following links and compare

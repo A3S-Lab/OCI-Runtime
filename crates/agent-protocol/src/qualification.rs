@@ -270,8 +270,7 @@ mod tests {
         assert!(error.message.contains("cannot arm host stage"));
 
         let encoded = format!(
-            r#"{{"schemaVersion":"{}-future","operationId":"guest-stage","operation":"create","stage":"guest-after-dispatch","protocolVersion":9,"faultCrossings":1,"executorCleanupSucceeded":true}}"#,
-            AGENT_TRANSPORT_QUALIFICATION_EVIDENCE_SCHEMA_VERSION
+            r#"{{"schemaVersion":"{AGENT_TRANSPORT_QUALIFICATION_EVIDENCE_SCHEMA_VERSION}-future","operationId":"guest-stage","operation":"create","stage":"guest-after-dispatch","protocolVersion":9,"faultCrossings":1,"executorCleanupSucceeded":true}}"#
         );
         assert!(AgentTransportQualificationEvidence::from_json(&encoded).is_err());
     }

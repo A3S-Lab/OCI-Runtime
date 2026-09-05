@@ -489,9 +489,17 @@ runtime shares, console parent, and recovery parent are opened without
 following their final link and compared before and after resolution. Unix
 uses the device/inode pair; Windows uses the volume serial/file index returned
 by the no-follow handle. A replacement or reparse-point race is rejected
-before a platform driver sees the path. This is a preflight fence only;
-subsystems that subsequently consume a pathname retain their own descriptor or
-handle pinning requirements.
+before a platform driver sees the path. The Unix utility-VM console is stronger
+than that generic preflight: the Host reserves its final entry with an atomic
+`openat(O_CREAT|O_EXCL|O_NOFOLLOW)`, retains the descriptor until the
+authenticated Agent session passes its contract checks so the inode cannot be
+recycled, and passes the resulting device/inode pair through the shim boundary.
+The worker reopens only that identity with a no-follow descriptor, retains it
+through `start_enter`, and gives libkrun `/proc/self/fd/<n>` (Linux) or
+`/dev/fd/<n>` (macOS). A pathname replacement can therefore fail closed without
+redirecting console bytes, and failed-launch cleanup removes only the originally
+reserved inode. Other pathname-consuming subsystems still retain their own
+descriptor or handle pinning requirements.
 
 The dedicated Linux KVM path can additionally carry the internal
 `a3s.oci.agent-vm-attachments.v2` bootstrap manifest for authorized v2 raw
