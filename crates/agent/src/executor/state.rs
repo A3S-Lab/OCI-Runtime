@@ -24,11 +24,7 @@ pub(super) struct ExecutorState {
     pub(super) containers: BTreeMap<ContainerKey, ContainerRecord>,
     pub(super) highest_generations: BTreeMap<String, u64>,
     operations: BTreeMap<OperationId, OperationRecord>,
-    pending_state_operations: BTreeMap<OperationId, PendingStateOperation>,
-    pending_unit_operations: BTreeMap<OperationId, PendingUnitOperation>,
-    pending_process_operations: BTreeMap<OperationId, PendingProcessOperation>,
-    pending_file_operations: BTreeMap<OperationId, PendingFileOperation>,
-    pending_filesystem_operations: BTreeMap<OperationId, PendingFilesystemOperation>,
+    pending_operations: BTreeMap<OperationId, PendingOperation>,
     pub(super) next_slot: u64,
     pub(super) cgroup_manager: Option<CgroupManager>,
 }
@@ -46,7 +42,7 @@ impl ExecutorState {
         }
         if let Some(operation_id) = operation_ids
             .iter()
-            .find(|operation_id| self.has_pending_operation(operation_id))
+            .find(|operation_id| self.pending_operations.contains_key(*operation_id))
         {
             return Err(executor_error(
                 ErrorCode::FailedPrecondition,
@@ -62,17 +58,13 @@ impl ExecutorState {
     }
 
     pub(super) fn reserve_operation(&self, operation_id: &OperationId) -> Result<()> {
-        if self.has_pending_operation(operation_id) {
+        if self.pending_operations.contains_key(operation_id) {
             return Err(reused_operation(operation_id));
         }
         if self
             .operations
             .len()
-            .saturating_add(self.pending_state_operations.len())
-            .saturating_add(self.pending_unit_operations.len())
-            .saturating_add(self.pending_process_operations.len())
-            .saturating_add(self.pending_file_operations.len())
-            .saturating_add(self.pending_filesystem_operations.len())
+            .saturating_add(self.pending_operations.len())
             >= MAX_OPERATION_RECORDS
         {
             Err(executor_error(
@@ -85,16 +77,6 @@ impl ExecutorState {
         } else {
             Ok(())
         }
-    }
-
-    fn has_pending_operation(&self, operation_id: &OperationId) -> bool {
-        self.pending_state_operations.contains_key(operation_id)
-            || self.pending_unit_operations.contains_key(operation_id)
-            || self.pending_process_operations.contains_key(operation_id)
-            || self.pending_file_operations.contains_key(operation_id)
-            || self
-                .pending_filesystem_operations
-                .contains_key(operation_id)
     }
 
     pub(super) fn replay_state(
@@ -125,6 +107,62 @@ impl ExecutorState {
         })
     }
 
+    fn prepare_pending_operation(
+        &mut self,
+        operation_id: &OperationId,
+        request: &RecordedRequest,
+        kind: PendingOperationKind,
+    ) -> Result<PendingOperationPreparation> {
+        if let Some(pending) = self.pending_operations.get(operation_id) {
+            if pending.kind != kind {
+                return Err(reused_operation(operation_id));
+            }
+            pending.validate_request(request)?;
+            return Ok(PendingOperationPreparation::Pending(
+                pending.completion.subscribe(),
+            ));
+        }
+        self.reserve_operation(operation_id)?;
+        let (completion, receiver) = watch::channel(None);
+        self.pending_operations.insert(
+            operation_id.clone(),
+            PendingOperation {
+                request: request.clone(),
+                kind,
+                completion,
+            },
+        );
+        Ok(PendingOperationPreparation::Claimed(receiver))
+    }
+
+    fn complete_pending_operation(
+        &mut self,
+        operation_id: OperationId,
+        request: RecordedRequest,
+        outcome: RecordedOutcome,
+    ) -> Result<()> {
+        let Some(pending) = self.pending_operations.remove(&operation_id) else {
+            return Err(executor_error(
+                ErrorCode::Internal,
+                format!("guest operation {operation_id} completed without an active claim"),
+            ));
+        };
+        let result = if pending.kind != outcome.kind() {
+            Err(reused_operation(&operation_id))
+        } else {
+            pending.validate_request(&request)
+        };
+        if let Err(error) = result {
+            let outcome = pending.kind.error_outcome(error.clone());
+            self.record(operation_id, pending.request.clone(), outcome.clone());
+            pending.completion.send_replace(Some(outcome));
+            return Err(error);
+        }
+        self.record(operation_id, request, outcome.clone());
+        pending.completion.send_replace(Some(outcome));
+        Ok(())
+    }
+
     pub(super) fn prepare_state_operation(
         &mut self,
         operation_id: &OperationId,
@@ -133,22 +171,20 @@ impl ExecutorState {
         if let Some(result) = self.replay_state(operation_id, request) {
             return Ok(StateOperationPreparation::Completed(result));
         }
-        if let Some(pending) = self.pending_state_operations.get(operation_id) {
-            pending.validate_request(request)?;
-            return Ok(StateOperationPreparation::Pending(
-                pending.completion.subscribe(),
-            ));
-        }
-        self.reserve_operation(operation_id)?;
-        let (completion, receiver) = watch::channel(None);
-        self.pending_state_operations.insert(
-            operation_id.clone(),
-            PendingStateOperation {
-                request: request.clone(),
-                completion,
+        Ok(
+            match self.prepare_pending_operation(
+                operation_id,
+                request,
+                PendingOperationKind::State,
+            )? {
+                PendingOperationPreparation::Pending(receiver) => {
+                    StateOperationPreparation::Pending(receiver)
+                }
+                PendingOperationPreparation::Claimed(receiver) => {
+                    StateOperationPreparation::Claimed(receiver)
+                }
             },
-        );
-        Ok(StateOperationPreparation::Claimed(receiver))
+        )
     }
 
     pub(super) fn complete_state_operation(
@@ -157,28 +193,7 @@ impl ExecutorState {
         request: RecordedRequest,
         result: Result<AgentState>,
     ) -> Result<()> {
-        let Some(pending) = self.pending_state_operations.remove(&operation_id) else {
-            return Err(executor_error(
-                ErrorCode::Internal,
-                format!("guest state operation {operation_id} completed without an active claim"),
-            ));
-        };
-        if let Err(error) = pending.validate_request(&request) {
-            self.record(
-                operation_id,
-                pending.request.clone(),
-                RecordedOutcome::State(Err(error.clone())),
-            );
-            pending.completion.send_replace(Some(Err(error.clone())));
-            return Err(error);
-        }
-        self.record(
-            operation_id,
-            request,
-            RecordedOutcome::State(result.clone()),
-        );
-        pending.completion.send_replace(Some(result));
-        Ok(())
+        self.complete_pending_operation(operation_id, request, RecordedOutcome::State(result))
     }
 
     pub(super) fn prepare_unit_operation(
@@ -189,22 +204,20 @@ impl ExecutorState {
         if let Some(result) = self.replay_unit(operation_id, request) {
             return Ok(UnitOperationPreparation::Completed(result));
         }
-        if let Some(pending) = self.pending_unit_operations.get(operation_id) {
-            pending.validate_request(request)?;
-            return Ok(UnitOperationPreparation::Pending(
-                pending.completion.subscribe(),
-            ));
-        }
-        self.reserve_operation(operation_id)?;
-        let (completion, receiver) = watch::channel(None);
-        self.pending_unit_operations.insert(
-            operation_id.clone(),
-            PendingUnitOperation {
-                request: request.clone(),
-                completion,
+        Ok(
+            match self.prepare_pending_operation(
+                operation_id,
+                request,
+                PendingOperationKind::Unit,
+            )? {
+                PendingOperationPreparation::Pending(receiver) => {
+                    UnitOperationPreparation::Pending(receiver)
+                }
+                PendingOperationPreparation::Claimed(receiver) => {
+                    UnitOperationPreparation::Claimed(receiver)
+                }
             },
-        );
-        Ok(UnitOperationPreparation::Claimed(receiver))
+        )
     }
 
     pub(super) fn complete_unit_operation(
@@ -213,24 +226,7 @@ impl ExecutorState {
         request: RecordedRequest,
         result: Result<()>,
     ) -> Result<()> {
-        let Some(pending) = self.pending_unit_operations.remove(&operation_id) else {
-            return Err(executor_error(
-                ErrorCode::Internal,
-                format!("guest operation {operation_id} completed without an active unit claim"),
-            ));
-        };
-        if let Err(error) = pending.validate_request(&request) {
-            self.record(
-                operation_id,
-                pending.request.clone(),
-                RecordedOutcome::Unit(Err(error.clone())),
-            );
-            pending.completion.send_replace(Some(Err(error.clone())));
-            return Err(error);
-        }
-        self.record(operation_id, request, RecordedOutcome::Unit(result.clone()));
-        pending.completion.send_replace(Some(result.clone()));
-        Ok(())
+        self.complete_pending_operation(operation_id, request, RecordedOutcome::Unit(result))
     }
 
     pub(super) fn replay_process(
@@ -255,22 +251,20 @@ impl ExecutorState {
         if let Some(result) = self.replay_process(operation_id, request) {
             return Ok(ProcessOperationPreparation::Completed(result));
         }
-        if let Some(pending) = self.pending_process_operations.get(operation_id) {
-            pending.validate_request(request)?;
-            return Ok(ProcessOperationPreparation::Pending(
-                pending.completion.subscribe(),
-            ));
-        }
-        self.reserve_operation(operation_id)?;
-        let (completion, receiver) = watch::channel(None);
-        self.pending_process_operations.insert(
-            operation_id.clone(),
-            PendingProcessOperation {
-                request: request.clone(),
-                completion,
+        Ok(
+            match self.prepare_pending_operation(
+                operation_id,
+                request,
+                PendingOperationKind::Process,
+            )? {
+                PendingOperationPreparation::Pending(receiver) => {
+                    ProcessOperationPreparation::Pending(receiver)
+                }
+                PendingOperationPreparation::Claimed(receiver) => {
+                    ProcessOperationPreparation::Claimed(receiver)
+                }
             },
-        );
-        Ok(ProcessOperationPreparation::Claimed(receiver))
+        )
     }
 
     pub(super) fn complete_process_operation(
@@ -279,28 +273,7 @@ impl ExecutorState {
         request: RecordedRequest,
         result: Result<AgentProcess>,
     ) -> Result<()> {
-        let Some(pending) = self.pending_process_operations.remove(&operation_id) else {
-            return Err(executor_error(
-                ErrorCode::Internal,
-                format!("guest process operation {operation_id} completed without an active claim"),
-            ));
-        };
-        if let Err(error) = pending.validate_request(&request) {
-            self.record(
-                operation_id,
-                pending.request.clone(),
-                RecordedOutcome::Process(Err(error.clone())),
-            );
-            pending.completion.send_replace(Some(Err(error.clone())));
-            return Err(error);
-        }
-        self.record(
-            operation_id,
-            request,
-            RecordedOutcome::Process(result.clone()),
-        );
-        pending.completion.send_replace(Some(result));
-        Ok(())
+        self.complete_pending_operation(operation_id, request, RecordedOutcome::Process(result))
     }
 
     pub(super) fn prepare_file_operation(
@@ -311,22 +284,20 @@ impl ExecutorState {
         if let Some(result) = self.replay_file(operation_id, request) {
             return Ok(FileOperationPreparation::Completed(result));
         }
-        if let Some(pending) = self.pending_file_operations.get(operation_id) {
-            pending.validate_request(request)?;
-            return Ok(FileOperationPreparation::Pending(
-                pending.completion.subscribe(),
-            ));
-        }
-        self.reserve_operation(operation_id)?;
-        let (completion, receiver) = watch::channel(None);
-        self.pending_file_operations.insert(
-            operation_id.clone(),
-            PendingFileOperation {
-                request: request.clone(),
-                completion,
+        Ok(
+            match self.prepare_pending_operation(
+                operation_id,
+                request,
+                PendingOperationKind::File,
+            )? {
+                PendingOperationPreparation::Pending(receiver) => {
+                    FileOperationPreparation::Pending(receiver)
+                }
+                PendingOperationPreparation::Claimed(receiver) => {
+                    FileOperationPreparation::Claimed(receiver)
+                }
             },
-        );
-        Ok(FileOperationPreparation::Claimed(receiver))
+        )
     }
 
     pub(super) fn complete_file_operation(
@@ -335,24 +306,7 @@ impl ExecutorState {
         request: RecordedRequest,
         result: Result<FileResponse>,
     ) -> Result<()> {
-        let Some(pending) = self.pending_file_operations.remove(&operation_id) else {
-            return Err(executor_error(
-                ErrorCode::Internal,
-                format!("guest file operation {operation_id} completed without an active claim"),
-            ));
-        };
-        if let Err(error) = pending.validate_request(&request) {
-            self.record(
-                operation_id,
-                pending.request.clone(),
-                RecordedOutcome::File(Err(error.clone())),
-            );
-            pending.completion.send_replace(Some(Err(error.clone())));
-            return Err(error);
-        }
-        self.record(operation_id, request, RecordedOutcome::File(result.clone()));
-        pending.completion.send_replace(Some(result));
-        Ok(())
+        self.complete_pending_operation(operation_id, request, RecordedOutcome::File(result))
     }
 
     pub(super) fn prepare_filesystem_operation(
@@ -363,22 +317,20 @@ impl ExecutorState {
         if let Some(result) = self.replay_filesystem(operation_id, request) {
             return Ok(FilesystemOperationPreparation::Completed(Box::new(result)));
         }
-        if let Some(pending) = self.pending_filesystem_operations.get(operation_id) {
-            pending.validate_request(request)?;
-            return Ok(FilesystemOperationPreparation::Pending(
-                pending.completion.subscribe(),
-            ));
-        }
-        self.reserve_operation(operation_id)?;
-        let (completion, receiver) = watch::channel(None);
-        self.pending_filesystem_operations.insert(
-            operation_id.clone(),
-            PendingFilesystemOperation {
-                request: request.clone(),
-                completion,
+        Ok(
+            match self.prepare_pending_operation(
+                operation_id,
+                request,
+                PendingOperationKind::Filesystem,
+            )? {
+                PendingOperationPreparation::Pending(receiver) => {
+                    FilesystemOperationPreparation::Pending(receiver)
+                }
+                PendingOperationPreparation::Claimed(receiver) => {
+                    FilesystemOperationPreparation::Claimed(receiver)
+                }
             },
-        );
-        Ok(FilesystemOperationPreparation::Claimed(receiver))
+        )
     }
 
     pub(super) fn complete_filesystem_operation(
@@ -387,30 +339,7 @@ impl ExecutorState {
         request: RecordedRequest,
         result: Result<FilesystemResponse>,
     ) -> Result<()> {
-        let Some(pending) = self.pending_filesystem_operations.remove(&operation_id) else {
-            return Err(executor_error(
-                ErrorCode::Internal,
-                format!(
-                    "guest filesystem operation {operation_id} completed without an active claim"
-                ),
-            ));
-        };
-        if let Err(error) = pending.validate_request(&request) {
-            self.record(
-                operation_id,
-                pending.request.clone(),
-                RecordedOutcome::Filesystem(Err(error.clone())),
-            );
-            pending.completion.send_replace(Some(Err(error.clone())));
-            return Err(error);
-        }
-        self.record(
-            operation_id,
-            request,
-            RecordedOutcome::Filesystem(result.clone()),
-        );
-        pending.completion.send_replace(Some(result));
-        Ok(())
+        self.complete_pending_operation(operation_id, request, RecordedOutcome::Filesystem(result))
     }
 
     pub(super) fn replay_file(
@@ -711,12 +640,13 @@ struct OperationRecord {
 }
 
 #[derive(Debug)]
-struct PendingStateOperation {
+struct PendingOperation {
     request: RecordedRequest,
-    completion: watch::Sender<Option<Result<AgentState>>>,
+    kind: PendingOperationKind,
+    completion: watch::Sender<Option<RecordedOutcome>>,
 }
 
-impl PendingStateOperation {
+impl PendingOperation {
     fn validate_request(&self, request: &RecordedRequest) -> Result<()> {
         if &self.request == request {
             Ok(())
@@ -727,114 +657,53 @@ impl PendingStateOperation {
             ))
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingOperationKind {
+    State,
+    Unit,
+    Process,
+    File,
+    Filesystem,
 }
 
 #[derive(Debug)]
-struct PendingUnitOperation {
-    request: RecordedRequest,
-    completion: watch::Sender<Option<Result<()>>>,
-}
-
-impl PendingUnitOperation {
-    fn validate_request(&self, request: &RecordedRequest) -> Result<()> {
-        if &self.request == request {
-            Ok(())
-        } else {
-            Err(executor_error(
-                ErrorCode::Conflict,
-                "guest operation ID was reused for a different request",
-            ))
-        }
-    }
-}
-
-#[derive(Debug)]
-struct PendingProcessOperation {
-    request: RecordedRequest,
-    completion: watch::Sender<Option<Result<AgentProcess>>>,
-}
-
-impl PendingProcessOperation {
-    fn validate_request(&self, request: &RecordedRequest) -> Result<()> {
-        if &self.request == request {
-            Ok(())
-        } else {
-            Err(executor_error(
-                ErrorCode::Conflict,
-                "guest operation ID was reused for a different request",
-            ))
-        }
-    }
-}
-
-#[derive(Debug)]
-struct PendingFileOperation {
-    request: RecordedRequest,
-    completion: watch::Sender<Option<Result<FileResponse>>>,
-}
-
-impl PendingFileOperation {
-    fn validate_request(&self, request: &RecordedRequest) -> Result<()> {
-        if &self.request == request {
-            Ok(())
-        } else {
-            Err(executor_error(
-                ErrorCode::Conflict,
-                "guest operation ID was reused for a different request",
-            ))
-        }
-    }
-}
-
-#[derive(Debug)]
-struct PendingFilesystemOperation {
-    request: RecordedRequest,
-    completion: watch::Sender<Option<Result<FilesystemResponse>>>,
-}
-
-impl PendingFilesystemOperation {
-    fn validate_request(&self, request: &RecordedRequest) -> Result<()> {
-        if &self.request == request {
-            Ok(())
-        } else {
-            Err(executor_error(
-                ErrorCode::Conflict,
-                "guest operation ID was reused for a different request",
-            ))
-        }
-    }
+enum PendingOperationPreparation {
+    Pending(watch::Receiver<Option<RecordedOutcome>>),
+    Claimed(watch::Receiver<Option<RecordedOutcome>>),
 }
 
 pub(super) enum UnitOperationPreparation {
     Completed(Result<()>),
-    Pending(watch::Receiver<Option<Result<()>>>),
-    Claimed(watch::Receiver<Option<Result<()>>>),
+    Pending(watch::Receiver<Option<RecordedOutcome>>),
+    Claimed(watch::Receiver<Option<RecordedOutcome>>),
 }
 
 pub(super) enum StateOperationPreparation {
     Completed(Result<AgentState>),
-    Pending(watch::Receiver<Option<Result<AgentState>>>),
-    Claimed(watch::Receiver<Option<Result<AgentState>>>),
+    Pending(watch::Receiver<Option<RecordedOutcome>>),
+    Claimed(watch::Receiver<Option<RecordedOutcome>>),
 }
 
 pub(super) enum ProcessOperationPreparation {
     Completed(Result<AgentProcess>),
-    Pending(watch::Receiver<Option<Result<AgentProcess>>>),
-    Claimed(watch::Receiver<Option<Result<AgentProcess>>>),
+    Pending(watch::Receiver<Option<RecordedOutcome>>),
+    Claimed(watch::Receiver<Option<RecordedOutcome>>),
 }
 
 #[derive(Debug)]
 pub(super) enum FileOperationPreparation {
     Completed(Result<FileResponse>),
-    Pending(watch::Receiver<Option<Result<FileResponse>>>),
-    Claimed(watch::Receiver<Option<Result<FileResponse>>>),
+    Pending(watch::Receiver<Option<RecordedOutcome>>),
+    Claimed(watch::Receiver<Option<RecordedOutcome>>),
 }
 
 #[derive(Debug)]
 pub(super) enum FilesystemOperationPreparation {
     Completed(Box<Result<FilesystemResponse>>),
-    Pending(watch::Receiver<Option<Result<FilesystemResponse>>>),
-    Claimed(watch::Receiver<Option<Result<FilesystemResponse>>>),
+    Pending(watch::Receiver<Option<RecordedOutcome>>),
+    Claimed(watch::Receiver<Option<RecordedOutcome>>),
 }
 
 impl OperationRecord {
@@ -850,13 +719,37 @@ impl OperationRecord {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum RecordedOutcome {
     State(Result<AgentState>),
     Unit(Result<()>),
     Process(Result<AgentProcess>),
     File(Result<FileResponse>),
     Filesystem(Result<FilesystemResponse>),
+}
+
+impl PendingOperationKind {
+    fn error_outcome(self, error: a3s_oci_sdk::Error) -> RecordedOutcome {
+        match self {
+            Self::State => RecordedOutcome::State(Err(error)),
+            Self::Unit => RecordedOutcome::Unit(Err(error)),
+            Self::Process => RecordedOutcome::Process(Err(error)),
+            Self::File => RecordedOutcome::File(Err(error)),
+            Self::Filesystem => RecordedOutcome::Filesystem(Err(error)),
+        }
+    }
+}
+
+impl RecordedOutcome {
+    fn kind(&self) -> PendingOperationKind {
+        match self {
+            Self::State(_) => PendingOperationKind::State,
+            Self::Unit(_) => PendingOperationKind::Unit,
+            Self::Process(_) => PendingOperationKind::Process,
+            Self::File(_) => PendingOperationKind::File,
+            Self::Filesystem(_) => PendingOperationKind::Filesystem,
+        }
+    }
 }
 
 fn reused_operation(operation_id: &OperationId) -> a3s_oci_sdk::Error {
@@ -1013,8 +906,8 @@ mod tests {
             .expect("complete exact operation");
         owner.changed().await.expect("owner result notification");
         retry.changed().await.expect("retry result notification");
-        assert_eq!(owner.borrow().clone(), Some(Ok(())));
-        assert_eq!(retry.borrow().clone(), Some(Ok(())));
+        assert_eq!(owner.borrow().clone(), Some(RecordedOutcome::Unit(Ok(()))));
+        assert_eq!(retry.borrow().clone(), Some(RecordedOutcome::Unit(Ok(()))));
         assert!(matches!(
             state
                 .prepare_unit_operation(&operation_id, &request)
@@ -1076,8 +969,14 @@ mod tests {
             .expect("complete exact state operation");
         owner.changed().await.expect("owner result notification");
         retry.changed().await.expect("retry result notification");
-        assert_eq!(owner.borrow().clone(), Some(Ok(result.clone())));
-        assert_eq!(retry.borrow().clone(), Some(Ok(result)));
+        assert_eq!(
+            owner.borrow().clone(),
+            Some(RecordedOutcome::State(Ok(result.clone())))
+        );
+        assert_eq!(
+            retry.borrow().clone(),
+            Some(RecordedOutcome::State(Ok(result)))
+        );
         assert!(matches!(
             state
                 .prepare_state_operation(&operation_id, &request)
@@ -1135,8 +1034,14 @@ mod tests {
             .expect("complete exact process operation");
         owner.changed().await.expect("owner result notification");
         retry.changed().await.expect("retry result notification");
-        assert_eq!(owner.borrow().clone(), Some(Ok(process.clone())));
-        assert_eq!(retry.borrow().clone(), Some(Ok(process)));
+        assert_eq!(
+            owner.borrow().clone(),
+            Some(RecordedOutcome::Process(Ok(process.clone())))
+        );
+        assert_eq!(
+            retry.borrow().clone(),
+            Some(RecordedOutcome::Process(Ok(process)))
+        );
         assert!(matches!(
             state
                 .prepare_process_operation(&operation_id, &request)
@@ -1182,8 +1087,14 @@ mod tests {
             .expect("complete exact file operation");
         owner.changed().await.expect("owner result notification");
         retry.changed().await.expect("retry result notification");
-        assert_eq!(owner.borrow().clone(), Some(Ok(result.clone())));
-        assert_eq!(retry.borrow().clone(), Some(Ok(result)));
+        assert_eq!(
+            owner.borrow().clone(),
+            Some(RecordedOutcome::File(Ok(result.clone())))
+        );
+        assert_eq!(
+            retry.borrow().clone(),
+            Some(RecordedOutcome::File(Ok(result)))
+        );
         assert!(matches!(
             state
                 .prepare_file_operation(&operation_id, &request)
@@ -1233,8 +1144,14 @@ mod tests {
             .expect("complete exact filesystem operation");
         owner.changed().await.expect("owner result notification");
         retry.changed().await.expect("retry result notification");
-        assert_eq!(owner.borrow().clone(), Some(Ok(result.clone())));
-        assert_eq!(retry.borrow().clone(), Some(Ok(result)));
+        assert_eq!(
+            owner.borrow().clone(),
+            Some(RecordedOutcome::Filesystem(Ok(result.clone())))
+        );
+        assert_eq!(
+            retry.borrow().clone(),
+            Some(RecordedOutcome::Filesystem(Ok(result)))
+        );
         assert!(matches!(
             state
                 .prepare_filesystem_operation(&operation_id, &request)

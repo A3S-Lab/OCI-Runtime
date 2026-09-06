@@ -175,11 +175,17 @@ fn stdin_operation_task_error(error: tokio::task::JoinError) -> Error {
 }
 
 async fn wait_for_unit_operation(
-    mut completion: watch::Receiver<Option<Result<()>>>,
+    mut completion: watch::Receiver<Option<RecordedOutcome>>,
 ) -> Result<()> {
     loop {
-        if let Some(result) = completion.borrow_and_update().clone() {
-            return result;
+        if let Some(outcome) = completion.borrow_and_update().clone() {
+            return match outcome {
+                RecordedOutcome::Unit(result) => result,
+                _ => Err(executor_error(
+                    ErrorCode::Internal,
+                    "guest unit operation completed with the wrong outcome kind",
+                )),
+            };
         }
         if completion.changed().await.is_err() {
             return Err(executor_error(
