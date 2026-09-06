@@ -1285,6 +1285,11 @@ real-driver coverage remains open for the other utility-VM backends.
     before VM launch.
   - [x] Move one-time token and recovery-report handoff into the exact share and
     require versioned shim evidence that the device was configured.
+  - [x] Bind Windows WHPX guest handoff to the explicit
+    `windows-virtiofs-acl-v1` metadata contract. Normalize only virtio-fs's
+    known synthetic `0755`/`0644` modes to the private `0700`/`0600` contract
+    through opened descriptors while retaining Windows DACL authority,
+    identity fencing, and fail-closed rejection of unknown modes.
   - [x] Add an explicit digest-bound product bundle-handoff extension that
     stages by create-operation identity, moves only after the runtime allocates
     the real generation, and preserves exact replay and owned cleanup.

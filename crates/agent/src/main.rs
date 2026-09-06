@@ -9,10 +9,10 @@ fn main() -> ExitCode {
                     .map(|attachments| (runtime_parent, attachments))
             })
             .and_then(|(runtime_parent, attachments)| {
-                a3s_oci_agent::take_session_token()
-                    .map(|token| (runtime_parent, attachments, token))
+                a3s_oci_agent::take_session_token_with_security()
+                    .map(|(token, security)| (runtime_parent, attachments, token, security))
             })
-            .and_then(|(runtime_parent, attachments, token)| {
+            .and_then(|(runtime_parent, attachments, token, security)| {
                 a3s_oci_agent::take_transport_qualification_request().and_then(|qualification| {
                     match (qualification, attachments) {
                         (Some(_), Some(_)) => Err(a3s_oci_sdk::Error::new(
@@ -20,15 +20,19 @@ fn main() -> ExitCode {
                             "transport qualification cannot consume production VM attachments",
                         )
                         .for_operation("bootstrap-guest-agent")),
-                        (Some(request), None) => a3s_oci_agent::run_transport_qualification(
-                            token,
-                            request,
-                            runtime_parent,
-                        ),
-                        (None, attachments) => a3s_oci_agent::run_with_vm_attachments(
+                        (Some(request), None) => {
+                            a3s_oci_agent::run_transport_qualification_with_security(
+                                token,
+                                request,
+                                runtime_parent,
+                                security,
+                            )
+                        }
+                        (None, attachments) => a3s_oci_agent::run_with_vm_attachments_and_security(
                             token,
                             runtime_parent,
                             attachments,
+                            security,
                         ),
                     }
                 })

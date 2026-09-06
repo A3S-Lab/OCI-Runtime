@@ -18,6 +18,11 @@ use zeroize::Zeroizing;
 
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
+// The Windows libkrun passthrough filesystem synthesizes these POSIX modes
+// for host-created entries. They are normalized through the opened handle
+// only after the host-selected Windows DACL contract has been validated.
+const WINDOWS_VIRTIOFS_DIRECTORY_MODE: u32 = 0o755;
+const WINDOWS_VIRTIOFS_FILE_MODE: u32 = 0o644;
 const TOKEN_TEXT_BYTES: u64 = (AGENT_SESSION_TOKEN_BYTES * 2) as u64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,18 +47,30 @@ impl EntryIdentity {
 
 /// Read and consume the one-time token without ever deleting a path that was
 /// substituted after the token file was opened.
+#[cfg(test)]
 pub(crate) fn consume_token_file(path: &Path) -> io::Result<Zeroizing<String>> {
-    consume_token_file_inner(path, || {})
+    consume_token_file_with_security(path, crate::GuestHandoffSecurity::Posix)
 }
 
-fn consume_token_file_inner<F>(path: &Path, before_unlink: F) -> io::Result<Zeroizing<String>>
+pub(crate) fn consume_token_file_with_security(
+    path: &Path,
+    security: crate::GuestHandoffSecurity,
+) -> io::Result<Zeroizing<String>> {
+    consume_token_file_inner(path, security, || {})
+}
+
+fn consume_token_file_inner<F>(
+    path: &Path,
+    security: crate::GuestHandoffSecurity,
+    before_unlink: F,
+) -> io::Result<Zeroizing<String>>
 where
     F: FnOnce(),
 {
     let (parent_path, name) = split_entry(path)?;
     let parent = open_directory_nofollow(parent_path)?;
     let parent_identity = EntryIdentity::from_file(&parent)?;
-    verify_directory_stat(&fstat(&parent)?, parent_path)?;
+    normalize_directory_stat(&parent, parent_path, security)?;
 
     let mut file = open_relative_file(
         &parent,
@@ -61,7 +78,7 @@ where
         libc::O_RDWR | libc::O_CLOEXEC | libc::O_NOFOLLOW,
         0,
     )?;
-    let file_identity = verify_token_file(&file, path)?;
+    let file_identity = normalize_private_file(&file, path, Some(TOKEN_TEXT_BYTES), security)?;
 
     let mut encoded = Zeroizing::new(String::with_capacity(TOKEN_TEXT_BYTES as usize));
     (&mut file)
@@ -109,7 +126,16 @@ where
 
 /// Create a bounded, exclusive recovery report relative to a pinned parent
 /// directory.  On failure, cleanup is restricted to the inode created here.
+#[cfg(test)]
 pub(crate) fn write_recovery_report_file(path: &Path, encoded: &[u8]) -> io::Result<()> {
+    write_recovery_report_file_with_security(path, encoded, crate::GuestHandoffSecurity::Posix)
+}
+
+pub(crate) fn write_recovery_report_file_with_security(
+    path: &Path,
+    encoded: &[u8],
+    security: crate::GuestHandoffSecurity,
+) -> io::Result<()> {
     if encoded.len() > AGENT_RECOVERY_REPORT_MAX_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -123,15 +149,24 @@ pub(crate) fn write_recovery_report_file(path: &Path, encoded: &[u8]) -> io::Res
 
     let (parent_path, name) = split_entry(path)?;
     let parent = open_directory_nofollow(parent_path)?;
-    verify_directory_stat(&fstat(&parent)?, parent_path)?;
+    normalize_directory_stat(&parent, parent_path, security)?;
+    // The Windows passthrough backend ignores the requested Unix mode and
+    // presents a regular file as 0644. Request that same shape here so the
+    // contract is exercised even on a host filesystem that honors modes;
+    // `normalize_private_file` immediately tightens it through the descriptor.
+    let create_mode = if security == crate::GuestHandoffSecurity::WindowsVirtioFs {
+        WINDOWS_VIRTIOFS_FILE_MODE
+    } else {
+        PRIVATE_FILE_MODE
+    };
     let mut file = open_relative_file(
         &parent,
         &name,
         libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-        PRIVATE_FILE_MODE,
+        create_mode,
     )?;
     let opened_identity = EntryIdentity::from_file(&file);
-    let file_identity = match verify_plain_file(&file, path, Some(0)) {
+    let file_identity = match normalize_private_file(&file, path, Some(0), security) {
         Ok(identity) => identity,
         Err(error) => {
             if let Ok(identity) = opened_identity {
@@ -281,38 +316,123 @@ fn verify_directory_stat(stat: &libc::stat, path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Verify a handoff directory and, for the explicitly selected Windows
+/// virtio-fs contract, normalize the backend's synthetic mode through the
+/// already-open descriptor.  The host DACL is the authority on Windows; this
+/// operation only makes the guest-side checks deterministic and never grants
+/// access to a path that was not already opened successfully.
+fn normalize_directory_stat(
+    directory: &File,
+    path: &Path,
+    security: crate::GuestHandoffSecurity,
+) -> io::Result<()> {
+    let stat = fstat(directory)?;
+    if stat_mode_type(stat.st_mode) != libc::S_IFDIR {
+        return verify_directory_stat(&stat, path);
+    }
+    let mode = stat.st_mode & 0o777;
+    if mode == PRIVATE_DIRECTORY_MODE {
+        return Ok(());
+    }
+    if security == crate::GuestHandoffSecurity::WindowsVirtioFs
+        && mode == WINDOWS_VIRTIOFS_DIRECTORY_MODE
+    {
+        fchmod(directory, PRIVATE_DIRECTORY_MODE, path)?;
+        return verify_directory_stat(&fstat(directory)?, path);
+    }
+    verify_directory_stat(&stat, path)
+}
+
+#[cfg(test)]
 fn verify_token_file(file: &File, path: &Path) -> io::Result<EntryIdentity> {
     let stat = fstat(file)?;
     verify_plain_stat(&stat, path, Some(TOKEN_TEXT_BYTES))?;
     Ok(EntryIdentity::from_stat(&stat))
 }
 
-fn verify_plain_file(
-    file: &File,
-    path: &Path,
-    expected_len: Option<u64>,
-) -> io::Result<EntryIdentity> {
-    let stat = fstat(file)?;
-    verify_plain_stat(&stat, path, expected_len)?;
-    Ok(EntryIdentity::from_stat(&stat))
-}
-
-fn verify_plain_stat(stat: &libc::stat, path: &Path, expected_len: Option<u64>) -> io::Result<()> {
-    let mode = stat.st_mode;
+/// Verify the immutable shape of a handoff file without making a mode
+/// decision.  Mode validation is performed by `verify_plain_stat` or the
+/// Windows-specific normalizer immediately afterwards.
+fn verify_plain_shape(stat: &libc::stat, path: &Path, expected_len: Option<u64>) -> io::Result<()> {
     let length = u64::try_from(stat.st_size).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("handoff file has a negative length: {}", path.display()),
         )
     })?;
-    if stat_mode_type(mode) != libc::S_IFREG
-        || mode & 0o777 != PRIVATE_FILE_MODE
+    if stat_mode_type(stat.st_mode) != libc::S_IFREG
         || expected_len.is_some_and(|expected| length != expected)
     {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
                 "guest handoff file is not a private regular file: {}",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Verify a handoff file while allowing only the known synthetic mode emitted
+/// by the Windows virtio-fs backend. Type, length, and inode identity remain
+/// mandatory before and after normalization.
+fn normalize_private_file(
+    file: &File,
+    path: &Path,
+    expected_len: Option<u64>,
+    security: crate::GuestHandoffSecurity,
+) -> io::Result<EntryIdentity> {
+    let stat = fstat(file)?;
+    verify_plain_shape(&stat, path, expected_len)?;
+    let mode = stat.st_mode & 0o777;
+    if mode == PRIVATE_FILE_MODE {
+        return Ok(EntryIdentity::from_stat(&stat));
+    }
+    if security == crate::GuestHandoffSecurity::WindowsVirtioFs
+        && mode == WINDOWS_VIRTIOFS_FILE_MODE
+    {
+        let identity = EntryIdentity::from_stat(&stat);
+        fchmod(file, PRIVATE_FILE_MODE, path)?;
+        let normalized = fstat(file)?;
+        if EntryIdentity::from_stat(&normalized) != identity {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("guest handoff file identity changed: {}", path.display()),
+            ));
+        }
+        verify_plain_stat(&normalized, path, expected_len)?;
+        return Ok(identity);
+    }
+    verify_plain_stat(&stat, path, expected_len)?;
+    Ok(EntryIdentity::from_stat(&stat))
+}
+
+fn verify_plain_stat(stat: &libc::stat, path: &Path, expected_len: Option<u64>) -> io::Result<()> {
+    let mode = stat.st_mode;
+    verify_plain_shape(stat, path, expected_len)?;
+    if mode & 0o777 != PRIVATE_FILE_MODE {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "guest handoff file is not a private regular file: {}",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn fchmod(file: &File, mode: u32, path: &Path) -> io::Result<()> {
+    // SAFETY: `file` owns a live descriptor and the mode is one of the two
+    // bounded constants above.  No pathname is followed by this operation.
+    let result = unsafe { libc::fchmod(file.as_raw_fd(), mode as libc::mode_t) };
+    if result != 0 {
+        let error = io::Error::last_os_error();
+        return Err(io::Error::new(
+            error.kind(),
+            format!(
+                "failed to normalize guest handoff mode for {}: {error}",
                 path.display()
             ),
         ));
@@ -423,6 +543,24 @@ mod tests {
             .expect("protect handoff file");
     }
 
+    fn synthetic_directory(path: &Path) {
+        std::fs::create_dir(path).expect("create synthetic handoff directory");
+        std::fs::set_permissions(
+            path,
+            std::fs::Permissions::from_mode(WINDOWS_VIRTIOFS_DIRECTORY_MODE),
+        )
+        .expect("set synthetic directory mode");
+    }
+
+    fn synthetic_file(path: &Path, contents: &[u8]) {
+        std::fs::write(path, contents).expect("write synthetic handoff file");
+        std::fs::set_permissions(
+            path,
+            std::fs::Permissions::from_mode(WINDOWS_VIRTIOFS_FILE_MODE),
+        )
+        .expect("set synthetic file mode");
+    }
+
     #[test]
     fn token_consumption_zeroizes_the_opened_inode_before_unlink() {
         let temporary = tempfile::tempdir().expect("create token fixture");
@@ -436,6 +574,73 @@ mod tests {
         assert_eq!(encoded.as_bytes(), &[b'a'; TOKEN_TEXT_BYTES as usize]);
         assert!(!path.exists());
         assert!(!directory.exists());
+    }
+
+    #[test]
+    fn windows_virtiofs_normalizes_known_synthetic_modes() {
+        let temporary = tempfile::tempdir().expect("create Windows handoff fixture");
+        let directory = temporary.path().join(".a3s-oci-bootstrap-windows");
+        synthetic_directory(&directory);
+        let path = directory.join("session-token");
+        synthetic_file(&path, &[b'a'; TOKEN_TEXT_BYTES as usize]);
+
+        let encoded =
+            consume_token_file_with_security(&path, crate::GuestHandoffSecurity::WindowsVirtioFs)
+                .expect("consume synthetic Windows token");
+
+        assert_eq!(encoded.as_bytes(), &[b'a'; TOKEN_TEXT_BYTES as usize]);
+        assert!(!path.exists());
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn posix_contract_rejects_synthetic_modes() {
+        let temporary = tempfile::tempdir().expect("create strict handoff fixture");
+        let directory = temporary.path().join(".a3s-oci-bootstrap-strict");
+        synthetic_directory(&directory);
+        let path = directory.join("session-token");
+        synthetic_file(&path, &[b'a'; TOKEN_TEXT_BYTES as usize]);
+
+        let error = consume_token_file(&path).expect_err("synthetic modes need Windows contract");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(path.exists());
+        assert!(directory.exists());
+    }
+
+    #[test]
+    fn windows_contract_rejects_unexpected_public_modes() {
+        let temporary = tempfile::tempdir().expect("create mode-fence fixture");
+        let directory = temporary.path().join(".a3s-oci-bootstrap-mode-fence");
+        std::fs::create_dir(&directory).expect("create mode-fence directory");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o777))
+            .expect("set unexpected directory mode");
+        let path = directory.join("session-token");
+        synthetic_file(&path, &[b'a'; TOKEN_TEXT_BYTES as usize]);
+
+        let error =
+            consume_token_file_with_security(&path, crate::GuestHandoffSecurity::WindowsVirtioFs)
+                .expect_err("unexpected public mode must remain fenced");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn windows_recovery_report_is_normalized_and_private() {
+        let temporary = tempfile::tempdir().expect("create Windows recovery fixture");
+        let directory = temporary.path().join(".a3s-oci-recovery-windows");
+        synthetic_directory(&directory);
+        let path = directory.join("report.json");
+
+        write_recovery_report_file_with_security(
+            &path,
+            b"report",
+            crate::GuestHandoffSecurity::WindowsVirtioFs,
+        )
+        .expect("publish Windows recovery report");
+
+        let metadata = std::fs::metadata(&path).expect("inspect normalized report");
+        assert_eq!(metadata.permissions().mode() & 0o777, PRIVATE_FILE_MODE);
+        assert_eq!(std::fs::read(&path).expect("read report"), b"report");
     }
 
     #[test]
@@ -476,7 +681,7 @@ mod tests {
         let path = directory.join("session-token");
         private_file(&path, &[b'a'; TOKEN_TEXT_BYTES as usize]);
 
-        let error = consume_token_file_inner(&path, || {
+        let error = consume_token_file_inner(&path, crate::GuestHandoffSecurity::Posix, || {
             std::fs::remove_file(&path).expect("remove original token path");
             private_file(&path, &[b'b'; TOKEN_TEXT_BYTES as usize]);
         })

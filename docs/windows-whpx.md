@@ -250,6 +250,22 @@ A successful WHPX owner-death recovery smoke additionally proves that:
 - the ordinary candidate remains `probe-only`, and only the crate-private
   qualification constructor reports its exact scoped override.
 
+### Windows virtio-fs handoff metadata
+
+Windows libkrun's virtio-fs passthrough synthesizes POSIX modes for entries
+created by the host (`0755` for directories and `0644` for regular files).
+Those values do not describe the host security boundary: every runtime-share
+generation is protected by a Windows DACL containing only the runtime owner
+and LocalSystem. The WHPX shim explicitly sets
+`A3S_OCI_AGENT_RUNTIME_SHARE_SECURITY=windows-virtiofs-acl-v1` for the Linux
+Guest. After validating the fixed mount and token path, the Guest normalizes
+only those two known synthetic modes to `0700`/`0600` through opened,
+no-follow descriptors, then performs the existing type, length, identity,
+zeroization, and cleanup checks. The selector is never inferred from a path;
+unknown selectors, unexpected modes, and failed `fchmod` operations remain
+fail-closed. Native Linux/KVM and macOS handoffs continue to require their
+native private mode contracts.
+
 ## A3S Box qualification owner
 
 `a3s-oci box-whpx-qualification-service` exposes the same durable SDK service
@@ -449,6 +465,32 @@ inventories, and the reports verified the protocol-v10 immutable-root boot
 assets. This is still an observation on the existing development host; the
 freshly provisioned release-host rerun and the operation-stage qualification
 remain release gates.
+
+On September 6, 2026, commit `9d1639ac335ddcadf6e63569e8b363fa92c10d61`
+completed the local Windows 10 Pro 23H2 (build 22631.4890, AMD64) rerun after
+adding the explicit Windows virtio-fs handoff metadata contract. The direct
+driver and owner-death/reopen reports both returned `available`; the complete
+`a3s.oci.windows-whpx-soak.v2` profile passed all 56 operation samples in
+681.403 seconds (25 serial, six parallel, three multi-container, three
+lifecycle-fault, five workload, ten typed-negative, and four owner-kill
+cases). Start and final host process inventories were empty, all 51 VM reports
+retained equal nonzero Windows handle inventories, and the final verification
+was `PASS`. The exact evidence hashes are:
+
+- soak summary `4747620697552b08fdf3ecb9efb38c65f7c2df07f9e64339e55ede20ab2f5bc6`;
+- soak operation table `fffe7a6e80f95b444713fb9fcca76816b3187b549f55dd35db6637e2c7fa6fe9`;
+- direct-driver summary `d685fca0ce77bb887b9b82dd012e3815b82f98ee6d36dee6b38a988a58d25f57`;
+- recovery summary `4ed6b0872ef9d3049fbb8267229c01add25d3c52682bbd6ada73354d55a3f472`.
+
+The source-matched immutable image uses manifest SHA-256
+`55a971935e5686bd05ca77c78ca88ab761ec29c42b2a2ef57effc2605de94968`, raw
+image SHA-256 `2624ef180f86ef6e9619982419997001a73cc46f0494b2ca5477fb7a71e2b364`,
+compressed image SHA-256
+`13d292f22fa80bd70b1429abceb6f9b7e65635cbc880ea54cbf51fb28abc1f1b`, and
+embedded agent SHA-256
+`1a1d065ef094b12c1c6821c98caeb06a5032b266e2ff1add66f6b83e76f9ca94`.
+This closes the local current-host WHPX development and test run, but does
+not claim the separately required freshly provisioned release-host gate.
 
 The August 1, 2026 direct-driver qualification ran from clean commit
 `7bb09dff81b5445e275c31faff6592ad4c32a45f` and emitted
