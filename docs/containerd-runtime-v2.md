@@ -849,6 +849,18 @@ Runtime and Agent digests are
 This remains development evidence for x86_64 and does not promote a driver or
 qualify a signed package.
 
+On 2026-09-06, the current main source revision
+`7a65a052beaa5ce7750d2a6d2f791a5a6548fd8e` passed the same qualification with
+fresh static-musl CLI, Agent, and shim artifacts staged as a package on the
+Ubuntu 24.04.3 LTS WSL2 x86_64 host. Three consecutive isolated containerd
+2.2.1 matrices completed in 96.50, 96.84, and 98.16 seconds and crossed all
+23 restart, rehydration, and forced-cleanup boundaries. The run retained
+zero tasks and containers, removed its temporary roots, and left the default
+containerd and Docker services untouched. Artifact digests and the exact
+qualification-test digest are retained in `compat/containerd-runtime-v2.json`.
+This is current-source observation evidence only: the staged directory is not
+a signed published archive and does not extend the advertised 2.2.2 claim.
+
 ## Open release gates
 
 - qualify the supported containerd version range from exact release packages;
