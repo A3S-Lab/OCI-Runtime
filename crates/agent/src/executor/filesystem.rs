@@ -17,7 +17,7 @@ use nix::dir::Dir;
 
 use super::state::{
     ContainerKey, ContainerRecord, ExecutorState, FileOperationPreparation,
-    FilesystemOperationPreparation, MutationKind, RecordedRequest,
+    FilesystemOperationPreparation, MutationKind, RecordedOutcome, RecordedRequest,
 };
 use super::{executor_error, validate_deadline, LinuxExecutor};
 
@@ -196,11 +196,17 @@ fn complete_file_operation(
 }
 
 async fn wait_for_file_operation(
-    mut completion: tokio::sync::watch::Receiver<Option<Result<FileResponse>>>,
+    mut completion: tokio::sync::watch::Receiver<Option<RecordedOutcome>>,
 ) -> Result<FileResponse> {
     loop {
-        if let Some(result) = completion.borrow_and_update().clone() {
-            return result;
+        if let Some(outcome) = completion.borrow_and_update().clone() {
+            return match outcome {
+                RecordedOutcome::File(result) => result,
+                _ => Err(executor_error(
+                    ErrorCode::Internal,
+                    "guest file operation completed with the wrong outcome kind",
+                )),
+            };
         }
         if completion.changed().await.is_err() {
             return Err(executor_error(
@@ -226,11 +232,17 @@ fn complete_filesystem_operation(
 }
 
 async fn wait_for_filesystem_operation(
-    mut completion: tokio::sync::watch::Receiver<Option<Result<FilesystemResponse>>>,
+    mut completion: tokio::sync::watch::Receiver<Option<RecordedOutcome>>,
 ) -> Result<FilesystemResponse> {
     loop {
-        if let Some(result) = completion.borrow_and_update().clone() {
-            return result;
+        if let Some(outcome) = completion.borrow_and_update().clone() {
+            return match outcome {
+                RecordedOutcome::Filesystem(result) => result,
+                _ => Err(executor_error(
+                    ErrorCode::Internal,
+                    "guest filesystem operation completed with the wrong outcome kind",
+                )),
+            };
         }
         if completion.changed().await.is_err() {
             return Err(executor_error(

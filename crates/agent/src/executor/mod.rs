@@ -98,7 +98,7 @@ use pidfd::SignalOutcome;
 use plan::InitPlan;
 use process::{PreparedProcess, ProcessSpawnContext};
 use state::{
-    ContainerKey, ContainerRecord, ExecutorState, MutationKind, RecordedRequest,
+    ContainerKey, ContainerRecord, ExecutorState, MutationKind, RecordedOutcome, RecordedRequest,
     StateOperationPreparation, UnitOperationPreparation,
 };
 use trusted_executable::PinnedExecutable;
@@ -1583,11 +1583,17 @@ fn complete_state_operation(
 }
 
 async fn wait_for_state_operation(
-    mut completion: tokio::sync::watch::Receiver<Option<Result<AgentState>>>,
+    mut completion: tokio::sync::watch::Receiver<Option<RecordedOutcome>>,
 ) -> Result<AgentState> {
     loop {
-        if let Some(result) = completion.borrow_and_update().clone() {
-            return result;
+        if let Some(outcome) = completion.borrow_and_update().clone() {
+            return match outcome {
+                RecordedOutcome::State(result) => result,
+                _ => Err(executor_error(
+                    ErrorCode::Internal,
+                    "guest state operation completed with the wrong outcome kind",
+                )),
+            };
         }
         if completion.changed().await.is_err() {
             return Err(executor_error(
@@ -1610,11 +1616,17 @@ fn complete_unit_operation(
 }
 
 async fn wait_for_unit_operation(
-    mut completion: tokio::sync::watch::Receiver<Option<Result<()>>>,
+    mut completion: tokio::sync::watch::Receiver<Option<RecordedOutcome>>,
 ) -> Result<()> {
     loop {
-        if let Some(result) = completion.borrow_and_update().clone() {
-            return result;
+        if let Some(outcome) = completion.borrow_and_update().clone() {
+            return match outcome {
+                RecordedOutcome::Unit(result) => result,
+                _ => Err(executor_error(
+                    ErrorCode::Internal,
+                    "guest unit operation completed with the wrong outcome kind",
+                )),
+            };
         }
         if completion.changed().await.is_err() {
             return Err(executor_error(

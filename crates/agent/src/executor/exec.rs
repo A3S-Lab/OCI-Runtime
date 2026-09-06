@@ -364,11 +364,17 @@ impl LinuxExecutor {
 }
 
 async fn wait_for_process_operation(
-    mut completion: tokio::sync::watch::Receiver<Option<Result<AgentProcess>>>,
+    mut completion: tokio::sync::watch::Receiver<Option<RecordedOutcome>>,
 ) -> Result<AgentProcess> {
     loop {
-        if let Some(result) = completion.borrow_and_update().clone() {
-            return result;
+        if let Some(outcome) = completion.borrow_and_update().clone() {
+            return match outcome {
+                RecordedOutcome::Process(result) => result,
+                _ => Err(executor_error(
+                    ErrorCode::Internal,
+                    "guest process operation completed with the wrong outcome kind",
+                )),
+            };
         }
         if completion.changed().await.is_err() {
             return Err(executor_error(
