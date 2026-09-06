@@ -882,6 +882,25 @@ candidate remains `probe-only`.
 AArch64 hardware evidence and Host shutdown remain open; the candidate
 therefore remains `probe-only`.
 
+On September 6, 2026, a clean current-main checkout at revision
+`7e14370f02f4187ac0fc3ecb979ad14421bfab92` reran the Linux KVM gates on the
+same x86_64 WSL2 host (`6.18.33.2-microsoft-standard-WSL2`) with the pinned
+libkrun assets and API version 12. The debug build produced an authenticated
+real-entry report (1/1), a post-probe fail-closed report (1/1), the complete
+14/14 compatibility-drift matrix, 17/17 lifecycle cases, the owner-death and
+service-restart recovery case (1/1), and all 25/25 fresh-generation soak waves.
+The reports retained clean source provenance and restored endpoint, process,
+descriptor, VM, runtime-share, recovery-report, and state-root inventories.
+Their SHA-256 values are `1e765344fe7b3acc1264d46fdae356a9336938e17b71ac3f64c4e61fe7d8fc49`
+(entry), `5f0547a980c09e79582b0f725b1430867d5dc3d0a55fa3199d728bb1f7fd450f`
+(post-probe), `4a92cbd18ea73fc87421e3d9ce7475bc8685b7d5da2c9f5bc6849e2298bf6867`
+(compatibility), `8dd315857977d7486fb5f6426433c3593269084d499a75ef0fefaeabbf6b519e`
+(lifecycle), `37d152e6a19fdb3dabf411ca2e112220f836485752184db8f944049af6c31dec`
+(recovery), and `dce2d5676a6771413eaea7f53eee3eb8695ad269ed709dad8b939308b0a2d286`
+(soak). This remains observation-only: fresh-host AArch64 and x86_64
+promotion artifacts, Host shutdown, and release-profile gates are still open,
+so the public KVM candidate remains `probe-only`.
+
 The September 3 follow-up at clean Runtime revision `fa4c59347346b677ab3b0a5c2efa7562d52bef17`
 added the Linux KVM File and Filesystem gates. Each passed all nine Host/Guest
 transport boundaries on the same real x86_64 KVM host, with immutable manifest

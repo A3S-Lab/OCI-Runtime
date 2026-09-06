@@ -717,6 +717,14 @@ retained in `compat/containerd-runtime-v2.json`;
 the run remains observation-only because it was not a signed published
 archive and does not extend the cross-driver support claim.
 
+On September 6, 2026, clean current-main revision
+`7e14370f02f4187ac0fc3ecb979ad14421bfab92` also passed the pinned x86_64 Linux
+KVM entry, post-probe fail-closed, 14-case compatibility-drift, 17-case
+lifecycle, owner-death/service-restart, and 25-wave soak gates on WSL2. All
+reports restored their endpoint, process, descriptor, VM, runtime-share, and
+state-root baselines. This is observation-only evidence; AArch64, fresh-host
+promotion, Host shutdown, and signed release gates remain open.
+
 ## Architecture
 
 ```text
