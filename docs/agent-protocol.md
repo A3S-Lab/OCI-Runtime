@@ -437,6 +437,16 @@ require the runtime-share evidence and the digest of the selected system-image
 manifest. Bundle paths, token files, and recovery-report paths are then
 validated below the fixed guest mount rather than below the system root.
 
+Windows WHPX additionally sets the exact
+`A3S_OCI_AGENT_RUNTIME_SHARE_SECURITY=windows-virtiofs-acl-v1` handoff
+selector. The selector is accepted only alongside a one-time token file below
+`/run/a3s-oci-runtime`; it permits the Linux Guest to normalize only the
+virtio-fs backend's known synthetic directory/file modes (`0755`/`0644`) to
+the private `0700`/`0600` contract through already-open descriptors. Type,
+length, device/inode identity, no-follow, and final cleanup checks remain
+unchanged. The protected Windows DACL—not the synthetic Guest mode—is the
+access-control authority, and unknown selectors or modes fail closed.
+
 macOS tests create a random private directory below `/private/tmp` with mode
 `0700`, bind a `0600` Unix socket, reject collisions and symlinks, and retain
 the device/inode identity of both entries. The host rechecks those identities

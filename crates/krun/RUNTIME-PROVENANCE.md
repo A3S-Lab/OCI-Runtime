@@ -191,6 +191,20 @@ library ABI is unchanged from that release; the runtime-owned archive prevents
 a clean OCI Runtime checkout from loading the older WHPX DLL while the fixed
 crate release is prepared.
 
+### Windows guest handoff metadata
+
+The Windows virtio-fs passthrough exposes host-created directory and regular
+file entries with synthetic POSIX modes (`0755` and `0644`); those modes are
+not the Windows access-control boundary. The WHPX shim therefore sets the
+versioned `windows-virtiofs-acl-v1` handoff selector together with the
+one-time token-file path. The Linux Guest accepts that selector only for a
+runtime-share path below `/run/a3s-oci-runtime`, opens the parent and entry
+without following links, and tightens only those two known synthetic modes to
+`0700` and `0600` through the retained descriptors. It rechecks type, length,
+identity, and final mode before consuming or publishing anything. The
+runtime-owned Windows DACL remains authoritative; an unknown selector,
+unexpected mode, failed normalization, or identity drift is rejected.
+
 ## macOS arm64
 
 The macOS shim carries this deterministic runtime archive:

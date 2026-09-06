@@ -5,7 +5,8 @@ use a3s_oci_agent_protocol::{
 };
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use a3s_oci_agent_protocol::{
-    AGENT_RECOVERY_REPORT_ENV, AGENT_RUNTIME_SHARE_ENV, AGENT_RUNTIME_SHARE_TAG,
+    AGENT_RECOVERY_REPORT_ENV, AGENT_RUNTIME_SHARE_ENV, AGENT_RUNTIME_SHARE_SECURITY_ENV,
+    AGENT_RUNTIME_SHARE_SECURITY_WINDOWS_VIRTIOFS, AGENT_RUNTIME_SHARE_TAG,
     AGENT_SESSION_TOKEN_FILE_ENV,
 };
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -424,6 +425,14 @@ fn agent_vm_smoke_windows(
     environment.push((
         AGENT_RUNTIME_SHARE_ENV.to_string(),
         AGENT_RUNTIME_SHARE_TAG.to_string(),
+    ));
+    // Windows libkrun exposes host-created virtio-fs entries with synthetic
+    // POSIX modes. The guest agent may normalize only those known modes after
+    // this host-selected contract is present; the protected host DACL remains
+    // the access-control authority.
+    environment.push((
+        AGENT_RUNTIME_SHARE_SECURITY_ENV.to_string(),
+        AGENT_RUNTIME_SHARE_SECURITY_WINDOWS_VIRTIOFS.to_string(),
     ));
     if let Some(path) = handoff.guest_recovery_report {
         environment.push((AGENT_RECOVERY_REPORT_ENV.to_string(), path.to_string()));

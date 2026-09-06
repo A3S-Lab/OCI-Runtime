@@ -4,6 +4,14 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 pub const AGENT_VSOCK_PORT: u32 = 4_093;
 /// Environment key that opts the guest agent into the fixed runtime share.
 pub const AGENT_RUNTIME_SHARE_ENV: &str = "A3S_OCI_AGENT_RUNTIME_SHARE";
+/// Environment key selecting the host-backed metadata contract for the
+/// runtime share. The Windows WHPX shim sets this only for a Linux Guest
+/// mounted through the Windows virtio-fs backend.
+pub const AGENT_RUNTIME_SHARE_SECURITY_ENV: &str = "A3S_OCI_AGENT_RUNTIME_SHARE_SECURITY";
+/// Guest-visible metadata contract used by the Windows WHPX virtio-fs
+/// backend. Windows has no persistent POSIX mode bits; the host DACL remains
+/// the authority and the Guest normalizes the backend's synthetic modes.
+pub const AGENT_RUNTIME_SHARE_SECURITY_WINDOWS_VIRTIOFS: &str = "windows-virtiofs-acl-v1";
 /// Fixed virtio-fs tag used for the per-generation runtime share.
 pub const AGENT_RUNTIME_SHARE_TAG: &str = "a3s-oci-runtime";
 /// Fixed guest mount point for the per-generation runtime share.

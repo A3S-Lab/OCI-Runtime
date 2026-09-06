@@ -1,5 +1,6 @@
 //! Linux guest bootstrap for the authenticated OCI agent protocol.
 
+use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
 #[cfg(target_os = "linux")]
@@ -13,6 +14,7 @@ use a3s_oci_agent_protocol::{
     AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest, AgentStartRequest,
     AgentState, AgentStateRequest, AgentTransportQualificationRequest, GuestAgentService,
     SessionToken, AGENT_RUNTIME_SHARE_ENV, AGENT_RUNTIME_SHARE_GUEST_ROOT,
+    AGENT_RUNTIME_SHARE_SECURITY_ENV, AGENT_RUNTIME_SHARE_SECURITY_WINDOWS_VIRTIOFS,
     AGENT_SESSION_TOKEN_DIRECTORY_PREFIX, AGENT_SESSION_TOKEN_ENV, AGENT_SESSION_TOKEN_FILE_ENV,
     AGENT_SESSION_TOKEN_FILE_NAME,
 };
@@ -47,6 +49,21 @@ pub use executor::{
 pub use linux_device::{OciLinuxDefaultDeviceNode, OCI_LINUX_DEFAULT_DEVICE_NODES};
 #[cfg(target_os = "linux")]
 pub use vm_attachment::{take_vm_attachment_manifest, UtilityVmAttachmentBinding};
+
+/// Metadata authority used for one guest handoff.
+///
+/// Native Unix virtio-fs exposes durable POSIX ownership and mode bits. The
+/// Windows WHPX passthrough backend cannot persist those bits and instead
+/// exposes synthetic values; its protected host DACL is the authority. The
+/// mode is selected by the host shim and never inferred from an untrusted path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuestHandoffSecurity {
+    /// Native Unix mode and ownership bits are authoritative.
+    Posix,
+    /// Windows WHPX virtio-fs synthetic modes are normalized after host DACL
+    /// validation.
+    WindowsVirtioFs,
+}
 
 #[cfg(not(target_os = "linux"))]
 #[derive(Debug)]
@@ -233,10 +250,16 @@ impl GuestAgentService for NegotiationOnlyAgent {
 /// Windows utility VMs receive a one-time file through the protected shared
 /// root. Other hosts retain the existing environment bootstrap.
 pub fn take_session_token() -> Result<SessionToken> {
+    take_session_token_with_security().map(|(token, _security)| token)
+}
+
+/// Consume the bootstrap token and retain the host-selected handoff contract
+/// for the lifetime of this guest session.
+pub fn take_session_token_with_security() -> Result<(SessionToken, GuestHandoffSecurity)> {
     if std::env::var_os(AGENT_SESSION_TOKEN_FILE_ENV).is_some() {
-        take_session_token_from_file()
+        take_session_token_from_file_with_security()
     } else {
-        take_session_token_from_environment()
+        take_session_token_from_environment_with_security()
     }
 }
 
@@ -251,6 +274,19 @@ pub fn take_transport_qualification_request() -> Result<Option<AgentTransportQua
 
 /// Remove and decode the protected bootstrap token from this process.
 pub fn take_session_token_from_environment() -> Result<SessionToken> {
+    take_session_token_from_environment_with_security().map(|(token, _security)| token)
+}
+
+fn take_session_token_from_environment_with_security(
+) -> Result<(SessionToken, GuestHandoffSecurity)> {
+    let security = take_guest_handoff_security(None)?;
+    if security != GuestHandoffSecurity::Posix {
+        return Err(Error::new(
+            ErrorCode::FailedPrecondition,
+            "Windows virtio-fs handoff security requires a one-time token file",
+        )
+        .for_operation("bootstrap-guest-agent"));
+    }
     let encoded = Zeroizing::new(std::env::var(AGENT_SESSION_TOKEN_ENV).map_err(|error| {
         Error::new(
             ErrorCode::FailedPrecondition,
@@ -259,19 +295,29 @@ pub fn take_session_token_from_environment() -> Result<SessionToken> {
         .for_operation("bootstrap-guest-agent")
     })?);
     std::env::remove_var(AGENT_SESSION_TOKEN_ENV);
-    SessionToken::from_hex(encoded.as_str()).map_err(|error| {
-        Error::new(
-            error.code,
-            format!("guest bootstrap token is invalid: {error}"),
-        )
-        .for_operation("bootstrap-guest-agent")
-    })
+    SessionToken::from_hex(encoded.as_str())
+        .map(|token| (token, security))
+        .map_err(|error| {
+            Error::new(
+                error.code,
+                format!("guest bootstrap token is invalid: {error}"),
+            )
+            .for_operation("bootstrap-guest-agent")
+        })
 }
 
 /// Read, unlink, and decode the protected one-time bootstrap token file.
 pub fn take_session_token_from_file() -> Result<SessionToken> {
+    take_session_token_from_file_with_security().map(|(token, _security)| token)
+}
+
+/// Read the one-time token file and return the host-selected metadata
+/// contract that must be used for subsequent guest cleanup.
+pub fn take_session_token_from_file_with_security() -> Result<(SessionToken, GuestHandoffSecurity)>
+{
     if std::env::var_os(AGENT_SESSION_TOKEN_ENV).is_some() {
         std::env::remove_var(AGENT_SESSION_TOKEN_ENV);
+        std::env::remove_var(AGENT_RUNTIME_SHARE_SECURITY_ENV);
         return Err(Error::new(
             ErrorCode::FailedPrecondition,
             "guest bootstrap token must not be present directly in the guest environment",
@@ -290,35 +336,73 @@ pub fn take_session_token_from_file() -> Result<SessionToken> {
     );
     std::env::remove_var(AGENT_SESSION_TOKEN_FILE_ENV);
     validate_token_path(&path)?;
+    let security = take_guest_handoff_security(Some(&path))?;
 
     #[cfg(target_os = "linux")]
     {
-        let encoded = handoff_fs::consume_token_file(&path).map_err(|error| {
-            Error::new(
-                ErrorCode::FailedPrecondition,
-                format!(
-                    "failed to consume guest bootstrap token file {}: {error}",
-                    path.display()
-                ),
-            )
-            .for_operation("bootstrap-guest-agent")
-        })?;
-        SessionToken::from_hex(encoded.as_str()).map_err(|error| {
-            Error::new(
-                error.code,
-                format!("guest bootstrap token is invalid: {error}"),
-            )
-            .for_operation("bootstrap-guest-agent")
-        })
+        let encoded =
+            handoff_fs::consume_token_file_with_security(&path, security).map_err(|error| {
+                Error::new(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "failed to consume guest bootstrap token file {}: {error}",
+                        path.display()
+                    ),
+                )
+                .for_operation("bootstrap-guest-agent")
+            })?;
+        SessionToken::from_hex(encoded.as_str())
+            .map(|token| (token, security))
+            .map_err(|error| {
+                Error::new(
+                    error.code,
+                    format!("guest bootstrap token is invalid: {error}"),
+                )
+                .for_operation("bootstrap-guest-agent")
+            })
     }
     #[cfg(not(target_os = "linux"))]
     {
+        let _ = security;
         Err(Error::new(
             ErrorCode::Unsupported,
             "file-based guest bootstrap is supported only by the Linux agent",
         )
         .for_operation("bootstrap-guest-agent"))
     }
+}
+
+fn take_guest_handoff_security(path: Option<&Path>) -> Result<GuestHandoffSecurity> {
+    let value = std::env::var_os(AGENT_RUNTIME_SHARE_SECURITY_ENV);
+    std::env::remove_var(AGENT_RUNTIME_SHARE_SECURITY_ENV);
+    parse_guest_handoff_security(value.as_deref(), path)
+}
+
+fn parse_guest_handoff_security(
+    value: Option<&OsStr>,
+    path: Option<&Path>,
+) -> Result<GuestHandoffSecurity> {
+    let Some(value) = value else {
+        return Ok(GuestHandoffSecurity::Posix);
+    };
+    if !value
+        .to_str()
+        .is_some_and(|value| value == AGENT_RUNTIME_SHARE_SECURITY_WINDOWS_VIRTIOFS)
+    {
+        return Err(Error::new(
+            ErrorCode::FailedPrecondition,
+            "guest runtime-share security contract is unknown",
+        )
+        .for_operation("bootstrap-guest-agent"));
+    }
+    if path.is_none_or(|path| !path.starts_with(Path::new(AGENT_RUNTIME_SHARE_GUEST_ROOT))) {
+        return Err(Error::new(
+            ErrorCode::FailedPrecondition,
+            "Windows virtio-fs handoff security requires a runtime-share token path",
+        )
+        .for_operation("bootstrap-guest-agent"));
+    }
+    Ok(GuestHandoffSecurity::WindowsVirtioFs)
 }
 
 fn validate_token_path(path: &Path) -> Result<()> {
@@ -350,7 +434,13 @@ fn invalid_token_path() -> Error {
 /// Connect to the host bridge and serve the fail-closed Linux executor.
 #[cfg(target_os = "linux")]
 pub fn run(token: SessionToken, runtime_parent: Option<PathBuf>) -> Result<()> {
-    run_linux(token, None, runtime_parent, None)
+    run_linux(
+        token,
+        None,
+        runtime_parent,
+        None,
+        GuestHandoffSecurity::Posix,
+    )
 }
 
 /// Connect with one already-verified utility-VM attachment binding.
@@ -360,7 +450,24 @@ pub fn run_with_vm_attachments(
     runtime_parent: Option<PathBuf>,
     attachments: Option<UtilityVmAttachmentBinding>,
 ) -> Result<()> {
-    run_linux(token, None, runtime_parent, attachments)
+    run_with_vm_attachments_and_security(
+        token,
+        runtime_parent,
+        attachments,
+        GuestHandoffSecurity::Posix,
+    )
+}
+
+/// Connect with one already-verified utility-VM attachment binding and the
+/// host-selected handoff filesystem contract.
+#[cfg(target_os = "linux")]
+pub fn run_with_vm_attachments_and_security(
+    token: SessionToken,
+    runtime_parent: Option<PathBuf>,
+    attachments: Option<UtilityVmAttachmentBinding>,
+    security: GuestHandoffSecurity,
+) -> Result<()> {
+    run_linux(token, None, runtime_parent, attachments, security)
 }
 
 /// Run one explicitly armed real-VM guest transport qualification session.
@@ -370,7 +477,23 @@ pub fn run_transport_qualification(
     request: AgentTransportQualificationRequest,
     runtime_parent: Option<PathBuf>,
 ) -> Result<()> {
-    run_linux(token, Some(request), runtime_parent, None)
+    run_transport_qualification_with_security(
+        token,
+        request,
+        runtime_parent,
+        GuestHandoffSecurity::Posix,
+    )
+}
+
+/// Run a transport qualification session with the selected handoff contract.
+#[cfg(target_os = "linux")]
+pub fn run_transport_qualification_with_security(
+    token: SessionToken,
+    request: AgentTransportQualificationRequest,
+    runtime_parent: Option<PathBuf>,
+    security: GuestHandoffSecurity,
+) -> Result<()> {
+    run_linux(token, Some(request), runtime_parent, None, security)
 }
 
 #[cfg(target_os = "linux")]
@@ -379,6 +502,7 @@ fn run_linux(
     qualification: Option<AgentTransportQualificationRequest>,
     runtime_parent: Option<PathBuf>,
     attachments: Option<UtilityVmAttachmentBinding>,
+    security: GuestHandoffSecurity,
 ) -> Result<()> {
     let recovery_path = take_recovery_report_path()?;
     let recovery_token = token.clone();
@@ -431,7 +555,7 @@ fn run_linux(
             ),
         };
         let cleanup_result = service.shutdown_with_recovery().await.and_then(|records| {
-            write_recovery_report(recovery_path.as_deref(), &recovery_token, records)
+            write_recovery_report(recovery_path.as_deref(), &recovery_token, records, security)
         });
         match qualification_fault {
             Some(fault) => transport_qualification::finish(serve_result, cleanup_result, &fault),
@@ -525,21 +649,24 @@ fn write_recovery_report(
     path: Option<&Path>,
     token: &SessionToken,
     records: Vec<AgentRecoveryRecord>,
+    security: GuestHandoffSecurity,
 ) -> Result<()> {
     let Some(path) = path else {
         return Ok(());
     };
     let report = AgentRecoveryReport::new(records)?.authenticate(token)?;
     let encoded = report.to_json()?;
-    handoff_fs::write_recovery_report_file(path, &encoded).map_err(|error| {
-        recovery_io_error(
-            format!(
-                "failed to commit guest recovery report {}: {error}",
-                path.display()
-            ),
-            ErrorCode::Internal,
-        )
-    })
+    handoff_fs::write_recovery_report_file_with_security(path, &encoded, security).map_err(
+        |error| {
+            recovery_io_error(
+                format!(
+                    "failed to commit guest recovery report {}: {error}",
+                    path.display()
+                ),
+                ErrorCode::Internal,
+            )
+        },
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -571,6 +698,19 @@ pub fn run_with_vm_attachments(
     .for_operation("run-guest-agent"))
 }
 
+/// Platform-neutral entry point used by `main` after it has consumed the
+/// bootstrap contract. Non-Linux targets retain the same unsupported result
+/// while keeping the security metadata out of the public API.
+#[cfg(not(target_os = "linux"))]
+pub fn run_with_vm_attachments_and_security(
+    token: SessionToken,
+    runtime_parent: Option<PathBuf>,
+    attachments: Option<UtilityVmAttachmentBinding>,
+    _security: GuestHandoffSecurity,
+) -> Result<()> {
+    run_with_vm_attachments(token, runtime_parent, attachments)
+}
+
 /// Report that guest transport qualification requires the Linux guest agent.
 #[cfg(not(target_os = "linux"))]
 pub fn run_transport_qualification(
@@ -585,16 +725,31 @@ pub fn run_transport_qualification(
     .for_operation("run-guest-agent"))
 }
 
+/// Platform-neutral entry point used by `main` after it has consumed the
+/// bootstrap contract. Non-Linux targets retain the existing unsupported
+/// result.
+#[cfg(not(target_os = "linux"))]
+pub fn run_transport_qualification_with_security(
+    token: SessionToken,
+    request: AgentTransportQualificationRequest,
+    runtime_parent: Option<PathBuf>,
+    _security: GuestHandoffSecurity,
+) -> Result<()> {
+    run_transport_qualification(token, request, runtime_parent)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use a3s_oci_agent_protocol::GuestAgentService;
+    use a3s_oci_agent_protocol::{
+        GuestAgentService, AGENT_RUNTIME_SHARE_SECURITY_WINDOWS_VIRTIOFS,
+    };
     use a3s_oci_sdk::{Error, ErrorCode};
 
     use super::{
-        finish_guest_session, validate_recovery_report_path, validate_token_path,
-        NegotiationOnlyAgent,
+        finish_guest_session, parse_guest_handoff_security, validate_recovery_report_path,
+        validate_token_path, GuestHandoffSecurity, NegotiationOnlyAgent,
     };
 
     #[test]
@@ -623,6 +778,44 @@ mod tests {
         ] {
             assert!(validate_token_path(Path::new(path)).is_err(), "{path}");
         }
+    }
+
+    #[test]
+    fn windows_handoff_contract_is_exact_and_path_bound() {
+        let runtime_path = Path::new("/run/a3s-oci-runtime/.a3s-oci-bootstrap-test/session-token");
+        assert_eq!(
+            parse_guest_handoff_security(
+                Some(std::ffi::OsStr::new(
+                    AGENT_RUNTIME_SHARE_SECURITY_WINDOWS_VIRTIOFS,
+                )),
+                Some(runtime_path),
+            )
+            .expect("exact Windows contract"),
+            GuestHandoffSecurity::WindowsVirtioFs
+        );
+        assert_eq!(
+            parse_guest_handoff_security(None, Some(runtime_path)).expect("default contract"),
+            GuestHandoffSecurity::Posix
+        );
+        assert!(parse_guest_handoff_security(
+            Some(std::ffi::OsStr::new(
+                AGENT_RUNTIME_SHARE_SECURITY_WINDOWS_VIRTIOFS,
+            )),
+            None,
+        )
+        .is_err());
+        assert!(parse_guest_handoff_security(
+            Some(std::ffi::OsStr::new("windows-virtiofs-acl-v2")),
+            Some(runtime_path),
+        )
+        .is_err());
+        assert!(parse_guest_handoff_security(
+            Some(std::ffi::OsStr::new(
+                AGENT_RUNTIME_SHARE_SECURITY_WINDOWS_VIRTIOFS,
+            )),
+            Some(Path::new("/tmp/session-token")),
+        )
+        .is_err());
     }
 
     #[test]

@@ -250,6 +250,22 @@ A successful WHPX owner-death recovery smoke additionally proves that:
 - the ordinary candidate remains `probe-only`, and only the crate-private
   qualification constructor reports its exact scoped override.
 
+### Windows virtio-fs handoff metadata
+
+Windows libkrun's virtio-fs passthrough synthesizes POSIX modes for entries
+created by the host (`0755` for directories and `0644` for regular files).
+Those values do not describe the host security boundary: every runtime-share
+generation is protected by a Windows DACL containing only the runtime owner
+and LocalSystem. The WHPX shim explicitly sets
+`A3S_OCI_AGENT_RUNTIME_SHARE_SECURITY=windows-virtiofs-acl-v1` for the Linux
+Guest. After validating the fixed mount and token path, the Guest normalizes
+only those two known synthetic modes to `0700`/`0600` through opened,
+no-follow descriptors, then performs the existing type, length, identity,
+zeroization, and cleanup checks. The selector is never inferred from a path;
+unknown selectors, unexpected modes, and failed `fchmod` operations remain
+fail-closed. Native Linux/KVM and macOS handoffs continue to require their
+native private mode contracts.
+
 ## A3S Box qualification owner
 
 `a3s-oci box-whpx-qualification-service` exposes the same durable SDK service
