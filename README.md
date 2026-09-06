@@ -725,6 +725,12 @@ reports restored their endpoint, process, descriptor, VM, runtime-share, and
 state-root baselines. This is observation-only evidence; AArch64, fresh-host
 promotion, Host shutdown, and signed release gates remain open.
 
+The same current-main source also passed the Linux KVM File and Filesystem
+owner-replacement matrices, 9/9 Host/Guest stages each (18/18 paths), with
+complete cleanup and immutable asset provenance. These are x86_64 observation
+artifacts; fresh AArch64 operation-stage evidence and promotion gates remain
+open.
+
 ## Architecture
 
 ```text

@@ -901,6 +901,15 @@ Their SHA-256 values are `1e765344fe7b3acc1264d46fdae356a9336938e17b71ac3f64c4e6
 promotion artifacts, Host shutdown, and release-profile gates are still open,
 so the public KVM candidate remains `probe-only`.
 
+The same current-main source then reran the File and Filesystem operation-stage
+owner-replacement gates. Both matrices passed all 9/9 Host/Guest transport
+boundaries with immutable asset provenance and complete endpoint, process,
+handoff, share, marker, and state cleanup. The retained report SHA-256 values
+are `35af7882554e4076f860893b32f633b91819fd3d33b9f74e4b2845ce5328408c`
+(File) and `88382de369350fa2b3e0d6f58f6eaeed18bcf5af03e7417f1d371b7d5356609d`
+(Filesystem). These are x86_64 observation artifacts only; fresh AArch64
+operation-stage evidence and promotion gates remain open.
+
 The September 3 follow-up at clean Runtime revision `fa4c59347346b677ab3b0a5c2efa7562d52bef17`
 added the Linux KVM File and Filesystem gates. Each passed all nine Host/Guest
 transport boundaries on the same real x86_64 KVM host, with immutable manifest
