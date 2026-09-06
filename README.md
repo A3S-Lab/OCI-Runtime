@@ -631,6 +631,9 @@ metadata selector. The Linux Guest normalizes only virtio-fs's known synthetic
 opened descriptors; the protected Windows DACL remains authoritative and all
 other modes fail closed. This compatibility path does not change the
 `probe-only` readiness or the outstanding fresh-host release gate.
+The submitted revision `9d1639a` passed the complete local WHPX profile
+(56/56 samples), direct-driver gate, and owner-death/reopen gate against a
+source-matched immutable image; the fresh-host release gate remains explicit.
 
 For Unix utility-VM workers, the parent-to-worker device/inode handoff binds
 both the exact generation-share directory and its required `run/` state child;
