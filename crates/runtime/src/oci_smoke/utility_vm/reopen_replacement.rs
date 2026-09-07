@@ -3300,3 +3300,49 @@ fn failed(
     append_reason(&mut report, reason);
     report
 }
+
+#[cfg(all(test, target_os = "windows", target_arch = "x86_64"))]
+mod windows_tests {
+    use super::qualification_runtime_share;
+
+    #[tokio::test]
+    async fn qualification_runtime_share_accepts_the_sibling_fixture_layout() {
+        let temporary = tempfile::tempdir().expect("temporary WHPX fixture");
+        let fixture_root = temporary
+            .path()
+            .canonicalize()
+            .expect("canonical fixture root");
+        let bootstrap = fixture_root.join("bootstrap");
+        let runtime_share = fixture_root.join("runtime-share");
+        let bundle = runtime_share.join("bundle");
+        std::fs::create_dir_all(runtime_share.join("run")).expect("runtime state directory");
+        std::fs::create_dir_all(&bundle).expect("bundle directory");
+        std::fs::create_dir(&bootstrap).expect("bootstrap directory");
+
+        let resolved = qualification_runtime_share(&bootstrap, &bundle)
+            .await
+            .expect("valid WHPX fixture layout");
+
+        assert_eq!(resolved, runtime_share);
+    }
+
+    #[tokio::test]
+    async fn qualification_runtime_share_rejects_missing_runtime_state() {
+        let temporary = tempfile::tempdir().expect("temporary WHPX fixture");
+        let fixture_root = temporary
+            .path()
+            .canonicalize()
+            .expect("canonical fixture root");
+        let bootstrap = fixture_root.join("bootstrap");
+        let runtime_share = fixture_root.join("runtime-share");
+        let bundle = runtime_share.join("bundle");
+        std::fs::create_dir_all(&bundle).expect("bundle directory");
+        std::fs::create_dir(&bootstrap).expect("bootstrap directory");
+
+        let error = qualification_runtime_share(&bootstrap, &bundle)
+            .await
+            .expect_err("missing runtime state must fail closed");
+
+        assert!(error.contains("runtime-state directory"), "{error}");
+    }
+}

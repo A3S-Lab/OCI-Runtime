@@ -104,3 +104,45 @@ pub(crate) fn merge(rootfs: &Path, console: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::merge;
+
+    #[test]
+    fn appends_fixed_bootstrap_logs_to_the_host_console() {
+        let temporary = tempfile::tempdir().expect("temporary bootstrap root");
+        let console = temporary.path().join("console.log");
+        std::fs::write(&console, b"firmware\n").expect("write host console");
+        std::fs::write(temporary.path().join("guest-init.stdout.log"), b"guest\n")
+            .expect("write guest stdout");
+        std::fs::write(temporary.path().join("init.trace.log"), b"trace")
+            .expect("write init trace");
+
+        merge(temporary.path(), &console).expect("merge bootstrap logs");
+
+        assert_eq!(
+            std::fs::read(&console).expect("read merged console"),
+            b"firmware\nguest\ntrace\n"
+        );
+    }
+
+    #[test]
+    fn rejects_an_oversized_bootstrap_log_before_merging() {
+        let temporary = tempfile::tempdir().expect("temporary bootstrap root");
+        let console = temporary.path().join("console.log");
+        std::fs::write(&console, b"firmware\n").expect("write host console");
+        std::fs::write(
+            temporary.path().join("guest-init.stderr.log"),
+            vec![b'x'; 64 * 1024 + 1],
+        )
+        .expect("write oversized bootstrap log");
+
+        let error = merge(temporary.path(), &console).expect_err("oversized log must fail");
+        assert!(error.contains("exceeds 65536 bytes"), "{error}");
+        assert_eq!(
+            std::fs::read(&console).expect("read unchanged console"),
+            b"firmware\n"
+        );
+    }
+}
