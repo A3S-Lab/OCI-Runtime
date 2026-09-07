@@ -46,6 +46,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
   10 typed-negative, and 4 owner-kill cases all passed with clean process
   inventories.
 
+- Revalidated the independent WHPX direct-driver and owner-death/service-
+  recovery gates after the merged changes, including exact exit replay, both
+  recovery fault boundaries, service reopen, stopped-only delete, and cleanup.
+
 - Pinned the Windows utility-VM shim through the process-creation boundary by
   retaining a no-follow handle with write/delete sharing disabled and comparing
   its kernel volume/file identity after canonicalization. A concurrent

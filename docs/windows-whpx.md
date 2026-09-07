@@ -538,6 +538,21 @@ and the summary and operation-table SHA-256 values are
 This strengthens existing-host evidence only; it does not replace the
 freshly provisioned release-host matrix.
 
+The same September 7 run also passed the independent direct-driver and
+owner-death/service-recovery gates from commit
+`9b1ca1d4be4daa98f8e9f8b8fb72448efe4bcdb5`. The retained reports verified
+exact create/start/kill/wait replay, scoped `probe-only` readiness, both
+recovery fault boundaries, service reopen, signal-9 exit replay, stopped-only
+delete, and complete process/share/recovery cleanup. The direct-driver report
+and summary SHA-256 values are
+`160c60bba7326721186c96bf7eb9aef132672b6883b022dfdbec9fac56fa1d7e` and
+`44736de8a20fcab9ae1d45cfaa710dc0934970758397b77fb7ce4361170444fc`;
+the recovery report and summary values are
+`257334f52a138e6d09a2f72ebce6cf69efaad9e3e4d901eb20ef72302a224400` and
+`ce23accbcd9fef5a938ca4add00cc779ede9fff0c83ef433af18572b676a522d`.
+These are current-host observations and leave the new-host release gate
+unchanged.
+
 The August 1, 2026 direct-driver qualification ran from clean commit
 `7bb09dff81b5445e275c31faff6592ad4c32a45f` and emitted
 `a3s.oci.whpx-driver-smoke-run.v1`. From 12:50:37Z through 12:51:08Z it built
