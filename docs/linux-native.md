@@ -898,8 +898,11 @@ Their SHA-256 values are `1e765344fe7b3acc1264d46fdae356a9336938e17b71ac3f64c4e6
 (lifecycle), `37d152e6a19fdb3dabf411ca2e112220f836485752184db8f944049af6c31dec`
 (recovery), and `dce2d5676a6771413eaea7f53eee3eb8695ad269ed709dad8b939308b0a2d286`
 (soak). This remains observation-only: fresh-host AArch64 and x86_64
-promotion artifacts, Host shutdown, and release-profile gates are still open,
-so the public KVM candidate remains `probe-only`.
+promotion artifacts and release-profile gates are still open, so the public
+KVM candidate remains `probe-only`. Existing-host Create durable reopen later
+retained all 11 stages including both Host-shutdown points on clean revision
+`9021b194dfcdd732cd199b68785db1d3a841edd9` (matrix SHA-256
+`0fb26ebac0ff05797851bf751bb8443d46a5ac4fdc8b91f91e8b380d281cd6d7`).
 
 The same current-main source then reran the File and Filesystem operation-stage
 owner-replacement gates. Both matrices passed all 9/9 Host/Guest transport
