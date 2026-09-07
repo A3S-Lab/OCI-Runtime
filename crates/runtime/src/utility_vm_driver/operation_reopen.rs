@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use a3s_oci_agent_protocol::{
     AgentOperation, AgentTransportFaultInjector, AgentTransportFaultStage,
@@ -497,65 +497,14 @@ async fn exercise(
     report.replacement_recovery_calls = replacement_driver.recovery_calls();
     report.replacement_rehydrated_created_record = replacement_driver.rehydrated_created_record();
 
-    // #region agent log
-    let replacement_create_started = Instant::now();
-    // #endregion
     let completed = match timeout(
         QUALIFICATION_TIMEOUT,
         replacement_service.create(request.clone()),
     )
     .await
     {
-        Ok(Ok(completed)) => {
-            // #region agent log
-            {
-                let elapsed_ms = replacement_create_started.elapsed().as_millis();
-                let payload = format!(
-                    "{{\"sessionId\":\"00a08f\",\"runId\":\"post-fix\",\"hypothesisId\":\"H8\",\"location\":\"operation_reopen.rs:replacement-create\",\"message\":\"replacement Create completed\",\"data\":{{\"stage\":\"{}\",\"elapsedMs\":{},\"timeoutMs\":{},\"outcome\":\"ok\"}},\"timestamp\":{}}}\n",
-                    stage.as_str(),
-                    elapsed_ms,
-                    QUALIFICATION_TIMEOUT.as_millis(),
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map(|d| d.as_millis())
-                        .unwrap_or(0)
-                );
-                let _ = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/mnt/d/code/a3s/debug-00a08f.log")
-                    .and_then(|mut f| {
-                        use std::io::Write;
-                        f.write_all(payload.as_bytes())
-                    });
-            }
-            // #endregion
-            completed
-        }
+        Ok(Ok(completed)) => completed,
         Ok(Err(error)) => {
-            // #region agent log
-            {
-                let elapsed_ms = replacement_create_started.elapsed().as_millis();
-                let payload = format!(
-                    "{{\"sessionId\":\"00a08f\",\"runId\":\"post-fix\",\"hypothesisId\":\"H8\",\"location\":\"operation_reopen.rs:replacement-create\",\"message\":\"replacement Create failed\",\"data\":{{\"stage\":\"{}\",\"elapsedMs\":{},\"timeoutMs\":{},\"outcome\":\"error\"}},\"timestamp\":{}}}\n",
-                    stage.as_str(),
-                    elapsed_ms,
-                    QUALIFICATION_TIMEOUT.as_millis(),
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map(|d| d.as_millis())
-                        .unwrap_or(0)
-                );
-                let _ = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/mnt/d/code/a3s/debug-00a08f.log")
-                    .and_then(|mut f| {
-                        use std::io::Write;
-                        f.write_all(payload.as_bytes())
-                    });
-            }
-            // #endregion
             drop(replacement_service);
             return replacement_failure(
                 &replacement_driver,
@@ -566,29 +515,6 @@ async fn exercise(
             .await;
         }
         Err(_) => {
-            // #region agent log
-            {
-                let elapsed_ms = replacement_create_started.elapsed().as_millis();
-                let payload = format!(
-                    "{{\"sessionId\":\"00a08f\",\"runId\":\"post-fix\",\"hypothesisId\":\"H8\",\"location\":\"operation_reopen.rs:replacement-create\",\"message\":\"replacement Create timed out\",\"data\":{{\"stage\":\"{}\",\"elapsedMs\":{},\"timeoutMs\":{},\"outcome\":\"timeout\"}},\"timestamp\":{}}}\n",
-                    stage.as_str(),
-                    elapsed_ms,
-                    QUALIFICATION_TIMEOUT.as_millis(),
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map(|d| d.as_millis())
-                        .unwrap_or(0)
-                );
-                let _ = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/mnt/d/code/a3s/debug-00a08f.log")
-                    .and_then(|mut f| {
-                        use std::io::Write;
-                        f.write_all(payload.as_bytes())
-                    });
-            }
-            // #endregion
             drop(replacement_service);
             return replacement_failure(
                 &replacement_driver,
