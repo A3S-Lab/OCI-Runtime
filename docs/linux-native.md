@@ -336,6 +336,28 @@ return to their baselines. The nested runtime schema is
 `a3s.oci.linux-kvm-recovery-smoke.v1`; the retained aggregate is
 `a3s.oci.linux-kvm-recovery-matrix.v2`.
 
+
+The digest-bound release matrix aggregates the core KVM promotion gates
+(agent entry, compatibility drift, lifecycle, owner-death recovery, Create
+reopen including Host shutdown, and soak) into
+`a3s.oci.linux-kvm-release-matrix.v1`:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_RELEASE_MATRIX_REPORT=/absolute/path/to/release-matrix.json \
+  A3S_OCI_LINUX_KVM_HOST_CLASS=existing \
+  bash .github/scripts/linux-kvm-release-matrix.sh
+```
+
+`host_class=existing` is observation-only and must keep
+`promotes_readiness=false`. Use `A3S_OCI_LINUX_KVM_HOST_CLASS=fresh` only on a
+newly provisioned host together with
+`A3S_OCI_LINUX_KVM_FRESH_HOST_ATTESTATION` pointing at a digest-bound
+`a3s.oci.linux-kvm-fresh-host-attestation.v1` JSON that sets
+`operator_attests_fresh_provisioning=true` and `provisioned_at_utc`. Fresh
+without attestation is rejected. Set `A3S_OCI_LINUX_KVM_SKIP_SOAK=1` to omit
+soak during focused debugging; a promotion run must leave soak enabled.
+
 The Create operation-stage gate uses another qualification-only driver with
 the exact `linux-kvm-operation-stage-reopen-only-v1` scope:
 
