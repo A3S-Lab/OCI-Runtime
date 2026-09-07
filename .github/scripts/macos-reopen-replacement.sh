@@ -119,7 +119,7 @@ run_create_stage() {
   if hardware_available; then
     test "$gate_exit_code" -eq 0
     jq --exit-status --arg stage "$fault_stage" \
-      '.schema_version == "a3s.oci.oci-vm-reopen-replacement.v2"
+      '.schema_version == "a3s.oci.oci-vm-reopen-replacement.v3"
        and .platform == "macos" and .status == "available"
        and .bundle_loaded
        and .requested_operation == "create"
@@ -207,7 +207,7 @@ run_create_stage() {
   else
     test "$gate_exit_code" -eq 2
     jq --exit-status --arg stage "$fault_stage" \
-      '.schema_version == "a3s.oci.oci-vm-reopen-replacement.v2"
+      '.schema_version == "a3s.oci.oci-vm-reopen-replacement.v3"
        and .platform == "macos"
        and .status != "available"
        and .requested_operation == "create"

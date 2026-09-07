@@ -67,7 +67,7 @@ $operationCliNames = @{
     Filesystem = 'filesystem'
 }
 $operationSchemas = @{
-    Create = 'a3s.oci.oci-vm-reopen-replacement.v2'
+    Create = 'a3s.oci.oci-vm-reopen-replacement.v3'
     State = 'a3s.oci.oci-vm-operation-reopen-replacement.v1'
     Start = 'a3s.oci.oci-vm-operation-reopen-replacement.v2'
     Kill = 'a3s.oci.oci-vm-operation-reopen-replacement.v3'

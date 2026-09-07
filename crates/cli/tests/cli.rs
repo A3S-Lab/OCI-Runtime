@@ -328,7 +328,7 @@ fn linux_kvm_create_reopen_fails_closed_with_versioned_output() {
         serde_json::from_slice(&output.stdout).expect("Create reopen output must be valid JSON");
     assert_eq!(
         report["schema_version"],
-        "a3s.oci.oci-vm-reopen-replacement.v2"
+        "a3s.oci.oci-vm-reopen-replacement.v3"
     );
     assert_eq!(report["platform"], "linux");
     assert_eq!(report["requested_operation"], "create");
@@ -1420,7 +1420,7 @@ fn oci_vm_reopen_replacement_fails_closed_with_versioned_output() {
         .expect("reopen-replacement diagnostic output must be valid JSON");
     assert_eq!(
         report["schema_version"],
-        "a3s.oci.oci-vm-reopen-replacement.v2"
+        "a3s.oci.oci-vm-reopen-replacement.v3"
     );
     assert_eq!(report["requested_operation"], "create");
     assert_eq!(report["requested_stage"], "host-before-request-write");
