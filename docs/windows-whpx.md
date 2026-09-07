@@ -526,6 +526,18 @@ This proves reclamation independently of process teardown on the existing
 host, while the corresponding fresh-host SDK, recovery, negative, and soak
 evidence remains required for release promotion.
 
+On September 7, 2026, the merged WHPX implementation completed a fresh
+current-host full soak from commit `385ea4321d56b487bd5e5c68d53ff1fbf56b731c`.
+The `a3s.oci.windows-whpx-soak.v2` report passed in 729.777 seconds with
+25/25 serial lifecycles, 3/3 multi-container runs, 3/3 lifecycle-fault runs,
+6/6 parallel runs, 5/5 workload cases, 10/10 typed-negative cases, and 4/4
+owner-kill points. Verification passed, both process inventories were empty,
+and the summary and operation-table SHA-256 values are
+`324fb42a229c33043411f13f4701016d41b31384c4b7b816b18d1fac304eddf6` and
+`b0f610642564216fb8fc33421c4e8b73a34957c277e3dd1d2d09cdd07f365556`.
+This strengthens existing-host evidence only; it does not replace the
+freshly provisioned release-host matrix.
+
 The August 1, 2026 direct-driver qualification ran from clean commit
 `7bb09dff81b5445e275c31faff6592ad4c32a45f` and emitted
 `a3s.oci.whpx-driver-smoke-run.v1`. From 12:50:37Z through 12:51:08Z it built
