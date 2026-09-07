@@ -183,9 +183,21 @@ never falls back to the Native Linux driver. Run it with the exact target
 manifest:
 
 ```bash
+# Use a short ASCII RUNNER_TEMP (for example /tmp). Paths that embed
+# multibyte directory names can exceed Unix-socket SUN_LEN and fail before
+# the Guest Agent boots.
+export RUNNER_TEMP=/tmp
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-agent-entry.sh
 ```
+
+On a non-root Host, libkrun virtiofs stores durable share files under the
+Host Service UID even when the Guest Agent runs as UID 0. Guest-side durable
+ownership checks therefore follow the runtime-share root owner for paths
+under `/run/a3s-oci-runtime`, while Native host paths continue to require the
+process effective UID. Host/shim recovery retention still validates mode
+`0600`/`0700` against the Host Service euid. Rebuild the static musl Guest
+Agent into the pinned system image after changing that Guest contract.
 
 The Host first validates a separate owner-only runtime share and binds a
 same-UID Unix socket. It starts the shim as the direct child and leader of a
