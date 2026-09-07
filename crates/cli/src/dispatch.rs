@@ -357,7 +357,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -386,7 +386,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -415,7 +415,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -444,7 +444,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -473,7 +473,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -502,7 +502,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -531,7 +531,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -560,7 +560,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -589,7 +589,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -618,7 +618,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -647,7 +647,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -676,7 +676,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -705,7 +705,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -734,7 +734,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -763,7 +763,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -792,7 +792,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -821,7 +821,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -850,7 +850,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -879,7 +879,7 @@ fn dispatch(
                     runtime_root,
                     system_image_manifest,
                     bundle,
-                    stage: fault_at.into(),
+                    stage: a3s_oci_runtime::AgentTransportOperationStage::try_from(fault_at).map_err(CliError::Message)?,
                 },
             )
             .await;
@@ -1652,7 +1652,7 @@ mod tests {
         let Command::LinuxKvmKillReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
@@ -1697,7 +1697,7 @@ mod tests {
         let Command::LinuxKvmDeleteReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
@@ -1742,7 +1742,7 @@ mod tests {
         let Command::LinuxKvmWaitReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
@@ -1787,7 +1787,7 @@ mod tests {
         let Command::LinuxKvmExecReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
@@ -1832,7 +1832,7 @@ mod tests {
         let Command::LinuxKvmSignalProcessReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
@@ -1877,7 +1877,7 @@ mod tests {
         let Command::LinuxKvmWaitProcessReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
@@ -1922,7 +1922,7 @@ mod tests {
         let Command::LinuxKvmPauseReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
@@ -1967,7 +1967,7 @@ mod tests {
         let Command::LinuxKvmResumeReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
@@ -2012,7 +2012,7 @@ mod tests {
         let Command::LinuxKvmProcessesReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
@@ -2057,7 +2057,7 @@ mod tests {
         let Command::LinuxKvmUpdateReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
@@ -2102,7 +2102,7 @@ mod tests {
         let Command::LinuxKvmStatsReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
@@ -2147,7 +2147,7 @@ mod tests {
         let Command::LinuxKvmReadOutputReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
@@ -2192,7 +2192,7 @@ mod tests {
         let Command::LinuxKvmWriteStdinReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
@@ -2237,7 +2237,7 @@ mod tests {
         let Command::LinuxKvmCloseStdinReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
@@ -2282,7 +2282,7 @@ mod tests {
         let Command::LinuxKvmResizeReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
@@ -2327,7 +2327,7 @@ mod tests {
         let Command::LinuxKvmFileReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite
@@ -2372,7 +2372,7 @@ mod tests {
         let Command::LinuxKvmFilesystemReopen { fault_at, .. } = parsed.command else {
             panic!("parsed a different command");
         };
-        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.into();
+        let stage: a3s_oci_runtime::AgentTransportOperationStage = fault_at.try_into().expect("operation stage");
         assert_eq!(
             stage,
             a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite

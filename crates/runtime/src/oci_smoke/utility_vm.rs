@@ -120,7 +120,7 @@ pub(super) async fn run_reopen_replacement(
     system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
-    stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
+    stage: a3s_oci_agent_protocol::AgentTransportFaultStage,
 ) -> crate::OciVmReopenReplacementReport {
     reopen_replacement::run(
         shim,

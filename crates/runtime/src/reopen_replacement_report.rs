@@ -1,6 +1,6 @@
 use a3s_oci_agent_protocol::{
-    AgentOperation, AgentTransportFaultPoint, AgentTransportOperationStage,
-    AGENT_PROTOCOL_VERSION_MAX,
+    AgentOperation, AgentTransportFaultPoint, AgentTransportFaultStage,
+    AgentTransportOperationStage, AgentTransportShutdownStage, AGENT_PROTOCOL_VERSION_MAX,
 };
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use a3s_oci_sdk::{ContainerId, ErrorCode, Generation, OperationId};
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::report::AgentVmSmokeReport;
 
 /// Schema emitted by a real utility-VM host-service reopen and VM replacement diagnostic.
-pub const OCI_VM_REOPEN_REPLACEMENT_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-reopen-replacement.v2";
+pub const OCI_VM_REOPEN_REPLACEMENT_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-reopen-replacement.v3";
 
 const QUALIFICATION_FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";
 
@@ -26,8 +26,9 @@ pub struct OciVmReopenReplacementReport {
     pub bundle_loaded: bool,
     /// Operation interrupted at the selected point in the first VM session.
     pub requested_operation: AgentOperation,
-    /// Exact Host or Guest transport point used to force the owner handoff.
-    pub requested_stage: AgentTransportOperationStage,
+    /// Exact Host/Guest create or Host-shutdown transport point used to force
+    /// the owner handoff.
+    pub requested_stage: AgentTransportFaultStage,
     /// Stable create identity reused after the host service reopened.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub qualification_operation_id: Option<OperationId>,
@@ -113,7 +114,7 @@ pub struct OciVmReopenReplacementReport {
 impl OciVmReopenReplacementReport {
     pub(crate) fn initial(
         platform: HostPlatform,
-        requested_stage: AgentTransportOperationStage,
+        requested_stage: AgentTransportFaultStage,
     ) -> Self {
         Self {
             schema_version: OCI_VM_REOPEN_REPLACEMENT_SCHEMA_VERSION.to_string(),
@@ -165,7 +166,7 @@ impl OciVmReopenReplacementReport {
     )))]
     pub(crate) fn unsupported(
         platform: HostPlatform,
-        requested_stage: AgentTransportOperationStage,
+        requested_stage: AgentTransportFaultStage,
     ) -> Self {
         let mut report = Self::initial(platform, requested_stage);
         report.status = CapabilityStatus::Unsupported;
@@ -188,18 +189,41 @@ impl OciVmReopenReplacementReport {
     }
 
     pub(crate) fn evidence_succeeded(&self) -> bool {
-        let expected_point = AgentTransportFaultPoint::Operation {
-            protocol_version: AGENT_PROTOCOL_VERSION_MAX,
-            operation: AgentOperation::Create,
-            stage: self.requested_stage,
-        }
-        .to_string();
         let guest_stage = self.requested_stage.is_guest();
         let response_delivered = matches!(
             self.requested_stage,
-            AgentTransportOperationStage::GuestAfterResponseWrite
+            AgentTransportFaultStage::Operation(
+                AgentTransportOperationStage::GuestAfterResponseWrite
+            )
         );
-        let expected_interruption = if response_delivered {
+        let shutdown_stage = self.requested_stage.shutdown();
+        let expected_point = match self.requested_stage {
+            AgentTransportFaultStage::Operation(stage) => AgentTransportFaultPoint::Operation {
+                protocol_version: AGENT_PROTOCOL_VERSION_MAX,
+                operation: AgentOperation::Create,
+                stage,
+            }
+            .to_string(),
+            AgentTransportFaultStage::Shutdown(stage) => AgentTransportFaultPoint::Shutdown {
+                protocol_version: AGENT_PROTOCOL_VERSION_MAX,
+                stage,
+            }
+            .to_string(),
+        };
+        // Host-shutdown reopen: Create completes, then Host close injects the
+        // selected shutdown fault while durable `created` remains. Guest-after-
+        // response-write instead loses the Host response while retaining
+        // `created`. Mid-create operation stages retain `creating`.
+        let expected_interruption = if shutdown_stage.is_some() {
+            self.first_create_response_received
+                && !self.disconnect_probe_attempted
+                && !self.durable_creating_retained
+                && self.durable_created_retained
+                && self
+                    .first_created_pid
+                    .is_some_and(|process_id| process_id > 0)
+                && self.replacement_rehydrated_created_record
+        } else if response_delivered {
             !self.first_create_response_received
                 && !self.disconnect_probe_attempted
                 && !self.durable_creating_retained
@@ -221,6 +245,8 @@ impl OciVmReopenReplacementReport {
                 .as_deref()
                 .is_some_and(crate::transport_cleanup_report::is_retryable_disconnect_operation)
         } else {
+            // Host operation stages and Host-shutdown close share the same
+            // qualification-fault operation name.
             self.first_create_error_operation.as_deref() == Some(QUALIFICATION_FAULT_OPERATION)
         };
         let expected_guest_evidence = if guest_stage {
@@ -228,6 +254,14 @@ impl OciVmReopenReplacementReport {
                 && self.guest_evidence_operation_id == self.qualification_operation_id
         } else {
             !self.guest_evidence_verified && self.guest_evidence_operation_id.is_none()
+        };
+        let stage_supported = match self.requested_stage {
+            AgentTransportFaultStage::Operation(stage) => stage.is_host() || stage.is_guest(),
+            AgentTransportFaultStage::Shutdown(stage) => matches!(
+                stage,
+                AgentTransportShutdownStage::HostBeforeShutdown
+                    | AgentTransportShutdownStage::HostAfterShutdown
+            ),
         };
 
         matches!(
@@ -237,7 +271,7 @@ impl OciVmReopenReplacementReport {
             && self.replacement_vm.platform == self.platform
             && self.bundle_loaded
             && self.requested_operation == AgentOperation::Create
-            && (self.requested_stage.is_host() || guest_stage)
+            && stage_supported
             && self.qualification_operation_id.is_some()
             && self.container_id.is_some()
             && self.negotiated_protocol == Some(AGENT_PROTOCOL_VERSION_MAX)
@@ -293,7 +327,8 @@ impl OciVmReopenReplacementReport {
 #[cfg(test)]
 mod tests {
     use a3s_oci_agent_protocol::{
-        AgentOperation, AgentTransportOperationStage, AGENT_PROTOCOL_VERSION_MAX,
+        AgentOperation, AgentTransportFaultStage, AgentTransportOperationStage,
+        AgentTransportShutdownStage, AGENT_PROTOCOL_VERSION_MAX,
     };
     use a3s_oci_core::{CapabilityStatus, HostPlatform};
     use a3s_oci_sdk::{ContainerId, ErrorCode, Generation, OperationId};
@@ -306,7 +341,7 @@ mod tests {
     fn report_requires_reopen_replay_distinct_owners_and_complete_cleanup() {
         let mut report = OciVmReopenReplacementReport::initial(
             HostPlatform::Macos,
-            AgentTransportOperationStage::HostBeforeRequestWrite,
+            AgentTransportOperationStage::HostBeforeRequestWrite.into(),
         );
         report.status = CapabilityStatus::Available;
         report.bundle_loaded = true;
@@ -349,7 +384,7 @@ mod tests {
             AgentTransportOperationStage::HostAfterResponseRead,
         ] {
             let mut stage_report = report.clone();
-            stage_report.requested_stage = stage;
+            stage_report.requested_stage = AgentTransportFaultStage::Operation(stage);
             stage_report.injected_point = Some(format!(
                 "agent-v{AGENT_PROTOCOL_VERSION_MAX}.create-{}",
                 stage.as_str()
@@ -364,7 +399,7 @@ mod tests {
             AgentTransportOperationStage::GuestBeforeResponseWrite,
         ] {
             let mut stage_report = report.clone();
-            stage_report.requested_stage = stage;
+            stage_report.requested_stage = AgentTransportFaultStage::Operation(stage);
             stage_report.injected_point = Some(format!(
                 "agent-v{AGENT_PROTOCOL_VERSION_MAX}.create-{}",
                 stage.as_str()
@@ -377,7 +412,9 @@ mod tests {
         }
 
         let mut delivered_response = report.clone();
-        delivered_response.requested_stage = AgentTransportOperationStage::GuestAfterResponseWrite;
+        delivered_response.requested_stage = AgentTransportFaultStage::Operation(
+            AgentTransportOperationStage::GuestAfterResponseWrite,
+        );
         delivered_response.injected_point = Some(format!(
             "agent-v{AGENT_PROTOCOL_VERSION_MAX}.create-{}",
             delivered_response.requested_stage.as_str()
@@ -392,6 +429,24 @@ mod tests {
             delivered_response.qualification_operation_id.clone();
         delivered_response.replacement_rehydrated_created_record = true;
         assert!(delivered_response.is_success(), "{delivered_response:?}");
+
+        for stage in [
+            AgentTransportShutdownStage::HostBeforeShutdown,
+            AgentTransportShutdownStage::HostAfterShutdown,
+        ] {
+            let mut shutdown_report = report.clone();
+            shutdown_report.requested_stage = AgentTransportFaultStage::Shutdown(stage);
+            shutdown_report.injected_point = Some(format!(
+                "agent-v{AGENT_PROTOCOL_VERSION_MAX}.{}",
+                stage.as_str()
+            ));
+            shutdown_report.first_create_response_received = true;
+            shutdown_report.durable_creating_retained = false;
+            shutdown_report.durable_created_retained = true;
+            shutdown_report.first_created_pid = Some(41);
+            shutdown_report.replacement_rehydrated_created_record = true;
+            assert!(shutdown_report.is_success(), "{shutdown_report:?}");
+        }
 
         let missing_guest_evidence = OciVmReopenReplacementReport {
             guest_evidence_verified: false,
@@ -442,7 +497,7 @@ mod tests {
     fn report_accepts_complete_linux_kvm_owner_replacement_evidence() {
         let mut report = OciVmReopenReplacementReport::initial(
             HostPlatform::Linux,
-            AgentTransportOperationStage::HostBeforeRequestWrite,
+            AgentTransportOperationStage::HostBeforeRequestWrite.into(),
         );
         report.status = CapabilityStatus::Available;
         report.bundle_loaded = true;

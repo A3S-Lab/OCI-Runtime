@@ -1107,8 +1107,8 @@ fn ensure_private_directory(path: &Path, mode: u32) -> Result<()> {
     let uid = unsafe { libc::geteuid() };
     if !metadata.is_dir()
         || metadata.file_type().is_symlink()
-        || metadata.uid() != uid
         || metadata.mode() & 0o777 != mode
+        || !private_tree_owner_allowed(path, metadata.uid(), uid)
     {
         return Err(recovery_error(
             ErrorCode::PermissionDenied,
@@ -1324,6 +1324,29 @@ pub(super) fn read_json_record<T: for<'de> Deserialize<'de>>(path: &Path, limit:
     })
 }
 
+/// Accept either the process euid or a virtiofs-remapped private-tree owner.
+///
+/// Linux virtio-fs commonly stores guest-root-created private files under the
+/// host share owner's UID. The guest agent still runs as UID 0, so a strict
+/// `metadata.uid() == geteuid()` check rejects its own recovery records. Allow
+/// the remapped owner only when the parent directory is a matching private
+/// `0700` tree entry (same remapped UID, not a symlink).
+fn private_tree_owner_allowed(path: &Path, file_uid: u32, euid: u32) -> bool {
+    if file_uid == euid {
+        return true;
+    }
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let Ok(parent_meta) = std::fs::symlink_metadata(parent) else {
+        return false;
+    };
+    parent_meta.is_dir()
+        && !parent_meta.file_type().is_symlink()
+        && parent_meta.mode() & 0o777 == 0o700
+        && parent_meta.uid() == file_uid
+}
+
 fn read_bounded_plain_file(path: &Path, limit: u64) -> Result<Vec<u8>> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         recovery_io_error(
@@ -1336,17 +1359,49 @@ fn read_bounded_plain_file(path: &Path, limit: u64) -> Result<Vec<u8>> {
     })?;
     // SAFETY: geteuid has no preconditions or failure result.
     let uid = unsafe { libc::geteuid() };
+    let owner_ok = private_tree_owner_allowed(path, metadata.uid(), uid);
+    // #region agent log
+    if !owner_ok || metadata.uid() != uid {
+        let _ = (|| -> std::io::Result<()> {
+            use std::io::Write;
+            let payload = format!(
+                "{{\"sessionId\":\"00a08f\",\"hypothesisId\":\"H4\",\"location\":\"recovery.rs:read_bounded_plain_file\",\"message\":\"recovery ownership check\",\"data\":{{\"path\":\"{}\",\"euid\":{},\"file_uid\":{},\"file_gid\":{},\"mode_perm\":{},\"owner_ok\":{},\"len\":{}}},\"timestamp\":{}}}\n",
+                path.display(),
+                uid,
+                metadata.uid(),
+                metadata.gid(),
+                metadata.mode() & 0o777,
+                owner_ok,
+                metadata.len(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0)
+            );
+            if let Some(parent) = path.parent() {
+                let mut file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(parent.join("a3s-debug-00a08f.ndjson"))?;
+                file.write_all(payload.as_bytes())?;
+            }
+            Ok(())
+        })();
+    }
+    // #endregion
     if !metadata.is_file()
         || metadata.file_type().is_symlink()
-        || metadata.uid() != uid
+        || !owner_ok
         || metadata.mode() & 0o777 != 0o600
         || metadata.len() > limit
     {
         return Err(recovery_error(
             ErrorCode::PermissionDenied,
             format!(
-                "native recovery file {} must be a bounded plain mode-0600 file owned by UID {uid}",
-                path.display()
+                "native recovery file {} must be a bounded plain mode-0600 file owned by UID {uid} (observed uid={} mode={:o} owner_ok={owner_ok})",
+                path.display(),
+                metadata.uid(),
+                metadata.mode() & 0o777,
             ),
         ));
     }
@@ -1441,6 +1496,29 @@ mod tests {
             parse_runtime_root_name("a3s-oci-agent-0-0000000000000001"),
             None
         );
+    }
+
+    #[test]
+    fn private_tree_owner_allows_virtiofs_remapped_share_owner() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let parent = temporary.path().join("run");
+        std::fs::create_dir(&parent).expect("parent");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
+            .expect("private parent");
+        let file = parent.join("device-targets.json");
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        options
+            .open(&file)
+            .and_then(|mut handle| handle.write_all(b"{}"))
+            .expect("private file");
+        let file_uid = std::fs::symlink_metadata(&file)
+            .expect("file metadata")
+            .uid();
+        assert!(private_tree_owner_allowed(&file, file_uid, file_uid));
+        // Guest agent euid 0 with virtiofs-remapped share owner.
+        assert!(private_tree_owner_allowed(&file, file_uid, 0));
+        assert!(!private_tree_owner_allowed(&file, file_uid.wrapping_add(1), 0));
     }
 
     #[test]

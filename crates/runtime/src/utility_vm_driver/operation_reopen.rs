@@ -86,7 +86,8 @@ pub struct LinuxKvmCreateReopenConfig {
     pub runtime_root: PathBuf,
     pub system_image_manifest: PathBuf,
     pub bundle: PathBuf,
-    pub stage: AgentTransportOperationStage,
+    /// Host/Guest Create transition or Host-shutdown close after successful Create.
+    pub stage: AgentTransportFaultStage,
 }
 
 /// Resume one transport-interrupted Create through a distinct real KVM owner.
@@ -259,24 +260,23 @@ async fn exercise(
     replacement_console: &Path,
     request: &CreateRequest,
     delete_operation_id: &OperationId,
-    stage: AgentTransportOperationStage,
+    stage: AgentTransportFaultStage,
     report: &mut OciVmReopenReplacementReport,
 ) -> std::result::Result<(), String> {
-    let faults = Arc::new(HostTransportFault::new(AgentTransportFaultStage::from(
-        stage,
-    )));
-    let guest_qualification = if stage.is_guest() {
-        Some(
-            AgentTransportQualificationRequest::new(
-                request.context.operation_id.clone(),
-                AgentOperation::Create,
-                stage,
+    let faults = Arc::new(HostTransportFault::new(stage));
+    let guest_qualification =
+        if let Some(operation_stage) = stage.operation().filter(|stage| stage.is_guest()) {
+            Some(
+                AgentTransportQualificationRequest::new(
+                    request.context.operation_id.clone(),
+                    AgentOperation::Create,
+                    operation_stage,
+                )
+                .map_err(|error| format!("failed to construct Guest qualification: {error}"))?,
             )
-            .map_err(|error| format!("failed to construct Guest qualification: {error}"))?,
-        )
-    } else {
-        None
-    };
+        } else {
+            None
+        };
     let session_qualification = match guest_qualification.as_ref() {
         Some(qualification) => UtilityVmSessionQualification::Guest(qualification.clone()),
         None => UtilityVmSessionQualification::Host(
@@ -297,27 +297,78 @@ async fn exercise(
     .await
     .map_err(|error| format!("failed to open first KVM Host service: {error}"))?;
 
-    let first_error = match timeout(QUALIFICATION_TIMEOUT, first_service.create(request.clone()))
-        .await
-    {
-        Ok(Err(error)) => error,
-        Ok(Ok(record)) => {
+    let host_shutdown = stage.shutdown().is_some();
+    if host_shutdown {
+        match timeout(QUALIFICATION_TIMEOUT, first_service.create(request.clone())).await {
+            Ok(Ok(record)) => {
+                if *record.state.status() != ContainerState::Created {
+                    drop(first_service);
+                    report.first_vm = first_driver.shutdown().await;
+                    return Err(format!(
+                        "Host-shutdown setup Create retained unexpected state {}",
+                        record.state.status()
+                    ));
+                }
+                report.first_create_response_received = true;
+            }
+            Ok(Err(error)) => {
+                drop(first_service);
+                report.first_vm = first_driver.shutdown().await;
+                return Err(format!(
+                    "{} setup Create returned an unexpected error: {error}",
+                    stage.as_str()
+                ));
+            }
+            Err(_) => {
+                drop(first_service);
+                report.first_vm = first_driver.shutdown().await;
+                return Err(format!("{} setup Create timed out", stage.as_str()));
+            }
+        }
+        match timeout(QUALIFICATION_TIMEOUT, first_driver.close_transport()).await {
+            Ok(Err(error)) => {
+                if let Err(reason) = record_first_interruption(report, error, stage) {
+                    drop(first_service);
+                    report.first_vm = first_driver.shutdown().await;
+                    return Err(reason);
+                }
+            }
+            Ok(Ok(())) => {
+                drop(first_service);
+                report.first_vm = first_driver.shutdown().await;
+                return Err(format!(
+                    "{} close unexpectedly returned success",
+                    stage.as_str()
+                ));
+            }
+            Err(_) => {
+                drop(first_service);
+                report.first_vm = first_driver.shutdown().await;
+                return Err(format!("{} close timed out", stage.as_str()));
+            }
+        }
+    } else {
+        let first_error =
+            match timeout(QUALIFICATION_TIMEOUT, first_service.create(request.clone())).await {
+                Ok(Err(error)) => error,
+                Ok(Ok(record)) => {
+                    drop(first_service);
+                    report.first_vm = first_driver.shutdown().await;
+                    return Err(format!(
+                        "first KVM Create unexpectedly returned success before owner replacement: {record:?}"
+                    ));
+                }
+                Err(_) => {
+                    drop(first_service);
+                    report.first_vm = first_driver.shutdown().await;
+                    return Err("first KVM Create timed out".to_string());
+                }
+            };
+        if let Err(reason) = record_first_interruption(report, first_error, stage) {
             drop(first_service);
             report.first_vm = first_driver.shutdown().await;
-            return Err(format!(
-                "first KVM Create unexpectedly returned success before owner replacement: {record:?}"
-            ));
+            return Err(reason);
         }
-        Err(_) => {
-            drop(first_service);
-            report.first_vm = first_driver.shutdown().await;
-            return Err("first KVM Create timed out".to_string());
-        }
-    };
-    if let Err(reason) = record_first_interruption(report, first_error, stage) {
-        drop(first_service);
-        report.first_vm = first_driver.shutdown().await;
-        return Err(reason);
     }
     if stage.is_host() {
         report.negotiated_protocol = faults.protocol_version();
@@ -349,7 +400,11 @@ async fn exercise(
             return Err("interrupted KVM Create retained no durable record".to_string());
         }
     };
-    let response_delivered = stage == AgentTransportOperationStage::GuestAfterResponseWrite;
+    let response_delivered = matches!(
+        stage,
+        AgentTransportFaultStage::Operation(AgentTransportOperationStage::GuestAfterResponseWrite)
+    );
+    let retain_created = response_delivered || host_shutdown;
     let exact_record = durable.driver == DriverKind::LibkrunKvm
         && durable.isolation == IsolationClass::DedicatedVm
         && durable.state.id() == request.id.as_str();
@@ -361,8 +416,8 @@ async fn exercise(
     if report.durable_created_retained {
         report.first_created_pid = *durable.state.pid();
     }
-    if (response_delivered && !report.durable_created_retained)
-        || (!response_delivered && !report.durable_creating_retained)
+    if (retain_created && !report.durable_created_retained)
+        || (!retain_created && !report.durable_creating_retained)
     {
         drop(first_service);
         report.first_vm = first_driver.shutdown().await;
@@ -608,7 +663,7 @@ fn owner_identities_are_distinct(
 fn record_first_interruption(
     report: &mut OciVmReopenReplacementReport,
     error: Error,
-    stage: AgentTransportOperationStage,
+    stage: AgentTransportFaultStage,
 ) -> std::result::Result<(), String> {
     report.first_create_error_code = Some(error.code);
     report.first_create_error_operation = error.operation.clone();
