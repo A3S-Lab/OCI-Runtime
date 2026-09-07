@@ -259,6 +259,9 @@ enum Command {
         /// Absolute matching a3s-oci-agent executable used for prepared init.
         #[arg(long, value_name = "FILE")]
         agent: PathBuf,
+        /// Explicit user-owned cgroup-v2 delegation for rootless Sandbox use.
+        #[arg(long, value_name = "DIR")]
+        delegated_cgroup_root: Option<PathBuf>,
     },
     /// Serve the KVM candidate only for owner-death/restart qualification.
     #[cfg(all(
@@ -876,6 +879,9 @@ enum Command {
         /// Absolute matching a3s-oci-agent executable used for the prepared init mode.
         #[arg(long, value_name = "FILE")]
         agent: PathBuf,
+        /// Explicit user-owned cgroup-v2 delegation for rootless Sandbox use.
+        #[arg(long, value_name = "DIR")]
+        delegated_cgroup_root: Option<PathBuf>,
         /// Exact A3S Box container identity allowed to consume the inherited descriptors.
         #[arg(long, value_name = "ID")]
         container_id: a3s_oci_sdk::ContainerId,
@@ -1407,6 +1413,11 @@ fn cli_main() -> ExitCode {
             rootless_device_bootstrap: true,
             ..
         } => delegated_cgroup_root.as_deref(),
+        #[cfg(target_os = "linux")]
+        Command::NativeLinuxService {
+            delegated_cgroup_root: Some(delegated_cgroup_root),
+            ..
+        } => Some(delegated_cgroup_root.as_path()),
         #[cfg(target_os = "linux")]
         Command::NativeLinuxRootlessDevicePolicySmoke {
             delegated_cgroup_root,

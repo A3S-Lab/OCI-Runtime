@@ -252,8 +252,12 @@ fn dispatch(
             })
         }),
         #[cfg(target_os = "linux")]
-        Command::NativeLinuxHostService { root, agent } => command_future!({
-            native_service::run_host(root, agent).await?;
+        Command::NativeLinuxHostService {
+            root,
+            agent,
+            delegated_cgroup_root,
+        } => command_future!({
+            native_service::run_host(root, agent, delegated_cgroup_root).await?;
             Ok(ExitCode::SUCCESS)
         }),
         #[cfg(all(
@@ -1050,10 +1054,18 @@ fn dispatch(
         Command::NativeLinuxService {
             root,
             agent,
+            delegated_cgroup_root,
             container_id,
             a3s_box_control_fds: _,
         } => command_future!({
-            native_service::run(root, agent, container_id).await?;
+            native_service::run(
+                root,
+                agent,
+                container_id,
+                delegated_cgroup_root,
+                rootless_device_policy_bootstrap,
+            )
+            .await?;
             Ok(ExitCode::SUCCESS)
         }),
         Command::NativeLinuxServiceSmoke {
