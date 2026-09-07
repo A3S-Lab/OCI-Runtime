@@ -25,11 +25,20 @@ mod fault_cleanup;
 mod guest_isolation;
 pub(crate) mod lifecycle;
 mod multi_container;
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 mod reopen_replacement;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod soak;
 pub(crate) mod transport_fault_cleanup;
+
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
+pub(super) use reopen_replacement::qualification_runtime_share;
 
 use lifecycle::{best_effort_delete, exercise};
 
@@ -101,7 +110,10 @@ pub(super) async fn run_transport_fault_cleanup(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -121,7 +133,10 @@ pub(super) async fn run_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_state_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -141,7 +156,10 @@ pub(super) async fn run_state_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_start_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -161,7 +179,10 @@ pub(super) async fn run_start_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_kill_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -181,7 +202,10 @@ pub(super) async fn run_kill_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_delete_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -201,7 +225,10 @@ pub(super) async fn run_delete_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_wait_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -221,7 +248,10 @@ pub(super) async fn run_wait_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_exec_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -241,7 +271,10 @@ pub(super) async fn run_exec_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_signal_process_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -261,7 +294,10 @@ pub(super) async fn run_signal_process_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_wait_process_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -281,7 +317,10 @@ pub(super) async fn run_wait_process_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_pause_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -301,7 +340,10 @@ pub(super) async fn run_pause_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_processes_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -321,7 +363,10 @@ pub(super) async fn run_processes_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_read_output_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -341,7 +386,10 @@ pub(super) async fn run_read_output_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_close_stdin_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -361,7 +409,10 @@ pub(super) async fn run_close_stdin_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_resize_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -381,7 +432,10 @@ pub(super) async fn run_resize_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_file_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -401,7 +455,10 @@ pub(super) async fn run_file_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_filesystem_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -421,7 +478,10 @@ pub(super) async fn run_filesystem_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_write_stdin_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -441,7 +501,10 @@ pub(super) async fn run_write_stdin_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_resume_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -461,7 +524,10 @@ pub(super) async fn run_resume_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_stats_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
@@ -481,7 +547,10 @@ pub(super) async fn run_stats_reopen_replacement(
     .await
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(super) async fn run_update_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,

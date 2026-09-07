@@ -492,6 +492,40 @@ embedded agent SHA-256
 This closes the local current-host WHPX development and test run, but does
 not claim the separately required freshly provisioned release-host gate.
 
+On September 6–7, 2026, the same Windows 10 Pro 23H2 host completed the
+operation-reopen qualification for every workload operation. Seven bounded
+`a3s.oci.whpx-operation-reopen-run.v1` reports passed all 180 cases (20
+operations x 9 stages): Create/State/Start/Kill (36),
+Wait/Exec/SignalProcess/WaitProcess (36), Pause/Resume/Processes/Update (36),
+Stats (9), ReadOutput/WriteStdin/CloseStdin (27), Resize/File/Filesystem (27),
+and Delete (9). The reports were produced against rootfs SHA-256
+`4b4daa9fe2fc696c4919c4412a4c3d3e770d8fb70292a004a2c72f5096175282`, manifest
+SHA-256 `62e7a589f519fa4102ab2600aaa8a3d94b7d516ef80af5bdb3740c238856823a`,
+and raw image SHA-256
+`53b5416e8ffa252f9253b96965770a7ff10b32ca3f31dbfae7046e855e67b256`.
+The seven summary SHA-256 values, in the operation groups listed above, are
+`b609172089daf2f1b7773d9988660dd5aa34af580aa4a31d83014219967f80d1`,
+`78d11deac863a72458ec4a9f7beca6c24a352522f09274817088220bac71f7ef`,
+`b6e398dcc12689a52bee9c09410f862e8c615a86851853d9d464d02ca99b4485`,
+`9e9c757e546ba31e9801ce111f2e4e81266f422bf24b1a495d0b5d9b68319414`,
+`d13ddcc66b7f8561751b3d3a35cd1d0676c70ff4f7a03b7b35528d2c576f05fc`,
+`2065e4f386f65085e7c8287704110f168fe4a7e03fd6cded183b773ce83c210f`, and
+`6a04ea50223907013dd65dc215738abc551ef3cc821fae3a6f36b1e8465fb9de`.
+The Stats run also verified replacement snapshots by payload rather than a
+strictly increasing wall-clock timestamp, so a clock adjustment cannot turn
+a valid rebound into a false failure.
+
+The independent
+`a3s.oci.windows-whpx-handle-reclamation-run.v1` report passed eight
+same-process cycles in one shim process. It retained a cold count of 115,
+baseline 122, peak/final 122, final delta 0, and
+`runtime_share_restored=true`; its summary and report SHA-256 values are
+`143826d6cd7503dc6f76a6d08f5a55a183d85c3354c140143743e473b60dec25` and
+`9a4441c2c5618d0d2766a7db15742c0dd95538cb971d3fc2d20fbfc4d3a9aa5e`.
+This proves reclamation independently of process teardown on the existing
+host, while the corresponding fresh-host SDK, recovery, negative, and soak
+evidence remains required for release promotion.
+
 The August 1, 2026 direct-driver qualification ran from clean commit
 `7bb09dff81b5445e275c31faff6592ad4c32a45f` and emitted
 `a3s.oci.whpx-driver-smoke-run.v1`. From 12:50:37Z through 12:51:08Z it built
@@ -713,8 +747,9 @@ Windows error-resource, WHPX partition/vCPU, and system-RNG facilities, then
 releases the temporary vCPU and partition, so process-global lazy handles are
 not misclassified as VM leaks. Host validation and the hardware soak script
 reject missing, zero, mismatched, or false evidence. The focused current-asset
-run retained exact equality, but the complete fresh-host rerun must retain the
-same evidence before WHPX can become `experimental`.
+run and the independent eight-cycle same-process gate retained exact equality,
+but the complete fresh-host rerun must retain the same evidence before WHPX can
+become `experimental`.
 
 Broader namespace, mount, capability, resource, seccomp, hook, and shared-guest
 coverage remains part of the shared executor, OCI conformance, and later

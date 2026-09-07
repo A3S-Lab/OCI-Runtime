@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use a3s_oci_agent_protocol::AgentStatsRequest;
-use a3s_oci_core::{DriverKind, IsolationClass};
+use a3s_oci_core::IsolationClass;
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     DeleteMode, DeleteRequest, ErrorCode, ListRequest, OciRuntimeService, OperationContext,
@@ -15,7 +15,6 @@ use super::super::update::support::{update_journal_status, UpdateJournalStatus};
 use super::super::{append_failure, owner_identities_are_distinct, QUALIFICATION_TIMEOUT};
 use super::support::record_recovery_evidence;
 use super::{FirstOwnerEvidence, Qualification, QualificationHvfDriver};
-use crate::agent_session::UtilityVmSession;
 use crate::host_cleanup::MacosHostCleanupTracker;
 use crate::oci_smoke::utility_vm::lifecycle::resource_stats_snapshot_is_exact;
 use crate::{OciVmOperationReopenReplacementReport, RuntimeDriver};
@@ -26,10 +25,11 @@ pub(super) async fn run(
     report: &mut OciVmOperationReopenReplacementReport,
 ) -> std::result::Result<(), String> {
     let cleanup = MacosHostCleanupTracker::capture();
-    let session = match UtilityVmSession::connect(
+    let session = match super::super::connect_replacement_qualification_session(
         &qualification.shim,
         &qualification.vm_rootfs,
         Some(&qualification.system_image_manifest),
+        &qualification.state_root,
         &qualification.replacement_console,
     )
     .await
@@ -111,7 +111,8 @@ pub(super) async fn run(
             let record = &records[0];
             if record.state.id() != qualification.create.id.as_str()
                 || qualification.start.target.generation != Some(record.generation)
-                || record.driver != DriverKind::LibkrunHvf
+                || record.driver
+                    != crate::oci_smoke::utility_vm::reopen_replacement::qualification_driver_kind()
                 || record.isolation != IsolationClass::DedicatedVm
                 || *record.state.status() != ContainerState::Running
                 || record.is_paused()
@@ -306,10 +307,15 @@ pub(super) async fn run(
             report.generation_after_reopen = stats.target.generation;
             report.same_generation_reused =
                 report.generation_before_reopen == report.generation_after_reopen;
-            report.stats_snapshot_rebound =
-                report.first_stats_snapshot.as_ref().is_none_or(|first| {
-                    stats.timestamp_unix_ns > first.timestamp_unix_ns && stats != *first
-                });
+            // `timestamp_unix_ns` is wall-clock evidence and can move
+            // backwards when the host clock is corrected while the owner is
+            // being replaced. Freshness therefore comes from the complete
+            // replacement snapshot being different from the first snapshot;
+            // target identity and generation are checked independently above.
+            report.stats_snapshot_rebound = report
+                .first_stats_snapshot
+                .as_ref()
+                .is_none_or(|first| stats != *first);
             if !report.replacement_stats_verified {
                 append_failure(
                     &mut failure,

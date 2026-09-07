@@ -5,7 +5,7 @@ use a3s_oci_agent_protocol::{
     AgentOperation, AgentTransportFaultInjector, AgentTransportFaultStage,
     AgentTransportOperationStage, AgentTransportQualificationRequest, AGENT_PROTOCOL_VERSION_MAX,
 };
-use a3s_oci_core::{CapabilityStatus, DriverKind, HostPlatform, IsolationClass};
+use a3s_oci_core::{CapabilityStatus, HostPlatform, IsolationClass};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
@@ -25,7 +25,6 @@ use super::{
     append_failure, create_qualification_state_root, owner_identities_are_distinct,
     QualificationHvfDriver, FAULT_OPERATION, QUALIFICATION_TIMEOUT,
 };
-use crate::agent_session::UtilityVmSession;
 use crate::host_cleanup::MacosHostCleanupTracker;
 use crate::transport_cleanup_report::is_retryable_disconnect_operation;
 use crate::{OciVmOperationReopenReplacementReport, RuntimeDriver};
@@ -45,6 +44,10 @@ pub(in crate::oci_smoke::utility_vm) async fn run(
         Err(reason) => return failed(report, reason),
     };
     let bundle_directory = match canonical_directory(bundle_directory, "OCI bundle").await {
+        Ok(path) => path,
+        Err(reason) => return failed(report, reason),
+    };
+    let vm_rootfs = match super::qualification_runtime_share(&vm_rootfs, &bundle_directory).await {
         Ok(path) => path,
         Err(reason) => return failed(report, reason),
     };
@@ -247,28 +250,16 @@ async fn exercise(
         AgentTransportFaultStage::from(stage),
     ));
     let first_cleanup = MacosHostCleanupTracker::capture();
-    let first_session_result = match guest_qualification {
-        Some(qualification) => {
-            UtilityVmSession::connect_with_guest_qualification(
-                shim,
-                vm_rootfs,
-                Some(system_image_manifest),
-                first_console,
-                qualification,
-            )
-            .await
-        }
-        None => {
-            UtilityVmSession::connect_with_host_fault_injector(
-                shim,
-                vm_rootfs,
-                Some(system_image_manifest),
-                first_console,
-                Arc::clone(&faults) as Arc<dyn AgentTransportFaultInjector>,
-            )
-            .await
-        }
-    };
+    let first_session_result = super::connect_first_qualification_session(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        state_root,
+        first_console,
+        guest_qualification,
+        Arc::clone(&faults) as Arc<dyn AgentTransportFaultInjector>,
+    )
+    .await;
     let first_session = match first_session_result {
         Ok(session) => Arc::new(session),
         Err(mut bridge) => {
@@ -404,7 +395,9 @@ async fn exercise(
             report.generation_before_reopen = Some(record.generation);
             report.first_created_pid = *record.state.pid();
             report.durable_created_retained = record.state.id() == create.id.as_str()
-                && record.driver == DriverKind::LibkrunHvf
+                && record.driver
+                    == crate::oci_smoke::utility_vm::reopen_replacement::qualification_driver_kind(
+                    )
                 && record.isolation == IsolationClass::DedicatedVm
                 && *record.state.status() == ContainerState::Created
                 && record.generation == created.generation
@@ -495,10 +488,11 @@ async fn exercise(
     drop(first_session);
 
     let replacement_cleanup = MacosHostCleanupTracker::capture();
-    let replacement_session = match UtilityVmSession::connect(
+    let replacement_session = match super::connect_replacement_qualification_session(
         shim,
         vm_rootfs,
         Some(system_image_manifest),
+        state_root,
         replacement_console,
     )
     .await

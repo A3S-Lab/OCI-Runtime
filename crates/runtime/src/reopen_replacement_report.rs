@@ -159,7 +159,10 @@ impl OciVmReopenReplacementReport {
         }
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
     pub(crate) fn unsupported(
         platform: HostPlatform,
         requested_stage: AgentTransportOperationStage,
@@ -167,12 +170,12 @@ impl OciVmReopenReplacementReport {
         let mut report = Self::initial(platform, requested_stage);
         report.status = CapabilityStatus::Unsupported;
         report.first_vm.status = CapabilityStatus::Unsupported;
-        report.first_vm.reason = Some("the first HVF owner was not started".to_string());
+        report.first_vm.reason = Some("the first utility-VM owner was not started".to_string());
         report.replacement_vm.status = CapabilityStatus::Unsupported;
         report.replacement_vm.reason =
-            Some("the replacement HVF owner was not started".to_string());
+            Some("the replacement utility-VM owner was not started".to_string());
         report.reason = Some(
-            "real utility-VM host-service reopen and owner replacement is implemented only for macOS aarch64/HVF"
+            "real utility-VM host-service reopen and owner replacement is not implemented for this host"
                 .to_string(),
         );
         report
@@ -227,8 +230,10 @@ impl OciVmReopenReplacementReport {
             !self.guest_evidence_verified && self.guest_evidence_operation_id.is_none()
         };
 
-        matches!(self.platform, HostPlatform::Macos | HostPlatform::Linux)
-            && self.first_vm.platform == self.platform
+        matches!(
+            self.platform,
+            HostPlatform::Macos | HostPlatform::Linux | HostPlatform::Windows
+        ) && self.first_vm.platform == self.platform
             && self.replacement_vm.platform == self.platform
             && self.bundle_loaded
             && self.requested_operation == AgentOperation::Create

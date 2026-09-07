@@ -25,7 +25,7 @@ pub(crate) fn take_request() -> Result<Option<AgentTransportQualificationRequest
         )
         .for_operation("bootstrap-guest-agent")
     })?;
-    AgentTransportQualificationRequest::from_json(&encoded)
+    AgentTransportQualificationRequest::from_handoff(&encoded)
         .map(Some)
         .map_err(|error| {
             Error::new(

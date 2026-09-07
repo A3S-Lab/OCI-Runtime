@@ -4,7 +4,7 @@ use a3s_oci_agent_protocol::{
     AgentOperation, AgentTransportFaultInjector, AgentTransportFaultStage,
     AGENT_PROTOCOL_VERSION_MAX,
 };
-use a3s_oci_core::{DriverKind, IsolationClass};
+use a3s_oci_core::IsolationClass;
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{ListRequest, OciRuntimeService};
 use tokio::time::timeout;
@@ -32,28 +32,16 @@ pub(super) async fn run(
         AgentTransportFaultStage::from(qualification.stage),
     ));
     let cleanup = MacosHostCleanupTracker::capture();
-    let session_result = match qualification.guest_qualification.as_ref() {
-        Some(request) => {
-            crate::agent_session::UtilityVmSession::connect_with_guest_qualification(
-                &qualification.shim,
-                &qualification.vm_rootfs,
-                Some(&qualification.system_image_manifest),
-                &qualification.first_console,
-                request,
-            )
-            .await
-        }
-        None => {
-            crate::agent_session::UtilityVmSession::connect_with_host_fault_injector(
-                &qualification.shim,
-                &qualification.vm_rootfs,
-                Some(&qualification.system_image_manifest),
-                &qualification.first_console,
-                Arc::clone(&faults) as Arc<dyn AgentTransportFaultInjector>,
-            )
-            .await
-        }
-    };
+    let session_result = super::super::connect_first_qualification_session(
+        &qualification.shim,
+        &qualification.vm_rootfs,
+        &qualification.system_image_manifest,
+        &qualification.state_root,
+        &qualification.first_console,
+        qualification.guest_qualification.as_ref(),
+        Arc::clone(&faults) as Arc<dyn AgentTransportFaultInjector>,
+    )
+    .await;
     let session = match session_result {
         Ok(session) => Arc::new(session),
         Err(mut bridge) => {
@@ -250,7 +238,9 @@ pub(super) async fn run(
         Ok(records) if records.len() == 1 => {
             let record = &records[0];
             report.durable_running_retained = record.state.id() == qualification.create.id.as_str()
-                && record.driver == DriverKind::LibkrunHvf
+                && record.driver
+                    == crate::oci_smoke::utility_vm::reopen_replacement::qualification_driver_kind(
+                    )
                 && record.isolation == IsolationClass::DedicatedVm
                 && record.generation == created.generation
                 && record.config_digest == created.config_digest

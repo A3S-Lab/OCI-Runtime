@@ -1313,6 +1313,9 @@ real-driver coverage remains open for the other utility-VM backends.
     before VM entry.
   - [ ] Run the complete WHPX SDK and recovery matrices against those exact
     assets on a fresh Windows host.
+    - [x] On the existing Windows 10 Pro 23H2 x86_64 host, run all 20 workload
+      operations through all 9 operation-reopen stages (180 / 180 cases),
+      retaining immutable asset, owner/fault, and cleanup evidence.
 
   The August 15, 2026 implementation builds the Alpine 3.22.5 x86_64 ext4
   image twice and requires byte-for-byte equality, binds Linux 6.12.91 and the
@@ -1365,6 +1368,9 @@ real-driver coverage remains open for the other utility-VM backends.
   - [x] Emit nonzero current-process handle counts immediately before libkrun
     context creation and after `krun_start_enter` returns. Shim schema v6 and
     Host validation require exact equality before cleanup can succeed.
+  - [x] Run an independent same-process WHPX reclamation gate for 8 VM cycles;
+    the retained current-host evidence was 115 cold, 122 baseline, 122 final,
+    zero final delta, and a restored runtime share.
   - [ ] Retain that exact evidence across the complete fresh-host WHPX SDK,
     recovery, negative, and soak matrices.
 
