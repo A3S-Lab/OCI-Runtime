@@ -41,6 +41,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
   and the sibling `bootstrap` / `runtime-share` qualification layout, including
   fail-closed rejection of missing runtime state and oversized diagnostics.
 
+- Revalidated the merged Windows WHPX path with a complete current-host soak:
+  25 serial, 3 multi-container, 3 lifecycle-fault, 6 parallel, 5 workload,
+  10 typed-negative, and 4 owner-kill cases all passed with clean process
+  inventories.
+
 - Pinned the Windows utility-VM shim through the process-creation boundary by
   retaining a no-follow handle with write/delete sharing disabled and comparing
   its kernel volume/file identity after canonicalization. A concurrent

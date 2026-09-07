@@ -646,6 +646,13 @@ same-process VM cycles with `115 -> 122 -> 122` cold/baseline/final handles,
 zero final delta, and a restored runtime share. These are existing-host
 observations and do not close the freshly provisioned release-host gate.
 
+On September 7, 2026, the merged implementation also passed a full current-
+host `a3s.oci.windows-whpx-soak.v2` run: 25/25 serial, 3/3 multi-container,
+3/3 lifecycle-fault, 6/6 parallel, 5/5 workload, 10/10 typed-negative, and
+4/4 owner-kill cases, with verification and final process cleanup passing.
+This remains existing-host evidence; the fresh-host promotion gate is still
+explicit.
+
 Windows WHPX guest handoff now carries an explicit `windows-virtiofs-acl-v1`
 metadata selector. The Linux Guest normalizes only virtio-fs's known synthetic
 `0755`/`0644` modes to its private `0700`/`0600` handoff contract through
