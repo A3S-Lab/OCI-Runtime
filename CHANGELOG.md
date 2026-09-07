@@ -27,6 +27,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added a Windows WHPX operation-reopen qualification runner covering all 20
+  workload operations and all 9 durable fault stages (180 cases), with
+  immutable system-image verification, owner/fault assertions, and complete
+  process/runtime-share cleanup checks.
+
+- Added an independent same-process WHPX handle-reclamation smoke gate. It
+  runs repeated VM cycles in one shim process and requires nonzero cold,
+  baseline, and final Windows handle inventories to restore exactly, without
+  relying on process teardown.
+
 - Pinned the Windows utility-VM shim through the process-creation boundary by
   retaining a no-follow handle with write/delete sharing disabled and comparing
   its kernel volume/file identity after canonicalization. A concurrent

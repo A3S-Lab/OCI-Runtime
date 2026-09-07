@@ -130,6 +130,10 @@ pub(super) async fn run(
         Ok(path) => path,
         Err(reason) => return failed(report, reason),
     };
+    let vm_rootfs = match qualification_runtime_share(&vm_rootfs, &bundle_directory).await {
+        Ok(path) => path,
+        Err(reason) => return failed(report, reason),
+    };
     let console_directory =
         match canonical_directory(console_directory, "qualification console directory").await {
             Ok(path) => path,
@@ -332,28 +336,16 @@ async fn exercise(
         stage,
     )));
     let first_cleanup = MacosHostCleanupTracker::capture();
-    let first_session_result = match guest_qualification {
-        Some(qualification) => {
-            UtilityVmSession::connect_with_guest_qualification(
-                shim,
-                vm_rootfs,
-                Some(system_image_manifest),
-                first_console,
-                qualification,
-            )
-            .await
-        }
-        None => {
-            UtilityVmSession::connect_with_host_fault_injector(
-                shim,
-                vm_rootfs,
-                Some(system_image_manifest),
-                first_console,
-                Arc::clone(&faults) as Arc<dyn AgentTransportFaultInjector>,
-            )
-            .await
-        }
-    };
+    let first_session_result = connect_first_qualification_session(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        state_root,
+        first_console,
+        guest_qualification,
+        Arc::clone(&faults) as Arc<dyn AgentTransportFaultInjector>,
+    )
+    .await;
     let first_session = match first_session_result {
         Ok(session) => Arc::new(session),
         Err(mut bridge) => {
@@ -418,7 +410,7 @@ async fn exercise(
             let record = records.into_iter().next().expect("one record");
             report.generation_before_reopen = Some(record.generation);
             let exact_record = record.state.id() == request.id.as_str()
-                && record.driver == DriverKind::LibkrunHvf
+                && record.driver == qualification_driver_kind()
                 && record.isolation == IsolationClass::DedicatedVm;
             report.durable_creating_retained =
                 exact_record && *record.state.status() == ContainerState::Creating;
@@ -551,10 +543,11 @@ async fn exercise(
     drop(first_session);
 
     let replacement_cleanup = MacosHostCleanupTracker::capture();
-    let replacement_session = match UtilityVmSession::connect(
+    let replacement_session = match connect_replacement_qualification_session(
         shim,
         vm_rootfs,
         Some(system_image_manifest),
+        state_root,
         replacement_console,
     )
     .await
@@ -1551,7 +1544,7 @@ impl QualificationHvfDriver {
     fn recovery_driver_request(&self, record: &ContainerRecord) -> Result<DriverCreateRequest> {
         let attachments_digest = self.recovery_create.attachments.digest()?;
         if record.state.id() != self.recovery_create.id.as_str()
-            || record.driver != DriverKind::LibkrunHvf
+            || record.driver != qualification_driver_kind()
             || record.isolation != self.recovery_create.isolation.class()
             || record.config_digest != self.recovery_create.bundle.config_digest()
             || record.attachments_digest.as_deref() != Some(attachments_digest.as_str())
@@ -2426,7 +2419,7 @@ impl QualificationHvfDriver {
 impl RuntimeDriver for QualificationHvfDriver {
     fn capability(&self) -> DriverCapability {
         DriverCapability {
-            driver: DriverKind::LibkrunHvf,
+            driver: qualification_driver_kind(),
             status: CapabilityStatus::Available,
             readiness: DriverReadiness::Experimental,
             isolation_classes: vec![IsolationClass::DedicatedVm],
@@ -2462,7 +2455,7 @@ impl RuntimeDriver for QualificationHvfDriver {
             || (*record.state.status() == ContainerState::Stopped
                 && self.recovery_start.is_some()
                 && self.recovery_kill.is_some());
-        if record.driver != DriverKind::LibkrunHvf
+        if record.driver != qualification_driver_kind()
             || record.isolation != IsolationClass::DedicatedVm
             || !recovery_state_supported
         {
@@ -2976,6 +2969,227 @@ async fn wait_for_replacement_marker(marker: &Path) -> std::result::Result<(), S
     }
 }
 
+pub(crate) const fn qualification_driver_kind() -> DriverKind {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        DriverKind::LibkrunWhpx
+    }
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    {
+        DriverKind::LibkrunHvf
+    }
+}
+
+/// Resolve the two roots used by a Windows WHPX qualification fixture.
+///
+/// The public diagnostic API predates WHPX and accepts one `vm_rootfs` path.
+/// On Windows that path is the extracted bootstrap root (`.../bootstrap`),
+/// while the OCI bundle is hosted by its sibling writable runtime share
+/// (`.../runtime-share`).  Keeping this convention in one resolver prevents
+/// the bootstrap disk and the virtiofs share from being accidentally conflated.
+pub(crate) async fn qualification_runtime_share(
+    bootstrap_root: &Path,
+    bundle_directory: &Path,
+) -> std::result::Result<PathBuf, String> {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        let bootstrap_name = bootstrap_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if bootstrap_name != "bootstrap" {
+            return Err(format!(
+                "WHPX qualification bootstrap root must be named `bootstrap`: {}",
+                bootstrap_root.display()
+            ));
+        }
+        let Some(bootstrap_parent) = bootstrap_root.parent() else {
+            return Err(format!(
+                "WHPX qualification bootstrap root has no fixture parent: {}",
+                bootstrap_root.display()
+            ));
+        };
+        let Some(configured_share) = bundle_directory.parent() else {
+            return Err(format!(
+                "WHPX qualification bundle has no runtime-share parent: {}",
+                bundle_directory.display()
+            ));
+        };
+        let runtime_share =
+            canonical_directory(configured_share, "WHPX qualification runtime share").await?;
+        let runtime_share_name = runtime_share
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if runtime_share_name != "runtime-share" {
+            return Err(format!(
+                "WHPX qualification runtime share must be named `runtime-share`: {}",
+                runtime_share.display()
+            ));
+        }
+        if runtime_share.parent() != Some(bootstrap_parent) {
+            return Err(format!(
+                "WHPX qualification bootstrap and runtime-share roots must be sibling directories: {} and {}",
+                bootstrap_root.display(),
+                runtime_share.display()
+            ));
+        }
+        let run = canonical_directory(
+            &runtime_share.join("run"),
+            "WHPX qualification runtime-state directory",
+        )
+        .await?;
+        if run.parent() != Some(runtime_share.as_path()) {
+            return Err(format!(
+                "WHPX qualification runtime-state directory escaped runtime share: {}",
+                run.display()
+            ));
+        }
+        Ok(runtime_share)
+    }
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    {
+        let _ = bundle_directory;
+        Ok(bootstrap_root.to_path_buf())
+    }
+}
+
+pub(super) async fn connect_first_qualification_session(
+    shim: &Path,
+    vm_rootfs: &Path,
+    system_image_manifest: &Path,
+    state_root: &Path,
+    console: &Path,
+    guest_qualification: Option<&AgentTransportQualificationRequest>,
+    faults: Arc<dyn AgentTransportFaultInjector>,
+) -> std::result::Result<UtilityVmSession, AgentVmSmokeReport> {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        let _ = state_root;
+        let Some(fixture_root) = vm_rootfs.parent() else {
+            let mut report = AgentVmSmokeReport::initial(HostPlatform::Windows);
+            report.reason = Some(format!(
+                "WHPX qualification runtime share has no fixture parent: {}",
+                vm_rootfs.display()
+            ));
+            return Err(report);
+        };
+        let bootstrap_root = fixture_root.join("bootstrap");
+        let runtime_share = vm_rootfs;
+        let bootstrap_root = match canonical_directory(&bootstrap_root, "WHPX bootstrap root").await
+        {
+            Ok(path) => path,
+            Err(reason) => {
+                let mut report = AgentVmSmokeReport::initial(HostPlatform::Windows);
+                report.reason = Some(reason);
+                return Err(report);
+            }
+        };
+        return match guest_qualification {
+            Some(qualification) => {
+                UtilityVmSession::connect_with_separate_runtime_share_and_guest_qualification(
+                    shim,
+                    &bootstrap_root,
+                    Some(system_image_manifest),
+                    runtime_share,
+                    console,
+                    qualification,
+                )
+                .await
+            }
+            None => {
+                UtilityVmSession::connect_with_separate_runtime_share_and_host_fault_injector(
+                    shim,
+                    &bootstrap_root,
+                    Some(system_image_manifest),
+                    runtime_share,
+                    console,
+                    faults,
+                )
+                .await
+            }
+        };
+    }
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    {
+        let _ = state_root;
+        match guest_qualification {
+            Some(qualification) => {
+                UtilityVmSession::connect_with_guest_qualification(
+                    shim,
+                    vm_rootfs,
+                    Some(system_image_manifest),
+                    console,
+                    qualification,
+                )
+                .await
+            }
+            None => {
+                UtilityVmSession::connect_with_host_fault_injector(
+                    shim,
+                    vm_rootfs,
+                    Some(system_image_manifest),
+                    console,
+                    faults,
+                )
+                .await
+            }
+        }
+    }
+}
+
+pub(super) async fn connect_replacement_qualification_session(
+    shim: &Path,
+    vm_rootfs: &Path,
+    system_image_manifest: Option<&Path>,
+    state_root: &Path,
+    console: &Path,
+) -> std::result::Result<UtilityVmSession, AgentVmSmokeReport> {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        let _ = state_root;
+        let Some(system_image_manifest) = system_image_manifest else {
+            let mut report = AgentVmSmokeReport::initial(HostPlatform::Windows);
+            report.reason = Some(
+                "Windows qualification requires an explicit system image manifest".to_string(),
+            );
+            return Err(report);
+        };
+        let Some(fixture_root) = vm_rootfs.parent() else {
+            let mut report = AgentVmSmokeReport::initial(HostPlatform::Windows);
+            report.reason = Some(format!(
+                "WHPX qualification runtime share has no fixture parent: {}",
+                vm_rootfs.display()
+            ));
+            return Err(report);
+        };
+        let bootstrap_root = fixture_root.join("bootstrap");
+        let runtime_share = vm_rootfs;
+        let bootstrap_root = match canonical_directory(&bootstrap_root, "WHPX bootstrap root").await
+        {
+            Ok(path) => path,
+            Err(reason) => {
+                let mut report = AgentVmSmokeReport::initial(HostPlatform::Windows);
+                report.reason = Some(reason);
+                return Err(report);
+            }
+        };
+        return UtilityVmSession::connect_with_separate_runtime_share(
+            shim,
+            &bootstrap_root,
+            Some(system_image_manifest),
+            runtime_share,
+            console,
+        )
+        .await;
+    }
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    {
+        let _ = state_root;
+        UtilityVmSession::connect(shim, vm_rootfs, system_image_manifest, console).await
+    }
+}
+
 async fn create_qualification_state_root(path: &Path) -> std::result::Result<(), String> {
     if path_exists(path).await? {
         return Err(format!(
@@ -2989,10 +3203,21 @@ async fn create_qualification_state_root(path: &Path) -> std::result::Result<(),
             path.display()
         )
     })?;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
-    if let Err(error) =
-        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await
-    {
+    #[cfg(unix)]
+    let protect = tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await;
+    #[cfg(windows)]
+    let protect = tokio::task::spawn_blocking({
+        let path = path.to_path_buf();
+        move || crate::windows_security::protect_path(&path)
+    })
+    .await
+    .map_err(|error| format!("failed to protect qualification state root task: {error}"))
+    .and_then(|result| result.map_err(|error| error.to_string()));
+    #[cfg(not(any(unix, windows)))]
+    let protect: Result<(), String> = Ok(());
+    if let Err(error) = protect {
         let cleanup = tokio::fs::remove_dir(path).await.err();
         return Err(format!(
             "failed to protect qualification state root {}: {error}{}",

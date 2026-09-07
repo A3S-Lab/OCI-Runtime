@@ -412,7 +412,7 @@ pub async fn oci_vm_reopen_replacement(
     .await
 }
 
-/// Resume one transport-interrupted durable create through a replacement macOS HVF owner.
+/// Resume one transport-interrupted durable create through a replacement utility-VM owner.
 ///
 /// The selected stage may be any Host- or Guest-side Create request/response
 /// transition. A fresh authenticated VM must recover or complete the original
@@ -426,7 +426,10 @@ pub async fn oci_vm_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    ))]
     {
         utility_vm::run_reopen_replacement(
             shim,
@@ -439,7 +442,10 @@ pub async fn oci_vm_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
     {
         let _ = (
             shim,
@@ -467,7 +473,10 @@ pub async fn oci_vm_state_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_state_reopen_replacement(
             shim,
@@ -480,7 +489,10 @@ pub async fn oci_vm_state_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -507,7 +519,10 @@ pub async fn oci_vm_start_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_start_reopen_replacement(
             shim,
@@ -520,7 +535,10 @@ pub async fn oci_vm_start_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -547,7 +565,10 @@ pub async fn oci_vm_kill_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_kill_reopen_replacement(
             shim,
@@ -560,7 +581,10 @@ pub async fn oci_vm_kill_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -588,7 +612,10 @@ pub async fn oci_vm_delete_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_delete_reopen_replacement(
             shim,
@@ -601,7 +628,10 @@ pub async fn oci_vm_delete_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -629,7 +659,10 @@ pub async fn oci_vm_wait_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_wait_reopen_replacement(
             shim,
@@ -642,7 +675,10 @@ pub async fn oci_vm_wait_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -670,7 +706,10 @@ pub async fn oci_vm_exec_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_exec_reopen_replacement(
             shim,
@@ -683,7 +722,10 @@ pub async fn oci_vm_exec_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -710,7 +752,10 @@ pub async fn oci_vm_signal_process_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_signal_process_reopen_replacement(
             shim,
@@ -723,7 +768,10 @@ pub async fn oci_vm_signal_process_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -753,7 +801,10 @@ pub async fn oci_vm_wait_process_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_wait_process_reopen_replacement(
             shim,
@@ -766,7 +817,10 @@ pub async fn oci_vm_wait_process_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -797,7 +851,10 @@ pub async fn oci_vm_pause_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_pause_reopen_replacement(
             shim,
@@ -810,7 +867,10 @@ pub async fn oci_vm_pause_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -837,7 +897,10 @@ pub async fn oci_vm_processes_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_processes_reopen_replacement(
             shim,
@@ -850,7 +913,10 @@ pub async fn oci_vm_processes_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -877,7 +943,10 @@ pub async fn oci_vm_read_output_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_read_output_reopen_replacement(
             shim,
@@ -890,7 +959,10 @@ pub async fn oci_vm_read_output_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -920,7 +992,10 @@ pub async fn oci_vm_write_stdin_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_write_stdin_reopen_replacement(
             shim,
@@ -933,7 +1008,10 @@ pub async fn oci_vm_write_stdin_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -963,7 +1041,10 @@ pub async fn oci_vm_close_stdin_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_close_stdin_reopen_replacement(
             shim,
@@ -976,7 +1057,10 @@ pub async fn oci_vm_close_stdin_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -1006,7 +1090,10 @@ pub async fn oci_vm_resize_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_resize_reopen_replacement(
             shim,
@@ -1019,7 +1106,10 @@ pub async fn oci_vm_resize_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -1046,7 +1136,10 @@ pub async fn oci_vm_file_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_file_reopen_replacement(
             shim,
@@ -1059,7 +1152,10 @@ pub async fn oci_vm_file_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -1086,7 +1182,10 @@ pub async fn oci_vm_filesystem_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_filesystem_reopen_replacement(
             shim,
@@ -1099,7 +1198,10 @@ pub async fn oci_vm_filesystem_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -1129,7 +1231,10 @@ pub async fn oci_vm_resume_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_resume_reopen_replacement(
             shim,
@@ -1142,7 +1247,10 @@ pub async fn oci_vm_resume_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -1169,7 +1277,10 @@ pub async fn oci_vm_stats_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_stats_reopen_replacement(
             shim,
@@ -1182,7 +1293,10 @@ pub async fn oci_vm_stats_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,
@@ -1210,7 +1324,10 @@ pub async fn oci_vm_update_reopen_replacement_at(
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     {
         utility_vm::run_update_reopen_replacement(
             shim,
@@ -1223,7 +1340,10 @@ pub async fn oci_vm_update_reopen_replacement_at(
         .await
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     {
         let _ = (
             shim,

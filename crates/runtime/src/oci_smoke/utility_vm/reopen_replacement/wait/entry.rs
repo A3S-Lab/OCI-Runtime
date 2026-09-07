@@ -18,6 +18,12 @@ pub(in crate::oci_smoke::utility_vm) async fn run(
         Ok(path) => path,
         Err(reason) => return failed(report, reason),
     };
+    let vm_rootfs =
+        match super::super::super::qualification_runtime_share(&vm_rootfs, &bundle_directory).await
+        {
+            Ok(path) => path,
+            Err(reason) => return failed(report, reason),
+        };
     let console_directory =
         match canonical_directory(console_directory, "qualification console directory").await {
             Ok(path) => path,

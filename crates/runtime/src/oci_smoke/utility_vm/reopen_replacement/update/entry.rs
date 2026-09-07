@@ -38,6 +38,12 @@ pub(in crate::oci_smoke::utility_vm) async fn run(
         Ok(path) => path,
         Err(reason) => return failed(report, reason),
     };
+    let vm_rootfs =
+        match super::super::super::qualification_runtime_share(&vm_rootfs, &bundle_directory).await
+        {
+            Ok(path) => path,
+            Err(reason) => return failed(report, reason),
+        };
     let console_directory =
         match canonical_directory(console_directory, "qualification console directory").await {
             Ok(path) => path,
@@ -148,7 +154,7 @@ pub(in crate::oci_smoke::utility_vm) async fn run(
         context: OperationContext::new(start_operation_id.clone()),
         target: exact_target.clone(),
     };
-    let update_resources = match resource_profile(HostPlatform::Macos) {
+    let update_resources = match resource_profile(HostPlatform::current()) {
         Ok(resources) => resources,
         Err(reason) => return failed(report, reason),
     };

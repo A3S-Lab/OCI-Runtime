@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use a3s_oci_agent_protocol::AgentWaitProcessRequest;
-use a3s_oci_core::{DriverKind, IsolationClass};
+use a3s_oci_core::IsolationClass;
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     DeleteMode, DeleteRequest, ErrorCode, ListRequest, OciRuntimeService, OperationContext,
@@ -22,7 +22,6 @@ use super::support::{
     SignalProcessJournalStatus,
 };
 use super::{FirstOwnerEvidence, Qualification, QualificationHvfDriver};
-use crate::agent_session::UtilityVmSession;
 use crate::host_cleanup::MacosHostCleanupTracker;
 use crate::{OciVmOperationReopenReplacementReport, RuntimeDriver};
 
@@ -37,10 +36,11 @@ pub(super) async fn run(
         crate::operation_reopen_replacement_report::wait_process::expected_wait_process_exit_status(
         );
     let cleanup = MacosHostCleanupTracker::capture();
-    let session = match UtilityVmSession::connect(
+    let session = match super::super::connect_replacement_qualification_session(
         &qualification.shim,
         &qualification.vm_rootfs,
         Some(&qualification.system_image_manifest),
+        &qualification.state_root,
         &qualification.replacement_console,
     )
     .await
@@ -123,7 +123,8 @@ pub(super) async fn run(
             let record = &records[0];
             if record.state.id() != qualification.create.id.as_str()
                 || qualification.start.target.generation != Some(record.generation)
-                || record.driver != DriverKind::LibkrunHvf
+                || record.driver
+                    != crate::oci_smoke::utility_vm::reopen_replacement::qualification_driver_kind()
                 || record.isolation != IsolationClass::DedicatedVm
                 || *record.state.status() != ContainerState::Running
                 || *record.state.pid() != report.replacement_created_pid

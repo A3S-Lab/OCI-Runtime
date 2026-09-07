@@ -59,6 +59,9 @@ mod filesystem_smoke;
 mod guest_isolation_report;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod host_cleanup;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+#[path = "windows_host_cleanup.rs"]
+mod host_cleanup;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod hvf_driver;
 #[cfg(all(
@@ -99,7 +102,11 @@ mod native_recovery_smoke;
 mod native_service;
 mod native_smoke;
 mod oci_smoke;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 mod operation_journal_evidence;
 mod operation_reopen_replacement_report;
 mod platform;

@@ -438,7 +438,7 @@ fn agent_vm_smoke_windows(
         environment.push((AGENT_RECOVERY_REPORT_ENV.to_string(), path.to_string()));
     }
     if let Some(request) = handoff.transport_qualification {
-        let encoded = match request.to_json() {
+        let encoded = match request.to_base64_handoff() {
             Ok(encoded) => encoded,
             Err(error) => {
                 report.reason = Some(error.to_string());
@@ -469,6 +469,15 @@ fn agent_vm_smoke_windows(
 
     std::env::set_var("LIBKRUN_WINDOWS_RETURN_ON_EXIT", "1");
     let enter_result = context.start_enter();
+    // libkrun's Windows init wrapper writes its bounded diagnostics below the
+    // bootstrap root.  Its host console file is still useful for firmware
+    // output, but does not receive those wrapper streams; merge the fixed
+    // guest logs so transport-qualification evidence remains observable to
+    // the owner after the VM exits.
+    if let Err(reason) = crate::windows_bootstrap_console::merge(&rootfs, console) {
+        report.reason = Some(reason);
+        return report;
+    }
     let handles_after = match current_process_handle_count() {
         Ok(count) => count,
         Err(reason) => {

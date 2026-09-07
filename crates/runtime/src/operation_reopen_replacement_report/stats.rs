@@ -8,7 +8,10 @@ use a3s_oci_agent_protocol::{AgentOperation, AgentTransportOperationStage};
     )
 ))]
 use a3s_oci_agent_protocol::{AgentTransportFaultPoint, AGENT_PROTOCOL_VERSION_MAX};
-#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(not(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+)))]
 use a3s_oci_core::CapabilityStatus;
 use a3s_oci_core::HostPlatform;
 
@@ -37,7 +40,10 @@ impl OciVmOperationReopenReplacementReport {
         report
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     pub(crate) fn unsupported_stats(
         platform: HostPlatform,
         requested_stage: AgentTransportOperationStage,
@@ -129,13 +135,19 @@ impl OciVmOperationReopenReplacementReport {
         ) {
             (false, None, Some(_)) => true,
             (true, Some(first), Some(replacement)) => {
-                replacement.timestamp_unix_ns > first.timestamp_unix_ns && replacement != first
+                // The timestamp is wall-clock data and may move backwards
+                // during owner replacement. Snapshot identity is established
+                // by the complete payload; target and generation binding are
+                // checked by `replacement_stats_are_bound` above.
+                replacement != first
             }
             _ => false,
         };
 
-        matches!(self.platform, HostPlatform::Macos | HostPlatform::Linux)
-            && self.first_vm.platform == self.platform
+        matches!(
+            self.platform,
+            HostPlatform::Macos | HostPlatform::Linux | HostPlatform::Windows
+        ) && self.first_vm.platform == self.platform
             && self.replacement_vm.platform == self.platform
             && self.bundle_loaded
             && self.requested_operation == AgentOperation::Stats
@@ -407,6 +419,23 @@ mod tests {
             }
             assert!(stage_report.is_success(), "{stage_report:?}");
         }
+
+        let mut clock_adjusted = report.clone();
+        clock_adjusted.requested_stage = AgentTransportOperationStage::GuestAfterResponseWrite;
+        clock_adjusted.injected_point = Some(format!(
+            "agent-v{AGENT_PROTOCOL_VERSION_MAX}.stats-guest-after-response-write"
+        ));
+        clock_adjusted.first_operation_response_received = true;
+        clock_adjusted.disconnect_probe_attempted = true;
+        clock_adjusted.first_operation_error_operation =
+            Some("read-agent-frame-header".to_string());
+        clock_adjusted.first_stats_snapshot = Some(stats_snapshot("reopen-stats", 2));
+        clock_adjusted.first_stats_verified = true;
+        clock_adjusted.guest_evidence_verified = true;
+        clock_adjusted.guest_evidence_operation_id =
+            clock_adjusted.qualification_operation_id.clone();
+        clock_adjusted.replacement_stats_snapshot = Some(stats_snapshot("reopen-stats", 1));
+        assert!(clock_adjusted.is_success(), "{clock_adjusted:?}");
 
         let mut linux_report = report.clone();
         linux_report.platform = HostPlatform::Linux;

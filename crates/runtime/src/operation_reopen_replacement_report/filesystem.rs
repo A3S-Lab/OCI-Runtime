@@ -2,7 +2,10 @@ use a3s_oci_agent_protocol::{
     AgentOperation, AgentTransportFaultPoint, AgentTransportOperationStage,
     AGENT_PROTOCOL_VERSION_MAX,
 };
-#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(not(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+)))]
 use a3s_oci_core::CapabilityStatus;
 use a3s_oci_core::HostPlatform;
 use a3s_oci_sdk::FilesystemOp;
@@ -26,7 +29,10 @@ impl OciVmOperationReopenReplacementReport {
         report
     }
 
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
     pub(crate) fn unsupported_filesystem(
         platform: HostPlatform,
         requested_stage: AgentTransportOperationStage,
@@ -76,8 +82,10 @@ impl OciVmOperationReopenReplacementReport {
             .is_some_and(|((filesystem, create), start)| {
                 filesystem != create && filesystem != start && create != start
             });
-        matches!(self.platform, HostPlatform::Macos | HostPlatform::Linux)
-            && self.first_vm.platform == self.platform
+        matches!(
+            self.platform,
+            HostPlatform::Macos | HostPlatform::Linux | HostPlatform::Windows
+        ) && self.first_vm.platform == self.platform
             && self.replacement_vm.platform == self.platform
             && self.bundle_loaded
             && self.requested_operation == AgentOperation::Filesystem

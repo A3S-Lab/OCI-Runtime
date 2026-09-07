@@ -1,10 +1,17 @@
 use a3s_oci_sdk::{Error, ErrorCode, OperationId, Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{AgentOperation, AgentTransportOperationStage};
 
 /// Guest environment key used only by the explicit real-VM qualification path.
 pub const AGENT_TRANSPORT_QUALIFICATION_ENV: &str = "A3S_OCI_AGENT_TRANSPORT_QUALIFICATION";
+/// Prefix used when a Windows libkrun kernel command line carries the request.
+///
+/// The Windows boot shim imports environment variables from the kernel command
+/// line. JSON quoting is not lossless through that parser, so the shim uses a
+/// URL-safe base64 value for this one handoff.
+const AGENT_TRANSPORT_QUALIFICATION_BASE64_PREFIX: &str = "base64:";
 /// Prefix that identifies one bounded qualification evidence line on the guest console.
 pub const AGENT_TRANSPORT_QUALIFICATION_EVIDENCE_PREFIX: &str =
     "A3S_OCI_AGENT_TRANSPORT_QUALIFICATION_EVIDENCE ";
@@ -19,6 +26,8 @@ pub const AGENT_TRANSPORT_QUALIFICATION_EVIDENCE_SCHEMA_VERSION: &str =
     "a3s.oci.agent-transport-qualification-evidence.v1";
 
 const MAX_QUALIFICATION_JSON_BYTES: usize = 1_024;
+const MAX_QUALIFICATION_HANDOFF_BYTES: usize = AGENT_TRANSPORT_QUALIFICATION_BASE64_PREFIX.len()
+    + MAX_QUALIFICATION_JSON_BYTES.div_ceil(3) * 4;
 
 /// One exact guest operation transition armed by a real-VM qualification run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +68,31 @@ impl AgentTransportQualificationRequest {
         Ok(request)
     }
 
+    /// Decode either the original JSON environment value or the base64 form
+    /// required by the Windows libkrun kernel-command-line bootstrap.
+    pub fn from_handoff(encoded: &str) -> Result<Self> {
+        if let Some(value) = encoded.strip_prefix(AGENT_TRANSPORT_QUALIFICATION_BASE64_PREFIX) {
+            if encoded.len() > MAX_QUALIFICATION_HANDOFF_BYTES {
+                return Err(qualification_error(format!(
+                    "guest transport qualification handoff exceeds {MAX_QUALIFICATION_HANDOFF_BYTES} bytes"
+                )));
+            }
+            let decoded = URL_SAFE_NO_PAD.decode(value).map_err(|error| {
+                qualification_error(format!(
+                    "guest transport qualification handoff is invalid base64: {error}"
+                ))
+            })?;
+            let decoded = std::str::from_utf8(&decoded).map_err(|error| {
+                qualification_error(format!(
+                    "guest transport qualification handoff is not valid UTF-8: {error}"
+                ))
+            })?;
+            Self::from_json(decoded)
+        } else {
+            Self::from_json(encoded)
+        }
+    }
+
     /// Encode the validated request for the dedicated shim/guest handoff.
     pub fn to_json(&self) -> Result<String> {
         self.validate()?;
@@ -67,6 +101,16 @@ impl AgentTransportQualificationRequest {
                 "failed to encode guest transport qualification request: {error}"
             ))
         })
+    }
+
+    /// Encode a quote-free value safe for the Windows libkrun kernel command
+    /// line. The Guest accepts this and the original JSON form.
+    pub fn to_base64_handoff(&self) -> Result<String> {
+        let encoded = self.to_json()?;
+        Ok(format!(
+            "{AGENT_TRANSPORT_QUALIFICATION_BASE64_PREFIX}{}",
+            URL_SAFE_NO_PAD.encode(encoded.as_bytes())
+        ))
     }
 
     /// Idempotency identity that must be present on the selected request.
@@ -257,6 +301,24 @@ mod tests {
             evidence.injected_point(),
             "agent-v9.create-guest-after-dispatch"
         );
+    }
+
+    #[test]
+    fn base64_handoff_round_trip_is_quote_free_and_bounded() {
+        let request = AgentTransportQualificationRequest::new(
+            OperationId::new("windows-kernel-command-line").expect("operation ID"),
+            AgentOperation::Create,
+            AgentTransportOperationStage::GuestBeforeDispatch,
+        )
+        .expect("qualification request");
+        let encoded = request.to_base64_handoff().expect("encode handoff");
+
+        assert!(!encoded.contains('"'));
+        assert_eq!(
+            AgentTransportQualificationRequest::from_handoff(&encoded).expect("decode handoff"),
+            request
+        );
+        assert!(AgentTransportQualificationRequest::from_handoff("base64:not_base64!").is_err());
     }
 
     #[test]
