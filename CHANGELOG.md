@@ -37,6 +37,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
   baseline, and final Windows handle inventories to restore exactly, without
   relying on process teardown.
 
+- Added Windows regression coverage for bounded bootstrap-console log merging
+  and the sibling `bootstrap` / `runtime-share` qualification layout, including
+  fail-closed rejection of missing runtime state and oversized diagnostics.
+
 - Pinned the Windows utility-VM shim through the process-creation boundary by
   retaining a no-follow handle with write/delete sharing disabled and comparing
   its kernel volume/file identity after canonicalization. A concurrent
