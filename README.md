@@ -653,6 +653,11 @@ host `a3s.oci.windows-whpx-soak.v2` run: 25/25 serial, 3/3 multi-container,
 This remains existing-host evidence; the fresh-host promotion gate is still
 explicit.
 
+The same merged current-host run passed the independent direct-driver and
+owner-death/service-recovery gates, including exact exit replay, both recovery
+fault boundaries, service reopen, stopped-only delete, and complete cleanup.
+These observations do not promote WHPX beyond `probe-only`.
+
 Windows WHPX guest handoff now carries an explicit `windows-virtiofs-acl-v1`
 metadata selector. The Linux Guest normalizes only virtio-fs's known synthetic
 `0755`/`0644` modes to its private `0700`/`0600` handoff contract through
