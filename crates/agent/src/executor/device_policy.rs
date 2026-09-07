@@ -225,6 +225,23 @@ impl DevicePolicyAuthority {
         }
     }
 
+    /// Restore same-UID procfs visibility after the setuid transition.
+    ///
+    /// Linux clears dumpability when credentials change, which makes
+    /// `/proc/<pid>/exe` unreadable even to the owning user. The runtime keeps
+    /// an executable identity record for crash recovery, so leave the
+    /// already-unprivileged owner inspectable before serving requests.
+    pub(super) fn restore_dumpability() -> Result<()> {
+        // SAFETY: PR_SET_DUMPABLE consumes one integer flag and zero padding.
+        if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 1, 0, 0, 0) } != 0 {
+            return Err(last_policy_error(
+                ErrorCode::PermissionDenied,
+                "restore rootless runtime procfs visibility",
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn install(
         &self,
         key: &str,
