@@ -3112,6 +3112,7 @@ pub(crate) async fn qualification_runtime_share(
     }
 }
 
+#[allow(clippy::result_large_err)]
 pub(super) async fn connect_first_qualification_session(
     shim: &Path,
     vm_rootfs: &Path,
@@ -3196,6 +3197,7 @@ pub(super) async fn connect_first_qualification_session(
     }
 }
 
+#[allow(clippy::result_large_err)]
 pub(super) async fn connect_replacement_qualification_session(
     shim: &Path,
     vm_rootfs: &Path,
