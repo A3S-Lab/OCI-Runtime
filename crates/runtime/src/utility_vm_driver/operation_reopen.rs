@@ -350,22 +350,26 @@ async fn exercise(
             }
         }
     } else {
-        let first_error =
-            match timeout(QUALIFICATION_TIMEOUT, first_service.create(request.clone())).await {
-                Ok(Err(error)) => error,
-                Ok(Ok(record)) => {
-                    drop(first_service);
-                    report.first_vm = first_driver.shutdown().await;
-                    return Err(format!(
+        let first_error = match timeout(
+            QUALIFICATION_TIMEOUT,
+            first_service.create(request.clone()),
+        )
+        .await
+        {
+            Ok(Err(error)) => error,
+            Ok(Ok(record)) => {
+                drop(first_service);
+                report.first_vm = first_driver.shutdown().await;
+                return Err(format!(
                         "first KVM Create unexpectedly returned success before owner replacement: {record:?}"
                     ));
-                }
-                Err(_) => {
-                    drop(first_service);
-                    report.first_vm = first_driver.shutdown().await;
-                    return Err("first KVM Create timed out".to_string());
-                }
-            };
+            }
+            Err(_) => {
+                drop(first_service);
+                report.first_vm = first_driver.shutdown().await;
+                return Err("first KVM Create timed out".to_string());
+            }
+        };
         if let Err(reason) = record_first_interruption(report, first_error, stage) {
             drop(first_service);
             report.first_vm = first_driver.shutdown().await;

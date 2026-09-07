@@ -1518,7 +1518,11 @@ mod tests {
         assert!(private_tree_owner_allowed(&file, file_uid, file_uid));
         // Guest agent euid 0 with virtiofs-remapped share owner.
         assert!(private_tree_owner_allowed(&file, file_uid, 0));
-        assert!(!private_tree_owner_allowed(&file, file_uid.wrapping_add(1), 0));
+        assert!(!private_tree_owner_allowed(
+            &file,
+            file_uid.wrapping_add(1),
+            0
+        ));
     }
 
     #[test]

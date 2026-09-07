@@ -96,24 +96,24 @@ impl From<FaultStageArg> for a3s_oci_runtime::AgentTransportFaultStage {
             FaultStageArg::GuestAfterRequestRead => Self::Operation(
                 a3s_oci_runtime::AgentTransportOperationStage::GuestAfterRequestRead,
             ),
-            FaultStageArg::GuestBeforeDispatch => Self::Operation(
-                a3s_oci_runtime::AgentTransportOperationStage::GuestBeforeDispatch,
-            ),
-            FaultStageArg::GuestAfterDispatch => Self::Operation(
-                a3s_oci_runtime::AgentTransportOperationStage::GuestAfterDispatch,
-            ),
+            FaultStageArg::GuestBeforeDispatch => {
+                Self::Operation(a3s_oci_runtime::AgentTransportOperationStage::GuestBeforeDispatch)
+            }
+            FaultStageArg::GuestAfterDispatch => {
+                Self::Operation(a3s_oci_runtime::AgentTransportOperationStage::GuestAfterDispatch)
+            }
             FaultStageArg::GuestBeforeResponseWrite => Self::Operation(
                 a3s_oci_runtime::AgentTransportOperationStage::GuestBeforeResponseWrite,
             ),
             FaultStageArg::GuestAfterResponseWrite => Self::Operation(
                 a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite,
             ),
-            FaultStageArg::HostBeforeShutdown => Self::Shutdown(
-                a3s_oci_runtime::AgentTransportShutdownStage::HostBeforeShutdown,
-            ),
-            FaultStageArg::HostAfterShutdown => Self::Shutdown(
-                a3s_oci_runtime::AgentTransportShutdownStage::HostAfterShutdown,
-            ),
+            FaultStageArg::HostBeforeShutdown => {
+                Self::Shutdown(a3s_oci_runtime::AgentTransportShutdownStage::HostBeforeShutdown)
+            }
+            FaultStageArg::HostAfterShutdown => {
+                Self::Shutdown(a3s_oci_runtime::AgentTransportShutdownStage::HostAfterShutdown)
+            }
         }
     }
 }
@@ -136,8 +136,7 @@ impl TryFrom<FaultStageArg> for a3s_oci_runtime::AgentTransportOperationStage {
 pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
     let succeeded = match arguments.operation {
         OperationArg::Create => {
-            let fault_stage =
-                a3s_oci_runtime::AgentTransportFaultStage::from(arguments.fault_at);
+            let fault_stage = a3s_oci_runtime::AgentTransportFaultStage::from(arguments.fault_at);
             let report = a3s_oci_runtime::oci_vm_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
@@ -155,273 +154,273 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let stage = a3s_oci_runtime::AgentTransportOperationStage::try_from(arguments.fault_at)
                 .map_err(super::CliError::Message)?;
             match operation {
-        OperationArg::Create => unreachable!("Create handled above"),
-        OperationArg::CloseStdin => {
-            let report = a3s_oci_runtime::oci_vm_close_stdin_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::Delete => {
-            let report = a3s_oci_runtime::oci_vm_delete_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::Exec => {
-            let report = a3s_oci_runtime::oci_vm_exec_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::File => {
-            let report = a3s_oci_runtime::oci_vm_file_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::Filesystem => {
-            let report = a3s_oci_runtime::oci_vm_filesystem_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::Kill => {
-            let report = a3s_oci_runtime::oci_vm_kill_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::Pause => {
-            let report = a3s_oci_runtime::oci_vm_pause_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::Processes => {
-            let report = a3s_oci_runtime::oci_vm_processes_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::ReadOutput => {
-            let report = a3s_oci_runtime::oci_vm_read_output_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::Resize => {
-            let report = a3s_oci_runtime::oci_vm_resize_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::Resume => {
-            let report = a3s_oci_runtime::oci_vm_resume_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::SignalProcess => {
-            let report = a3s_oci_runtime::oci_vm_signal_process_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::State => {
-            let report = a3s_oci_runtime::oci_vm_state_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::Start => {
-            let report = a3s_oci_runtime::oci_vm_start_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::Stats => {
-            let report = a3s_oci_runtime::oci_vm_stats_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::Update => {
-            let report = a3s_oci_runtime::oci_vm_update_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::Wait => {
-            let report = a3s_oci_runtime::oci_vm_wait_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::WaitProcess => {
-            let report = a3s_oci_runtime::oci_vm_wait_process_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
-        OperationArg::WriteStdin => {
-            let report = a3s_oci_runtime::oci_vm_write_stdin_reopen_replacement_at(
-                &arguments.shim,
-                &arguments.vm_rootfs,
-                &arguments.system_image_manifest,
-                &arguments.bundle,
-                &arguments.console_dir,
-                stage,
-            )
-            .await;
-            let succeeded = report.is_success();
-            super::write_json(&report)?;
-            succeeded
-        }
+                OperationArg::Create => unreachable!("Create handled above"),
+                OperationArg::CloseStdin => {
+                    let report = a3s_oci_runtime::oci_vm_close_stdin_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::Delete => {
+                    let report = a3s_oci_runtime::oci_vm_delete_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::Exec => {
+                    let report = a3s_oci_runtime::oci_vm_exec_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::File => {
+                    let report = a3s_oci_runtime::oci_vm_file_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::Filesystem => {
+                    let report = a3s_oci_runtime::oci_vm_filesystem_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::Kill => {
+                    let report = a3s_oci_runtime::oci_vm_kill_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::Pause => {
+                    let report = a3s_oci_runtime::oci_vm_pause_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::Processes => {
+                    let report = a3s_oci_runtime::oci_vm_processes_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::ReadOutput => {
+                    let report = a3s_oci_runtime::oci_vm_read_output_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::Resize => {
+                    let report = a3s_oci_runtime::oci_vm_resize_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::Resume => {
+                    let report = a3s_oci_runtime::oci_vm_resume_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::SignalProcess => {
+                    let report = a3s_oci_runtime::oci_vm_signal_process_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::State => {
+                    let report = a3s_oci_runtime::oci_vm_state_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::Start => {
+                    let report = a3s_oci_runtime::oci_vm_start_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::Stats => {
+                    let report = a3s_oci_runtime::oci_vm_stats_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::Update => {
+                    let report = a3s_oci_runtime::oci_vm_update_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::Wait => {
+                    let report = a3s_oci_runtime::oci_vm_wait_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::WaitProcess => {
+                    let report = a3s_oci_runtime::oci_vm_wait_process_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
+                OperationArg::WriteStdin => {
+                    let report = a3s_oci_runtime::oci_vm_write_stdin_reopen_replacement_at(
+                        &arguments.shim,
+                        &arguments.vm_rootfs,
+                        &arguments.system_image_manifest,
+                        &arguments.bundle,
+                        &arguments.console_dir,
+                        stage,
+                    )
+                    .await;
+                    let succeeded = report.is_success();
+                    super::write_json(&report)?;
+                    succeeded
+                }
             }
         }
     };

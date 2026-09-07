@@ -227,24 +227,24 @@ pub(super) async fn run(
         isolation: IsolationRequest::DedicatedVm,
         attachments,
     };
-    let guest_qualification = if let Some(operation_stage) = stage.operation().filter(|s| s.is_guest())
-    {
-        match AgentTransportQualificationRequest::new(
-            operation_id.clone(),
-            AgentOperation::Create,
-            operation_stage,
-        ) {
-            Ok(request) => Some(request),
-            Err(error) => {
-                return failed(
-                    report,
-                    format!("failed to construct Guest reopen qualification: {error}"),
-                );
+    let guest_qualification =
+        if let Some(operation_stage) = stage.operation().filter(|s| s.is_guest()) {
+            match AgentTransportQualificationRequest::new(
+                operation_id.clone(),
+                AgentOperation::Create,
+                operation_stage,
+            ) {
+                Ok(request) => Some(request),
+                Err(error) => {
+                    return failed(
+                        report,
+                        format!("failed to construct Guest reopen qualification: {error}"),
+                    );
+                }
             }
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
     report.qualification_operation_id = Some(operation_id);
     report.container_id = Some(exact_target.id.clone());
 
