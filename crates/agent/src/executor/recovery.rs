@@ -4,6 +4,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
+use a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT;
 use a3s_oci_sdk::{
     ContainerTarget, Error, ErrorCode, Result, CONTROL_CGROUP_NAME, WORKLOAD_CGROUP_NAME,
 };
@@ -1103,8 +1104,7 @@ fn ensure_private_directory(path: &Path, mode: u32) -> Result<()> {
             error,
         )
     })?;
-    // SAFETY: geteuid has no preconditions or failure result.
-    let uid = unsafe { libc::geteuid() };
+    let uid = durable_owner_uid(path)?;
     if !metadata.is_dir()
         || metadata.file_type().is_symlink()
         || metadata.uid() != uid
@@ -1119,6 +1119,42 @@ fn ensure_private_directory(path: &Path, mode: u32) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Owner identity for durable executor state.
+///
+/// Native host paths use the current effective UID. Paths under the utility-VM
+/// runtime share use the share root's owner instead: libkrun virtiofs remaps
+/// guest-root writes to the Host Service UID, so `geteuid()` (often 0 in the
+/// Guest Agent) does not match the on-disk owner.
+fn durable_owner_uid(path: &Path) -> Result<u32> {
+    durable_owner_uid_for(path, Path::new(AGENT_RUNTIME_SHARE_GUEST_ROOT))
+}
+
+fn durable_owner_uid_for(path: &Path, share_root: &Path) -> Result<u32> {
+    if path == share_root || path.starts_with(share_root) {
+        let metadata = std::fs::symlink_metadata(share_root).map_err(|error| {
+            recovery_io_error(
+                format!(
+                    "failed to inspect runtime share root {}: {error}",
+                    share_root.display()
+                ),
+                error,
+            )
+        })?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(recovery_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "runtime share root must be a real directory: {}",
+                    share_root.display()
+                ),
+            ));
+        }
+        return Ok(metadata.uid());
+    }
+    // SAFETY: geteuid has no preconditions or failure result.
+    Ok(unsafe { libc::geteuid() })
 }
 
 fn reject_symlinks_below(path: &Path) -> Result<()> {
@@ -1334,8 +1370,7 @@ fn read_bounded_plain_file(path: &Path, limit: u64) -> Result<Vec<u8>> {
             error,
         )
     })?;
-    // SAFETY: geteuid has no preconditions or failure result.
-    let uid = unsafe { libc::geteuid() };
+    let uid = durable_owner_uid(path)?;
     if !metadata.is_file()
         || metadata.file_type().is_symlink()
         || metadata.uid() != uid
@@ -1862,5 +1897,35 @@ mod tests {
                 init,
             }
         }
+    }
+
+    #[test]
+    fn durable_owner_uses_effective_uid_outside_the_runtime_share() {
+        let temporary = tempfile::tempdir().expect("temporary path");
+        let path = temporary.path().join("recovery.json");
+        std::fs::write(&path, "{}").expect("write recovery file");
+        let share_root = temporary.path().join("not-the-share");
+        std::fs::create_dir(&share_root).expect("create unused share root");
+        let uid = durable_owner_uid_for(&path, &share_root).expect("owner uid");
+        // SAFETY: geteuid has no preconditions or failure result.
+        assert_eq!(uid, unsafe { libc::geteuid() });
+    }
+
+    #[test]
+    fn durable_owner_uses_runtime_share_root_for_virtiofs_paths() {
+        let temporary = tempfile::tempdir().expect("temporary share");
+        let share_root = temporary.path().join("run-a3s-oci-runtime");
+        std::fs::create_dir(&share_root).expect("create share root");
+        std::fs::set_permissions(&share_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect share root");
+        let nested = share_root.join("run").join("a3s-oci-agent-1").join("c-1");
+        std::fs::create_dir_all(&nested).expect("create nested runtime path");
+        let path = nested.join("device-targets.json");
+        std::fs::write(&path, "{}").expect("write device targets");
+        let uid = durable_owner_uid_for(&path, &share_root).expect("share owner uid");
+        let share_uid = std::fs::symlink_metadata(&share_root)
+            .expect("share metadata")
+            .uid();
+        assert_eq!(uid, share_uid);
     }
 }
