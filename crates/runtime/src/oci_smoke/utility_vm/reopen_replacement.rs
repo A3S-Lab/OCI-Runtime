@@ -3144,7 +3144,7 @@ pub(super) async fn connect_first_qualification_session(
                 return Err(report);
             }
         };
-        return match guest_qualification {
+        match guest_qualification {
             Some(qualification) => {
                 UtilityVmSession::connect_with_separate_runtime_share_and_guest_qualification(
                     shim,
@@ -3167,7 +3167,7 @@ pub(super) async fn connect_first_qualification_session(
                 )
                 .await
             }
-        };
+        }
     }
     #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
     {
@@ -3234,14 +3234,14 @@ pub(super) async fn connect_replacement_qualification_session(
                 return Err(report);
             }
         };
-        return UtilityVmSession::connect_with_separate_runtime_share(
+        UtilityVmSession::connect_with_separate_runtime_share(
             shim,
             &bootstrap_root,
             Some(system_image_manifest),
             runtime_share,
             console,
         )
-        .await;
+        .await
     }
     #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
     {
