@@ -1600,12 +1600,15 @@ fn open_pinned_shim(path: &Path, description: &str) -> Result<PreparedShim, Stri
         ));
     }
 
-    let descriptor_root = if cfg!(target_os = "linux") {
-        "/proc/self/fd"
-    } else {
-        "/dev/fd"
-    };
-    let command_path = PathBuf::from(format!("{descriptor_root}/{}", file.as_raw_fd()));
+    #[cfg(target_os = "linux")]
+    let command_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+    // macOS GitHub runners reject exec through /dev/fd for O_RDONLY pins
+    // (EACCES). Keep the open descriptor to pin the inode, but spawn via
+    // the canonical path that Darwin still allows to execute.
+    #[cfg(target_os = "macos")]
+    let command_path = canonical.clone();
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let command_path = PathBuf::from(format!("/dev/fd/{}", file.as_raw_fd()));
     Ok(PreparedShim {
         command_path,
         display_path: canonical,
