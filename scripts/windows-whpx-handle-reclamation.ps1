@@ -42,12 +42,68 @@ function Write-JsonFile {
     [IO.File]::WriteAllText($Path, (ConvertTo-Json -InputObject $Value -Depth 16), $script:utf8NoBom)
 }
 
-function Join-QuotedArguments {
-    param([Parameter(Mandatory)] [string[]]$Arguments)
-    @($Arguments | ForEach-Object {
-        if ($_.Contains('"')) { throw "Native argument contains an unsupported quote: $_" }
-        '"{0}"' -f $_
-    }) -join ' '
+function ConvertTo-NativeArgument {
+    param([AllowEmptyString()] [Parameter(Mandatory)] [string]$Argument)
+    if ($Argument.Contains('"')) {
+        throw "Native argument contains an unsupported quote: $Argument"
+    }
+    if ($Argument.Length -eq 0 -or $Argument -match '\s') {
+        return '"' + $Argument + '"'
+    }
+    return $Argument
+}
+
+function Invoke-CapturedProcess {
+    param(
+        [Parameter(Mandatory)] [string]$FilePath,
+        [Parameter(Mandatory)] [string[]]$Arguments,
+        [Parameter(Mandatory)] [string]$StdoutPath,
+        [Parameter(Mandatory)] [string]$StderrPath,
+        [int]$TimeoutSeconds = 900
+    )
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $FilePath
+    $startInfo.Arguments = (
+        $Arguments | ForEach-Object { ConvertTo-NativeArgument -Argument $_ }
+    ) -join ' '
+    $startInfo.WorkingDirectory = $repositoryRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw "Failed to start native process: $FilePath"
+    }
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    $timedOut = $false
+    while (-not $process.WaitForExit(250)) {
+        if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            [void]$process.WaitForExit(5000)
+            $timedOut = $true
+            break
+        }
+    }
+    $stdout = $stdoutTask.GetAwaiter().GetResult()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
+    [IO.File]::WriteAllText($StdoutPath, $stdout, $script:utf8NoBom)
+    [IO.File]::WriteAllText($StderrPath, $stderr, $script:utf8NoBom)
+    $exitCode = $process.ExitCode
+    $process.Dispose()
+    if ($timedOut) {
+        throw "Timed out after $TimeoutSeconds seconds: $FilePath"
+    }
+    [pscustomobject]@{
+        ExitCode = $exitCode
+        Stdout = $stdout
+        Stderr = $stderr
+        DurationMs = [int]$timer.Elapsed.TotalMilliseconds
+    }
 }
 
 function Get-A3sOciProcesses {
@@ -125,13 +181,17 @@ try {
         '--runtime-share', $runtimeShare, '--console-directory', $consoleDirectory,
         '--iterations', $Iterations.ToString()
     )
-    $process = Start-Process -FilePath $shim -ArgumentList (Join-QuotedArguments $arguments) `
-        -RedirectStandardOutput $reportPath -RedirectStandardError $stderrPath -PassThru
-    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        $process.WaitForExit()
-        $failures.Add("shim exceeded the $TimeoutSeconds-second timeout")
-    } else { $shimExitCode = $process.ExitCode }
+    try {
+        $completed = Invoke-CapturedProcess `
+            -FilePath $shim `
+            -Arguments $arguments `
+            -StdoutPath $reportPath `
+            -StderrPath $stderrPath `
+            -TimeoutSeconds $TimeoutSeconds
+        $shimExitCode = $completed.ExitCode
+    } catch {
+        $failures.Add($_.Exception.Message)
+    }
 
     try { $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json }
     catch { $failures.Add("shim report is not valid JSON: $($_.Exception.Message)") }

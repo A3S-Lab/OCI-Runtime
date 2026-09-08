@@ -473,8 +473,24 @@ Completed:
 
 Not yet complete:
 
-- equivalent real-host utility-VM transport/reopen qualification for WHPX and
-  the KVM backend; the complete 180-path HVF matrix is retained;
+- equivalent fresh-host utility-VM transport/reopen qualification for WHPX and
+  the KVM backend; the complete 180-path HVF matrix is retained, WHPX has
+  existing-host 180/180 operation-stage plus 11/11 transport-fault/Host
+  shutdown evidence, and KVM Create durable reopen now covers all nine
+  operation stages plus both Host-shutdown stages under
+  `a3s.oci.oci-vm-reopen-replacement.v3` /
+  `a3s.oci.linux-kvm-create-reopen-matrix.v2` on existing WSL hosts (fresh-host
+  retained evidence and promotion remain open). Retained clean-checkout
+  evidence: source revision `9021b194dfcdd732cd199b68785db1d3a841edd9`,
+  matrix SHA-256
+  `0fb26ebac0ff05797851bf751bb8443d46a5ac4fdc8b91f91e8b380d281cd6d7`
+  (11/11 `available`, including `host-before-shutdown` and
+  `host-after-shutdown`). KVM Create durable reopen also
+  requires a system image whose guest agent accepts virtiofs-remapped
+  private-tree ownership for recovery files, and fixtures prepared with
+  `scripts/prepare-utility-vm-bundle.sh` (UID/GID maps bound to the extracting
+  owner). A stale agent image surfaces as Create/`device-targets.json`
+  `Permission denied` under virtiofs;
 - complete shared guest OCI executor;
 - a production workload driver;
 - OCI hook rollback, crash recovery, security-negative, and soak
@@ -1244,7 +1260,32 @@ enforce it. No property is silently ignored.
 - [ ] Repeat the retained real-host operation-stage and shutdown qualification
   on WHPX and the future KVM backend before promoting either driver's
   readiness. This is a per-driver release gate; it does not reopen the
-  protocol contract or the completed HVF matrix.
+  protocol contract or the completed HVF matrix. WHPX now has a focused
+  `scripts/windows-whpx-transport-fault-cleanup.ps1` entry for the shared
+  11-stage `oci-vm-transport-fault-cleanup` matrix (nine Create Host/Guest
+  stages plus both Host shutdown stages). Clean commit `35ed746` retained an
+  available existing-host summary
+  (`475143c36a07296e10910bba92b639d8bf3b2e5bb798f6839302b51873989b0b`) covering
+  all 11 stages. The same commit also retained an existing-host
+  `a3s.oci.windows-whpx-release-matrix.v1` observation run
+  (`b51fe030b2967122d9ad4bc78abe7bb210dd4d33b124f7dee1cc84bc6daf1bdc`,
+  `host_class=existing`, `promotes_readiness=false`) binding handle-reclamation,
+  driver/recovery smoke, transport-fault cleanup, soak, and 180-path
+  operation-reopen. Create reopen now also covers both Host shutdown stages
+  after a successful Create (`a3s.oci.oci-vm-reopen-replacement.v3`; full
+  matrix is 182 cases = 20×9 operation stages + Create's two Host-shutdown
+  stages). Existing-host focused Create evidence retained both
+  `host-before-shutdown` and `host-after-shutdown` as `available`
+  (`summary`
+  `4632cc6c68f3d837a59d98b379972d62b6168202945bbdbe56f1e75100d4c552`).
+  `-HostClass fresh` now also requires a digest-bound
+  `a3s.oci.windows-whpx-fresh-host-attestation.v1` operator attestation before
+  `promotes_readiness` can be set. Fresh-host WHPX evidence and the equivalent
+  KVM retained report are still required before this checklist item can close.
+  Linux KVM now has `linux-kvm-release-matrix.sh` with the same
+  `host_class=existing|fresh` and digest-bound
+  `a3s.oci.linux-kvm-fresh-host-attestation.v1` gate pattern as WHPX;
+  only `host_class=fresh` with attestation may set `promotes_readiness`.
 - [x] Implement all OCI hook phases with typed prestart, createRuntime,
   createContainer, startContainer, and poststart failure rollback, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
