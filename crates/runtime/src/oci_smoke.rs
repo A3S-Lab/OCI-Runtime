@@ -407,7 +407,7 @@ pub async fn oci_vm_reopen_replacement(
         system_image_manifest,
         bundle,
         console_directory,
-        AgentTransportOperationStage::HostBeforeRequestWrite,
+        AgentTransportOperationStage::HostBeforeRequestWrite.into(),
     )
     .await
 }
@@ -415,7 +415,8 @@ pub async fn oci_vm_reopen_replacement(
 /// Resume one transport-interrupted durable create through a replacement utility-VM owner.
 ///
 /// The selected stage may be any Host- or Guest-side Create request/response
-/// transition. A fresh authenticated VM must recover or complete the original
+/// transition, or either explicit Host-shutdown close after a successful
+/// Create. A fresh authenticated VM must recover or complete the original
 /// durable operation and generation after the first owner disconnects.
 #[must_use]
 pub async fn oci_vm_reopen_replacement_at(
@@ -424,7 +425,7 @@ pub async fn oci_vm_reopen_replacement_at(
     system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
-    stage: AgentTransportOperationStage,
+    stage: AgentTransportFaultStage,
 ) -> OciVmReopenReplacementReport {
     #[cfg(any(
         all(target_os = "windows", target_arch = "x86_64"),

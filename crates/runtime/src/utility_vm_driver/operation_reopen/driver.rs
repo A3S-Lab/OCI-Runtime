@@ -610,6 +610,23 @@ impl QualificationKvmOperationDriver {
         Ok(active)
     }
 
+    pub(super) async fn close_transport(&self) -> Result<()> {
+        let owner = self
+            .session
+            .lock()
+            .await
+            .as_ref()
+            .map(|active| Arc::clone(&active.owner));
+        let Some(owner) = owner else {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification KVM owner has no active transport to close",
+            )
+            .for_operation("qualification-kvm-close"));
+        };
+        owner.client().close().await
+    }
+
     pub(super) async fn shutdown(&self) -> AgentVmSmokeReport {
         // Keep the active owner published until its destructive shutdown has
         // completed.  If this caller is cancelled while the VM is being

@@ -129,7 +129,7 @@ runtime_dir="$binary_stage/a3s-oci-krun-runtime"
 
 provenance="$(
   linux_kvm_provenance \
-    linux-kvm-create-reopen-9-stage-v1 "$profile" \
+    linux-kvm-create-reopen-11-stage-v1 "$profile" \
     "$cli" "$shim" "$runtime_dir" \
     "$runtime_assets_manifest" \
     "$A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST"
@@ -156,13 +156,13 @@ if [[ "$kvm_status" == "unavailable" ]]; then
     --argjson kvm_driver "$kvm_driver" \
     --argjson provenance "$provenance" \
     '{
-      schema_version: "a3s.oci.linux-kvm-create-reopen-matrix.v1",
+      schema_version: "a3s.oci.linux-kvm-create-reopen-matrix.v2",
       platform: "linux",
       architecture: $architecture,
       status: "unavailable",
       kvm_required: true,
-      qualification_scope: "linux-kvm-operation-stage-reopen-only-v1",
-      expected_case_count: 9,
+      qualification_scope: "linux-kvm-create-reopen-11-stage-v1",
+      expected_case_count: 11,
       case_count: 0,
       system_image_manifest_sha256: $manifest_sha256,
       provenance: $provenance,
@@ -171,14 +171,14 @@ if [[ "$kvm_status" == "unavailable" ]]; then
       reason: $reason
     }' | tee "$report_path"
   jq --exit-status \
-    '.schema_version == "a3s.oci.linux-kvm-create-reopen-matrix.v1"
+    '.schema_version == "a3s.oci.linux-kvm-create-reopen-matrix.v2"
      and .platform == "linux" and .status == "unavailable"
      and .qualification_scope
-       == "linux-kvm-operation-stage-reopen-only-v1"
-     and .kvm_required and .expected_case_count == 9 and .case_count == 0
+       == "linux-kvm-create-reopen-11-stage-v1"
+     and .kvm_required and .expected_case_count == 11 and .case_count == 0
      and .provenance.schema_version == "a3s.oci.linux-kvm-provenance.v1"
      and .provenance.qualification_profile
-       == "linux-kvm-create-reopen-9-stage-v1"
+       == "linux-kvm-create-reopen-11-stage-v1"
      and .provenance.source_tree_clean
      and .kvm_driver.status == "unavailable"
      and .cases == [] and (.reason | length > 0)' \
@@ -232,6 +232,8 @@ stages=(
   guest-after-dispatch
   guest-before-response-write
   guest-after-response-write
+  host-before-shutdown
+  host-after-shutdown
 )
 
 run_stage() {
@@ -259,19 +261,31 @@ run_stage() {
     --arg stage "$stage" \
     --arg architecture "$architecture" \
     --arg manifest_sha256 "$manifest_sha256" \
-    '.schema_version == "a3s.oci.oci-vm-reopen-replacement.v2"
+    '.schema_version == "a3s.oci.oci-vm-reopen-replacement.v3"
      and .platform == "linux" and .status == "available"
      and .bundle_loaded and .requested_operation == "create"
      and .requested_stage == $stage
      and (.qualification_operation_id | startswith("kvm-reopen-"))
      and (.container_id | startswith("kvm-reopen-"))
      and .negotiated_protocol == 10
-     and .injected_point == ("agent-v10.create-" + $stage)
      and .fault_crossings == 1
      and .first_create_error_code == "unavailable"
      and .first_create_error_retryable
-     and (if ($stage | startswith("guest-")) then
-            (.first_create_error_operation
+     and (if ($stage | endswith("-shutdown")) then
+            .injected_point == ("agent-v10." + $stage)
+            and .first_create_error_operation
+              == "oci-vm-transport-qualification-fault"
+            and (.guest_evidence_verified | not)
+            and (.guest_evidence_operation_id == null)
+            and .first_create_response_received
+            and (.disconnect_probe_attempted | not)
+            and (.durable_creating_retained | not)
+            and .durable_created_retained
+            and (.first_created_pid > 0)
+            and .replacement_rehydrated_created_record
+          elif ($stage | startswith("guest-")) then
+            .injected_point == ("agent-v10.create-" + $stage)
+            and (.first_create_error_operation
              | IN("agent-protocol",
                   "read-agent-frame-header",
                   "read-agent-frame-payload",
@@ -281,21 +295,28 @@ run_stage() {
             and .guest_evidence_verified
             and (.guest_evidence_operation_id
                  == .qualification_operation_id)
+            and (if $stage == "guest-after-response-write" then
+                   (.first_create_response_received | not)
+                   and (.disconnect_probe_attempted | not)
+                   and (.durable_creating_retained | not)
+                   and .durable_created_retained
+                   and (.first_created_pid > 0)
+                   and .replacement_rehydrated_created_record
+                 else
+                   (.first_create_response_received | not)
+                   and (.disconnect_probe_attempted | not)
+                   and .durable_creating_retained
+                   and (.durable_created_retained | not)
+                   and (.first_created_pid == null)
+                   and (.replacement_rehydrated_created_record | not)
+                 end)
           else
-            .first_create_error_operation
+            .injected_point == ("agent-v10.create-" + $stage)
+            and .first_create_error_operation
               == "oci-vm-transport-qualification-fault"
             and (.guest_evidence_verified | not)
             and (.guest_evidence_operation_id == null)
-          end)
-     and (if $stage == "guest-after-response-write" then
-            (.first_create_response_received | not)
-            and (.disconnect_probe_attempted | not)
-            and (.durable_creating_retained | not)
-            and .durable_created_retained
-            and (.first_created_pid > 0)
-            and .replacement_rehydrated_created_record
-          else
-            (.first_create_response_received | not)
+            and (.first_create_response_received | not)
             and (.disconnect_probe_attempted | not)
             and .durable_creating_retained
             and (.durable_created_retained | not)
@@ -366,7 +387,7 @@ for stage in "${stages[@]}"; do
 done
 
 case_count="$(wc -l < "$cases_path")"
-test "$case_count" -eq 9
+test "$case_count" -eq 11
 jq --null-input \
   --arg architecture "$architecture" \
   --arg rootfs_archive_sha256 "$rootfs_archive_sha256" \
@@ -375,13 +396,13 @@ jq --null-input \
   --argjson provenance "$provenance" \
   --slurpfile cases "$cases_path" \
   '{
-    schema_version: "a3s.oci.linux-kvm-create-reopen-matrix.v1",
+    schema_version: "a3s.oci.linux-kvm-create-reopen-matrix.v2",
     platform: "linux",
     architecture: $architecture,
     status: "available",
     kvm_required: true,
-    qualification_scope: "linux-kvm-operation-stage-reopen-only-v1",
-    expected_case_count: 9,
+    qualification_scope: "linux-kvm-create-reopen-11-stage-v1",
+    expected_case_count: 11,
     case_count: ($cases | length),
     rootfs_archive_sha256: $rootfs_archive_sha256,
     system_image_manifest_sha256: $manifest_sha256,
@@ -392,23 +413,23 @@ jq --null-input \
   }' | tee "$report_path"
 
 jq --exit-status \
-  '.schema_version == "a3s.oci.linux-kvm-create-reopen-matrix.v1"
+  '.schema_version == "a3s.oci.linux-kvm-create-reopen-matrix.v2"
    and .platform == "linux" and .status == "available"
-   and .qualification_scope == "linux-kvm-operation-stage-reopen-only-v1"
-   and .kvm_required and .expected_case_count == 9 and .case_count == 9
+   and .qualification_scope == "linux-kvm-create-reopen-11-stage-v1"
+   and .kvm_required and .expected_case_count == 11 and .case_count == 11
    and .provenance.schema_version == "a3s.oci.linux-kvm-provenance.v1"
    and .provenance.platform == .platform
    and .provenance.architecture == .architecture
    and .provenance.qualification_profile
-     == "linux-kvm-create-reopen-9-stage-v1"
+     == "linux-kvm-create-reopen-11-stage-v1"
    and .provenance.driver == "libkrun-kvm"
    and .provenance.isolation == "dedicated-vm"
    and .provenance.source_tree_clean
    and .provenance.system_image_manifest_sha256
      == .system_image_manifest_sha256
    and .kvm_driver.status == "available"
-   and ([.cases[].stage] | length) == 9
-   and ([.cases[].stage] | unique | length) == 9
+   and ([.cases[].stage] | length) == 11
+   and ([.cases[].stage] | unique | length) == 11
    and all(.cases[];
      .status == "available"
      and .report.status == "available"

@@ -483,9 +483,11 @@ share nor a launchable VM attachment.
 The Host also pins the Unix libkrun shim itself at the fork/exec boundary. It
 opens the requested regular file with no-follow semantics, compares the
 requested and canonical directory entries with the retained device/inode, and
-executes the retained descriptor through `/proc/self/fd/<n>` on Linux or
-`/dev/fd/<n>` on macOS. Replacing the shim path after validation therefore
-cannot redirect the process that receives the authenticated session token.
+executes the retained descriptor through `/proc/self/fd/<n>` on Linux. On
+macOS, Darwin rejects exec through `/dev/fd/<n>` for `O_RDONLY` pins (`EACCES`),
+so the Host keeps the open inode pin and spawns through the canonical path
+instead. On Linux, replacing the shim path after validation therefore cannot
+redirect the process that receives the authenticated session token.
 
 On Windows, the Host retains a no-follow executable handle with write/delete
 sharing disabled until `CreateProcess` has resolved the image, and compares its

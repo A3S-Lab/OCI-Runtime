@@ -119,7 +119,7 @@ pub(super) async fn run(
     system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
-    stage: AgentTransportOperationStage,
+    stage: AgentTransportFaultStage,
 ) -> OciVmReopenReplacementReport {
     let mut report = OciVmReopenReplacementReport::initial(HostPlatform::current(), stage);
     let vm_rootfs = match canonical_directory(vm_rootfs, "VM rootfs").await {
@@ -227,23 +227,24 @@ pub(super) async fn run(
         isolation: IsolationRequest::DedicatedVm,
         attachments,
     };
-    let guest_qualification = if stage.is_guest() {
-        match AgentTransportQualificationRequest::new(
-            operation_id.clone(),
-            AgentOperation::Create,
-            stage,
-        ) {
-            Ok(request) => Some(request),
-            Err(error) => {
-                return failed(
-                    report,
-                    format!("failed to construct Guest reopen qualification: {error}"),
-                );
+    let guest_qualification =
+        if let Some(operation_stage) = stage.operation().filter(|s| s.is_guest()) {
+            match AgentTransportQualificationRequest::new(
+                operation_id.clone(),
+                AgentOperation::Create,
+                operation_stage,
+            ) {
+                Ok(request) => Some(request),
+                Err(error) => {
+                    return failed(
+                        report,
+                        format!("failed to construct Guest reopen qualification: {error}"),
+                    );
+                }
             }
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
     report.qualification_operation_id = Some(operation_id);
     report.container_id = Some(exact_target.id.clone());
 
@@ -328,13 +329,11 @@ async fn exercise(
     request: &CreateRequest,
     delete_operation_id: &OperationId,
     baseline_runtime_entries: &std::collections::BTreeSet<String>,
-    stage: AgentTransportOperationStage,
+    stage: AgentTransportFaultStage,
     guest_qualification: Option<&AgentTransportQualificationRequest>,
     report: &mut OciVmReopenReplacementReport,
 ) -> std::result::Result<(), String> {
-    let faults = Arc::new(HostTransportFault::new(AgentTransportFaultStage::from(
-        stage,
-    )));
+    let faults = Arc::new(HostTransportFault::new(stage));
     let first_cleanup = MacosHostCleanupTracker::capture();
     let first_session_result = connect_first_qualification_session(
         shim,
@@ -379,25 +378,84 @@ async fn exercise(
         }
     };
 
-    let response_delivered = matches!(stage, AgentTransportOperationStage::GuestAfterResponseWrite);
+    let response_delivered = matches!(
+        stage,
+        AgentTransportFaultStage::Operation(AgentTransportOperationStage::GuestAfterResponseWrite)
+    );
+    let host_shutdown = stage.shutdown().is_some();
+    let retain_created = response_delivered || host_shutdown;
     let mut first_failure = None;
-    match timeout(QUALIFICATION_TIMEOUT, first_service.create(request.clone())).await {
-        Ok(Err(error)) => {
-            if let Err(reason) = record_first_interruption(report, error, stage) {
-                append_failure(&mut first_failure, reason);
+    if host_shutdown {
+        match timeout(QUALIFICATION_TIMEOUT, first_service.create(request.clone())).await {
+            Ok(Ok(record)) => {
+                if *record.state.status() != ContainerState::Created {
+                    append_failure(
+                        &mut first_failure,
+                        format!(
+                            "Host-shutdown setup Create retained unexpected state {}",
+                            record.state.status()
+                        ),
+                    );
+                } else {
+                    report.first_create_response_received = true;
+                }
+            }
+            Ok(Err(error)) => append_failure(
+                &mut first_failure,
+                format!(
+                    "{} setup Create returned an unexpected error: {error}",
+                    stage.as_str()
+                ),
+            ),
+            Err(_) => append_failure(
+                &mut first_failure,
+                format!(
+                    "{} setup Create exceeded the {} second timeout",
+                    stage.as_str(),
+                    QUALIFICATION_TIMEOUT.as_secs()
+                ),
+            ),
+        }
+        if first_failure.is_none() {
+            match timeout(QUALIFICATION_TIMEOUT, first_session.client().close()).await {
+                Ok(Err(error)) => {
+                    if let Err(reason) = record_first_interruption(report, error, stage) {
+                        append_failure(&mut first_failure, reason);
+                    }
+                }
+                Ok(Ok(())) => append_failure(
+                    &mut first_failure,
+                    format!("{} close unexpectedly returned success", stage.as_str()),
+                ),
+                Err(_) => append_failure(
+                    &mut first_failure,
+                    format!(
+                        "{} close exceeded the {} second timeout",
+                        stage.as_str(),
+                        QUALIFICATION_TIMEOUT.as_secs()
+                    ),
+                ),
             }
         }
-        Ok(Ok(record)) => append_failure(
-            &mut first_failure,
-            format!("first Create unexpectedly completed before owner replacement: {record:?}"),
-        ),
-        Err(_) => append_failure(
-            &mut first_failure,
-            format!(
-                "first create exceeded the {} second timeout",
-                QUALIFICATION_TIMEOUT.as_secs()
+    } else {
+        match timeout(QUALIFICATION_TIMEOUT, first_service.create(request.clone())).await {
+            Ok(Err(error)) => {
+                if let Err(reason) = record_first_interruption(report, error, stage) {
+                    append_failure(&mut first_failure, reason);
+                }
+            }
+            Ok(Ok(record)) => append_failure(
+                &mut first_failure,
+                format!("first Create unexpectedly completed before owner replacement: {record:?}"),
             ),
-        ),
+            Err(_) => append_failure(
+                &mut first_failure,
+                format!(
+                    "first create exceeded the {} second timeout",
+                    QUALIFICATION_TIMEOUT.as_secs()
+                ),
+            ),
+        }
     }
     if stage.is_host() {
         report.negotiated_protocol = faults.protocol_version();
@@ -419,7 +477,7 @@ async fn exercise(
             if report.durable_created_retained {
                 report.first_created_pid = *record.state.pid();
             }
-            let expected_record_retained = if response_delivered {
+            let expected_record_retained = if retain_created {
                 report.durable_created_retained
             } else {
                 report.durable_creating_retained
@@ -430,7 +488,7 @@ async fn exercise(
                     format!(
                         "interrupted create retained {} instead of the exact durable {} record",
                         record.state.status(),
-                        if response_delivered {
+                        if retain_created {
                             "created"
                         } else {
                             "creating"
@@ -468,9 +526,9 @@ async fn exercise(
         )
         .await
         {
-            Ok(ContainerOperationJournalStatus::Prepared) if !response_delivered => {}
+            Ok(ContainerOperationJournalStatus::Prepared) if !retain_created => {}
             Ok(ContainerOperationJournalStatus::Succeeded(response))
-                if response_delivered && response.as_ref() == record => {}
+                if retain_created && response.as_ref() == record => {}
             Ok(ContainerOperationJournalStatus::Prepared) => append_failure(
                 &mut first_failure,
                 "completed Create response left its Host journal prepared",
@@ -3054,6 +3112,7 @@ pub(crate) async fn qualification_runtime_share(
     }
 }
 
+#[allow(clippy::result_large_err)]
 pub(super) async fn connect_first_qualification_session(
     shim: &Path,
     vm_rootfs: &Path,
@@ -3085,7 +3144,7 @@ pub(super) async fn connect_first_qualification_session(
                 return Err(report);
             }
         };
-        return match guest_qualification {
+        match guest_qualification {
             Some(qualification) => {
                 UtilityVmSession::connect_with_separate_runtime_share_and_guest_qualification(
                     shim,
@@ -3108,7 +3167,7 @@ pub(super) async fn connect_first_qualification_session(
                 )
                 .await
             }
-        };
+        }
     }
     #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
     {
@@ -3138,6 +3197,7 @@ pub(super) async fn connect_first_qualification_session(
     }
 }
 
+#[allow(clippy::result_large_err)]
 pub(super) async fn connect_replacement_qualification_session(
     shim: &Path,
     vm_rootfs: &Path,
@@ -3174,14 +3234,14 @@ pub(super) async fn connect_replacement_qualification_session(
                 return Err(report);
             }
         };
-        return UtilityVmSession::connect_with_separate_runtime_share(
+        UtilityVmSession::connect_with_separate_runtime_share(
             shim,
             &bootstrap_root,
             Some(system_image_manifest),
             runtime_share,
             console,
         )
-        .await;
+        .await
     }
     #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
     {
@@ -3252,7 +3312,7 @@ fn owner_identities_are_distinct(
 fn record_first_interruption(
     report: &mut OciVmReopenReplacementReport,
     error: Error,
-    stage: AgentTransportOperationStage,
+    stage: AgentTransportFaultStage,
 ) -> std::result::Result<(), String> {
     report.first_create_error_code = Some(error.code);
     report.first_create_error_operation = error.operation.clone();

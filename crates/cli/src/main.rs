@@ -339,9 +339,9 @@ enum Command {
         /// Source OCI bundle copied into the protected runtime handoff.
         #[arg(long, value_name = "DIR")]
         bundle: PathBuf,
-        /// Exact Host- or Guest-side Create transition to interrupt.
+        /// Exact Host/Guest Create transition or Host-shutdown close after Create.
         #[arg(long, value_enum)]
-        fault_at: reopen_replacement::FaultStageArg,
+        fault_at: TransportFaultStageArg,
     },
     /// Qualify all Host/Guest State interruption stages through real KVM owners.
     #[cfg(all(
@@ -1377,6 +1377,8 @@ impl From<TransportFaultStageArg> for a3s_oci_runtime::AgentTransportFaultStage 
 
 #[derive(Debug, Error)]
 enum CliError {
+    #[error("{0}")]
+    Message(String),
     #[error("runtime request failed: {0}")]
     Runtime(#[from] a3s_oci_sdk::Error),
     #[error("failed to serialize command output: {0}")]
