@@ -1467,6 +1467,11 @@ fn cli_main() -> ExitCode {
             ..
         } => Some(delegated_cgroup_root.as_path()),
         #[cfg(target_os = "linux")]
+        Command::NativeLinuxHostService {
+            delegated_cgroup_root: Some(delegated_cgroup_root),
+            ..
+        } => Some(delegated_cgroup_root.as_path()),
+        #[cfg(target_os = "linux")]
         Command::NativeLinuxRootlessDevicePolicySmoke {
             delegated_cgroup_root,
             ..

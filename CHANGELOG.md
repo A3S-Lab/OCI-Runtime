@@ -25,6 +25,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- `native-linux-host-service` with `--delegated-cgroup-root` now completes the
+  same rootless device-policy bootstrap as `native-linux-service` before Tokio
+  starts. Sandbox creates through the durable multi-container host owner retain
+  the parent-bound device helper instead of failing closed on device preparation.
+
 ### Added
 
 - Added a Windows WHPX operation-reopen qualification runner covering all 20

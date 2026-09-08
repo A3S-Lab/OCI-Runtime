@@ -270,6 +270,19 @@ pub struct NativeLinuxHostService {
 impl NativeLinuxHostService {
     /// Open the native driver and durable host state before publishing the socket.
     pub async fn bind(config: NativeLinuxHostServiceConfig) -> Result<Self> {
+        Self::bind_with_rootless_device_policy(config, None).await
+    }
+
+    /// Open the host service after a privileged rootless device-policy bootstrap.
+    ///
+    /// Sandbox creates need the parent-bound device helper. Callers that supply
+    /// `--delegated-cgroup-root` should complete [`RootlessDevicePolicyBootstrap`]
+    /// before Tokio starts (non-root real UID/GID with effective root), then pass
+    /// the handle here. Construction keeps only the helper privileged.
+    pub async fn bind_with_rootless_device_policy(
+        config: NativeLinuxHostServiceConfig,
+        bootstrap: Option<RootlessDevicePolicyBootstrap>,
+    ) -> Result<Self> {
         prepare_private_directory(&config.root, "native host service root").await?;
         prepare_private_directory(&config.state_root(), "native host service state root").await?;
         prepare_private_directory(
@@ -278,22 +291,32 @@ impl NativeLinuxHostService {
         )
         .await?;
 
-        let driver = Arc::new(match config.delegated_cgroup_root.as_deref() {
-            Some(root) => {
-                NativeLinuxDriver::open_experimental_with_rootless_cgroup_delegation(
+        let driver = Arc::new(match bootstrap {
+            Some(bootstrap) => {
+                NativeLinuxDriver::open_experimental_with_rootless_device_policy(
                     config.executor_parent(),
                     &config.init_executable,
-                    root,
+                    bootstrap,
                 )
                 .await?
             }
-            None => {
-                NativeLinuxDriver::open_experimental(
-                    config.executor_parent(),
-                    &config.init_executable,
-                )
-                .await?
-            }
+            None => match config.delegated_cgroup_root.as_deref() {
+                Some(root) => {
+                    NativeLinuxDriver::open_experimental_with_rootless_cgroup_delegation(
+                        config.executor_parent(),
+                        &config.init_executable,
+                        root,
+                    )
+                    .await?
+                }
+                None => {
+                    NativeLinuxDriver::open_experimental(
+                        config.executor_parent(),
+                        &config.init_executable,
+                    )
+                    .await?
+                }
+            },
         });
         let runtime_driver: Arc<dyn RuntimeDriver> = driver.clone();
         let service = match HostRuntimeService::open(config.state_root(), runtime_driver).await {
