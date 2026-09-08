@@ -169,11 +169,14 @@ impl PinnedCurrentExecutable {
         }
 
         #[cfg(target_os = "linux")]
-        let descriptor_root = "/proc/self/fd";
+        let command_path = Path::new("/proc/self/fd").join(file.as_raw_fd().to_string());
+        // macOS GitHub runners reject exec through /dev/fd for O_RDONLY pins
+        // (EACCES). Keep the open descriptor to pin the inode, but spawn via
+        // the canonical path that Darwin still allows to execute.
         #[cfg(target_os = "macos")]
-        let descriptor_root = "/dev/fd";
+        let command_path = canonical;
         Ok(Self {
-            command_path: Path::new(descriptor_root).join(file.as_raw_fd().to_string()),
+            command_path,
             _file: file,
         })
     }
@@ -638,7 +641,7 @@ mod tests {
         #[cfg(target_os = "linux")]
         assert!(pinned.command_path().starts_with("/proc/self/fd/"));
         #[cfg(target_os = "macos")]
-        assert!(pinned.command_path().starts_with("/dev/fd/"));
+        assert!(!pinned.command_path().starts_with("/dev/fd/"));
 
         let status = Command::new(pinned.command_path())
             .arg("--list")
