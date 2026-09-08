@@ -1,7 +1,7 @@
 #[cfg(any(unix, windows))]
 use std::fs;
 use std::io;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
