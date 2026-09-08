@@ -8,7 +8,10 @@ use crate::unix_service::{
     combine_service_and_cleanup, prepare_private_directory, validate_absolute_normalized_path,
     validate_unix_socket_path, UnixServiceEndpoint, SERVICE_SOCKET_NAME,
 };
-use crate::{HostRuntimeService, NativeControlDescriptors, NativeLinuxDriver, RuntimeDriver};
+use crate::{
+    HostRuntimeService, NativeControlDescriptors, NativeLinuxDriver, RootlessDevicePolicyBootstrap,
+    RuntimeDriver,
+};
 
 const STATE_DIRECTORY_NAME: &str = "state";
 const EXECUTOR_DIRECTORY_NAME: &str = "executor";
@@ -19,6 +22,7 @@ pub struct NativeLinuxServiceConfig {
     root: PathBuf,
     init_executable: PathBuf,
     container_id: ContainerId,
+    delegated_cgroup_root: Option<PathBuf>,
 }
 
 /// Filesystem contract for one long-lived, multi-container native Linux owner.
@@ -26,6 +30,7 @@ pub struct NativeLinuxServiceConfig {
 pub struct NativeLinuxHostServiceConfig {
     root: PathBuf,
     init_executable: PathBuf,
+    delegated_cgroup_root: Option<PathBuf>,
 }
 
 impl NativeLinuxHostServiceConfig {
@@ -42,7 +47,17 @@ impl NativeLinuxHostServiceConfig {
         Ok(Self {
             root,
             init_executable,
+            delegated_cgroup_root: None,
         })
+    }
+
+    /// Supply the explicit user-owned cgroup root required by rootless
+    /// device isolation.
+    pub fn with_delegated_cgroup_root(mut self, root: impl Into<PathBuf>) -> Result<Self> {
+        let root = root.into();
+        validate_absolute_normalized_path(&root, "native delegated cgroup root")?;
+        self.delegated_cgroup_root = Some(root);
+        Ok(self)
     }
 
     /// Private root containing the endpoint, durable state, and executor root.
@@ -82,7 +97,17 @@ impl NativeLinuxServiceConfig {
             root,
             init_executable,
             container_id,
+            delegated_cgroup_root: None,
         })
+    }
+
+    /// Supply the explicit user-owned cgroup root required by rootless
+    /// device isolation.
+    pub fn with_delegated_cgroup_root(mut self, root: impl Into<PathBuf>) -> Result<Self> {
+        let root = root.into();
+        validate_absolute_normalized_path(&root, "native delegated cgroup root")?;
+        self.delegated_cgroup_root = Some(root);
+        Ok(self)
     }
 
     /// Private root containing the endpoint, durable state, and executor root.
@@ -129,15 +154,56 @@ impl NativeLinuxService {
         config: NativeLinuxServiceConfig,
         descriptors: NativeControlDescriptors,
     ) -> Result<Self> {
+        Self::bind_inner(config, descriptors, None).await
+    }
+
+    /// Prepare one native Linux service after a privileged rootless device
+    /// policy bootstrap has been completed by the CLI launcher.
+    pub async fn bind_with_rootless_device_policy(
+        config: NativeLinuxServiceConfig,
+        descriptors: NativeControlDescriptors,
+        bootstrap: Option<RootlessDevicePolicyBootstrap>,
+    ) -> Result<Self> {
+        Self::bind_inner(config, descriptors, bootstrap).await
+    }
+
+    async fn bind_inner(
+        config: NativeLinuxServiceConfig,
+        descriptors: NativeControlDescriptors,
+        bootstrap: Option<RootlessDevicePolicyBootstrap>,
+    ) -> Result<Self> {
         prepare_private_directory(&config.root, "native service root").await?;
         prepare_private_directory(&config.state_root(), "native service state root").await?;
         prepare_private_directory(&config.executor_parent(), "native service executor parent")
             .await?;
 
-        let driver = Arc::new(
-            NativeLinuxDriver::open_experimental(config.executor_parent(), &config.init_executable)
-                .await?,
-        );
+        let driver = Arc::new(match bootstrap {
+            Some(bootstrap) => {
+                NativeLinuxDriver::open_experimental_with_rootless_device_policy(
+                    config.executor_parent(),
+                    &config.init_executable,
+                    bootstrap,
+                )
+                .await?
+            }
+            None => match config.delegated_cgroup_root.as_deref() {
+                Some(root) => {
+                    NativeLinuxDriver::open_experimental_with_rootless_cgroup_delegation(
+                        config.executor_parent(),
+                        &config.init_executable,
+                        root,
+                    )
+                    .await?
+                }
+                None => {
+                    NativeLinuxDriver::open_experimental(
+                        config.executor_parent(),
+                        &config.init_executable,
+                    )
+                    .await?
+                }
+            },
+        });
         let runtime_driver: Arc<dyn RuntimeDriver> = driver.clone();
         let service = match HostRuntimeService::open_with_native_control_descriptors(
             config.state_root(),
@@ -212,10 +278,23 @@ impl NativeLinuxHostService {
         )
         .await?;
 
-        let driver = Arc::new(
-            NativeLinuxDriver::open_experimental(config.executor_parent(), &config.init_executable)
-                .await?,
-        );
+        let driver = Arc::new(match config.delegated_cgroup_root.as_deref() {
+            Some(root) => {
+                NativeLinuxDriver::open_experimental_with_rootless_cgroup_delegation(
+                    config.executor_parent(),
+                    &config.init_executable,
+                    root,
+                )
+                .await?
+            }
+            None => {
+                NativeLinuxDriver::open_experimental(
+                    config.executor_parent(),
+                    &config.init_executable,
+                )
+                .await?
+            }
+        });
         let runtime_driver: Arc<dyn RuntimeDriver> = driver.clone();
         let service = match HostRuntimeService::open(config.state_root(), runtime_driver).await {
             Ok(service) => Arc::new(service),

@@ -129,6 +129,7 @@ impl RootlessDevicePolicyBootstrap {
             let _ = authority.shutdown();
             return Err(error);
         }
+        device_policy::DevicePolicyAuthority::restore_dumpability()?;
         delegation.install_device_policy_authority(authority)?;
         Ok(Self {
             delegation,

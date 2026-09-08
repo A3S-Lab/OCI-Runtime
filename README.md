@@ -2,6 +2,13 @@
   <img src="assets/readme/hero.svg" width="100%" alt="A3S OCI Runtime binds each container to an exact generation, durable lifecycle, and evidence-gated execution driver">
 </p>
 
+
+<p align="center">
+  <strong>Language / 语言:</strong>
+  <a href="README.md">English</a> ·
+  <a href="README.zh-CN.md">中文</a>
+</p>
+
 <p align="center">
   <strong>The low-level execution plane for A3S: official OCI types, durable lifecycle replay, and one reviewed Linux executor across native and utility-VM paths.</strong>
 </p>
@@ -621,7 +628,7 @@ reattachment remains open for the Box B2 cutover.
 | Host path | Retained real evidence | Current readiness and open gate |
 | --- | --- | --- |
 | Native Linux x86_64/aarch64 | Rootful and helper-backed rootless lifecycle, including all six OCI default devices, `/dev/ptmx`, configured-init `/dev/console`, an explicit FIFO outside `/dev`, the immutable declared/default device boundary, and the bounded A3S Box device policy; SDK service transport; exec/PTY/I/O; init/exec scheduler and namespaced-sysctl read-back; cgroup update/stats; hooks; namespace and mount profiles; multi-container fencing; fault cleanup; owner-`SIGKILL` safe termination and stopped cleanup; exact `startContainer` Hook owner-death process-group cleanup and replacement recovery; 25 waves × 4 containers; x86_64/aarch64 installed Box production-owner composition through all four SDKs with `/dev/kvm` absent and inaccessible, plus fresh-Box-process owner-death/restart gates | Default inventory `probe-only`; explicitly opened development driver `experimental`. Live session reattachment, default cutover, production security, and OCI conformance remain |
-| Linux KVM utility VM | Independent device/access/ioctl/API-version probes; deterministic x86_64 and AArch64 runtime archives and immutable ext4 roots; exact libkrun, firmware, exported kernel, and static Guest Agent compatibility sets; descriptor-pinned read-only root attachment; isolated create/configure/root/plain-vsock/release context gates; an isolated real-entry worker with descriptor-pinned KVM and runtime-share checks, parent-to-worker device/inode identity binding, pidfd owner death, kernel-authenticated Unix peer identity, protocol-v10 negotiation, and fail-closed cleanup evidence when KVM is unavailable. Both architecture lanes retain the 14-case pre-entry compatibility-drift matrix and invoke a KVM-gated 17-case lifecycle matrix. Its versioned ten-case Guest path-isolation entry checks traversal, symbolic-link, and magic-link escapes; focused regressions also swap bundle, rootfs, and bind-source entries after descriptor validation. The lanes also invoke a scoped owner-death/restart gate, a scoped 25-wave fresh-generation soak, and nine-stage Create, State, Start, Kill, Delete, Wait, Exec, SignalProcess, WaitProcess, Pause, Resume, Processes, Update, Stats, ReadOutput, WriteStdin, CloseStdin, Resize, File, and Filesystem owner-replacement gates. A KVM-independent driver preflight rejects both shared-kernel classes, inexact generations, missing handoff ownership, and missing, linked, non-private, drifted, escaping-rootfs, or absolute-bind handoffs before creating a Guest-visible generation share. The soak audits generation fencing and replay plus per-wave process, marker, endpoint, descriptor, bundle-handoff, runtime-share, recovery-report, and configured Guest `cgroupsPath` lifetime. The public candidate owns one VM per exact generation, rejects host-kernel fallback, keeps bootstrap and writable shares separate, and remains non-registerable | `probe-only`; clean x86_64 revision `fa4c593` retained 9/9 stages for both File and Filesystem (18/18 new paths), with aggregate reports `8bd1bb731198c5a28659a47e85d146a5e8285483488a6540acda8d1596d51ec3` and `205e3b493e218a3fc3d8bc50f4d4b3af14ccf0156846352dfa00bd1d84d67c19`. Earlier clean revisions retain the 17/17 lifecycle, 1/1 owner-death/restart, 25/25 soak, and other 162/180 operation-stage paths. AArch64 remains pending, as do Host shutdown and separate real-entry negative-isolation profiles required for promotion |
+| Linux KVM utility VM | Independent device/access/ioctl/API-version probes; deterministic x86_64 and AArch64 runtime archives and immutable ext4 roots; exact libkrun, firmware, exported kernel, and static Guest Agent compatibility sets; descriptor-pinned read-only root attachment; isolated create/configure/root/plain-vsock/release context gates; an isolated real-entry worker with descriptor-pinned KVM and runtime-share checks, parent-to-worker device/inode identity binding, pidfd owner death, kernel-authenticated Unix peer identity, protocol-v10 negotiation, and fail-closed cleanup evidence when KVM is unavailable. Both architecture lanes retain the 14-case pre-entry compatibility-drift matrix and invoke a KVM-gated 17-case lifecycle matrix. Its versioned ten-case Guest path-isolation entry checks traversal, symbolic-link, and magic-link escapes; focused regressions also swap bundle, rootfs, and bind-source entries after descriptor validation. The lanes also invoke a scoped owner-death/restart gate, a scoped 25-wave fresh-generation soak, and nine-stage Create, State, Start, Kill, Delete, Wait, Exec, SignalProcess, WaitProcess, Pause, Resume, Processes, Update, Stats, ReadOutput, WriteStdin, CloseStdin, Resize, File, and Filesystem owner-replacement gates. Guest durable ownership on the virtiofs runtime share follows the share-root Host UID rather than Guest `geteuid()`, so non-root Host Services can retain recovery records and device-target manifests. A KVM-independent driver preflight rejects both shared-kernel classes, inexact generations, missing handoff ownership, and missing, linked, non-private, drifted, escaping-rootfs, or absolute-bind handoffs before creating a Guest-visible generation share. The soak audits generation fencing and replay plus per-wave process, marker, endpoint, descriptor, bundle-handoff, runtime-share, recovery-report, and configured Guest `cgroupsPath` lifetime. The public candidate owns one VM per exact generation, rejects host-kernel fallback, keeps bootstrap and writable shares separate, and remains non-registerable | `probe-only`; September 8, 2026 bare-metal x86_64 observation at `e71a995`/`a35703c` retained lifecycle, recovery, 180/180 operation-stage reopen paths, and 25/25 soak with short `RUNNER_TEMP`. Earlier clean revisions retain File/Filesystem 9/9 each (`fa4c593`) and prior lifecycle/soak rows. AArch64 remains pending, as do Host shutdown and separate real-entry negative-isolation profiles required for promotion |
 | macOS arm64/HVF | Public same-UID SDK host service; one dedicated VM per exact generation; manifest-bound immutable ext4 system image with pinned A3S Linux kernel and agent; read-only root disk plus separate same-UID mode-0700 writable runtime share pinned through retained no-follow directory handles and parent-to-worker device/inode identity binding; Guest-local devtmpfs sources for privileged OCI device nodes; a real protocol-v10 bridge with all 21 Guest operations; retained full protocol-v9 lifecycle, multi-container, namespace/rootfs enforcement, 3 no-delete cleanup points, 11 transport fault points, 180/180 workload-operation replacement paths, negative asset/authentication gates, and 25 fresh-VM waves; source revision `a5a6b53` passed the revision-bound public-path gate across all 20 driver operations plus `features`/`list`/`events`, Host Service `SIGKILL` recovery, and a separate 25/25 fresh-VM soak with zero transient leaks | `experimental` on Apple Silicon. Every currently advertised public macOS/HVF function is implemented and the protocol-v10 public path is qualified at the recorded revision. The versioned ten-case Guest path-isolation profile is implementation-complete and CI-wired; its first `available` artifact at the updated revision remains pending. Signed release-package qualification, OCI conformance, security review, upgrade/rollback compatibility, and longer release soak remain before `supported` |
 | Windows x86_64/WHPX | Real partition/context/guest gates, protocol-v9 lifecycle and filesystem sessions, direct driver qualification, protected per-generation shares, exact exit replay, owner death at both recovery fault boundaries, host-service reopen, stopped-only delete, and complete transient cleanup. The current implementation also builds a reproducible x86_64 ext4 system image, pins Linux 6.12.91 and all native boot assets, attaches the root read-only, and keeps the runtime share separate. Existing-host evidence now covers all 180/180 operation-stage replacement paths across the 20 workload operations and an independent same-process 8-cycle handle-reclamation gate with exact 115 cold, 122 baseline, and 122 final handles | `probe-only`; the complete SDK/recovery/negative/soak matrix must still pass with those exact assets on a freshly provisioned WHPX host. The v7 shim and Host retain the v6 in-process handle-restoration contract, but the fresh-host release gate remains open |
 
@@ -773,6 +780,25 @@ owner-replacement matrices, 9/9 Host/Guest stages each (18/18 paths), with
 complete cleanup and immutable asset provenance. These are x86_64 observation
 artifacts; fresh AArch64 operation-stage evidence and promotion gates remain
 open.
+
+On September 8, 2026, clean current-main revisions
+`e71a995` (virtiofs durable-owner fix) and follow-on merge `a35703c` retained a
+bare-metal x86_64 observation on Zorin OS 18.1 (`Linux 7.0.0-31-generic`) with
+real `/dev/kvm`. Non-root Host virtiofs shares store durable files under the
+Host Service UID; Guest Agent ownership checks under
+`/run/a3s-oci-runtime` now follow the runtime-share root owner instead of
+`geteuid()`. With `RUNNER_TEMP=/tmp` and a source-matched immutable system
+image, the host passed Linux KVM lifecycle, owner-death/recovery, all twenty
+operation-stage reopen matrices (180/180 paths), and the 25-wave soak. The
+same revision `a35703c` also passed the rootful Native Linux CRIU checkpoint
+gate (`open_experimental_with_criu`, pinned CRIU 4.2.1) with an `available`
+positive report (SHA-256
+`05eccd22bca338f89d11fa8b2a971c58ce4e4ff34fc246c1b2203162f7cbe57b`) plus the
+private-PID and configured-network negative reports. This remains
+observation-only evidence: AArch64, freshly provisioned multi-architecture
+promotion, Host shutdown, and signed release gates stay open, and the Linux
+KVM candidate remains `probe-only`.
+
 
 ## Architecture
 
@@ -1491,9 +1517,12 @@ images, replay the exact response, preserve the artifact, and clean every
 restore journal, staging, executor, and session path. Package qualification v6
 runs the same three-report gate with the staged static CLI and Agent, binds the
 runtime and host-provided CRIU digests, and retains the reports in the archive.
-Broader namespace and descriptor profiles, cross-driver and retained tagged
-multi-architecture qualification, and production readiness remain open. See
-the [immutable checkpoint contract](docs/checkpoint-contract.md).
+A September 8, 2026 bare-metal x86_64 observation from clean revision
+`a35703c` retained the same three-report gate against pinned CRIU 4.2.1; it is
+source-built observation evidence and does not close tagged multi-architecture
+or production readiness. Broader namespace and descriptor profiles, cross-driver
+and retained tagged multi-architecture qualification, and production readiness
+remain open. See the [immutable checkpoint contract](docs/checkpoint-contract.md).
 
 The containerd runtime-v2 shim now exposes this optional contract without
 making it part of the endpoint's 18-operation base admission set. A paused
