@@ -257,7 +257,13 @@ fn dispatch(
             agent,
             delegated_cgroup_root,
         } => command_future!({
-            native_service::run_host(root, agent, delegated_cgroup_root).await?;
+            native_service::run_host(
+                root,
+                agent,
+                delegated_cgroup_root,
+                rootless_device_policy_bootstrap.take(),
+            )
+            .await?;
             Ok(ExitCode::SUCCESS)
         }),
         #[cfg(all(

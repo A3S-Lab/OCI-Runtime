@@ -45,6 +45,7 @@ pub(crate) async fn run_host(
     root: PathBuf,
     agent: PathBuf,
     delegated_cgroup_root: Option<PathBuf>,
+    device_policy_bootstrap: Option<RootlessDevicePolicyBootstrap>,
 ) -> Result<()> {
     let mut interrupt =
         signal(SignalKind::interrupt()).map_err(|error| signal_error("SIGINT", error))?;
@@ -55,7 +56,9 @@ pub(crate) async fn run_host(
         Some(root) => config.with_delegated_cgroup_root(root)?,
         None => config,
     };
-    let service = NativeLinuxHostService::bind(config).await?;
+    let service =
+        NativeLinuxHostService::bind_with_rootless_device_policy(config, device_policy_bootstrap)
+            .await?;
     service
         .serve_until(async move {
             tokio::select! {
