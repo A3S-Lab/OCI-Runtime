@@ -395,7 +395,7 @@ async fn captures_kernel_identity_for_plain_files_and_directories() {
     assert_eq!(directory_identity, canonical_directory_identity);
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn executes_the_pinned_shim_after_directory_entry_replacement() {
     use std::os::unix::fs::PermissionsExt;
@@ -428,6 +428,35 @@ async fn executes_the_pinned_shim_after_directory_entry_replacement() {
         std::fs::read(&shim).expect("read replacement executable"),
         b"#!/bin/sh\nprintf replacement\n"
     );
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn spawns_the_pinned_shim_via_canonical_path_on_macos() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("create pinned-shim fixture");
+    let shim = directory.path().join("shim");
+    std::fs::copy("/bin/sh", &shim).expect("copy a portable executable fixture");
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
+        .expect("make executable fixture runnable");
+
+    let prepared = prepare_shim(&shim, "test shim")
+        .await
+        .expect("pin the original executable");
+    assert!(
+        !prepared.command_path().starts_with("/dev/fd/"),
+        "macOS must spawn through the canonical path, not /dev/fd"
+    );
+
+    let output = tokio::process::Command::new(prepared.command_path())
+        .arg("-c")
+        .arg("printf retained")
+        .output()
+        .await
+        .expect("execute the pinned canonical path");
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"retained");
 }
 
 #[cfg(windows)]
