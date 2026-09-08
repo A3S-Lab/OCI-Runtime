@@ -364,6 +364,88 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -SystemImageManifest C:\a3s\oci-artifacts\windows\system-image\system-image.json
 ```
 
+Run the shared utility-VM transport-fault and Host-shutdown cleanup gate
+separately. This is the Windows counterpart of the macOS/Linux 11-stage
+`oci-vm-transport-fault-cleanup` matrix (nine Create Host/Guest stages plus
+`host-before-shutdown` and `host-after-shutdown`):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\windows-whpx-transport-fault-cleanup.ps1 `
+  -RootfsArchive C:\path\to\alpine-minirootfs.tar `
+  -SystemImageManifest C:\a3s\oci-artifacts\windows\system-image\system-image.json
+```
+
+A successful run emits `a3s.oci.whpx-transport-fault-cleanup-run.v1` with
+exactly 11 cases and requires the shared
+`a3s.oci.oci-vm-transport-fault-cleanup.v3` evidence plus WHPX handle
+reclamation and immutable boot-asset digests on every stage. Existing-host
+evidence does not close the freshly provisioned release-host gate.
+
+On September 7, 2026, clean `main` commit
+`35ed7465cfd02377d918d779278debf3ca8eea71` retained an available
+`a3s.oci.whpx-transport-fault-cleanup-run.v1` summary on the existing Windows
+10 Pro 23H2 x86_64 host. All 11 stages passed, including
+`host-before-shutdown` and `host-after-shutdown`, against the pinned system
+image (`manifest`
+`eea05f7550a1fa2824853e88c44e0b2f1ae95f670f44ca395ebc34f3020f0ac1`, `ext4`
+`7c1680fc11e2005fbb439910edf14c92926f4a46d8ca6877feb254909b5c2574`). The
+summary SHA-256 is
+`475143c36a07296e10910bba92b639d8bf3b2e5bb798f6839302b51873989b0b`. This is
+existing-host observation evidence for the R1 WHPX transport/shutdown gap; it
+does not promote readiness or close the fresh-host release gate.
+
+On September 7, 2026, the same assets retained an available
+`a3s.oci.windows-whpx-release-matrix.v1` summary with `host_class=existing`
+and `promotes_readiness=false` under
+`target/windows-whpx-release-matrix/existing-20260907165307`. All six bound
+gates passed (handle-reclamation, driver smoke, recovery smoke, 11-stage
+transport-fault cleanup, soak, and 180-path operation-reopen) in 3294.686
+seconds against commit `35ed7465cfd02377d918d779278debf3ca8eea71`. The
+repaired matrix summary SHA-256 is
+`b51fe030b2967122d9ad4bc78abe7bb210dd4d33b124f7dee1cc84bc6daf1bdc`
+(`summary_repaired=true` records removal of child-process stdout pollution
+from `gates[]` while keeping the same gate digests and timings). This is
+still observation-only; only `-HostClass fresh` can close the promotion gate.
+
+The handle-reclamation gate captures shim exit codes through
+`System.Diagnostics.ProcessStartInfo` (same pattern as transport-fault and
+soak). PowerShell `Start-Process -RedirectStandard*` left `ExitCode` null
+after a successful 8/8 report, and `$null -ne 0` falsely failed the gate.
+The release-matrix soak entry reads `evidence\summary.json`, matching the
+soak evidence contract.
+
+Run the digest-bound release matrix that a freshly provisioned WHPX host must
+pass before readiness can become `experimental`. It builds once, then runs
+handle-reclamation, driver smoke, recovery smoke, transport-fault cleanup,
+soak, and operation-reopen against the same immutable assets, emitting
+`a3s.oci.windows-whpx-release-matrix.v1`. Use `-HostClass fresh` only on a
+newly provisioned host together with `-FreshHostAttestation` pointing at a
+digest-bound `a3s.oci.windows-whpx-fresh-host-attestation.v1` JSON that sets
+`operator_attests_fresh_provisioning=true` and `provisioned_at_utc`. The
+default `existing` class cannot close the promotion gate, and `fresh` without
+attestation is rejected:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\windows-whpx-release-matrix.ps1 `
+  -RootfsArchive C:\path\to\alpine-minirootfs.tar `
+  -SystemImageManifest C:\a3s\oci-artifacts\windows\system-image\system-image.json `
+  -HostClass fresh `
+  -FreshHostAttestation C:\a3s\oci-artifacts\windows\fresh-host-attestation.json
+```
+
+Example attestation:
+
+```json
+{
+  "schema_version": "a3s.oci.windows-whpx-fresh-host-attestation.v1",
+  "operator_attests_fresh_provisioning": true,
+  "provisioned_at_utc": "2026-09-07T00:00:00Z",
+  "hostname": "whpx-release-01"
+}
+```
+
 The default profile requires:
 
 - 25 consecutive full protocol-v10 OCI lifecycles with an x86_64/AArch64
@@ -514,6 +596,18 @@ The seven summary SHA-256 values, in the operation groups listed above, are
 The Stats run also verified replacement snapshots by payload rather than a
 strictly increasing wall-clock timestamp, so a clock adjustment cannot turn
 a valid rebound into a false failure.
+
+On September 7, 2026, Create reopen was extended to Host shutdown on the same
+existing host. After a successful Create retains durable `created`, injecting
+`host-before-shutdown` or `host-after-shutdown` on Host close returns retryable
+`Unavailable`, the replacement owner rehydrates the created record, and cleanup
+completes. Schema `a3s.oci.oci-vm-reopen-replacement.v3` records the shutdown
+stage; a focused `a3s.oci.whpx-operation-reopen-run.v1` summary covering both
+shutdown stages (plus one operation-stage control case) is available with
+SHA-256 `4632cc6c68f3d837a59d98b379972d62b6168202945bbdbe56f1e75100d4c552`.
+The full matrix is now 182 cases when Create's two Host-shutdown stages are
+included with the prior 180 operation-stage paths. Existing-host evidence still
+does not close the freshly provisioned release-host gate.
 
 The independent
 `a3s.oci.windows-whpx-handle-reclamation-run.v1` report passed eight
@@ -757,7 +851,8 @@ terminal replay, stopped-only delete, and complete transient cleanup.
 The version-pinned image, read-only root attachment, source/digest manifest,
 pre-entry drift checks, separate runtime-share path, NUMA-capable firmware, and
 one focused real-host lifecycle are implemented. The release gate remains open
-until the following two complete matrix gates pass:
+until the following two complete matrix gates pass on a freshly provisioned
+WHPX host through `scripts/windows-whpx-release-matrix.ps1 -HostClass fresh`:
 
 1. rerun the complete WHPX SDK, soak, owner-death, and service-recovery
    matrices against the exact v1 manifest on a fresh WHPX-enabled Windows
@@ -766,6 +861,14 @@ until the following two complete matrix gates pass:
    inherited v6 handle-reclamation fields, including nonzero
    `windows_handles_before_vm` and `windows_handles_after_vm` values to match,
    with `windows_handle_inventory_restored=true`.
+
+The release-matrix entry also binds the independent eight-cycle handle
+reclamation gate, the 11-stage transport-fault/Host-shutdown cleanup gate, and
+the 180-path operation-reopen matrix into one
+`a3s.oci.windows-whpx-release-matrix.v1` summary. A `host_class=existing` run
+is observation-only and must not set `promotes_readiness`. A
+`host_class=fresh` run requires `-FreshHostAttestation` and embeds its digest
+in the matrix summary before readiness may be promoted from that evidence.
 
 The implementation now captures those two inventories in the libkrun shim,
 after immutable assets are pinned and again immediately after

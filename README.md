@@ -1347,7 +1347,7 @@ Real execution gates require a prepared host and isolated runtime root.
 | --- | --- | --- |
 | Linux x86_64/aarch64 | `bash .github/scripts/native-linux-smoke.sh`, `bash .github/scripts/native-linux-checkpoint.sh` with an exact CRIU binary, and `bash .github/scripts/linux-kvm-lifecycle.sh` with the pinned KVM manifest | [Native Linux development](docs/linux-native.md) |
 | Apple Silicon | `cargo run -p a3s-oci-cli -- hvf-smoke` followed by the signed utility-VM profiles | [macOS HVF development](docs/macos-hvf.md) |
-| Windows x86_64 | `scripts/windows-whpx-driver-smoke.ps1` and `scripts/windows-whpx-recovery-smoke.ps1` with a verified container-rootfs archive and `windows-system-image` manifest | [Windows WHPX development](docs/windows-whpx.md) |
+| Windows x86_64 | `scripts/windows-whpx-release-matrix.ps1` (handle-reclamation, driver, recovery, transport-fault, soak, operation-reopen) or the focused scripts underneath, with a verified container-rootfs archive and `windows-system-image` manifest | [Windows WHPX development](docs/windows-whpx.md) |
 
 The Linux smoke prepares an explicit user-owned cgroup-v2 subtree for the
 rootless v4 gate. Before Tokio starts, the CLI retains that exact delegation,
