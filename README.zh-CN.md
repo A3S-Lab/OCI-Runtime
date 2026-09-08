@@ -1,7 +1,6 @@
 <p align="center">
-  <img src="assets/readme/hero.svg" width="100%" alt="A3S OCI Runtime：将每个容器绑定到精确 generation、持久生命周期与证据门控的执行 driver">
+  <img src="assets/readme/hero.svg" width="100%" alt="A3S OCI Runtime 将每个容器绑定到确切的代次、持久化生命周期和以证据为准入条件的执行驱动">
 </p>
-
 
 <p align="center">
   <strong>Language / 语言:</strong>
@@ -10,54 +9,55 @@
 </p>
 
 <p align="center">
-  <strong>A3S 的底层执行平面：官方 OCI 类型、持久生命周期重放，以及跨越 native 与 utility-VM 路径的同一套已审阅 Linux 执行器。</strong>
+  <strong>A3S 的底层执行平面：官方 OCI 类型、持久化生命周期重放，以及原生与辅助虚拟机路径共用的经审查 Linux 执行器。</strong>
 </p>
 
 <p align="center">
-  <a href="https://github.com/A3S-Lab/OCI-Runtime/actions/workflows/ci.yml"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/A3S-Lab/OCI-Runtime/ci.yml?branch=main&amp;style=flat-square&amp;label=CI"></a>
-  <a href="https://github.com/A3S-Lab/OCI-Runtime/releases/latest"><img alt="Latest A3S OCI Runtime release" src="https://img.shields.io/github/v/release/A3S-Lab/OCI-Runtime?display_name=tag&amp;sort=semver&amp;style=flat-square&amp;color=68c7ff"></a>
-  <img alt="OCI Runtime Specification 1.3.0" src="https://img.shields.io/badge/OCI_Runtime_Spec-1.3.0-68c7ff?style=flat-square">
-  <img alt="Rust workspace" src="https://img.shields.io/badge/implementation-Rust-dbe7f0?style=flat-square&amp;logo=rust&amp;logoColor=111827">
-  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-f0b85a?style=flat-square"></a>
+  <a href="https://github.com/A3S-Lab/OCI-Runtime/actions/workflows/ci.yml"><img alt="CI 状态" src="https://img.shields.io/github/actions/workflow/status/A3S-Lab/OCI-Runtime/ci.yml?branch=main&amp;style=flat-square&amp;label=CI"></a>
+  <a href="https://github.com/A3S-Lab/OCI-Runtime/releases/latest"><img alt="A3S OCI Runtime 最新版本" src="https://img.shields.io/github/v/release/A3S-Lab/OCI-Runtime?display_name=tag&amp;sort=semver&amp;style=flat-square&amp;color=68c7ff"></a>
+  <img alt="OCI 运行时规范 1.3.0" src="https://img.shields.io/badge/OCI_Runtime_Spec-1.3.0-68c7ff?style=flat-square">
+  <img alt="Rust 工作区" src="https://img.shields.io/badge/implementation-Rust-dbe7f0?style=flat-square&amp;logo=rust&amp;logoColor=111827">
+  <a href="LICENSE"><img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-f0b85a?style=flat-square"></a>
 </p>
 
 <p align="center">
   <a href="#启动前先检查">检查</a> ·
-  <a href="#当前已实现内容">实现</a> ·
+  <a href="#当前已实现的能力">实现</a> ·
   <a href="#运行时契约">契约</a> ·
   <a href="#平台状态">平台</a> ·
   <a href="#架构">架构</a> ·
-  <a href="#运行真实门禁">资格验证</a> ·
+  <a href="#运行真实环境验证关卡">资格验证</a> ·
   <a href="#开发">开发</a>
 </p>
 
 ---
 
-**A3S OCI Runtime** 负责 A3S 的实际 Linux 容器执行：精确的 OCI
-校验、容器与进程状态、单调 generation、操作
-日志、终端状态、平台 driver、utility VM、经过认证的
-guest agent，以及运行时作用域内的清理。
+**A3S OCI Runtime** 负责 A3S 中实际的 Linux 容器执行：精确的 OCI
+校验、容器与进程状态、单调递增的代次、操作
+日志、终态、平台驱动、辅助虚拟机、经过身份认证的
+客户机代理，以及运行时范围内的清理。
 
-它故意不拉取镜像、不构建镜像、不实现 Compose、不拥有
-产品网络或卷，也不会变成 Docker daemon。这些职责
-留在 [A3S Box](https://github.com/A3S-Lab/Box)；Box 通过公共
-`a3s-oci-sdk` 提供已准备好的 bundle、隔离要求，以及版本化的
-attachment 清单。
+它的职责不包括拉取镜像、构建镜像、实现 Compose、管理
+产品网络或卷，也不充当 Docker 守护进程。这些职责
+仍由 [A3S Box](https://github.com/A3S-Lab/Box) 承担；Box 通过
+公共 `a3s-oci-sdk` 提供准备好的
+bundle、隔离要求和带版本的附件清单。
 
-提供商中立的 Rust 契约也可独立使用：
-`a3s-oci-core = "=0.3.1"` 与 `a3s-oci-sdk = "=0.3.1"`。它们的
-`sdk/rust/v*` 源码标签与完整 Runtime 二进制发布彼此独立。
+不依赖具体提供方的 Rust 契约也可独立使用，包版本为
+`a3s-oci-core = "=0.3.1"` 和 `a3s-oci-sdk = "=0.3.1"`。其
+`sdk/rust/v*` 源码标签与完整 Runtime 二进制发行版相互独立。
 
 > [!WARNING]
-> 本仓库处于积极开发中。当前没有内置 driver 被声明为
-> `supported`。默认宿主服务仅暴露发现能力；Native Linux
-> 仅在显式以开发实例打开时才变为 `experimental`，Apple Silicon HVF
-> 为 `experimental`，而 KVM 与 WHPX 仍为 `probe-only`。Experimental
-> 表示已审阅的开发配置文件可以启动；并不意味着已通过生产认证。
+> 本仓库正在积极开发中。目前没有任何内置驱动
+> 声明为 `supported`。默认主机服务仅提供能力发现；
+> Native Linux 只有在显式作为开发实例启用时才为
+> `experimental`，Apple Silicon HVF 为 `experimental`，KVM 和 WHPX
+> 仍为 `probe-only`。实验性表示经审查的开发配置可以
+> 启动，并不意味着已通过生产认证。
 
 ## 启动前先检查
 
-第一个成功的操作故意是只读的：
+设计上，第一步成功执行的操作是只读检查：
 
 ```bash
 git clone https://github.com/A3S-Lab/OCI-Runtime.git
@@ -65,8 +65,9 @@ cd OCI-Runtime
 cargo run -p a3s-oci-cli -- features
 ```
 
-在用于当前分支的合格 Windows x86_64 宿主上，该命令会报告
-可用的 hypervisor，但仍拒绝夸大 driver 就绪度：
+在当前分支用于资格验证的 Windows x86_64 主机上，该命令
+报告 hypervisor 可用，同时仍如实反映驱动
+就绪程度：
 
 ```json
 {
@@ -91,399 +92,397 @@ cargo run -p a3s-oci-cli -- features
 }
 ```
 
-evidence 对象因宿主而异。选择规则不会：
+证据对象因主机而异，但选择规则始终一致：
 
-| 报告状态 | 可否启动？ | 含义 |
+| 报告的状态 | 是否允许启动？ | 含义 |
 | --- | --- | --- |
-| 宿主 `available` + `probe-only` | 否 | 仅诊断或资格验证 |
-| 宿主 `available` + `experimental` | 需显式选择加入 | 已审阅的开发配置文件；发布门禁仍适用 |
-| 宿主 `available` + `supported` | 是 | 已认证配置文件 |
-| 宿主 `unavailable` 或 `unsupported` | 否 | 缺少先决条件，或平台不适用 |
+| 主机 `available` + `probe-only` | 否 | 仅用于诊断或资格验证 |
+| 主机 `available` + `experimental` | 需显式选择启用 | 经审查的开发配置；仍须通过发布关卡 |
+| 主机 `available` + `supported` | 是 | 已认证的配置 |
+| 主机 `unavailable` 或 `unsupported` | 否 | 缺少前置条件或平台不适用 |
 
-`DriverCapability::can_launch()` 同时要求宿主能力为 available，
-以及 readiness 为 `experimental` 或 `supported`。
+`DriverCapability::can_launch()` 要求主机能力可用，
+且就绪状态为 `experimental` 或 `supported`。
 
-## 当前已实现内容
+## 当前已实现的能力
 
-|层 |实施边界|
-| ---| ---|
-|公共SDK |使用官方 OCI `Spec`、`Process`、`LinuxResources`、`State` 和 `Features` 类型的异步`Send + Sync` Rust 合约；类型 ID、生成、操作上下文、每个驱动程序的精确工件功能协商、版本化附件（包括已授权存储）、Linux 网络接口、不透明网络执行/本地重定向证据、可重用访客会话身份、不可变检查点引用和暂停恢复响应、I/O、文件系统会话、统计信息、事件和稳定错误 |
-|验证和运输| OCI 1.0.0–1.3.0 模式和语义验证，具有前向兼容的未知属性保留和忽略语义、精确的 79 项通用配置和 278 项要求所有者门、详尽的 19 例固定上游 JSON 模式套件、四个启动配置文件配置/状态/功能矩阵、不可变配置、附件和检查点 SHA-256 绑定、通过 Unix 套接字的有界协议 8 本地 IPC 或受保护的 Windows 命名管道，以及具有精确响应丢失重放功能的耐用 Unix/Windows 短进程 `create/state/start/kill/delete` CLI 适配器 |
-|持久的主机服务|精确的创建/状态/启动/终止/删除、驱动程序通告的可选操作（包括不可变检查点和暂停生成恢复编排）、全局幂等性日志（包括文件上传和文件系统 mkdir/移动/删除）、重放、生成防护、启动恢复、启动范围内的跨日志孤儿审计、失败生成隔离、使用 Unix 安装身份防护进行基于功能的状态遍历、提交后重放记录对本地 Linux 和 Apple Silicon HVF 的本地和utility VM驱动程序、排序列表、有序事件以及相同 UID 多容器所有者的确认
-|共享Linux执行器|命名空间创建/加入、命名空间条目之前声明的根目录准入、`pivot_root`、具有根相对遗留目标和可选字段处理的有序 OCI 挂载、早期配置或合成挂载后从有效树解析的 rootfs 内部绑定源、分离有序`idmap`/`ridmap` 绑定、无需捐赠者传播的递归私有挂载 rootfs 设备暂存、完整的 OCI 1.3 Linux 挂载选项控制注册表、精确的 init/exec argv、环境、cwd、终端默认值、UID/GID、补充组和 umask、挂载处理后的条件 `/dev/fd`、`/dev/stdin`、`/dev/stdout` 和 `/dev/stderr` 链接、具有失败即关闭私有描述符隔离和精确所有者 pidfd 的 OCI 挂钩进程组监督、用户映射、精确的绝对和稳定的相对 `cgroupsPath` 分辨率以及省略时的私有生成隔离路径、具有显式 cgroup v1 实时拒绝的完整 cgroup v2 CPU 共享/配额/突发/周期/cpuset/空闲映射、精确的内存限制/保留/交换和 PID 创建/更新映射（保留零）和 OCI `-1` 编码为 `max`，有限总交换验证、完整的 cgroup v2 块 I/O 默认/每设备权重和读/写 BPS/IOPS 节流映射，具有零速率清除、键控读回、部分更新保留、反向回滚和显式叶权重拒绝、动态 HugeTLB 使用/保留控制、键控 RDMA HCA 句柄/对象限制、具有动态控制器启用的有界 OCI 1.3 统一控制文件写入、内核定义格式、类型化文件冲突拒绝、可读无操作/回滚快照和只写控制支持、仅类型化拒绝 cgroup v1 内存和网络`net_cls`/`net_prio` 控制、所有五个具有内核回读功能集、精确的`no_new_privileges` 验证、具有精确内核回读的所有 16 个 OCI rlimit 类型、`oomScoreAdj`、调度程序策略、I/O 优先级、精确`LINUX`/`LINUX32` init 个性、所有七种 OCI NUMA 内存策略模式和三个带内核回读的标志、父级拥有的 Intel RDT CLOS、有序模式、进程分配、监控和所有者死亡清理、围绕 cgroup 成员身份应用的 exec CPU 亲和力、具有描述符限制的应用、回读和回滚的事务命名空间 sysctls、精确的根块/字符/FIFO 节点、六个默认设备、`/dev/ptmx`、PTY 支持的`/dev/console`、持久占位符清理、具有有序资源规则缩小的不可变声明/默认设备库存 BPF、seccomp、PID 1 监督、pidfds、exec、进程 I/O、带有 OCI `consoleSize` 初始化的 PTY、有界主机确认的突变重放日志、父级绑定启动/会话帮助程序、PID 启动时间限制的所有者死亡逻辑删除、描述符限制的文件/文件系统会话、暂停/恢复、资源更新、规范化 CPU/内存/PID/块 I/O 统计信息以及合格配置文件的范围清理 |
-|实用程序-VM 边界 |独立的 libkrun shim、具有 v1-v9 兼容性的经过身份验证的协议 v10、20 个公共工作负载操作以及一个有界维护确认、克隆范围关闭、精确生成 VM 会话以及静态guest agent背后的相同 Linux 执行器。平台中立的每代一个虚拟机生命周期现在支持公共 HVF 驱动程序和 Linux KVM 候选者，包括捆绑包所有权切换、并发创建防护、重试和终端清理、停止恢复逻辑删除以及有界关闭。持久恢复记录保留在每代共享上，特权 OCI 设备源仅在来宾本地 devtmpfs 上创建并在创建屏障处删除，并且在删除来宾运行时根之前关闭会消耗每个保留的设备目标清单 |
-|容器运行时-v2 |仅 SDK `containerd-shim-a3s-oci-v2` 具有针对 `containerd.task.v2.Task` 所有 17 种方法的代码拥有合约、24 条路由转换表（其确切的 18 次操作需要 SDK 联合门端点准入）以及每个驱动程序 `Checkpoint`/`Restore` v1 协商。任务检查点提交经过摘要验证的目录包；检查点支持的 Create 恢复暂停的生成，而 schema-v10 元数据在 shim 替换过程中保留其 CREATED-to-Start 屏障。该填充程序还保留了精确的 2.2.2 arm64 Native Linux 开发资格、2.2.3 x86_64 回归证据以及覆盖所有 23 个重新启动/补液边界的当前三遍 2.2.1 WSL2 观察。保留持久的命名空间/任务/执行身份、可重放任务和`DeleteProcess`收据、排序输入/信号/调整大小/控制日志、有界 FIFO/PTY I/O、精确生成崩溃清理和重新启动恢复。 Schema v9 保持可读性并引入了精确的待更新主体；模式 v1-v8 在其记录的默认值下保持兼容。单元覆盖范围包括包重放和篡改拒绝、恢复意图删除Shim 清理、承诺恢复采用、承诺 init/exec Start 采用、终端信号解决、响应接收重放和无竞争输出游标恢复。没有生产驱动程序宣传检查点或恢复。单独的 rootful Native Linux CRIU 构造函数通告这两种操作，并具有有界的真实内核 v3 检查点/恢复生命周期、响应丢失重放、双边界替换进程恢复以及 PID/网络命名空间拒绝资格； v6 包集成了该门，同时保留了标记包、更广泛的配置、跨驱动程序和多架构资格保持开放。 |
-| A3S Box消费者|仅限公共 SDK 生命周期和附件；暂停/继续；进程和文件系统会话；精确的实时库存、标准化统计数据、有界有序事件和重放安全的完整资源更新；显式的 Native Linux Sandbox 生产路由、校验和发布布局安装以及完整的 Rust/Python/TypeScript/Go SDK 在 x86_64 和 aarch64 上传递，`/dev/kvm` 不存在且无法访问，而默认和跨平台切换保持开放 |
-|保留证据|架构和规范锁、189 对经过身份验证的协议故障覆盖、便携式九阶段 Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem 主机重新打开并提供准确的提交后确认、真正的 HVF 九阶段 Host/Guest Create 加两阶段主机关闭中断和清理，所有九个真正的 HVF 创建、状态、启动、终止、删除、等待、执行、SignalProcess、WaitProcess、暂停、恢复、进程、更新、统计、ReadOutput、WriteStdin、CloseStdin、调整大小、文件和文件系统通过持久服务重新打开和虚拟机/会话所有者替换进行转换，真正的协议 v10 Apple Silicon Guest 启动，具有独特的精确 init/exec 功能的本机 Linux 真实容器， `NoNewPrivs`、rlimit、OOM 分数、I/O 优先级、调度程序、init 个性、init NUMA 内存策略、执行 CPU 亲和性和命名空间 sysctl 读回、无根默认设备和设备策略门、在两个主机重新打开和原子进度计数器之间精确暂停/恢复操作 ID 重放、所有者死亡安全终止、精确`startContainer` Hook 进程组所有者死亡恢复，以及三个连续的同一主机实时 Containerd 2.2 生命周期/重新启动/I/O 矩阵，其中删除了 exec-ID 重用、丢失 `DeleteProcess` 和任务删除响应重放、提交后来宾日志回收和提交的 init-Start、exec-Start、init-Kill、Pause、Resume、Update、WriteStdin、 CloseStdin、SignalProcess 和 ResizePty 垫片替换门、提交后 `WriteStdin` 和 `CloseStdin` 强制清理、新鲜 VM HVF 浸泡、失败即关闭 Linux KVM 生命周期/恢复/25 波浸泡条目以及真正的 x86_64 九阶段Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem 所有者替换，以及 WHPX 标称加上所有者死亡/服务重启资格 |
+| 层级 | 已实现的边界 |
+| --- | --- |
+| 公共 SDK | 使用官方 OCI `Spec`、`Process`、`LinuxResources`、`State` 和 `Features` 类型的异步 `Send + Sync` Rust 契约；类型化 ID、代次、操作上下文、绑定确切制品的逐驱动能力协商、带版本的附件（包括已授权的存储、Linux 网络接口、不透明的网络强制执行/本地重定向证据、可复用的客户机会话身份）、不可变检查点引用与暂停状态的恢复响应、I/O、文件系统会话、统计、事件和稳定的错误类型 |
+| 校验与传输 | OCI 1.0.0–1.3.0 schema 与语义校验，保留未知属性并按忽略语义处理以实现前向兼容；精确覆盖 79 项通用配置和 278 条责任方要求的关卡；固定版本的上游 JSON Schema 套件全部 19 个用例；四种启动配置的 configuration/State/Features 矩阵；不可变配置、附件与检查点的 SHA-256 绑定；通过 Unix socket 或受保护的 Windows 命名管道传输的有界 protocol-8 本地 IPC；以及持久化的 Unix/Windows 短生命周期进程 `create/state/start/kill/delete` CLI 适配器，支持响应丢失后的精确重放 |
+| 持久化主机服务 | 精确的 create/state/start/kill/delete；驱动声明的可选操作，包括不可变检查点与暂停代次恢复编排；全局幂等日志，涵盖 File upload 和 Filesystem mkdir/move/remove；重放、代次隔离、启动恢复、启动时跨所有日志的孤立项审计、失败代次隔离、以能力句柄为根且通过 Unix 挂载身份进行隔离的状态遍历、本地与辅助虚拟机驱动提交后的重放记录确认、排序列表、有序事件，以及 Native Linux 和 Apple Silicon HVF 上同 UID 的多容器所有者 |
+| 共享 Linux 执行器 | 命名空间创建/加入；进入命名空间前对声明的根目录进行准入检查；`pivot_root`；有序 OCI 挂载，支持相对于根的旧式目标路径和可选字段处理；根据先前配置或合成挂载后的有效目录树解析 rootfs 内部绑定源；分离式有序 `idmap`/`ridmap` 绑定挂载；加入挂载命名空间后，在递归私有化的 rootfs 中暂存设备且不向来源命名空间传播；完整的 OCI 1.3 Linux 挂载选项控制注册表；精确的 init/exec argv、环境、cwd、终端默认值、UID/GID、附加组和 umask；挂载处理后按条件创建 `/dev/fd`、`/dev/stdin`、`/dev/stdout` 和 `/dev/stderr` 链接；OCI hook，具备失败即拒绝的私有描述符隔离和绑定确切所有者的 pidfd 进程组监管；用户映射；精确的绝对 `cgroupsPath` 与稳定的相对路径解析，省略时使用受代次隔离的私有路径；完整的 cgroup v2 CPU shares/quota/burst/period/cpuset/idle 映射，并显式拒绝 cgroup v1 realtime；精确的内存 limit/reservation/swap 和 PIDs 创建/更新映射，保留零值并将 OCI `-1` 编码为 `max`；有限总交换量校验；完整的 cgroup v2 块 I/O 默认/逐设备权重与读写 BPS/IOPS 限速映射，支持零速率清除、按键回读、保留未涉及的局部更新、逆序回滚，并显式拒绝叶级权重；动态 HugeTLB 用量/预留控制；按键设置的 RDMA HCA 句柄/对象限制；有界 OCI 1.3 unified 控制文件写入，支持动态启用控制器、内核定义的格式、拒绝与类型化文件冲突、可读取的空操作/回滚快照和只写控制项；以类型化错误拒绝仅限 cgroup v1 的内存及网络 `net_cls`/`net_prio` 控制；全部五个 capability 集合及内核回读；精确验证 `no_new_privileges`；全部 16 种 OCI rlimit 类型及精确内核回读；`oomScoreAdj`、调度策略、I/O 优先级、精确的 `LINUX`/`LINUX32` init personality；全部七种 OCI NUMA 内存策略模式和三个标志及内核回读；由父进程持有的 Intel RDT CLOS、有序 schemata、进程分配、监控和所有者死亡清理；在加入 cgroup 前后应用 exec CPU 亲和性；事务式命名空间 sysctl，通过描述符限定应用、回读和回滚范围；精确的 rootful 块/字符/FIFO 节点、六个默认设备、`/dev/ptmx`、由 PTY 支撑的 `/dev/console`、持久化占位项清理；基于不可变声明/默认设备清单的 BPF，按顺序收窄资源规则；seccomp、PID 1 监管、pidfd、exec、进程 I/O、按 OCI `consoleSize` 初始化的 PTY；有界且由 Host 确认的变更重放日志；绑定父进程的启动/会话辅助进程；绑定 PID 启动时间的所有者死亡墓碑记录；通过描述符限定范围的文件/文件系统会话；暂停/恢复、资源更新、标准化 CPU/内存/PID/块 I/O 统计，以及已验证配置范围内的清理 |
+| 辅助虚拟机边界 | 隔离的 libkrun shim；经过身份认证的 protocol v10，兼容 v1-v9；20 个公共工作负载操作和一个有界维护确认操作；覆盖所有克隆实例的关闭；绑定确切代次的虚拟机会话；静态客户机代理后使用同一个 Linux 执行器。平台中立、每代次一台虚拟机的生命周期现已同时支撑公共 HVF 驱动和 Linux KVM 候选驱动，涵盖 bundle 所有权交接、并发 Create 隔离、重试和终态清理、停止状态恢复墓碑记录及有界关闭。持久化恢复记录保留在各代次的共享目录中；特权 OCI 设备源仅在 Guest 本地 devtmpfs 上创建，并在 Create 屏障处移除；关闭流程会在删除 Guest 运行时根目录前逐一处理所有保留的设备目标清单 |
+| containerd runtime-v2 | 仅依赖 SDK 的 `containerd-shim-a3s-oci-v2`，以代码定义 `containerd.task.v2.Task` 全部 17 个方法的契约；包含 24 条路由的转换表，其所需 SDK 操作的确切并集共 18 项，用于端点准入；逐驱动协商 `Checkpoint`/`Restore` v1。Task Checkpoint 提交经过摘要校验的目录包；基于检查点的 Create 恢复暂停代次，schema-v10 元数据在 shim 更换后仍保留 CREATED 到 Start 的屏障。shim 还保留了确切的 2.2.2 arm64 Native Linux 开发资格验证、2.2.3 x86_64 回归证据，以及当前覆盖全部 23 个重启/状态重建边界的 2.2.1 WSL2 连续三轮观测。持久化命名空间/task/exec 身份、可重放的 task 和 `DeleteProcess` 回执、有序的输入/信号/尺寸调整/控制日志、有界 FIFO/PTY I/O、确切代次的崩溃清理与重启恢复均予以保留。Schema v9 仍可读取，并引入精确的待处理 Update 请求体；schema v1-v8 按其文档规定的默认值保持兼容。单元覆盖包括包重放与篡改拒绝、恢复意图的 DeleteShim 清理、接管已提交的 Resume、接管已提交的 init/exec Start、终态信号结算、响应回执重放，以及无竞态的输出游标恢复。没有生产驱动声明 Checkpoint 或 Restore。独立的 rootful Native Linux CRIU 构造器声明这两项操作，并已具备有界的真实内核 v3 检查点/恢复生命周期、响应丢失重放、跨两个边界的替代进程恢复验证，以及 PID/网络命名空间拒绝验证；包 v6 集成了该关卡，而留存带标签包、更广泛配置、跨驱动及多架构资格验证仍待完成。 |
+| A3S Box 使用方 | 仅通过公共 SDK 使用生命周期和附件；暂停/恢复；进程与文件系统会话；精确的实时清单、标准化统计、有界有序事件，以及可安全重放的完整资源更新；显式 Native Linux Sandbox 生产路由、带校验和的发行版布局安装；在 `/dev/kvm` 缺失且不可访问的 x86_64 和 aarch64 上，Rust/Python/TypeScript/Go SDK 全部通过验证，而默认路径与跨平台切换仍待完成 |
+| 留存证据 | Schema 与规范锁定清单；189 对已认证协议故障覆盖；可移植的九阶段 Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem 主机重新打开验证，含精确提交后确认；真实 HVF 的九阶段 Host/Guest Create，加上两阶段 Host 关闭中断与清理；通过持久化服务重新打开及虚拟机/会话所有者替换，验证真实 HVF 上 Create、State、Start、Kill、Delete、Wait、Exec、SignalProcess、WaitProcess、Pause、Resume、Processes、Update、Stats、ReadOutput、WriteStdin、CloseStdin、Resize、File、Filesystem 全部操作各自的九个转换阶段；真实 protocol-v10 Apple Silicon Guest 启动；原生 Linux 真实容器验证，分别精确回读 init/exec capability、`NoNewPrivs`、rlimit、OOM 分数、I/O 优先级、调度器、init personality、init NUMA 内存策略、exec CPU 亲和性和命名空间 sysctl；rootless 默认设备与设备策略关卡；跨两次 Host 重新打开、精确重放 Pause/Resume 操作 ID 并使用原子进度计数器的浸泡测试；所有者死亡时安全终止；精确的 `startContainer` Hook 进程组所有者死亡恢复；同一 Host 上连续三轮真实 containerd 2.2 生命周期/重启/I/O 矩阵，覆盖已删除 exec ID 复用、`DeleteProcess` 与 task Delete 响应丢失重放、提交后客户机日志回收，以及已提交 init-Start、exec-Start、init-Kill、Pause、Resume、Update、WriteStdin、CloseStdin、SignalProcess 和 ResizePty 的 shim 替换关卡；提交后 `WriteStdin` 与 `CloseStdin` 强制清理；全新虚拟机 HVF 浸泡测试；失败即拒绝的 Linux KVM 生命周期/恢复/25 轮浸泡测试入口，加上真实 x86_64 上九阶段 Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem 所有者替换；以及 WHPX 正常路径与所有者死亡/服务重启资格验证 |
 
-垫片恢复现在可以协调之前的精确运行时`Stopped`记录
-重放待处理的初始化信号。如果本地元数据没有出口，则有界
-精确生成等待导入运行时的持久退出；信号杂志
-然后在没有第二次杀戮的情况下前进。连续三届Ubuntu
-2026年8月24日的arm64/containerd 2.2.2矩阵保留了这个终端
-通过一个未更改的主机 PID 进行 init-Kill 边界，包括 exit-42 shim 和
-容器等待/删除证据和独立的零活性残留审计。
+shim 恢复现在会先核对 Runtime 中确切的 `Stopped` 记录，再
+重放待处理的 init 信号。如果本地元数据没有退出信息，一次有界、
+绑定确切代次的 Wait 会导入 Runtime 的持久化退出记录；随后信号日志
+继续推进，无需第二次 Kill。2026 年 8 月 24 日连续三轮 Ubuntu
+arm64/containerd 2.2.2 矩阵在 Host PID 保持不变的情况下，留存了这一终态
+init-Kill 边界的证据，包括退出码为 42 的 shim 和
+containerd Wait/Delete 证据，以及独立的零存活残留审计。
 
-Exec 恢复应用相同的权威退出规则，而不延迟
-实时进程：在重放挂起的进程信号之前，它会执行精确的操作
-零超时`WaitProcess`。持久退出将执行程序移动到`Exited`，记录
-第一个观察时间，并解决未决序列，无需第二个
-`SignalProcess`； `DeadlineExceeded` 证明 exec 仍然存在并保留
+exec 恢复采用同样的权威退出记录规则，且不延迟
+存活进程：重放待处理的进程信号前，先执行一次精确的
+零超时 `WaitProcess`。持久化退出记录会将 exec 移至 `Exited`，记录
+首次观测时间，并结算待处理序列，而不再次调用
+`SignalProcess`；`DeadlineExceeded` 则证明 exec 仍存活，并保留
 正常的身份稳定重放路径。
 
-`DeleteProcess` 现在在原子删除之前写入准确的响应收据
-来自主垫片元数据的已停止执行。如果 exec 仍留在该 main 中
-崩溃后的记录，收据只是一个未承诺的意图和补液
-丢弃它。如果执行人员缺席，则替换填充程序会重放收据的
-PID、退出状态和纳秒退出时间。耐用的新化身
-相同的执行ID清除旧收据，完整任务Delete或DeleteShim删除
-杂志。
+`DeleteProcess` 现在先写入精确的响应回执，再以原子方式
+从 shim 主元数据中移除已停止的 exec。如果崩溃后 exec 仍在主
+记录中，回执仅表示尚未提交的意图，状态重建时
+将其丢弃。如果 exec 已不存在，替代 shim 会重放回执中的
+PID、退出状态和纳秒级退出时间。同一 exec ID 的新持久化
+实例会清除旧回执，而完整的 task Delete 或 DeleteShim 会移除
+该日志。
 
-任务删除现在在分派之前存储`a3s-oci-shim-task-delete-v1.json`
-代围栏运行时删除。收据绑定命名空间、任务
-化身、容器身份、生成、捆绑、PID、退出状态和
-纳秒退出时间。保留主要元数据以及实时运行时生成
-标记未承诺的意图并消耗收据；任务删除后，
-无元数据替换验证服务名称空间、任务 ID 和
-捆绑并返回确切的第一个响应。那个只重放的垫片表明它
-响应后退出，所以containerd 2.2.3泄漏清理不能离开
-一个无主的替换进程永远等待。
+Task Delete 现在先保存 `a3s-oci-shim-task-delete-v1.json`，再分派
+受代次隔离保护的 Runtime delete。回执绑定命名空间、task
+实例、容器身份、代次、bundle、PID、退出状态和
+纳秒级退出时间。若主元数据仍在且 Runtime 代次仍存活，
+则标记为未提交意图并消耗该回执；task 移除后，
+不携带元数据的替代实例会校验服务命名空间、task ID 和
+bundle，并返回与首次完全一致的响应。这个仅用于重放的 shim 在
+发送响应后会发出退出信号，因此 containerd 2.2.3 的泄漏清理不会
+留下无人持有、永久等待的替代进程。
 
-恢复还会将经过验证的任务发布到内存状态之前
-启动任何输出泵。因此，立即可重放的输出块可以
-将其持久光标提交给恢复的任务，而不是与
-缺少状态条目。确定性 FIFO 回归涵盖了该排序，
-部分泵启动故障会停止之前创建的每个泵
-已发布的任务被回滚。
+恢复还会先将已校验的 task 发布到内存状态中，再
+启动任何输出泵。这样，能够立即重放的输出块便可
+针对已恢复的 task 提交持久化游标，避免与
+尚不存在的状态条目产生竞态。确定性的 FIFO 回归测试覆盖这一顺序；
+如果输出泵部分启动失败，则先停止所有已创建的输出泵，
+再回滚已发布的 task。
 
-提交后`WriteStdin`强制清理现在有自己的确切边界。的
-gateway 停止主机，直到 schema-v10 元数据保留 exec 化身 1，
-挂起的序列 1 和确切的标准输入字节，然后停止填充程序并提交
-直接通过公共 SDK 获得相同的`write-stdin-1`身份。执行官
-必须从一个输入效果退出 23，同时 init 仍以其原始状态运行
-PID 和生成。在 shim `SIGKILL` 之后，DeleteShim 不得重新调度
-待处理字节；它消除了确切的运行时生成、工作负载进程，
-捆绑包、cgroup 和 shim 状态，同时保留调用者拥有的容器
+提交后 `WriteStdin` 强制清理现在具备独立的精确边界。该
+关卡暂停 Host，直到 schema-v10 元数据保留 exec 实例 1、
+待处理序列 1 和精确的 stdin 字节，然后暂停 shim，并直接
+通过公共 SDK 提交同一个 `write-stdin-1` 身份。exec
+必须仅因一次输入效果以 23 退出，同时 init 在原 PID
+和代次上保持 Running。shim 收到 `SIGKILL` 后，DeleteShim 不得重新分派
+待处理字节；它会移除确切的 Runtime 代次、工作负载进程、
+bundle、cgroup 和 shim 状态，同时保留调用方持有的容器
 元数据。
 
-提交后`CloseStdin`强制清理现在具有匹配的精确边界。
-当主机停止时，`CloseIO`通过其通告的方式到达任务垫片
-ttrpc 端点和 schema-v10 元数据保留 exec 化身 1、stdin 状态
-关闭，并且没有待处理的写入。然后垫片停止，主机恢复，并且
-直接通过相同的化身绑定`close-stdin-1`身份
-公共 SDK。 EOF 使 exec 退出 29，而 init 仍保持运行状态
-原始PID和生成。在 shim `SIGKILL` 之后，DeleteShim 不得调度
-第二次关闭；它消除了确切的运行时生成、工作负载进程，
-捆绑包、cgroup 和 shim 状态，同时保留调用者拥有的容器
-元数据。聚焦单元边界从一个记录的运行时关闭开始，
-证明清理叶子在隔离 Kill 和强制删除时计数不变
-到确切的一代。
+提交后 `CloseStdin` 强制清理现在也具备对应的精确边界。
+Host 暂停时，`CloseIO` 经由 task shim 声明的
+ ttrpc 端点到达 shim，schema-v10 元数据保留 exec 实例 1、stdin 状态
+Closing，且没有待处理写入。随后暂停 shim、恢复 Host，
+并直接通过公共 SDK 提交绑定同一实例的
+`close-stdin-1` 身份。EOF 使 exec 以 29 退出，而 init 仍在
+原 PID 和代次上保持 Running。shim 收到 `SIGKILL` 后，DeleteShim 不得
+分派第二次关闭；它会移除确切的 Runtime 代次、工作负载进程、
+bundle、cgroup 和 shim 状态，同时保留调用方持有的容器
+元数据。聚焦此边界的单元测试从一次已记录的 Runtime close 开始，
+证明清理不会增加该计数，并将 Kill 和强制 Delete
+限定到确切代次。
 
-提交后`ResizePty`强制清理现在具有自动匹配功能
-边界。被忽略的真实容器门创建一个终端执行程序，停止
-主机，通过 shim 验证的 ttrpc 端点发送 `ResizePty`，并且
-需要 schema-v10 元数据来保留带有挂起序列的 exec 化身 1
-1 为 166x52。然后它停止 shim，恢复主机，并提交相同的内容
-直接通过公共 SDK 绑定化身`resize-1` 身份。的
-门通过 `/proc/<pid>/fd/0` 读取实时 PTY 尺寸，并且
-`TIOCGWINSZ`，然后杀死垫片并要求原始响应为
-丢失了。 DeleteShim 不得调度第二次调整大小；它只删除确切的
-运行时生成、工作负载进程、bundle、cgroup 和 shim 状态
-保留调用者拥有的容器元数据。聚焦单元边界开始
-通过一个记录的运行时调整大小并证明清理留下的数据
-保持不变，同时屏蔽 Kill 并强制删除到确切的一代。
+提交后 `ResizePty` 强制清理现在也具备对应的自动化
+边界。默认忽略的真实 containerd 关卡创建终端 exec、暂停
+Host、经 shim 已校验的 ttrpc 端点发送 `ResizePty`，并
+要求 schema-v10 元数据保留 exec 实例 1，待处理序列
+为 1，尺寸为 166x52。然后暂停 shim、恢复 Host，并直接
+通过公共 SDK 提交绑定同一实例的 `resize-1`
+身份。该关卡通过 `/proc/<pid>/fd/0` 和
+`TIOCGWINSZ` 读取实时 PTY 尺寸，随后终止 shim，并要求原始响应
+确实丢失。DeleteShim 不得再次分派尺寸调整；它仅移除确切的
+Runtime 代次、工作负载进程、bundle、cgroup 和 shim 状态，同时
+保留调用方持有的容器元数据。聚焦此边界的单元测试从
+一次已记录的 Runtime resize 开始，证明清理不会改变该
+计数，并将 Kill 和强制 Delete 限定到确切代次。
 
-所有非破坏性 CI 目标都通过此门，包括 Linux、musl、
-macOS、Windows 和本机 Linux arm64 覆盖范围。源码修订
-`2fef85c6e68a07f114d211175b77841301d57985`也通过了三项完整
-Ubuntu 24.04.3 LTS/WSL2 x86_64 上的 91.96、91.89 中的 containerd 2.2.1 矩阵
-91.92 秒，通过未更改的主机 PID 1566。每次通过都跨越了所有 23 个
-守护进程重启和提交后补充边界，包括当前的
-强制清理`ResizePty`门。 static-musl CLI、代理、垫片、资格
-可执行文件，Cargo.lock SHA-256 值是
-`e22a08d884ad59187fce39e170f6ca21d367a77c2d3a1a297cb8650adf6f7561`,
-`c73cc2356552de6f2def62598a44fb370df7300a56af5c7be33e63d148b865e2`,
-`c4c8ce162cdb0c031eac6e792e2bbdf9c99c30e7ef971ca8791b123f2b4ce00c`,
-`ba458b70cb1c879ed78095d326ccfe8992b22f12198728b45cc8d50a52e0451f`,
-和`1f00f4ec1b0f1ba9f3e39daf2b8782e42c922d9fa696aaa07c709c38123edca0`。
-默认 Containerd 在 PID 184 处保持活动状态。最终审核发现零
-任务、容器、实时运行时容器、匹配进程、挂载或
-cgroups 在两个孤立的根被移除之前。此源构建 WSL2 记录
-仅用于观察，不会推广确切的 containerd 2.2.2 Ubuntu
-arm64 开发声明；确切的发布包范围资格和
-其余 R7 释放门保持打开状态。
+包含此关卡的所有非破坏性 CI 目标均通过，包括 Linux、musl、
+macOS、Windows 和 Native Linux arm64。源码修订
+`2fef85c6e68a07f114d211175b77841301d57985` 还在 Ubuntu 24.04.3 LTS/WSL2
+x86_64 上通过了三轮完整 containerd 2.2.1 矩阵，耗时分别为 91.96、91.89
+和 91.92 秒，Host PID 始终为 1566。每轮都经过全部 23 个
+守护进程重启及提交后状态重建边界，包括当前的
+`ResizePty` 强制清理关卡。静态 musl CLI、agent、shim、资格验证
+可执行文件及 Cargo.lock 的 SHA-256 值依次为
+`e22a08d884ad59187fce39e170f6ca21d367a77c2d3a1a297cb8650adf6f7561`、
+`c73cc2356552de6f2def62598a44fb370df7300a56af5c7be33e63d148b865e2`、
+`c4c8ce162cdb0c031eac6e792e2bbdf9c99c30e7ef971ca8791b123f2b4ce00c`、
+`ba458b70cb1c879ed78095d326ccfe8992b22f12198728b45cc8d50a52e0451f`
+和 `1f00f4ec1b0f1ba9f3e39daf2b8782e42c922d9fa696aaa07c709c38123edca0`。
+默认 containerd 始终以 PID 184 运行。最终审计确认，在移除两个
+隔离根目录前，task、容器、存活 Runtime 容器、匹配进程、挂载和
+cgroup 的数量均为零。这份 WSL2 源码构建记录
+仅作观测，不提升确切的 containerd 2.2.2 Ubuntu
+arm64 开发支持声明；确切发行包的版本范围资格验证和
+其余 R7 发布关卡仍待完成。
 
-源码修订`9726719e5a66156cd61f8be36ca00998bbcfc871`通过三项
-连续完成 Ubuntu 24.04 x86_64/containerd 2.2.3 矩阵
-117.37、119.36 和 118.94 秒到未更改的主机 PID 2678296。
-发布 CLI、代理、填充程序、资格可执行文件和 Cargo.lock SHA-256
-值为
-`80d0b69686c73516fc3a507f2545af77b405918584176bdb0a96ab3bcf067102`,
-`68219e592a061b9dba7f491d54716354195cd8f8005fa792ab367681dda5352e`,
-`99bacac7a308e4830ca55101ef8148a511526722cf9006d8a37ef9cba89dbf50`,
-`3e752abc8ada3b8e3dae9d86e370feb7d17bf04c2245f13888d52ba7537b2fd2`,
-和`c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`。
-该套件使用专用的私有 Containerd 根、状态、套接字和 systemd
-单位；生产容器始终保持活跃状态​​，PID 为 2485480。
-探测和每次通过后的独立审核都发现零匹配任务，
-容器、捆绑包、实时运行时记录、cgroup、快照、shim 进程、
-资格流程或工作负载流程。
+源码修订 `9726719e5a66156cd61f8be36ca00998bbcfc871` 在
+Ubuntu 24.04 x86_64/containerd 2.2.3 上连续通过三轮完整
+矩阵，耗时分别为 117.37、119.36 和 118.94 秒，Host PID 始终为 2678296。
+发布版 CLI、agent、shim、资格验证可执行文件及 Cargo.lock 的 SHA-256
+值依次为
+`80d0b69686c73516fc3a507f2545af77b405918584176bdb0a96ab3bcf067102`、
+`68219e592a061b9dba7f491d54716354195cd8f8005fa792ab367681dda5352e`、
+`99bacac7a308e4830ca55101ef8148a511526722cf9006d8a37ef9cba89dbf50`、
+`3e752abc8ada3b8e3dae9d86e370feb7d17bf04c2245f13888d52ba7537b2fd2`
+和 `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`。
+套件使用专用的私有 containerd 根目录、状态、socket 和 systemd
+单元；生产 containerd 全程以 PID 2485480 运行。
+探测后及每轮测试后的独立审计均确认，匹配的 task、
+容器、bundle、存活 Runtime 记录、cgroup、快照、shim 进程、
+资格验证进程和工作负载进程数量均为零。
 
-源码改版`a3865075d8ced661447a85196e17136379535fa7`通过三项
-连续完成 Ubuntu 24.04 x86_64/containerd 2.2.3 矩阵
-89.96、93.40 和 94.55 秒至未更改的主机 PID 2504484。
-发布 CLI、代理、填充程序、资格可执行文件和 Cargo.lock SHA-256
-值为
-`80d0b69686c73516fc3a507f2545af77b405918584176bdb0a96ab3bcf067102`,
-`68219e592a061b9dba7f491d54716354195cd8f8005fa792ab367681dda5352e`,
-`ca14a7d28f3b95656b831006c22e2e88561c272a19c48aab19b43d6592ca652c`,
-`c560b1d92d4e786a026fd2c8002bcb0330c06d620304a08c5df4951ebdaf9ce4`,
-和`c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`。
-该套件使用专用的私有 Containerd 根、状态、套接字和 systemd
-单位；生产容器始终保持活跃状态​​，PID 为 2485480。
-每次通过后的独立审核发现零匹配的任务、容器、
-捆绑包、实时运行时记录、cgroup、安装、shim 进程、代理或主机
-儿童、资格流程、僵尸或准备好的操作。
+源码修订 `a3865075d8ced661447a85196e17136379535fa7` 在
+Ubuntu 24.04 x86_64/containerd 2.2.3 上连续通过三轮完整
+矩阵，耗时分别为 89.96、93.40 和 94.55 秒，Host PID 始终为 2504484。
+发布版 CLI、agent、shim、资格验证可执行文件及 Cargo.lock 的 SHA-256
+值依次为
+`80d0b69686c73516fc3a507f2545af77b405918584176bdb0a96ab3bcf067102`、
+`68219e592a061b9dba7f491d54716354195cd8f8005fa792ab367681dda5352e`、
+`ca14a7d28f3b95656b831006c22e2e88561c272a19c48aab19b43d6592ca652c`、
+`c560b1d92d4e786a026fd2c8002bcb0330c06d620304a08c5df4951ebdaf9ce4`
+和 `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`。
+套件使用专用的私有 containerd 根目录、状态、socket 和 systemd
+单元；生产 containerd 全程以 PID 2485480 运行。
+每轮测试后的独立审计均确认，匹配的 task、容器、
+bundle、存活 Runtime 记录、cgroup、挂载、shim 进程、agent 或 Host
+子进程、资格验证进程、僵尸进程和已准备操作的数量均为零。
 
-源码修改`5a6d5f2d817d5951929c2394dff57ef925dd5822`通过三项
-在 65.15 中连续完成 Ubuntu arm64/containerd 2.2.2 矩阵，
-66.76 和 64.11 秒，通过未更改的主机 PID 436920。
-主机、代理、填充程序、资格可执行文件和 Cargo.lock SHA-256 值是
-`53bf14d72adb347b35d19f936bf91d15adcc3cce65aa88f63886746f07f5ddb2`,
-`28dad74972b28b400a9e5e9f9b38ba59aeaf6662532dfefc7dd5527ff17d6b48`,
-`801c6ebd6bb6a41f1049dbd64d6ae60165a0914254edb953b2eaf633c6c368f2`,
-`fa3a513bf2f5aba01a511bc953dcfc5cb1bb05080fbd58bb993d9a0a44a10363`,
-和`c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`。
-每一遍都保留精确的序列-1 SIGTERM，正常执行退出 29，
-replacement-shim 和 restarted-containerd 等等证据，第一个和
-重放`DeleteProcess` PID、状态和退出时间戳，以及原始的
-运行 init PID。每次通过后的独立审核发现零匹配
-任务、容器、捆绑包、cgroup、安装、实时运行时记录、垫片、
-代理、资格或主机子进程和零僵尸或已准备好
-操作。原始安装的垫片已在 SHA-256 处恢复
+源码修订 `5a6d5f2d817d5951929c2394dff57ef925dd5822` 连续通过三轮
+完整 Ubuntu arm64/containerd 2.2.2 矩阵，耗时分别为 65.15、
+66.76 和 64.11 秒，Host PID 始终为 436920。发布版
+Host、agent、shim、资格验证可执行文件及 Cargo.lock 的 SHA-256 值依次为
+`53bf14d72adb347b35d19f936bf91d15adcc3cce65aa88f63886746f07f5ddb2`、
+`28dad74972b28b400a9e5e9f9b38ba59aeaf6662532dfefc7dd5527ff17d6b48`、
+`801c6ebd6bb6a41f1049dbd64d6ae60165a0914254edb953b2eaf633c6c368f2`、
+`fa3a513bf2f5aba01a511bc953dcfc5cb1bb05080fbd58bb993d9a0a44a10363`
+和 `c31f4bb3ea8394cbb05adcb25051994e75c8592b53be7b7d3b5e82f74cfd1727`。
+每轮均留存了确切的序列 1 SIGTERM、exec 正常退出码 29、
+替代 shim 与重启后 containerd 的 Wait 证据、首次及
+重放 `DeleteProcess` 的 PID、状态和退出时间戳，以及原始
+运行中 init 的 PID。每轮后的独立审计均确认，匹配的
+ task、容器、bundle、cgroup、挂载、存活 Runtime 记录、shim、
+agent、资格验证进程及 Host 子进程数量均为零，僵尸进程和已准备
+操作也均为零。原先安装的 shim 已恢复，其 SHA-256 为
 `a0e7dce493308ebea0b4642dd81a9e489109a8b3709f2a1ede62b015cc123482`；
-测试运行时根、发布目标、签出和日志已被删除。
+测试 Runtime 根目录、发布构建目标、检出目录和日志已移除。
 
-OCI 1.3 `linux.netDevices` 由共享 Linux 执行器实现。的
-运行时验证有界确定性移动计划，需要单独的
-网络命名空间，拒绝精确的目标名称冲突，支持附加
-`%d`模板，保留稳定的链接属性和永久全局
-地址，并将每个移动的接口启动。失败的创建会提前滚动
-以相反的顺序向后移动；回滚租约仅在以下时间后释放
-创建的状态是持久提交的。无根执行拒绝请求
-在突变之前，因为当前的助手合约没有授予宿主
-网络设备权限。 Native Linux gateway 使用真正的虚拟接口来
-练习移动、重命名、地址/MTU/MAC 保留、目标冲突、部分
-回滚、无根拒绝和清理。
+共享 Linux 执行器已实现 OCI 1.3 `linux.netDevices`。
+运行时校验有界且确定性的迁移计划，要求使用独立的
+网络命名空间，拒绝确切的目标名称冲突，支持末尾追加
+`%d` 的模板，保留稳定的链路属性和永久全局
+地址，并启用每个迁移后的接口。Create 失败时，按逆序
+回滚此前的迁移；仅在 created 状态持久化提交后才释放
+回滚租约。rootless 执行会在发生变更前拒绝请求，
+因为当前辅助进程契约并未授予主机
+网络设备权限。Native Linux 关卡使用真实 dummy 接口，
+验证迁移、重命名、地址/MTU/MAC 保留、目标冲突、部分
+回滚、rootless 拒绝及清理。
 
-rootful public `a3s.oci.attachments.v3` 配置文件添加了不可变的调用者发布
-围绕该 OCI 机制的命名空间、接口和清理标识。它
-需要精确的目标接口名称而不是`%d`，绑定所有三个
-将身份识别为持久的重放证据，并区分运行时创建的
-从保留已加入的调用者命名空间中释放命名空间。它从来没有
+rootful 公共 `a3s.oci.attachments.v3` 配置在此 OCI 机制之上增加了
+由调用方签发的不可变命名空间、接口和清理身份。它
+要求使用确切的目标接口名而非 `%d`，将这三个
+身份全部绑定到持久化重放证据，并区分运行时创建的
+命名空间的释放与所加入的调用方命名空间的保留。它从不
 接收或决定 IPAM、DNS、路由、别名或网络策略。
 
-所需的 `dev.a3s.network.enforcement@1` 扩展添加了一个不透明的，
-生成和 SHA-256 绑定的调用者强制身份加上可选的
-节点本地重定向身份到一个精确加入的调用者命名空间。它关闭了
-架构不能携带主机名/IP 规则、路由、端点、凭据、租户
-元数据，或政策决定。 Host自主协商，通过
-对驾驶员没有改变，并在之后重新验证确切的`ContainerRecord`证据
-重新启动。 Rootful Native Linux 现在仅在有网络时才公布版本 1
-设备权限；它的真实主机门保留命名空间/接口身份，
-重定向/拒绝行为、主机重新打开重放和调用者拥有的机制
-保存。 Rootless Native Linux 和 VM 驱动程序不会对其对外声明。
+必需扩展 `dev.a3s.network.enforcement@1` 为一个确切的、
+已加入的调用方命名空间添加不透明的调用方强制执行身份，
+并可选添加节点本地重定向身份，均绑定代次和 SHA-256。其封闭
+schema 无法承载主机名/IP 规则、路由、端点、凭据、租户
+元数据或策略决策。Host 独立协商该扩展，将其
+原样传递给驱动，并在重启后重新校验确切的 `ContainerRecord` 证据。
+rootful Native Linux 现在仅在具有网络设备
+权限时声明版本 1；其真实主机关卡留存命名空间/接口身份、
+重定向/拒绝行为、Host 重新打开重放，以及调用方持有机制
+保持不变的证据。rootless Native Linux 和虚拟机驱动不声明此扩展。
 
-暂停和恢复保持单独协商的运行时操作，具有稳定的
-`OperationContext` 身份、精确生成的击剑、持久重放以及
-重新启动对账。他们的承诺`ContainerPaused`和
-`ContainerResumed` 观察现在通过类型化揭示了确切的突变
-`RuntimeEvent::operation_id`；主机根据持久性验证它
-事件声明和旧版 `operation-id` 属性。较旧的事件 v1 记录
-如果没有类型化投影，则通过该经过验证的属性仍然可读。
-本机 Linux 浸泡模式 v2 现在保留每个暂停和恢复操作 ID，
-在单独的主机服务重新打开后重放每个提交的响应，并且
-记录原子工作负载计数器，证明在暂停和更新时没有任何进展
-恢复和第二次重新开放后的进展。标记包资格 v4
-将此 OAR-02 证据绑定到确切的分阶段运行时和代理工件。
-运行时不会决定工作负载何时空闲或应该唤醒；呼叫者拥有
-该政策并发布明确的操作。
+暂停和恢复仍是分别协商的运行时操作，具备稳定的
+`OperationContext` 身份、确切代次隔离、持久化重放和
+重启核对。其已提交的 `ContainerPaused` 和
+`ContainerResumed` 观测现在通过类型化
+`RuntimeEvent::operation_id` 暴露确切变更；Host 同时对照持久化
+事件声明和旧版 `operation-id` 属性进行校验。不含
+类型化投影的旧 event-v1 记录仍可通过这一已校验属性读取。
+Native Linux 浸泡测试 schema v2 现在保留每个 Pause 和 Resume 操作 ID，
+在各自独立的 Host Service 重新打开后重放已提交响应，并
+记录原子工作负载计数器，证明暂停期间没有进展，而 Resume
+及其后的第二次重新打开后进展恢复。带标签包资格验证 v4
+将这份 OAR-02 证据绑定到确切的暂存 runtime 和 Agent 制品。
+Runtime 不决定工作负载何时空闲或何时唤醒；该策略由
+调用方掌握，并由调用方发出显式操作。
 
-公共`a3s.oci.attachments.v4`配置文件建立了可重用的
-访客会话边界。 SharedGuestKernel 创建或恢复必须绑定一个
-逻辑会话ID、积极化身、不可变信任域、容量
-从 1 到 64，运行时所有权，以及显式的空销毁或
-相同信任域保留模式。协议 7 且耐用 `ContainerRecord`
-证据围栏降级、重启和操作 ID 重用。共享HVF/KVM
-驱动程序核心实现会话范围的共享和所有权标记，序列化
-准入、容量和生成防护，两种重置模式、成员本地
-故障清理、竞争安全并行会话回收、会话恢复
-报告和一业主关闭。生产
-HVF、KVM 和 WHPX 注册继续仅宣传其合格的
-附件配置文件，直到相应的真实主机重新启动、清理和
-保留浸泡证据，并且它们的累积存储/网络传输
-已实施。
+公共 `a3s.oci.attachments.v4` 配置确立了可复用的
+客户机会话边界。SharedGuestKernel create 或 restore 必须绑定一个
+逻辑会话 ID、正数实例编号、不可变信任域、
+1 到 64 的容量、运行时所有权，以及显式的空时销毁或
+同信任域保留模式。Protocol 7 和持久化 `ContainerRecord`
+证据对降级、重启和操作 ID 复用实施隔离。共享 HVF/KVM
+驱动核心实现了会话范围的共享目录与所有权标记、串行化
+准入、容量和代次隔离、两种重置模式、成员局部
+故障清理、无竞态的并行会话回收、会话恢复
+报告，以及单一所有者关闭。生产环境的
+HVF、KVM 和 WHPX 注册仍只声明已通过资格验证的
+附件配置，直到留存相应的真实主机重启、清理与
+浸泡测试证据，并实现这些配置逐层累积的存储/网络传输。
 
-会话准入在所有者更换后也无法关闭：持久的
-`.guest-sessions/<id>/` root 不能被视为没有空池
-进程内所有者或主动切换准入，因此第二个虚拟机无法静默
-当先前的虚拟机可能仍然存在时，重用逻辑标识。
+跨所有者替换时，会话准入同样遵循失败即拒绝原则：若没有
+进程内所有者或正在进行的交接准入，持久化的
+`.guest-sessions/<id>/` 根目录不能被视为空池，因此当之前的虚拟机
+可能仍然存在时，第二台虚拟机不能悄然复用同一逻辑身份。
 
-OCI 1.3 `linux.resources.hugepageLimits` 也由共享实现
-执行人。 SDK 保留了完整的规范`uint64` 范围，而
-执行器根据实时 cgroup-v2 验证每个规范页面大小名称
-库存，仅在请求时启用`hugetlb`，并应用使用和
-当内核公开预留记帐时，预留限制。创建并
-实时更新使用具有读回和反向回滚功能的内核可表示值；
-部分更新使省略的页面大小保持不变。在`control-workload-v1`中，
-HugeTLB 仍然是一个精确的仅工作负载限制，而不是被复制到
-管理信封。 Native Linux CI 读取选定的主机页面大小控件
-每当运行程序暴露 `hugetlb` 时，就会返回 x86_64 和 aarch64。
+共享执行器也已实现 OCI 1.3 `linux.resources.hugepageLimits`。
+SDK 保留规范规定的完整 `uint64` 范围，而
+执行器根据实时 cgroup-v2 清单校验每个规范页大小
+名称，仅在请求时启用 `hugetlb`；当内核提供预留记账时，
+同时应用用量和预留限制。Create 和
+实时 Update 使用内核可表示的值，支持回读和逆序回滚；
+部分更新保持省略的页大小不变。在 `control-workload-v1` 中，
+HugeTLB 仍是仅作用于工作负载的精确限制，不会复制到
+管理资源包络。当运行器暴露 `hugetlb` 时，Native Linux CI 会在
+x86_64 和 aarch64 上回读所选主机页大小的控制项。
 
-OCI 1.3 `linux.resources.rdma` 作为单独的密钥 cgroup-v2 实现
-控制器。每个设备可能会限制 HCA 句柄、HCA 对象或两者；装置
-在设备策略突变之前检查名称和可用的内核条目。
-创建和实时更新保留省略的字段，标准化内核的签名
-计数器上限为`max`，读回每个有效值，并滚动应用
-设备以相反的顺序返回。仅在请求时才需要 RDMA，并且保持不变
-`control-workload-v1` 中仅工作负载。本机 Linux 资格读取
-当运行者公开控制器和工作负载时，控制和工作负载条目会返回
-可用的 InfiniBand 设备。
+OCI 1.3 `linux.resources.rdma` 作为独立的按键索引 cgroup-v2
+控制器实现。每个设备可限制 HCA 句柄、HCA 对象或两者；
+设备策略变更前会检查设备名和可用的内核条目。
+Create 和实时 Update 保留省略字段，将内核的有符号
+计数器上限归一化为 `max`，回读每个生效值，并按逆序
+回滚已应用的设备。仅在请求时才要求 RDMA，并且在
+`control-workload-v1` 中仅作用于工作负载。当运行器同时暴露控制器和
+可用的 InfiniBand 设备时，Native Linux 资格验证会回读
+control 与 workload 条目。
 
-OCI 1.3 `linux.resources.unified` 接受有界 cgroup-v2 控制文件映射。
-执行器验证每个密钥一个安全文件名，拒绝运行时拥有的
-`cgroup.*` 类型化 OCI 资源已拥有的状态和文件，保留
-稳定的写入顺序，并通过运行时携带未知的控制器名称
-实时内核库存。在创建叶子之前启用所需的控制器；
-控制器不存在或无法启用、控制文件丢失或不可写
-控制在设备策略突变之前返回一个类型错误。创建和更新
-以稳定的顺序写入每个值，而不强加通用的读回格式。
-更新使用可读控件进行无操作抑制和反向回滚，而
-只写控件仍然有效。 `control-workload-v1` 仅适用于
-工作负载叶；原生 Linux 资格均来自于 `memory.high`
-子级，在可能的情况下验证内核规范化的部分 `io.max` 写入，并且
-练习有根和委托无根实时更新。
+OCI 1.3 `linux.resources.unified` 接受有界的 cgroup-v2 控制文件映射。
+执行器为每个键校验一个安全文件名，拒绝运行时持有的
+`cgroup.*` 状态及已由类型化 OCI 资源管理的文件，保留
+稳定的写入顺序，并借助实时内核清单处理运行时未知的
+控制器名称。在创建叶节点前启用所需控制器；
+控制器缺失或无法启用、控制文件缺失或不可写时，
+都会在设备策略变更前返回类型化错误。Create 和 Update
+按稳定顺序写入每个值，不强加通用的回读格式。
+Update 使用可读控制项抑制空操作并实现逆序回滚，
+同时仍允许只写控制项。`control-workload-v1` 仅将它们应用于
+workload 叶节点；Native Linux 资格验证从两个子节点回读
+`memory.high`，在条件允许时验证由内核规范化的部分 `io.max` 写入，
+并测试 rootful 和委派权限的 rootless 实时更新。
 
-当前位于 `A3S-Lab/Box@a16772c3` 的 Box 适配器会重新检查每次读取
-确切的运行时绑定。文件上传/下载和文件系统
-stat/mkdir/move/list/remove 现在使用相同的跨平台会话外观；
-能力和盒子生成检查发生在调度、响应目标之前
-并且形状被重新验证，并且一种明确可重试的突变响应是
-使用相同的上下文和一个运行时效果重放。部分产品
-资源请求被编译成一个完整的 OCI `LinuxResources` 合约，
-在调度之前持久声明，并使用相同的运行时操作重放
-失去回应后。运行时确认更新 Box 重启意图
-原子地而不改变原始的创建身份。
+当前 `A3S-Lab/Box@a16772c3` 的 Box 适配器会对照
+确切的运行时绑定重新检查每次读取。文件上传/下载和文件系统
+stat/mkdir/move/list/remove 现在使用同一个跨平台会话门面；
+分派前检查能力与 Box 代次，重新校验响应目标
+与结构，并对一次明确可重试的变更响应使用
+相同上下文重放，确保运行时仅产生一次效果。部分产品
+资源请求会编译为一份完整的 OCI `LinuxResources` 契约，
+在分派前持久化登记，并在响应丢失后以同一个运行时操作
+重放。Runtime 确认会以原子方式更新 Box 重启意图，
+不改变最初的 create 身份。
 
-新的突变记录使用`a3s.oci.operation.v6`。版本 3 文件上传和
-文件系统 mkdir/move/remove 保持可读；版本4还保留了
-每个精确的检查点请求和类型化的不可变响应；版本 5 添加了
-准确的恢复请求、分配的生成和暂停运行响应；和
-版本 6 保留了每个确切的 TEE 证明挑战和不可变的证据
-回应。版本 1 到 5 对于它们编码的操作仍然是可读的。
-主机在确认驱动程序重放之前提交日志结果
-证据，因此断开连接会返回可重试的错误，并且下一个所有者会重放
-主机结果，无需再次调度突变。主持人杂志
-在驱动程序证据被删除后，仍然是永久的更改请求围栏
-释放。
+新的变更记录使用 `a3s.oci.operation.v6`。版本 3 的 File 上传和
+Filesystem mkdir/move/remove 仍可读取；版本 4 还保留
+每个精确的 checkpoint 请求和类型化不可变响应；版本 5 添加
+精确的 restore 请求、分配的代次和暂停运行响应；
+版本 6 则保留每个精确的 TEE 证明挑战与不可变证据
+响应。版本 1 至 5 对各自编码的操作仍保持可读。
+Host 在确认驱动重放证据之前，先提交已记录到日志的
+结果，因此断连会返回可重试错误，下一任所有者会重放
+Host 结果，而不再次分派变更。在驱动证据
+释放后，Host 日志仍是防止修改请求后重用身份的永久屏障。
 
-持久状态现在将其规范根固定为目录功能。全部
-后代读取、枚举、创建、替换和隔离移动是
-从保留的目录句柄解析。 macOS、Linux 和 Windows 门证明
-环境根重命名、布局或事务符号链接/重解析点
-替换、外部文件系统句柄、同一设备 Linux 绑定挂载
-替换，或赛车 Windows 文件/目录目标替换不能
-重定向突变。 Windows 提交每个已经开源的相对对象
-到保留的目标父句柄并通过该句柄应用文件 DACL
-相同的打开对象。文件替换仅容忍有限的瞬态 Windows
-目标共享锁。递归审核提交的开店情况
-生成、操作、活动容器、过程、隔离和事件
-驾驶员恢复或请求服务之前的关系，同时保留
-幂等崩溃重放所需的显式中间状态。
+持久化状态现在将其规范根目录固定为一个目录能力句柄。所有
+后代项的读取、枚举、创建、替换和隔离移动均通过
+保留的目录句柄解析。macOS、Linux 和 Windows 关卡证明，
+环境根路径重命名、布局或事务中的符号链接/重解析点
+替换、外来文件系统句柄、同设备 Linux 绑定挂载
+替换，或竞态中的 Windows 文件/目录目标替换，都无法
+重定向变更。Windows 相对于保留的目标父目录句柄提交
+每个已打开的源对象，并通过同一个
+打开的对象应用文件 DACL。文件替换仅容忍有界、短暂的 Windows
+目标共享锁。打开存储时，会在驱动恢复或开始处理请求之前，
+递归审计已提交的代次、操作、存活容器、进程、隔离项和事件
+之间的关系，同时保留幂等崩溃重放所需的
+显式中间状态。
 
-确切的containerd API、身份、安装、重新启动、清理和
-资格边界记录在
+确切的 containerd API、身份、安装、重启、清理和
+资格验证边界详见
 [containerd Runtime V2](docs/containerd-runtime-v2.md)。
 
-合约 v1 冻结运行时类型`io.containerd.a3s-oci.v2`，任务服务
-`containerd.task.v2.Task`，以及 Linux 归档条目
-`containerd-shim-a3s-oci-v2`。将该条目安装为
-`/usr/local/bin/containerd-shim-a3s-oci-v2`。命名空间和任务 ID 使用
-`sha256-length-framed-u64be-v1`编码产生稳定的SDK容器ID；
-Host 分配 Create 返回的单调运行时生成，并且
-shim 会持续存在并在以后的每个请求中处理该确切的代。
-相同的代码拥有的表将每个任务分支和 FIFO 泵映射到其公共表
-SDK操作。 RuntimeInfo 将确切的 18 操作联合发布为
-`dev.a3s.oci.containerd-sdk-operations`；垫片拒绝端点丢失
-任何成员，其crate清单经过测试以保留 A3S Box 和驱动程序
-在此适配器边界之外的实现。
-有界进程 I/O 路径每个 shim 步骤最多读取和写入 64 KiB，
-将非终端 stdout 和 stderr 分开，并合并终端输出
-PTY 流。每个内核接受的 FIFO 前缀都会推进持久字节
-光标在下一次写入之前，因此取消永远不会提交未写入的内容
-后缀和替换恢复不会丢失。
+契约 v1 固定运行时类型 `io.containerd.a3s-oci.v2`、task 服务
+`containerd.task.v2.Task` 和 Linux 归档条目
+`containerd-shim-a3s-oci-v2`。将该条目安装到
+`/usr/local/bin/containerd-shim-a3s-oci-v2`。命名空间和 task ID 使用
+`sha256-length-framed-u64be-v1` 编码生成稳定的 SDK 容器 ID；
+Host 分配 Create 返回的单调递增运行时代次，
+shim 将其持久化，并在之后每个请求中寻址该确切代次。
+同一张代码定义的表将每个 Task 分支和 FIFO 泵映射到相应公共
+SDK 操作。RuntimeInfo 将确切的 18 操作并集发布为
+`dev.a3s.oci.containerd-sdk-operations`；缺少任何成员的端点都会被 shim
+拒绝，且测试会检查其 crate 清单，确保 A3S Box 和驱动
+实现位于这一适配器边界之外。
+有界进程 I/O 路径在每个 shim 步骤最多读写 64 KiB，
+非终端模式下将 stdout 和 stderr 分开，终端模式下则将输出
+合并到 PTY 流。内核接受的每个 FIFO 前缀都会在下一次写入前
+推进持久化字节游标，因此取消操作不会提交尚未写入的
+后缀，替代实例恢复时也不会丢失数据。
 
-创建恢复覆盖远程提交边界的两侧。垫片
-保留完整的包、隔离、I/O、rootfs 所有权、任务
-化身，派遣前稳定的操作身份。真正的过错
-门可以在调度之前停止主机，在该意图之后停止垫片
-持久，直接通过公共 SDK 提交确切的 Create，并杀死
-在完整元数据存在之前填充。 DeleteShim必须加入那一代，
-删除其确切的进程、运行时状态、rootfs 和包，并保留
-调用者拥有的containerd元数据；重复生成或驱动程序重新路由
-留下确切的证据并未能通过大门。
+Create 恢复覆盖远程提交边界的两侧。shim 会在分派前
+持久化完整的 bundle、隔离、I/O、rootfs 所有权、task
+实例和稳定操作身份。真实故障关卡
+可在分派前暂停 Host，在意图持久化后暂停 shim，
+通过公共 SDK 直接提交确切的 Create，再在完整元数据存在前终止
+shim。DeleteShim 必须接入该唯一代次，
+移除其确切进程、运行时状态、rootfs 和 bundle，同时保留
+调用方持有的 containerd 元数据；重复代次或驱动重路由
+都会留下确切证据并导致关卡失败。
 
-Box 的确切版本还验证了其管理主页，为
-快照较低，命名卷和网络，编译产品拥有的OCI
-捆绑包，并启动或重用此运行时的身份防护长寿命 Native
-Linux 所有者。它阻止 x86_64 和 aarch64 Linux 通道驱动 Rust、Python、
-TypeScript 和 Go Sandbox 生命周期、exec、文件系统、路由感知统计信息、
-通过显式暂停/恢复、快照恢复、重新启动和清理
-生产路线。
+上述确切的 Box 修订还会校验其托管主目录，持久化准备
+快照 lower 层、命名卷和网络，编译由产品持有的 OCI
+bundle，并启动或复用本运行时中受身份隔离保护的长生命周期 Native
+Linux 所有者。其 x86_64 和 aarch64 Linux 阻断式验证任务通过显式
+生产路由驱动 Rust、Python、TypeScript 和 Go 的 Sandbox
+生命周期、exec、文件系统、按路由统计、
+暂停/恢复、快照恢复、重启和清理。
 
-框完成度和运行时准备度衡量不同的范围。盒子可以完成
-针对合格的运行时切片的当前产品契约；这个存储库
-仍然拥有所有 20 个公共工作负载运营、每个广告驱动程序、所有者更换
-语义、OCI 一致性和发布资格。一个完整的消费者是
-因此，这并不能证明较低级别的运行时已完成。
+Box 完成度与 Runtime 就绪程度衡量的是不同范围。Box 可以
+基于 Runtime 已验证的部分能力完成当前产品契约；本仓库
+仍负责全部 20 个公共工作负载操作、每个声明的驱动、所有者替换
+语义、OCI 一致性和发布资格验证。因此，使用方已完成
+并不能证明底层运行时已完成。
 
-Linux 文件和文件系统调用在继承的新内部帮助程序中执行
-仅保留确切的根、用户命名空间和挂载命名空间描述符。
-帮助器验证其父级，拒绝重复或重新排序的描述符，
-在挂载命名空间之前输入用户命名空间，然后执行
-有界`openat2`操作。因此，容器 ID 在
-rootfs、绑定挂载、ID 映射挂载和容器创建的 tmpfs 文件系统。
+Linux 文件和文件系统调用在每次新建的内部辅助进程中执行，该进程仅继承
+确切保留的根目录、用户命名空间和挂载命名空间描述符。
+辅助进程认证其父进程，拒绝重复或顺序改变的描述符，
+先进入用户命名空间，再进入挂载命名空间，然后执行
+有界 `openat2` 操作。因此，容器内 ID 在
+rootfs、绑定挂载、ID 映射挂载及容器创建的 tmpfs 文件系统上均保持正确。
 
-完整的发布目标是每个适用的 OCI 运行时规范
-1.3.0 对 Linux 容器和每个广告驱动程序的要求 — 不是
-减少了仅 A3S 的配置文件。 [ROADMAP.md](ROADMAP.md) 保留完整的证据并
-分开打开释放门。
+完整发布目标涵盖 Linux 容器的 OCI 运行时规范
+1.3.0 中每条适用要求，以及每个声明的驱动，而非
+精简的 A3S 专用配置。[ROADMAP.md](ROADMAP.md) 将已完成证据与
+待完成发布关卡分开记录。
 
-能力集执行保持精确，并且对于每个值都是失败即关闭的
-运行时可以授予。当正在运行的内核或执行器继承时
-权限无法授予认可的请求功能，init 和 exec 删除
-仅对不可用的集成员身份发送有界结构化警告
-交叉执行之前的监督代理。格式错误或重复的警告
-框架无法关闭，而不是成为不受信任的日志文本。
+对于运行时能够授予的每个值，capability 集合强制执行始终精确，
+并遵循失败即拒绝原则。当当前内核或执行器继承的
+权限无法授予已识别的请求 capability 时，init 和 exec 仅移除
+那个无法授予的集合成员，并在跨越 exec 边界前向
+监管代理发送有界的结构化警告。格式错误或重复的警告
+帧会导致拒绝，而不会成为不可信日志文本。
 
-Linux sysctls 现在遵循相同的失败即关闭边界。 SDK只接受
-OCI 点或斜杠中的已知 IPC、网络、UTS 域和用户命名空间控制
-符号。执行器拒绝主机全局控制和同主机命名空间
-连接，通过保留的 procfs 应用有界确定性事务，
-验证每个值，如果 Create 未提交，则恢复较早的值。
+Linux sysctl 现在遵循相同的失败即拒绝边界。SDK 仅接受
+已知的 IPC、网络、UTS 域和用户命名空间控制项，支持 OCI 点号或斜杠
+表示法。执行器拒绝主机全局控制项及加入同主机相同命名空间的请求，
+通过保留的 procfs 应用有界确定性事务，
+验证每个值，并在 Create 未提交时恢复先前的值。
 
-Intel RDT 由运行时命名空间父级而不是容器拥有
-初始化进程。当 `linux.intelRdt` 存在时，父级会找到已安装的
-resctrl 文件系统，准备或验证请求的 CLOS，应用
-按 OCI 顺序`l3CacheSchema`、`memBwSchema` 和完整的`schemata`，读取
-返回有效值，并在运行前分配经过身份验证的 init PID
-钩子运行。专用监控组和运行时创建的 CLOS 目录
-在删除、关闭、创建失败或本机所有者死亡恢复时删除。
-显式和根 CLOS 目录仍属于外部所有。
+Intel RDT 由运行时命名空间父进程持有，而非容器
+init 进程。存在 `linux.intelRdt` 时，父进程查找已挂载的
+resctrl 文件系统，准备或验证请求的 CLOS，按 OCI 顺序应用
+`l3CacheSchema`、`memBwSchema` 和完整的 `schemata`，回读
+生效值，并在运行时 hook 执行前分配经认证的 init PID。
+专用监控组和运行时创建的 CLOS 目录会在
+Delete、关闭、Create 失败或原生所有者死亡恢复时移除。
+显式指定的 CLOS 目录和根 CLOS 目录仍由外部持有。
 
 ## 运行时契约
 
-### 创建和开始保持分开
+### 创建与启动保持分离
 
 ```text
 creating ── create committed ──▶ created
@@ -491,48 +490,46 @@ created  ── start committed  ──▶ running
 running  ── init terminated  ──▶ stopped
 ```
 
-`create` 验证并准备请求的边界而不执行
-`process.args`。只有`start`释放配置的进程。无效
-如果没有削弱这一障碍，转型就会失败。
+`create` 校验并准备请求的边界，不执行
+`process.args`。只有 `start` 才会放行已配置的进程。无效的
+状态转换会失败，不会削弱这一屏障。
 
-每个耐用容器记录保留：
+每条持久化容器记录保留：
 
-- 确切的经过验证的配置和摘要；
-- 完整的`a3s.oci.attachments.v1`、存储感知 v2、网络感知 v3 或
-  guest-session-aware v4 清单及其新创建记录的摘要；
-- 使用共享来宾内核时的确切可重用来宾会话化身
-  隔离；
-- 单调增加的运行时生成；
-- 运行时选择的驱动程序和有效的隔离；
-- 主动操作意图和终端回放结果；
-- 观察到的确切的 init 和 exec-process 退出状态；
-- 中断突变的恢复或隔离状态。
+- 精确校验后的配置及其摘要；
+- 新建记录的完整 `a3s.oci.attachments.v1`、支持存储的 v2、支持网络的 v3 或
+  支持客户机会话的 v4 清单及其摘要；
+- 使用 shared-guest-kernel 隔离时，确切的可复用客户机会话
+  实例；
+- 单调递增的运行时代次；
+- 运行时选定的驱动及有效隔离方式；
+- 活跃的操作意图与终态重放结果；
+- 观测到的确切 init 与 exec 进程退出状态；
+- 中断变更的恢复或隔离状态。
 
-匹配重试会重现原始结果。陈旧的一代，重用
-具有不同有效负载的操作 ID、不支持的 OCI 字段、不可用
-隔离类，或更改记录的驱动程序在突变之前失败。
+匹配的 retry 会复现原始结果。过时代次、以不同 payload 复用的
+操作 ID、不支持的 OCI 字段、不可用的隔离类，或已记录驱动发生变更，
+都会在变更前失败。
 
-### 隔离是一个要求，而不是驱动程序名称
+### 隔离是要求，而非驱动名称
 
-|请求 |边界|内核分享 |
-| ---| ---| ---|
-| `DedicatedVm` |硬件实用程序VM |一个工作负载或 Pod 拥有来宾内核 |
-| `SharedGuestKernel` |硬件实用程序VM |一个已声明的信任域共享一个来宾内核 |
-| `SharedHostKernel` |原生 Linux |容器共享主机内核 |
+| 请求 | 边界 | 内核共享 |
+| --- | --- | --- |
+| `DedicatedVm` | 硬件辅助虚拟机 | 一个工作负载或 pod 独占客户机内核 |
+| `SharedGuestKernel` | 硬件辅助虚拟机 | 一个已声明的信任域共享客户机内核 |
+| `SharedHostKernel` | Native Linux | 容器共享主机内核 |
 
-`SharedGuestKernel` 请求必须携带 `a3s.oci.attachments.v4` 绑定
-一种精确的访客会话化身。这是持久的身份和权威
-当前注册的实用程序 VM 驱动程序提供的证据，而不是声明
-汇集；能力协商仍然拒绝 v4，直到该驱动程序通告
-架构。
+`SharedGuestKernel` 请求必须携带 `a3s.oci.attachments.v4` 绑定，
+对应一个确切的客户机会话实例。这是持久化身份与权限
+证据，并非声称当前注册的辅助虚拟机驱动已提供
+池化；能力协商仍会拒绝 v4，直到该驱动声明相应 schema。
 
-调用者请求隔离类。运行时选择一个启动就绪的
-该类别的所有者，保留选定的驱动程序，并稍后路由
-即使在司机重新开放服务后，操作也会返回到确切的所有者
-以不同的顺序注册。它永远不会改变历史状态或下降
-从虚拟机边界返回主机内核。
+调用方请求隔离类。运行时为此类选择一个可启动的所有者，
+持久化所选驱动，并将后续每次操作路由回该确切所有者——
+即使服务重新打开后驱动注册顺序不同。它从不改写历史状态，
+也从不从虚拟机边界回退到主机内核。
 
-### SDK是执行边界
+### SDK 即执行边界
 
 ```rust,no_run
 use a3s_oci_runtime::HostRuntimeService;
@@ -562,15 +559,14 @@ async fn main() -> a3s_oci_sdk::Result<()> {
 }
 ```
 
-`RuntimeClient` 可以包装进程内服务或通过有界本地连接
-工控机。报告本地流损坏，没有隐藏重放；下一个明确的
-请求重新连接并重新协商，以便调用者可以重试或协调
-原始操作标识。前台`run`只是一个客户端组合
-持久的创建/启动/等待/删除调用；它不会创建第二个
-生命周期 API 或状态机。
+`RuntimeClient` 可包装进程内服务，也可通过有界本地 IPC 连接。
+本地流断开时会如实上报，不会隐藏重放；下一次显式请求会
+重新连接并重新协商，以便调用方 retry 或与原始操作身份对账。
+前台 `run` 只是 durable create/start/wait/delete 调用的客户端组合；
+它不会创建第二套生命周期 API 或状态机。
 
-在 Linux 上，明确的实验主机所有者发布了一个持久的 SDK
-不打开KVM的端点：
+在 Linux 上，显式 experimental 主机所有者会发布一个 durable SDK
+端点，且不会打开 KVM：
 
 ```bash
 a3s-oci native-linux-host-service \
@@ -578,15 +574,15 @@ a3s-oci native-linux-host-service \
   --agent /usr/libexec/a3s-oci-agent
 ```
 
-所有者在发布之前打开 Native Linux 驱动程序和持久状态
-`runtime.sock`，为独立的围栏容器代提供服务
-经过身份验证的相同 UID 客户端，并在优雅的情况下获取驱动程序拥有的进程
-关闭。 Box显式`A3S_BOX_OCI_MIGRATION=sandbox`生产路线使用
-这位业主。现有的`native-linux-service`命令仍然是
-沙盒范围内的 FD 3/4/5 所有者，用于兼容性和重点资格认证。
+所有者在发布 `runtime.sock` 前打开 Native Linux 驱动与持久化状态，
+向经身份认证的同 UID 客户端提供独立隔离的容器代次服务，
+并在优雅关闭时回收驱动持有的进程。Box 显式
+`A3S_BOX_OCI_MIGRATION=sandbox` 生产路由使用此所有者。现有
+`native-linux-service` 命令仍是 Sandbox 范围内 FD 3/4/5 的所有者，
+用于兼容性与聚焦资格验证。
 
-在 Apple Silicon 上，公共 HVF 所有者公开了相同的 SDK 合约，同时
-将持久状态与每代虚拟机状态分开：
+在 Apple Silicon 上，公共 HVF 所有者在暴露相同 SDK 契约的同时，
+将持久化状态与每代虚拟机状态分离：
 
 ```bash
 a3s-oci macos-hvf-host-service \
@@ -595,221 +591,204 @@ a3s-oci macos-hvf-host-service \
   --system-image-manifest /absolute/path/to/system-image.json
 ```
 
-它准备一个仅所有者的`0700`根，发布相同的UID`0600`
-`runtime.sock`，接受并发客户端，并且仅删除套接字 inode
-它创造了。该服务公布所有 20 个 HVF 驱动程序操作以及
-`features`、`list` 和 `events`，需要运行时捆绑切换
-扩展，并在正常关闭时获取每个实时专用虚拟机。高压真空炉
-司机只做广告`DedicatedVm`；未实现共享来宾池。
+它准备仅所有者的 `0700` 根目录，发布同 UID 的 `0600`
+`runtime.sock`，接受并发客户端，并仅删除其创建的 socket inode。
+该服务声明全部 20 个 HVF 驱动操作以及 `features`、`list` 和
+`events`，要求 runtime bundle-handoff 扩展，并在优雅关闭时回收
+每个存活的专用虚拟机。HVF 驱动仅声明 `DedicatedVm`；共享客户机
+池化尚未实现。
 
-运行时契约套件还跨两个不同的操作系统重新启动所有者
-同一 Unix 套接字或 Windows 命名管道上的进程。更换开启
-相同的持久`HostRuntimeService`状态，同时一个保留的客户端恢复
-确切的生成和实时执行目标，重放创建/启动/执行而无需
-重复测试驱动程序调度，并继续库存、标准输入、信号、等待，
-输出和清理。这证明了通用过程和传输边界，
-不是本机 Linux 或实用程序虚拟机在真实硬件上的重新连接。
+运行时契约套件还会在相同 Unix socket 或 Windows 命名管道上，
+跨两个不同的 OS 进程重启所有者。替代进程打开相同的 durable
+`HostRuntimeService` 状态，而一个保留的客户端恢复确切代次与
+存活 exec 目标，重放 create/start/exec 且不重复 test-driver 分派，
+并继续 inventory、stdin、signal、wait、output 与 cleanup。这证明
+的是通用进程与传输边界，而非真实硬件上的 Native Linux 或
+辅助虚拟机重新附着。
 
-真正的 Native Linux 门现在跨越了与实际的进程边界
-司机。启动器在分叉命名空间子级之前是父级死亡绑定的；
-在所有者`SIGKILL`之后，替换过程会重新验证不可变的
-配置加上所有者/启动器/init 启动时间身份，等待
-确切的工作量消失，并暴露出已停止的清理墓碑。它从来没有
-声称直播流已重新连接或在没有出现时伪造退出代码
-经过身份验证的父母幸存下来并收获了它。幂等杀，清空库存，
-明确缺少退出证据、仅停止删除和执行程序/cgroup
-清理工作在 x86_64 和 aarch64 上进行机器检查。实时流程会话
-对于 Box B2 切换，重新连接仍然保持开放状态。
+真实 Native Linux 关卡现已跨越进程边界，使用实际驱动。
+launcher 在 fork 命名空间子进程前绑定 parent-death；所有者
+`SIGKILL` 后，替代进程重新校验不可变配置以及 owner/launcher/init
+启动时间身份，等待确切工作负载消失，并暴露 stopped cleanup
+tombstone。它从不声称 live stream 已重新附着，也不会在没有
+经身份认证的 parent 存活并回收时伪造退出码。幂等 kill、空
+inventory、显式缺失退出证据、仅 stopped delete，以及
+executor/cgroup cleanup 在 x86_64 与 aarch64 上均经机器校验。
+Box B2 切换所需的 live process-session 重新附着仍待完成。
 
 ## 平台状态
 
-|主机路径 |保留真实证据|当前准备就绪并敞开大门|
-| ---| ---| ---|
-|原生 Linux x86_64/aarch64 |有根和助手支持的无根生命周期，包括所有六个 OCI 默认设备、`/dev/ptmx`、配置初始化`/dev/console`、`/dev` 外部的显式 FIFO、不可变声明/默认设备边界以及有界 A3S Box 设备策略； SDK服务传输；执行/PTY/I/O； init/exec 调度程序和命名空间-sysctl 回读； cgroup 更新/统计信息；钩子；命名空间和挂载配置文件；多集装箱围栏；故障清理；所有者-`SIGKILL`安全终止并停止清理；精确`startContainer` Hook所有者-死亡进程-组清理和替换恢复； 25波×4个容器； x86_64/aarch64 通过所有四个 SDK 安装了 Box 生产所有者组成，`/dev/kvm` 不存在且无法访问，加上新鲜的 Box 进程所有者死亡/重启门 |默认库存`probe-only`；明确打开开发驱动程序`experimental`。实时会话重新连接、默认切换、生产安全性和 OCI 一致性仍然存在 |
-| Linux KVM 实用程序虚拟机 |独立的设备/访问/ioctl/API版本探针；确定性 x86_64 和 AArch64 运行时存档和不可变的 ext4 根；精确的 libkrun、固件、导出的内核和静态 Guest Agent 兼容性集；描述符固定的只读根附件；隔离的创建/配置/根/plain-vsock/释放上下文门；一个隔离的真实进入工作线程，具有描述符固定的 KVM 和运行时共享检查、父工作线程设备/inode 身份绑定、pidfd 所有者死亡、内核验证的 Unix 对等身份、协议 v10 协商以及 KVM 不可用时的失败即关闭清理证据。两个架构通道均保留 14 种预进入兼容性漂移矩阵，并调用 KVM 门控的 17 种生命周期矩阵。其版本化的十例来宾路径隔离条目检查遍历、符号链接和魔术链接转义；重点回归还会在描述符验证后交换包、rootfs 和绑定源条目。这些通道还调用作用域所有者死亡/重启门、作用域 25 波新生代浸泡以及九阶段创建、状态、启动、终止、删除、等待、执行、SignalProcess、WaitProcess、暂停、恢复、进程、更新、统计、ReadOutput、WriteStdin、CloseStdin、调整大小、文件和文件系统所有者替换门。 virtiofs 运行时共享上的来宾持久所有权遵循共享根主机 UID，而不是来宾 `geteuid()`，因此非根主机服务可以保留恢复记录和设备目标清单。在创建来宾可见的代共享之前，独立于 KVM 的驱动程序预检会拒绝共享内核类、不精确的代、丢失切换所有权以及丢失、链接、非私有、漂移、转义 rootfs 或绝对绑定切换。浸泡审核生成屏蔽和重放以及每波进程、标记、端点、描述符、捆绑切换、运行时共享、恢复报告和配置的 Guest `cgroupsPath` 生命周期。公开候选人在每一代拥有一个虚拟机，拒绝主机内核回退，将引导程序和可写共享分开，并且保持不可注册| `probe-only`； 2026 年 9 月 8 日在`e71a995`/`a35703c` 的裸机 x86_64 观察保留了生命周期、恢复、180/180 操作阶段重新打开路径以及短 `RUNNER_TEMP` 的 25/25 浸泡。早期的干净修订保留文件/文件系统 9/9（`fa4c593`）和之前的生命周期/浸泡行。 AArch64 仍悬而未决，主机关闭和升级所需的单独真实条目负隔离配置文件也是如此。
-| macOS arm64/HVF |公共相同UID SDK主机服务；每一代有一个专用虚拟机；清单绑定的不可变 ext4 系统映像，具有固定的 A3S Linux 内核和代理；只读根磁盘加上单独的相同 UID 模式-0700 可写运行时共享，通过保留的 no-follow 目录句柄和父到工作程序设备/inode 身份绑定固定；特权 OCI 设备节点的来宾本地 devtmpfs 源；真正的 v10 协议桥接器，具有所有 21 个来宾操作；保留完整的协议 v9 生命周期、多容器、命名空间/根文件系统强制、3 个不可删除清理点、11 个传输故障点、180/180 工作负载操作替换路径、负资产/身份验证门和 25 个新 VM 波；源修订版 `a5a6b53` 在所有 20 个驱动程序操作中通过了修订版绑定的公共路径门，加上 `features`/`list`/`events`、主机服务 `SIGKILL` 恢复以及零瞬态泄漏的单独 25/25 新虚拟机浸泡 | Apple Silicon 上的`experimental`。当前公布的每个公共 macOS/HVF 功能均已实现，并且协议 v10 公共路径在记录的修订版中合格。版本化的十案例访客路径隔离配置文件已实现完整且 CI 连线；更新版本中的第一个 `available` 工件仍在等待中。签署的发布包资格、OCI 一致性、安全审查、升级/回滚兼容性以及更长的发布时间保留在 `supported` 之前
-| Windows x86_64/WHPX |真正的分区/上下文/来宾门、协议 v9 生命周期和文件系统会话、直接驱动程序资格、受保护的每代共享、精确退出重放、两个恢复故障边界处的所有者死亡、主机服务重新打开、仅停止删除以及完整的瞬时清理。当前的实现还构建了一个可重现的 x86_64 ext4 系统映像，固定 Linux 6.12.91 和所有本机启动资产，附加只读根目录，并保持运行时共享独立。现有主机证据现在涵盖了 20 个工作负载操作中的所有 180/180 个操作阶段替换路径，以及一个独立的同进程 8 周期句柄回收门，具有精确的 115 个冷句柄、122 个基线句柄和 122 个最终句柄 | `probe-only`；完整的 SDK/恢复/负/浸泡矩阵仍必须通过新配置的 WHPX 主机上的这些确切资产。 v7 shim 和主机保留 v6 进程内处理恢复契约，但新主机发布大门仍然打开 |
+| 主机路径 | 留存的真实证据 | 当前就绪状态与开放关卡 |
+| --- | --- | --- |
+| Native Linux x86_64/aarch64 | Rootful 与 helper 支撑的 rootless 生命周期，包括全部六个 OCI 默认设备、`/dev/ptmx`、配置 init 的 `/dev/console`、`/dev` 外的显式 FIFO、不可变 declared/default 设备边界，以及有界 A3S Box 设备策略；SDK 服务传输；exec/PTY/I/O；init/exec 调度器与 namespaced-sysctl 回读；cgroup update/stats；hooks；命名空间与 mount profile；多容器隔离；fault cleanup；owner-`SIGKILL` 安全终止与 stopped cleanup；精确 `startContainer` Hook owner-death 进程组 cleanup 与 replacement recovery；25 波 × 4 容器；x86_64/aarch64 经全部四个 SDK 的已安装 Box 生产所有者组合，`/dev/kvm` 缺失且不可访问，加上 fresh-Box-process owner-death/restart 关卡 | 默认 inventory 为 `probe-only`；显式打开的 development driver 为 `experimental`。Live session 重新附着、默认切换、生产安全与 OCI conformance 仍待完成 |
+| Linux KVM 辅助虚拟机 | 独立的 device/access/ioctl/API-version 探测；确定性的 x86_64 与 AArch64 runtime archive 与不可变 ext4 root；精确的 libkrun、firmware、exported kernel 与 static Guest Agent 兼容性集合；descriptor-pinned 只读 root attachment；隔离的 create/configure/root/plain-vsock/release context 关卡；带 descriptor-pinned KVM 与 runtime-share 检查、parent-to-worker device/inode 身份绑定、pidfd owner death、kernel-authenticated Unix peer identity、protocol-v10 协商，以及 KVM 不可用时的 fail-closed cleanup 证据的隔离 real-entry worker。两条架构通道均保留 14-case pre-entry compatibility-drift matrix，并调用 KVM-gated 17-case lifecycle matrix。其 versioned 十 case Guest path-isolation entry 检查 traversal、symbolic-link 与 magic-link 逃逸；聚焦回归还会在 descriptor 校验后交换 bundle、rootfs 与 bind-source entry。通道还调用 scoped owner-death/restart 关卡、scoped 25-wave fresh-generation soak，以及九阶段 Create、State、Start、Kill、Delete、Wait、Exec、SignalProcess、WaitProcess、Pause、Resume、Processes、Update、Stats、ReadOutput、WriteStdin、CloseStdin、Resize、File 与 Filesystem owner-replacement 关卡。Guest 在 virtiofs runtime share 上的 durable ownership 遵循 share-root Host UID，而非 Guest `geteuid()`，因此 non-root Host Service 可保留 recovery record 与 device-target manifest。KVM-independent driver preflight 在创建 Guest-visible generation share 前，会拒绝 shared-kernel class、不精确代次、缺失 handoff ownership，以及缺失、linked、non-private、drifted、escaping-rootfs 或 absolute-bind handoff。soak 审计 generation fencing 与 replay，以及每波的 process、marker、endpoint、descriptor、bundle-handoff、runtime-share、recovery-report 与 configured Guest `cgroupsPath` 生命周期。公共候选驱动每确切代次拥有一台 VM，拒绝 host-kernel fallback，将 bootstrap 与 writable share 分离，且仍不可注册 | `probe-only`；2026 年 9 月 8 日裸机 x86_64 观测（`e71a995`/`a35703c`）在短 `RUNNER_TEMP` 下留存 lifecycle、recovery、180/180 operation-stage reopen path 与 25/25 soak。更早的 clean revision 保留 File/Filesystem 各 9/9（`fa4c593`）及先前 lifecycle/soak 行。AArch64 仍待完成，Host shutdown 与 promotion 所需的独立 real-entry negative-isolation profile 亦待完成 |
+| macOS arm64/HVF | 公共同 UID SDK host service；每确切代次一台 dedicated VM；manifest-bound 不可变 ext4 system image，含 pinned A3S Linux kernel 与 agent；只读 root disk 加独立同 UID mode-0700 writable runtime share，经 retained no-follow directory handle 与 parent-to-worker device/inode 身份绑定固定；Guest-local devtmpfs 上的 privileged OCI device node；真实 protocol-v10 bridge，含全部 21 个 Guest 操作；留存完整 protocol-v9 lifecycle、multi-container、namespace/rootfs enforcement、3 个 no-delete cleanup point、11 个 transport fault point、180/180 workload-operation replacement path、negative asset/authentication 关卡，以及 25 fresh-VM wave；源码 revision `a5a6b53` 通过 revision-bound public-path 关卡，覆盖全部 20 个 driver 操作以及 `features`/`list`/`events`、Host Service `SIGKILL` recovery，以及独立 25/25 fresh-VM soak，零 transient leak | Apple Silicon 上为 `experimental`。当前声明的每个公共 macOS/HVF 功能均已实现，protocol-v10 public path 在记录 revision 上已通过资格验证。Versioned 十 case Guest path-isolation profile 已实现且 CI 已接入；updated revision 上的首个 `available` artifact 仍待完成。Signed release-package qualification、OCI conformance、security review、upgrade/rollback compatibility 与更长 release soak 在 `supported` 之前仍待完成 |
+| Windows x86_64/WHPX | 真实 partition/context/guest 关卡、protocol-v9 lifecycle 与 filesystem session、direct driver qualification、protected per-generation share、exact exit replay、两个 recovery fault boundary 处的 owner death、host-service reopen、stopped-only delete 与完整 transient cleanup。当前实现还构建可复现的 x86_64 ext4 system image，pin Linux 6.12.91 与全部 native boot asset，只读 attach root，并保持 runtime share 独立。existing-host 证据现已覆盖 20 个 workload operation 的全部 180/180 operation-stage replacement path，以及独立同进程 8-cycle handle-reclamation 关卡，exact 115 cold、122 baseline 与 122 final handle | `probe-only`；完整 SDK/recovery/negative/soak matrix 仍须在新配置的 WHPX 主机上以这些 exact asset 通过。v7 shim 与 Host 保留 v6 in-process handle-restoration 契约，但 fresh-host release 关卡仍开放 |
 
-Windows WHPX 来宾切换现在带有显式 `windows-virtiofs-acl-v1`
-元数据选择器。 Linux Guest 仅标准化 virtio-fs 的已知合成
-`0755`/`0644`通过其私有`0700`/`0600`切换合约
-打开的描述符；受保护的 Windows DACL 仍然具有权威性，并且所有
-其他模式失败关闭。此兼容性路径不会改变
-`probe-only` 准备就绪或出色的新主机释放门。
-提交的修订版`9d1639a`通过了完整的本地WHPX配置文件
-（56/56 个样本）、直接驱动门和所有者死亡/重新打开门
-源匹配的不可变图像；新主机的发布门仍然是明确的。
+Windows WHPX guest handoff 现在携带显式 `windows-virtiofs-acl-v1`
+metadata selector。Linux Guest 仅通过已打开 descriptor，将 virtio-fs
+已知 synthetic `0755`/`0644` mode 规范化为私有 `0700`/`0600` handoff
+契约；受保护的 Windows DACL 仍为权威，其他 mode 均 fail closed。此
+兼容路径不改变 `probe-only` readiness 或仍待完成的 fresh-host release
+关卡。提交 revision `9d1639a` 在 source-matched immutable image 上通过
+完整 local WHPX profile（56/56 sample）、direct-driver 关卡与
+owner-death/reopen 关卡；fresh-host release 关卡仍显式开放。
 
-2026 年 9 月 6 日至 7 日的当前主办方运营资格延长至
-每个工作负载操作的证据。 Windows 10 Pro 上的七次有界运行
-23H2 (AMD64) 通过了 180/180 个操作阶段案例（20 个操作 x 9 保留
-故障阶段），包括时钟调整的统计替换情况；全部
-报告保留了预期的所有者/故障交叉、不可变的资产哈希值，以及
-完成进程/共享清理。独立者
-`a3s.oci.windows-whpx-handle-reclamation-run.v1`门也过了八
-具有 `115 -> 122 -> 122` 冷/基线/最终句柄的同一进程 VM 周期，
-最终增量为零，并恢复了运行时份额。这些是现有主机
-观察，并且不要关闭新配置的发布主机门。
+2026 年 9 月 6–7 日的 current-host operation qualification 将证据
+扩展到每个 workload operation。Windows 10 Pro 23H2 (AMD64) 上七次
+有界运行通过 180/180 operation-stage case（20 operation × 9 retained
+fault stage），包括 clock-adjusted Stats replacement case；所有 report
+均保留预期 owner/fault crossing、immutable asset hash 与完整
+process/share cleanup。独立 `a3s.oci.windows-whpx-handle-reclamation-run.v1`
+关卡还通过八次同进程 VM cycle，`115 -> 122 -> 122` cold/baseline/final
+handle、零 final delta 与 restored runtime share。这些是 existing-host
+观测，并不关闭 freshly provisioned release-host 关卡。
 
-2026年9月7日，合并实施还通过了完整的当前-
-主机`a3s.oci.windows-whpx-soak.v2`运行：25/25串口，3/3多容器，
-3/3 生命周期故障、6/6 并行、5/5 工作负载、10/10 类型否定以及
-4/4 所有者杀死案例，经过验证和最终流程清理通过。
-这仍然是现有的宿主证据；新主晋级门依旧
-明确的。
+2026 年 9 月 7 日，merged implementation 还通过完整 current-host
+`a3s.oci.windows-whpx-soak.v2` run：25/25 serial、3/3 multi-container、
+3/3 lifecycle-fault、6/6 parallel、5/5 workload、10/10 typed-negative
+与 4/4 owner-kill case，verification 与 final process cleanup 均通过。
+这仍是 existing-host 证据；fresh-host promotion 关卡仍显式开放。
 
-相同的合并当前主机运行通过了独立的直接驱动程序和
-所有者死亡/服务恢复门，包括精确的退出重放，以及恢复
-故障边界、服务重新打开、仅停止删除和完全清理。
-这些观察结果不会促使 WHPX 超出`probe-only`。
+同一 merged current-host run 还通过独立 direct-driver 与
+owner-death/service-recovery 关卡，包括 exact exit replay、两个
+recovery fault boundary、service reopen、stopped-only delete 与完整
+cleanup。这些观测不会将 WHPX 提升为 `probe-only` 以上。
 
-Windows WHPX 来宾切换现在带有显式 `windows-virtiofs-acl-v1`
-元数据选择器。 Linux Guest 仅标准化 virtio-fs 的已知合成
-`0755`/`0644` 模式通过其私有 `0700`/`0600` 切换合约
-打开的描述符；受保护的 Windows DACL 仍然具有权威性，并且所有
-其他模式失败关闭。此兼容性路径不会改变
-`probe-only` 准备就绪或出色的新主机释放门。
-提交的修订版`9d1639a`通过了完整的本地WHPX配置文件
-（56/56 个样本）、直接驱动门和所有者死亡/重新打开门
-源匹配的不可变图像；新主机的发布门仍然是明确的。
+Windows WHPX guest handoff 现在携带显式 `windows-virtiofs-acl-v1`
+metadata selector。Linux Guest 仅通过已打开 descriptor，将 virtio-fs
+已知 synthetic `0755`/`0644` mode 规范化为私有 `0700`/`0600` handoff
+契约；受保护的 Windows DACL 仍为权威，其他 mode 均 fail closed。此
+兼容路径不改变 `probe-only` readiness 或仍待完成的 fresh-host release
+关卡。提交 revision `9d1639a` 在 source-matched immutable image 上通过
+完整 local WHPX profile（56/56 sample）、direct-driver 关卡与
+owner-death/reopen 关卡；fresh-host release 关卡仍显式开放。
 
-对于 Unix 实用程序-VM 工作线程，父节点到工作线程的设备/inode 切换绑定
-确切的世代共享目录及其所需的 `run/` 状态子目录；
-隐藏的工作命令拒绝不完整的身份对。
+对 Unix 辅助虚拟机 worker，parent-to-worker device/inode handoff 同时
+绑定 exact generation-share directory 及其必需的 `run/` state child；
+hidden worker command 会拒绝不完整的 identity pair。
 
-全部保留Linux KVM入门、兼容性、生命周期、恢复、
-操作重新打开，并且浸泡工件带有共享来源合约
-如下所述。这消除了工件身份的模糊性；它没有
-用不可用的运行程序输出来代替成功的真实 KVM 证据。
+所有留存的 Linux KVM entry、compatibility、lifecycle、recovery、
+operation-reopen 与 soak artifact 均携带下文所述的 shared provenance
+contract。这消除了 artifact identity 歧义；它不能以 unavailable-runner
+output 替代成功的 real-KVM 证据。
 
-当 `/dev/kvm` 存在时，Linux 发现和 Native Linux 开发必须有效
-missing or unusable. KVM 是一个可选的实用程序 VM 驱动程序，而不是先决条件
-用于主机内核执行。 Box main commit
-`d6861de302e6e165a2fdc473b2d399bb0692048e` 保留已安装的产品
-boundary in
+Linux discovery 与 Native Linux development 在 `/dev/kvm` 缺失或不可用时
+必须仍可用。KVM 是可选的辅助虚拟机驱动，从不是 host-kernel execution
+的前置条件。Box main commit
+`d6861de302e6e165a2fdc473b2d399bb0692048e` 在
 [CI run 33497670646](https://github.com/A3S-Lab/Box/actions/runs/33497670646)
-在 x86_64 和 aarch64 上针对运行时提交
-`438e4b7936cd08d408160fe9341a21786f60cd26`.
+上，于 x86_64 与 aarch64 对 Runtime commit
+`438e4b7936cd08d408160fe9341a21786f60cd26` 留存了该 installed-product
+边界。
 
-2026 年 8 月 15 日，一次重点关注的 Apple Silicon 重放通过了所有 14 个期刊
-`guest-after-response-write` 提交后 Guest 的突变案例
-确认。文件和文件系统也通过了完整的九个阶段
-重新打开和真实所有者替换矩阵，总共 18/18 条路径。使用的运行
-代理 SHA-256
+2026 年 8 月 15 日，聚焦的 Apple Silicon rerun 通过全部 14 个 journaled
+`guest-after-response-write` mutation case，含 post-commit Guest
+acknowledgement。File 与 Filesystem 还通过完整九阶段 reopen 与 real
+owner-replacement matrix，共 18/18 path。运行使用 agent SHA-256
 `eea01813858f5dd16bed70cbfba87221da6daebb4201b7a628665aad3f615a7d`
-和系统映像 SHA-256
+与 system-image SHA-256
 `e888c52e35ba8ed8f747d55bdc32316190dc317865e6919014e434a1e644e6ef`。
 
-最新WHPX所有者死亡之门出炉
-`a3s.oci.whpx-recovery-smoke-run.v1` 来自干净的运行时提交`2d91cd0`。
-这将关闭服务重新启动证据项。不可变图像代码和
-资格神器现在已经存在，但他们还没有生产出
-宣传公共候选人所需的新主持人矩阵。当前的垫片
-还在 libkrun 上下文之前记录其 Windows 句柄清单
-创建和VM退出后；主机验证和硬件浸泡拒绝任何
-漂移。在新主机矩阵出现之前，这仍然是实施证据
-保留每个会话中的匹配计数。
+最新 WHPX owner-death 关卡从 clean runtime commit `2d91cd0` 发出
+`a3s.oci.whpx-recovery-smoke-run.v1`。这关闭了 service-restart 证据项。
+immutable-image code 与 qualification artifact 现已存在，但尚未产生
+promotion 公共候选所需的 fresh-host matrix。当前 shim 还在 libkrun context
+创建前与 VM exit 后立即记录 Windows handle inventory；Host validation 与
+hardware soak 会拒绝任何 drift。在 fresh-host matrix 于每个 session 留存
+匹配计数之前，这仍是 implementation 证据。
 
-2026 年 9 月 3 日当前主赛资格新增真主观察
-不改变这些准备状态分类。在 x86_64 WSL2 上，固定
-Linux KVM 资产通过入门，14/14 兼容性漂移案例，17/17
-生命周期案例、所有者死亡/重启、25/25 浸泡波和 162/162 操作
-替换路径。 clean Runtime 修订版的 9 月 3 日后续活动
-`fa4c593`添加了真正的文件和文件系统所有者替换，通过了9/9阶段
-对于具有不可变资产来源的每个操作（18/18 附加路径）
-和零残留。在现有的 Windows 10 x86_64 主机上，固定的 WHPX
-资产通过了 56/56 生命周期、多容器、故障、工作负载、负面和
-所有者杀死样本，所有 51 个虚拟机句柄库存均已恢复。这些结果
-明确仅观察：广告中两者的新宿主证据
-体系结构、剩余的 WHPX/KVM 操作阶段和关闭边界，并签署
-升级之前仍然需要发布工件。随后的运行从
-合并运行时提交`bf43388dc1a5630f3fbbd699203877cf84f1ee2d`重复了
-WHPX 56/56 浸泡、直接驱动和服务恢复门
-源匹配的不可变图像；所有 51 个虚拟机句柄库存均已恢复并且
-主机进程库存返回零。它仍然只是观察
-现有主机，因此不会关闭新配置的发布主机
-或操作阶段门。
+2026 年 9 月 3 日的 current-main qualification 增加了 real-host observation，
+但未改变这些 readiness classification。在 x86_64 WSL2 上，pinned Linux KVM
+asset 通过 entry、14/14 compatibility drift case、17/17 lifecycle case、
+owner-death/restart、25/25 soak wave 与 162/162 operation replacement path。
+9 月 3 日 follow-up（clean Runtime revision `fa4c593`）增加 real File 与
+Filesystem owner replacement，各 9/9 stage（额外 18/18 path），含
+immutable asset provenance 与 zero residue。在 existing Windows 10 x86_64
+host 上，pinned WHPX asset 通过 56/56 lifecycle、multi-container、fault、
+workload、negative 与 owner-kill sample，51 个 VM handle inventory 全部
+恢复。这些结果明确为 observation-only：fresh-host evidence（两条 advertised
+architecture）、剩余 WHPX/KVM operation-stage 与 shutdown boundary，以及
+signed release artifact 在 promotion 前仍必需。后续 merged Runtime commit
+`bf43388dc1a5630f3fbbd699203877cf84f1ee2d` run 在 source-matched
+immutable image 上重复 WHPX 56/56 soak、direct-driver 与 service-recovery
+关卡；51 个 VM handle inventory 全部恢复，host process inventory 归零。
+它仍是 existing host 上的 observation-only，因此不关闭 freshly provisioned
+release-host 或 operation-stage 关卡。
 
-同一天还保留了一个发布配置文件 Native Linux/containerd
-来自来源`878f8414cef3b85bef1b51fe6735017b25828252`的观察：三
-连续隔离的containerd 2.2.1矩阵（96.42/96.17/95.31秒）
-通过了所有 23 个重启、补水和静态强制清理边界
-musl CLI/Agent/shim 工件。保留默认的containerd和Host Service
-在其原始 PID 上，运行后审计发现没有任务、捆绑包、进程、
-mount、cgroup 或运行时残留。它被记录为仅观察，因为
-它使用 WSL2 上的源构建工件；它不宣传广告
-容器或驱动程序声明。
+同一日期还留存 release-profile Native Linux/containerd observation（source
+`878f8414cef3b85bef1b51fe6735017b25828252`）：三轮连续 isolated
+containerd 2.2.1 matrix（96.42/96.17/95.31 秒）通过全部 23 个 restart、
+rehydration 与 forced-cleanup boundary，使用 static musl CLI/Agent/shim
+artifact。default containerd 与 Host Service 保持原 PID，post-run audit
+未发现 task、bundle、process、mount、cgroup 或 Runtime residue。记为
+observation-only，因使用 WSL2 上的 source-built artifact；它不提升
+advertised containerd 或 driver claim。
 
-源修订版的重启边界后续
-`fa9393d473c2f2305ce8f7ec67054acea7ea54a0` 重复相同的隔离
-containerd 2.2.1 WSL2 x86_64 资格在 96.53、96.63 和 3 次
-96.59 秒。该资格现在记录一个由代码执行的有序分类账
-对于所有 23 个重新启动、垫片补水和强制清理边界；每个
-通完成准确盘点。静态 musl CLI、代理、垫片和
-资格工件加上匹配的 Cargo.lock 摘要保留在
-`compat/containerd-runtime-v2.json`。默认的containerd保持在PID 180，
-最终审计发现任务、容器、捆绑包、运行时记录为零，
-专用根和单元之前的 shim/工作负载进程、挂载或 cgroup
-被删除。这仍然是 WSL2 的仅观察来源构建证据，
-不关闭跨驱动程序或签名的发布包大门。
+restart-boundary follow-up（source revision
+`fa9393d473c2f2305ce8f7ec67054acea7ea54a0`）在 96.53、96.63 与 96.59
+秒内重复相同 isolated containerd 2.2.1 WSL2 x86_64 qualification 三次。
+qualification 现记录全部 23 个 restart、shim-rehydration 与
+forced-cleanup boundary 的 code-enforced ordered ledger；每轮均完成 exact
+inventory。Static-musl CLI、agent、shim 与 qualification artifact，以及
+matching Cargo.lock digest 留存于 `compat/containerd-runtime-v2.json`。
+default containerd 保持 PID 180，final audit 在移除 private root 与 unit
+前，task、container、bundle、Runtime record、shim/workload process、mount
+与 cgroup 均为零。这仍是 WSL2 上的 observation-only source-build 证据，
+不关闭 cross-driver 或 signed release-package 关卡。
 
-当前打包的资格使用源修订版
-`af8c5f97ac1f4eb506b32e8d57b3d1c0d5fb3645` 并通过以下方式行使
-分阶段 static-musl 包
-`a3s-oci-runtime-v0.2.0-linux-x86_64`。三个隔离的containerd 2.2.1 WSL2
-x86_64 矩阵在所有 23 个矩阵中用时 95.09/95.25/114.44 秒完成
-重新启动、垫片补水和强制清理边界。包裹报告
-和可执行摘要（包括报告 SHA-256
-`d87aa3ff3cd58843d57f51b75b91ca6d05c880f043d24477789105dfc065ba86`) 是
-保留在`compat/containerd-runtime-v2.json`；
-运行仍然只是观察，因为它不是签名发布的
-存档并且不扩展跨驱动程序支持声明。
+current packaged qualification 使用 source revision
+`af8c5f97ac1f4eb506b32e8d57b3d1c0d5fb3645`，经 staged static-musl package
+`a3s-oci-runtime-v0.2.0-linux-x86_64` 执行。三轮 isolated containerd 2.2.1
+WSL2 x86_64 matrix 在 95.09/95.25/114.44 秒内完成全部 23 个 restart、
+shim-rehydration 与 forced-cleanup boundary。package report 与 executable
+digest（含 report SHA-256
+`d87aa3ff3cd58843d57f51b75b91ca6d05c880f043d24477789105dfc065ba86`）留存于
+`compat/containerd-runtime-v2.json`；run 仍为 observation-only，因非 signed
+published archive，且不扩展 cross-driver support claim。
 
-2026年9月6日，清洁电流-主改版
-`7e14370f02f4187ac0fc3ecb979ad14421bfab92`也通过了固定的x86_64 Linux
-KVM 输入、探针后失败即关闭、14 例兼容性漂移、17 例
-WSL2 上的生命周期、所有者死亡/服务重启和 25 波浸泡门。全部
-报告恢复了它们的端点、进程、描述符、VM、运行时共享和
-状态根基线。这是仅观察到的证据； AArch64，新鲜主机
-促销、主机关闭和签名发布大门仍然开放。
+2026 年 9 月 6 日，clean current-main revision
+`7e14370f02f4187ac0fc3ecb979ad14421bfab92` 还在 WSL2 上通过 pinned x86_64
+Linux KVM entry、post-probe fail-closed、14-case compatibility-drift、
+17-case lifecycle、owner-death/service-restart 与 25-wave soak 关卡。所有
+report 均恢复 endpoint、process、descriptor、VM、runtime-share 与
+state-root baseline。这是 observation-only 证据；AArch64、fresh-host
+promotion、Host shutdown 与 signed release 关卡仍开放。
 
-同样的current-main源码也通过了Linux KVM File and Filesystem
-所有者替换矩阵，每个 9/9 主机/访客阶段（18/18 路径），其中
-完整的清理和不可变的资产来源。这些是x86_64观察
-文物；新的 AArch64 运行阶段证据和升级门仍然存在
-打开。
+同一 current-main source 还通过 Linux KVM File 与 Filesystem
+owner-replacement matrix，各 9/9 Host/Guest stage（18/18 path），含完整
+cleanup 与 immutable asset provenance。这些是 x86_64 observation artifact；
+fresh AArch64 operation-stage 证据与 promotion 关卡仍开放。
 
-2026年9月8日，清洁当前-主要修订
-`e71a995`（virtiofs 持久所有者修复）和后续合并 `a35703c` 保留了
-Zorin OS 18.1 (`Linux 7.0.0-31-generic`) 上的裸机 x86_64 观察
-真正的`/dev/kvm`。非根主机 virtiofs 共享将持久文件存储在
-主机服务UID；guest agent所有权检查
-`/run/a3s-oci-runtime` 现在跟随运行时共享根所有者而不是
-`geteuid()`。具有`RUNNER_TEMP=/tmp`和源匹配的不可变系统
-图像，主机通过了Linux KVM生命周期，所有者死亡/恢复，全部二十
-操作阶段重新打开矩阵（180/180 路径）和 25 波浸泡。的
-相同的修订版 `a35703c` 也通过了 rootful Native Linux CRIU 检查点
-门（`open_experimental_with_criu`，固定 CRIU 4.2.1），带有 `available`
-阳性报告（SHA-256
-`05eccd22bca338f89d11fa8b2a971c58ce4e4ff34fc246c1b2203162f7cbe57b`) 加上
-专用 PID 和配置网络负面报告。这仍然是
-仅观察证据：AArch64，新配置的多架构
-升级、主机关闭和签名发布大门保持开放，并且 Linux
-KVM 候选者仍然是`probe-only`。
+2026 年 9 月 8 日，clean current-main revision
+`e71a995`（virtiofs durable-owner fix）与 follow-on merge `a35703c` 在
+Zorin OS 18.1（`Linux 7.0.0-31-generic`）裸机 x86_64 上留存 observation，
+使用真实 `/dev/kvm`。Non-root Host virtiofs share 在 Host Service UID 下
+存储 durable file；Guest Agent 在 `/run/a3s-oci-runtime` 下的 ownership
+检查现遵循 runtime-share root owner，而非 `geteuid()`。在 `RUNNER_TEMP=/tmp`
+与 source-matched immutable system image 下，host 通过 Linux KVM lifecycle、
+owner-death/recovery、全部二十个 operation-stage reopen matrix（180/180
+path）与 25-wave soak。同一 revision `a35703c` 还通过 rootful Native Linux
+CRIU checkpoint 关卡（`open_experimental_with_criu`、pinned CRIU 4.2.1），
+含 `available` positive report（SHA-256
+`05eccd22bca338f89d11fa8b2a971c58ce4e4ff34fc246c1b2203162f7cbe57b`）以及
+private-PID 与 configured-network negative report。这仍是 observation-only
+证据：AArch64、freshly provisioned multi-architecture promotion、Host
+shutdown 与 signed release 关卡仍开放，Linux KVM 候选仍为 `probe-only`。
 
 
 ## 架构
 
 ```text
-A3S Box (current Sandbox consumer; explicit Native Linux production route
-         owns bundle/resource preparation and uses the long-lived SDK owner;
-         default, MicroVM, and cross-platform cutover remain open)
+A3S Box（当前 Sandbox 使用方；显式 Native Linux 生产路由
+         负责 bundle/资源准备并使用长期 SDK 所有者；
+         default、MicroVM 与 cross-platform cutover 仍待完成）
 a3s-oci CLI
 containerd runtime-v2 shim
                          │
                          ▼
                   RuntimeClient
-             in-process or bounded local IPC
+             in-process 或有界本地 IPC
                          │
                          ▼
               ┌──────────────────────┐
@@ -820,7 +799,7 @@ containerd runtime-v2 shim
               └──────────┬───────────┘
                          ▼
                  DriverRegistry
-             isolation owner selected once
+             隔离所有者只选择一次
                  ┌───────┴────────┐
                  │                │
        NativeLinuxDriver     utility-VM driver
@@ -836,491 +815,460 @@ containerd runtime-v2 shim
           cgroups · process I/O · confined filesystem · exact cleanup
 ```
 
-仅隔离的 `a3s-oci-krun-shim` 加载校验和固定的本机 libkrun
-资产。 SDK、CLI 发现路径、持久主机服务和 Native Linux
-驱动程序不初始化虚拟机管理程序库。
+只有隔离的 `a3s-oci-krun-shim` 加载 checksum-pinned native libkrun
+asset。SDK、CLI discovery path、durable host service 与 Native Linux
+driver 不会初始化 hypervisor library。
 
-在 Linux x86_64 和 AArch64 上，`a3s-oci-krun-shim context-smoke` 验证并
-加载选定的本机包，检查固件导出的内核，以及
-创建、配置和释放一个 libkrun 上下文。该命令不
-打开`/dev/kvm`，进入虚拟机，或更改KVM驱动程序的`probe-only`准备情况。
-更强的预入口门还绑定了精确的静态代理和不可变的
-来自同一目标清单的根磁盘：
+在 Linux x86_64 与 AArch64 上，`a3s-oci-krun-shim context-smoke` 校验并
+加载所选 native bundle，检查 firmware-exported kernel，并 create、configure、
+release 一个 libkrun context。该命令不会打开 `/dev/kvm`、进入 VM，或
+改变 KVM driver 的 `probe-only` readiness。更强的 pre-entry 关卡还会从
+同一 target manifest 绑定 exact static agent 与 immutable root disk：
 
 ```bash
 a3s-oci-krun-shim system-image-context-smoke \
   --system-image-manifest /absolute/path/to/system-image.json
 ```
 
-它使用只读描述符固定清单和原始图像，重新检查每个
-紧接在本机 API 使用之前的字节，以只读方式附加根，然后
-释放上下文。它仍然不进入 KVM 或要求来宾执行。
+它用只读 descriptor pin manifest 与 raw image，在 native API 使用前
+立即 recheck 每个 byte，只读 attach root，然后 release context。它仍不
+进入 KVM，也不声称 guest execution。
 
-公共 Linux API 通过以下方式公开 `KvmRuntimeDriver::open_candidate`
-`KvmRuntimeDriverConfig` 包含隔离的垫片、可写运行时根目录、
-和不可变的系统映像清单。它准备一个空的私有引导程序
-root 与精确生成运行时共享分开，委托所有 20 个
-通过共享实用程序 VM 进行工作负载操作和六个 OCI 挂钩阶段
-core，并禁用 Native Linux 回退。它的能力刻意保留
-`probe-only`，所以`HostRuntimeService`拒绝正常注册，直到
-真主晋级门下通。
+公共 Linux API 暴露 `KvmRuntimeDriver::open_candidate`，配置为
+`KvmRuntimeDriverConfig`，含 isolated shim、writable runtime root 与
+immutable system-image manifest。它单独准备 empty private bootstrap root
+与 exact-generation runtime share，将全部 20 个 workload operation 与
+六个 OCI hook phase 委托给 shared utility-VM core，并禁用 Native Linux
+fallback。其 capability 刻意保持 `probe-only`，因此 `HostRuntimeService`
+在下方 real-host promotion 关卡通过前，会拒绝 normal registration。
 
-单独的认证入口门添加了UID拥有模式-`0700`生成
-共享、相同 UID Unix 端点、绑定 pidfd 的 shim 所有者和直接隔离
-虚拟机工作者。工作人员在打开之前重新验证每个非 KVM 条目资产
-`/dev/kvm`，然后重复完整的兼容性和设备检查
-固定设备并需要 API 版本 12。它只能通过
-不可变的系统根。主机仅接受内核报告的直接工作线程
-Protocol-v10 令牌协商之前的子进程：
+独立的 authenticated entry 关卡增加 UID-owned mode-`0700` generation
+share、同 UID Unix endpoint、pidfd-bound shim owner 与 direct isolated VM
+worker。worker 在打开 `/dev/kvm` 前 revalidate 每个 non-KVM entry asset，
+pin device 并 require API version 12 后重复完整 compatibility 与 device
+check。它仅通过 immutable system root 进入。Host 在 protocol-v10 token
+negotiation 前，只接受 kernel-reported direct worker child：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-agent-entry.sh
 ```
 
-单独的兼容性矩阵在配置的工作边界处停止，并且
-不需要KVM：
+独立的 compatibility matrix 在 configured worker boundary 处停止，不要求
+KVM：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-compatibility-drift.sh
 ```
 
-14个案例涵盖清单和原始图像替换、相同大小的内容
-突变和符号链接；架构和运行时目标不匹配；客座代理
-版本和摘要漂移；和运行时存档、libkrun、固件和导出
-内核来源漂移。每种情况都必须在没有 KVM 设备访问或 VM 的情况下失败
-进入和恢复端点、填充进程、令牌切换和运行时共享
-库存。机器可读的结果使用
+其 14 个 case 覆盖 manifest 与 raw-image replacement、同 size content
+mutation 与 symlink；architecture 与 runtime-target mismatch；Guest Agent
+version 与 digest drift；以及 runtime archive、libkrun、firmware 与 exported
+kernel provenance drift。每个 case 必须 fail，且无 KVM-device access 或 VM
+entry，并恢复 endpoint、shim-process、token-handoff 与 runtime-share
+inventory。machine-readable result 使用
 `a3s.oci.linux-kvm-compatibility-drift.v2`。
 
-在没有可用 KVM 的主机上，经过身份验证的条目命令必须在以下时间后失败：
-非 KVM 设置，保留嵌套的 KVM 证据，并恢复端点、进程和
-交接库存。当KVM可用时，门首先需要一个真实的
-经过身份验证的启动，然后运行隐藏的仅资格失败
-`/dev/kvm` 和 API
-版本 12 已在 libkrun 进入 VM 之前进行验证。 Shim 模式 v7 记录
-该确切边界和脚本拒绝任何端点、进程、令牌或
-运行时共享残留。此实现不会提升驱动程序：
-x86_64 和 AArch64 上成功的真实进入证据以及
-仍然需要完整的生命周期、恢复和浸泡矩阵。
+在无可用 KVM 的主机上，authenticated entry command 必须在 non-KVM setup
+后 fail，保留 nested KVM evidence，并恢复 endpoint、process 与 handoff
+inventory。当 KVM 可用时，关卡先要求 real authenticated boot，然后在
+`/dev/kvm` 与 API version 12 校验后、libkrun 进入 VM 前，运行 hidden
+qualification-only failure。Shim schema v7 记录该 exact boundary，script
+拒绝任何 endpoint、process、token 或 runtime-share residue。此 implementation
+不提升 driver：x86_64 与 AArch64 上成功的 real-entry evidence，加上完整
+lifecycle、recovery 与 soak matrix 仍必需。
 
-该脚本保留正常输入
-`a3s.oci.linux-kvm-agent-entry.v1` 和注入边界
-`a3s.oci.linux-kvm-post-probe-failure.v1`。两者都包装原始 v10/v7 主机和
-shim 使用 `a3s.oci.linux-kvm-provenance.v1` 进行报告。共同的对象需要
-干净的签出，绑定 Git 对象格式、实际签出提交和树，
-Linux 平台和目标架构，并对 CLI、shim、运行时资产进行哈希处理
-清单、选定的运行时文件和系统映像清单。它还记录了
-准确的构建配置文件、资格配置文件、`libkrun-kvm` 驱动程序，以及
-`dedicated-vm`隔离等级。其他 KVM 门重复使用相同的合约，因此
-来自不同源或运行时字节的绿色报告无法满足
-晋升门。
+script 将 normal entry 留存于
+`a3s.oci.linux-kvm-agent-entry.v1`，injected boundary 留存于
+`a3s.oci.linux-kvm-post-probe-failure.v1`。两者用
+`a3s.oci.linux-kvm-provenance.v1` 包装 raw v10/v7 Host 与 shim report。
+common object 要求 clean checkout，绑定 Git object format、actual checkout
+commit 与 tree、Linux platform 与 target architecture，并对 CLI、shim、
+runtime-assets manifest、selected runtime file 与 system-image manifest 做
+hash。它还记录 exact build profile、qualification profile、`libkrun-kvm`
+driver 与 `dedicated-vm` isolation class。其他 KVM 关卡复用同一 contract，
+因此来自不同 source 或 runtime byte 的 otherwise green report 无法满足
+promotion 关卡。
 
-KVM 门控生命周期条目重用与实用程序 VM 相同的实现
-Apple Silicon 资格认证，而不是维持第二次仅限 Linux 的测试
-线束：
+KVM-gated lifecycle entry 复用 Apple Silicon qualification 的同一 Utility
+VM implementation，而非维护第二套 Linux-only test harness：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-lifecycle.sh
 ```
 
-单独的所有者死亡/重启条目练习，候选人通过
-明确范围的 Unix 主机服务而不使其通常可注册：
+独立的 owner-death/restart entry 经 explicitly scoped Unix Host Service
+exercise 该 candidate，但不使其 normally registerable：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-recovery.sh
 ```
 
-创建操作阶段条目使用单独的限定范围和
-替换所有四个主机和五个访客的真正 KVM VM/会话所有者
-请求/响应转换：
+Create operation-stage entry 使用独立 qualification scope，并在全部四个
+Host 与五个 Guest request/response transition 处替换 real KVM VM/session
+owner：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-create-reopen.sh
 ```
 
-状态在精确设置创建后使用相同的限定范围。它
-在不同的替换来宾中重建创建的容器并重新发布
-针对原始持久代的状态：
+State 在 exact setup Create 后使用相同 qualification scope。它在 distinct
+replacement Guest 中 rebuild 该 Created container，并对 original durable
+generation 重新发出 State：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-state-reopen.sh
 ```
 
-Start 保留与 Create 相同的设置和确切的 Start 标识。替代品
-来宾要么调度准备好的 Start 一次，要么重建一个已经
-主机重放持久响应之前已提交的运行状态：
+Start 保留相同 setup Create 与 exact Start identity。replacement Guest 要么
+dispatch prepared Start 一次，要么在 Host replay durable response 前
+reconstruct 已 committed Running state：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-start-reopen.sh
 ```
 
-Kill 保留确切的设置 Create、Start 和 signal-9 Kill 身份。一个
-替换来宾重建正在运行的工作负载并调度
-准备杀死一次或重建之前已经提交的停止的墓碑
-主机重放持久响应：
+Kill 保留 exact setup Create、Start 与 signal-9 Kill identity。replacement
+Guest reconstruct Running workload，要么 dispatch prepared Kill 一次，要么
+在 Host replay durable response 前 rebuild 已 committed Stopped tombstone：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-kill-reopen.sh
 ```
 
-删除保留这三个设置标识以及确切的仅停止标识
-删除身份。它的前八条路径重建了停止的墓碑并
-发送 删除一次。最终提交的路径启动一个不同的空 KVM
-所有者，不重建工作负载，并让主机重放已完成的日志
-没有其他司机调度：
+Delete 保留上述三个 setup identity 加上 exact stopped-only Delete identity。
+前八条 path rebuild Stopped tombstone 并 dispatch Delete 一次。final
+committed path 启动 distinct empty KVM owner，不 rebuild workload，让 Host
+replay completed journal 而无需再次 driver dispatch：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-delete-reopen.sh
 ```
 
-等待使用相同的精确停止设置并将当前目标解析为其
-持久的一代。前八条路重建了停止的客人墓碑，
-调度原来的 15 秒 Wait 一次，并缓存其 signal-9 结果。的
-提交的最终路径已经有该缓存，因此替换和稍后等待
-无需其他司机或客人调度即可呼叫重放：
+Wait 使用相同 exact stopped setup，并将 current target 解析到 durable
+generation。前八条 path rebuild Stopped Guest tombstone，dispatch original
+15-second Wait 一次，并 cache signal-9 result。committed final path 已有
+该 cache，因此 replacement 与后续 Wait call 均 replay，无需再次 driver 或
+Guest dispatch：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-wait-reopen.sh
 ```
 
-Exec 保留确切的设置创建和启动身份以及一个随机数绑定，
-长时间运行的终端进程请求。前八个路径仅恢复
-运行 init 进程并在 API 重试后分派一次未更改的 Exec。
-提交的最终路径在恢复期间重新创建 init 和 Exec，重新绑定
-将它们的正 PID 放入持久响应中，并让主机重放 Exec
-无需另一个 API 驱动的调度：
+Exec 保留 exact setup Create 与 Start identity，加上一个 nonce-bound、
+long-running terminal process request。前八条 path 仅 recover Running init
+process，并在 API retry 后 dispatch unchanged Exec 一次。committed final
+path 在 recovery 中 recreate init 与 Exec，将 positive PID rebind 到 durable
+response，让 Host replay Exec 而无需再次 API-driven dispatch：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-exec-reopen.sh
 ```
 
-SignalProcess 保留该提交的终端 Exec 并发送确切的信号 10。
-前八个路径重建 init 和 Exec，但保留准备好的信号
-API 重试调度一次。提交的最终路径等待重建
-执行就绪标记，在恢复期间重新应用信号一次，并让
-主机重放已完成的日志，无需另一个驱动程序调度：
+SignalProcess 保留 committed terminal Exec 并发送 exact signal 10。前八条
+path rebuild init 与 Exec，但 leave Prepared signal 供 API retry dispatch
+一次。committed final path 等待 rebuilt Exec readiness marker，在 recovery
+中 reapply signal 一次，让 Host replay completed journal 而无需再次 driver
+dispatch：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-signal-process-reopen.sh
 ```
 
-WaitProcess 使用信号 10 终止同一个已提交的非 init Exec，并且
-等待最多 15 秒才能准确退出。前八条路径重建并
-终止 Exec，然后在 API 上分派已解析的 WaitProcess 目标一次
-重试并缓存`signal=10, oom_killed=false`。已经承诺的最终路径
-具有持久的缓存，因此替换和稍后的 WaitProcess 调用不会执行
-司机调度：
+WaitProcess 以 signal 10 终止同一 committed non-init Exec，并 wait 最多
+15 秒获取 exact exit。前八条 path rebuild 并 terminate Exec，然后在 API
+retry 上 dispatch resolved WaitProcess target 一次，并 cache
+`signal=10, oom_killed=false`。committed final path 已有 durable cache，
+因此 replacement 与后续 WaitProcess call 均不 driver dispatch：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-wait-process-reopen.sh
 ```
 
-暂停会保留创建和启动身份的准确设置并验证
-在冻结生成之前绑定随机数初始化标记。前八条路
-重建未暂停的 init 并在 API 重试时分派未更改的 Pause。
-提交的最终路径在恢复期间重新应用暂停，重新绑定暂停的路径
-记录到替换的PID，并让主机重放而无需另一个
-API驱动的调度：
+Pause 保留 exact setup Create 与 Start identity，并在 freeze generation 前
+verify nonce-bound init marker。前八条 path rebuild unpaused init，并在 API
+retry 上 dispatch unchanged Pause 一次。committed final path 在 recovery
+中 reapply Pause，将 paused record rebind 到 replacement PID，让 Host
+replay 而无需再次 API-driven dispatch：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-pause-reopen.sh
 ```
 
-恢复保留确切的设置创建、启动和暂停标识。每个
-替换来宾在随机数绑定初始化后重建冷冻机历史记录
-标记。前八个路径在 API 重试时调度一次未更改的 Resume；
-提交的最终路径在恢复期间重新应用“恢复”并让主机
-无需另一个 API 驱动的调度即可重放：
+Resume 保留 exact setup Create、Start 与 Pause identity。每个 replacement
+Guest 在 nonce-bound init marker 后 reconstruct freezer history。前八条
+path 在 API retry 上 dispatch unchanged Resume 一次；committed final path
+在 recovery 中 reapply Resume，让 Host replay 而无需再次 API-driven
+dispatch：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-resume-reopen.sh
 ```
 
-进程保留了创建、启动和实时终端执行的精确设置
-身份。每个替换的来宾都会使用新的正值重新创建 init 和 Exec
-PID 和两个随机数绑定标记，然后接收只读进程查询
-一次，因为不存在持久的查询响应日志。退回的库存
-必须在保留代中准确包含这两个目标，包括
-在第一个所有者写完完整的回复后：
+Processes 保留 exact setup Create、Start 与 live terminal Exec identity。
+每个 replacement Guest recreate init 与 Exec，fresh positive PID 与两个
+nonce-bound marker，然后 receive read-only Processes query 一次，因无
+durable query-response journal。returned inventory 必须恰好包含这两个
+target，generation 不变，包括 first owner 已写入 complete response 之后：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-processes-reopen.sh
 ```
 
-更新保留了确切的设置创建和启动身份以及完整的
-Linux 资源配置文件。前八名替换客人将获得
-重建正在运行的 init 后一次未更改的请求。当第一任主人
-已经提交了响应，恢复将资源配置文件重新应用到
-新鲜的 cgroup 和主机重放响应，无需另一个 API 驱动
-派遣。 Direct Stats 验证 512 MiB 限制和实时计数器：
+Update 保留 exact setup Create 与 Start identity，加上 complete Linux
+resource profile。前八条 replacement Guest 在 rebuild running init 后
+receive unchanged request 一次。当 first owner 已 commit response 时，
+recovery 将 resource profile reapply 到 fresh cgroup，Host replay response
+而无需再次 API-driven dispatch。Direct Stats 验证 512 MiB limit 与 live
+counter：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-update-reopen.sh
 ```
 
-统计信息保留已提交的创建、启动和更新设置，同时处理
-查询自身为只读。每位替换客人都会收到一份新的统计数据
-请求，包括在第一个所有者写出完整的回复之后。决赛
-路径要求替换快照更新且不同，同时两者
-快照保留准确的生成和更新的资源配置文件：
+Stats 保留 committed Create、Start 与 Update setup，并将 query 本身视为
+read-only。每个 replacement Guest receive 一次 fresh Stats request，包括
+first owner 已写入 complete response 之后。final path 要求 replacement
+snapshot 更新且 distinct，同时两个 snapshot 均保留 exact generation 与
+updated resource profile：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-stats-reopen.sh
 ```
 
-ReadOutput 保留提交的 Create、Start 和非终端捕获 Exec
-设置。每一位替换的客人都会收到一个新的请求，内容完全相同
-进程目标、游标、字节限制和超时，包括在第一个之后
-所有者交付了完整的随机数绑定的标准输出块。恢复重新绑定两者
-设置 PID、隔离陈旧的主机和来宾代，并删除两个标记
-和所有临时所有者状态：
+ReadOutput 保留 committed Create、Start 与 non-terminal capture Exec setup。
+每个 replacement Guest receive 一次 fresh request，process target、cursor、
+byte limit 与 timeout 不变，包括 first owner 已 deliver complete
+nonce-bound stdout chunk 之后。Recovery rebind 两个 setup PID，fence stale
+Host 与 Guest generation，并移除两个 marker 与全部 transient owner state：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-read-output-reopen.sh
 ```
 
-WriteStdin 保留提交的 Create、Start 和非终端管道支持
-执行设置。前八个替换所有者分派未更改的字节
-一次来自准备好的主机日志。 `guest-after-response-write`，恢复
-将提交的写入重新水合到重建的 Exec 中，并且 API 重试返回
-无需另一名司机派遣。每条路径都会验证确切的效果标记，
-请求身份、陈旧的主机和来宾围栏以及完成清理：
+WriteStdin 保留 committed Create、Start 与 non-terminal pipe-backed Exec
+setup。前八条 replacement owner 从 Prepared Host journal dispatch unchanged
+bytes 一次。在 `guest-after-response-write`，recovery 将 committed write
+rehydrate 到 rebuilt Exec，API retry 返回而无需再次 driver dispatch。每条
+path 验证 exact effect marker、request identity、stale Host 与 Guest fence
+与 complete cleanup：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-write-stdin-reopen.sh
 ```
 
-CloseStdin 保留相同的设置和一个管道支持的 Exec，该 Exec 可以准确地写入
-仅在观察到 EOF 后才进行效果标记。前八位更换业主
-从准备好的主机日志中发送未更改的关闭一次。在
-`guest-after-response-write`，recovery关闭之前重建的Exec输入
-主机服务打开完成，因此 API 重试返回，无需其他驱动程序
-派遣。每条路径都会验证确切的进程目标、EOF 标记、过时的主机
-和访客围栏，并完成清理：
+CloseStdin 保留相同 setup 与 pipe-backed Exec，该 Exec 仅在 observe EOF 后
+写入 exact effect marker。前八条 replacement owner 从 Prepared Host journal
+dispatch unchanged close 一次。在 `guest-after-response-write`，recovery
+在 Host service open 完成前 close rebuilt Exec input，因此 API retry 返回
+而无需再次 driver dispatch。每条 path 验证 exact process target、EOF
+marker、stale Host 与 Guest fence 与 complete cleanup：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-close-stdin-reopen.sh
 ```
 
-Resize 保留精确的终端尺寸和随机数绑定的 PTY Exec。的
-前八个替换所有者将准备好的调整大小发送一次；决赛
-路径在恢复期间重新应用提交的维度并重放主机
-没有第二个司机调度的响应：
+Resize 保留 exact terminal dimension 与 nonce-bound PTY Exec。前八条
+replacement owner dispatch prepared resize 一次；final path 在 recovery 中
+reapply committed dimension，并 replay Host response 而无需第二次 driver
+dispatch：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-resize-reopen.sh
 ```
 
-文件通过相同的九个主机/来宾传输边界限定上传
-使用私有可写 `/tmp` 挂载。恢复验证了确切的耐用性
-请求和生成，幂等地重放已确认的上传，下载
-来自替换访客的字节，拒绝更改的和过时的身份，以及
-在强制删除之前删除文件：
+File 经相同九个 Host/Guest transport boundary 验证 upload，使用 private
+writable `/tmp` mount。Recovery 验证 exact durable request 与 generation，
+idempotently replay acknowledged upload，从 replacement Guest download
+bytes，reject changed 与 stale identity，并在 force-delete 前 remove file：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-file-reopen.sh
 ```
 
-文件系统使用相应的目录元数据和 Stat 来限定 mkdir
-效果。它使用相同的耐用日志、替换所有者重放、更改和
-过时生成栅栏、显式删除和零残留检查：
+Filesystem 验证 mkdir，含对应 directory metadata 与 Stat effect。它使用
+相同 durable journal、replacement-owner replay、changed 与 stale-generation
+fence、explicit Remove 与 zero-residue check：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-filesystem-reopen.sh
 ```
 
-有界浸泡使用其自己的限定范围和一项持久的主机服务：
+bounded soak 使用独立 qualification scope 与一个 durable Host Service：
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-soak.sh
 ```
 
-当 KVM 可用时，生命周期条目会下载固定的 Alpine 夹具，
-在私有运行时共享下准备两个包，并运行 17 个案例：一个完整的
-生命周期、一个多容器生命周期、一个版本化的访客隔离条目、
-三个不可删除清理边界，以及所有 11 个传输故障点。的
-访客隔离条目包含十个捆绑的有序敌对路径案例，
-rootfs、绑定源、文件和文件系统边界。需要输入
-`permission-denied` 来自确切拥有操作的错误，未更改的金丝雀，
-缺少容器状态，并完成固定装置/运行时清理。的
-`a3s.oci.linux-kvm-lifecycle-matrix.v2`报告
-保留每个嵌套的运行时报告以及端点、进程、运行时状态，
-引导、令牌/恢复和标记清理检查。没有可用的KVM
-跳过夹具下载并发出 `status: unavailable` 零案例。
-这使得 CI 对跑步者的能力保持诚实；它不算是硬件
-通过。 `a3s.oci.linux-kvm-recovery-matrix.v2` 条目同样跳过 Alpine
-当KVM不可用时。使用 KVM，它会终止实时主机服务，需要
-经过身份验证的 SIGKILL 恢复，
-打开一个不同的替换套接字所有者，重放确切的停止状态并
-等待，并证明仅停止删除加上瞬时清理。浸泡也
-在不可用的主机上跳过 Alpine；其保留的聚合模式是
-`a3s.oci.linux-kvm-soak-matrix.v2`。在 KVM 上运行 25 个新代，
-需要每个进程、描述符、端点、切换、共享、恢复记录，
-和访客标记在每次波后返回到基线。可用生命周期，
-恢复和浸泡报告，包括集成的访客隔离条目
-新的 x86_64 和 AArch64 KVM 主机仍然需要。其他实录
-负面隔离特征仍然是单独的晋升证据。
+当 KVM 可用时，lifecycle entry 下载 pinned Alpine fixture，在 private
+runtime share 下准备两个 bundle，并运行 17 个 case：一个 full lifecycle、
+一个 multi-container lifecycle、一个 versioned Guest-isolation entry、三个
+no-delete cleanup boundary，以及全部 11 个 transport fault point。Guest-
+isolation entry 含 bundle、rootfs、bind-source、File 与 Filesystem boundary
+的十个 ordered hostile-path case。它要求 exact owning operation 返回 typed
+`permission-denied` error，canary 不变，container state 缺失，且 fixture/
+runtime cleanup 完整。`a3s.oci.linux-kvm-lifecycle-matrix.v2` report
+留存每个 nested runtime report，以及 endpoint、process、runtime-state、
+bootstrap、token/recovery 与 marker cleanup check。无可用 KVM 时跳过
+fixture download 并 emit `status: unavailable` 与 zero case。这使 CI 如实
+反映 runner capability；它不算 hardware pass。`a3s.oci.linux-kvm-recovery-
+matrix.v2` entry 在 KVM unavailable 时 likewise 跳过 Alpine。有 KVM 时 kill
+live Host Service，require authenticated SIGKILL recovery，open distinct
+replacement socket owner，replay exact stopped state 与 Wait，并证明
+stopped-only Delete 加 transient cleanup。soak 在 unavailable host 上也
+跳过 Alpine；其 retained aggregate schema 为
+`a3s.oci.linux-kvm-soak-matrix.v2`。有 KVM 时运行 25 fresh generation，并
+要求每个 process、descriptor、endpoint、handoff、share、recovery record 与
+Guest marker 在每波后回到 baseline。Available lifecycle、recovery 与 soak
+report（含 integrated Guest-isolation entry）仍须来自 fresh x86_64 与
+AArch64 KVM host。其他 real-entry negative-isolation profile 仍是独立
+promotion evidence。
 
-`a3s.oci.linux-kvm-create-reopen-matrix.v1` 条目也会跳过 Alpine
-KVM 不可用。在 KVM 上，它保留了确切的持久代和
-创建跨九个真实主机/客户中断点的操作身份，
-包括对已承诺的`guest-after-response-write`结果进行补液
-一位独特的替代嘉宾。所有案例强制删除并恢复引导程序，
-端点、进程、捆绑切换、运行时共享、恢复报告和标记
-库存。 `a3s.oci.linux-kvm-state-reopen-matrix.v1`门应用
-同样的九分给国家。它的前八个点保留了精确的 Created
-记录而不返回响应； `guest-after-response-write` 提供
-在断开探针证明所有者丢失之前的准确响应。更换
-恢复必须重建 Created 状态，保留设置 Create 身份并
-生成，返回恢复的持久记录，并恢复相同的清理
-库存。然后`a3s.oci.linux-kvm-start-reopen-matrix.v1`门适用
-同样点开始。它的前八个路径保留 Created 状态并且
-通过替换驱动程序发送确切的启动一次。最终路径
-保留运行状态；恢复重新创建并启动工作负载，重新绑定
-替换 PID，重新生成准确的标记，并让主机重放
-无需另一个 API 驱动的 Start 调度即可完成日志。的
-`a3s.oci.linux-kvm-kill-reopen-matrix.v1`门同样适用九点
-杀。其前八条路径保持运行状态；更换恢复
-重新创建并启动工作负载、修复设置响应并调度
-不变的 SIGKILL 一次。最终路径保留Stopped状态；恢复
-重新创建、启动和终止替换工作负载以重建来宾
-墓碑，然后主机重放已完成的杀戮日志而无需另一个
-API驱动的调度。每条路径都会验证替换标记并使用
-仅停止删除。然后`a3s.oci.linux-kvm-delete-reopen-matrix.v1`登机口
-将所有九个点应用于删除。其前八个路径保留 Stopped 状态
-和一份准备好的日记；替换恢复重新创建、启动和终止
-在分派未更改的工作负载之前，使用原始设置身份的工作负载
-删除一次。提交的最终路径保留空库存和
-SucceededEmpty 日志，因此不同的空替换所有者不执行任何操作
-工作负载恢复或驱动程序在主机重放之前删除。的
-`a3s.oci.linux-kvm-wait-reopen-matrix.v1`门重建停止的墓碑
-共九点。它的前八条路径发送精确解析的等待
-定位一次并持久缓存`signal=9, oom_killed=false`；承诺的决赛
-路径保留该缓存并重放替换调用和稍后的 Wait 调用
-没有司机调度。每条路径都拒绝两个主机上的过时代
-和来宾边界，使用仅停止删除，并恢复所有清单。
-`a3s.oci.linux-kvm-exec-reopen-matrix.v1` 门将所有九个点应用到一个
-终端执行者它的前八个路径保留一个Prepared日志，仅恢复
-正在运行的 init 进程，并分派字节相同的进程、终端，
-I/O、生成和操作标识一次。承诺的最终路径保留
-成功的进程日志，以新的积极方式重新创建 init 和 Exec
-PID，重新绑定设置和执行响应，并重放主机请求，而无需
-另一位司机派遣。每条路径都会验证不同的随机数绑定 init 和 Exec
-标记，拒绝更改的请求和过时的生成，强制删除
-工作量，并恢复所有库存。的
-`a3s.oci.linux-kvm-signal-process-reopen-matrix.v1` 门保留了这一点
-终端 Exec 并在所有九个点应用信号 10。它的前八条路径
-保留一个Prepared信号日志，重建init和Exec，并调度
-API 重试时目标和信号保持不变。承诺的最终路径保留
-SucceededEmpty 日志，重建 init 和 Exec，等待随机数绑定的 Exec
-就绪标记，并在恢复期间重新应用信号一次；主持人
-然后重放不执行额外的驱动程序调度。每条路径都会验证
-单独的信号标记，拒绝信号漂移和过时的主机/客户生成，
-强制删除工作负载，并恢复所有清单。等效覆盖范围
-供 WaitProcess 使用
-`a3s.oci.linux-kvm-wait-process-reopen-matrix.v1`。它的前八条路径有
-没有主机退出缓存，因此恢复会重建并终止之前的确切 Exec
-一个已解决的 WaitProcess 调度仍然存在 `signal=10, oom_killed=false`。在
-`guest-after-response-write`，缓存已经持久；恢复仍在
-重新创建并终止 Exec，但将其从实时清单中忽略，并且
-替换和稍后等待重放都以零驱动程序调度。每一条路
-重用所有设置身份，拒绝过时的主机和来宾生成，
-强制删除工作负载，并恢复每个清单。等效覆盖范围
-暂停使用`a3s.oci.linux-kvm-pause-reopen-matrix.v1`。它的前八个
-路径保留运行状态和准备暂停日志，重建未暂停的日志
-init，并调度未更改的 Pause 一次。承诺的最终路径保留
-暂停状态和成功日志；恢复启动替换init，
-等待其标记，重新应用暂停，并报告重新创建-暂停-运行
-主持人重放之前的证据。每条路径都会隔离更改的请求和陈旧的主机
-和来宾代，强制删除暂停的代，并恢复每个
-库存。简历使用`a3s.oci.linux-kvm-resume-reopen-matrix.v1`。每个
-替换所有者使用反弹 PID 重建创建、启动和暂停。其
-前八个路径保留暂停状态，并且前一个路径保留准备恢复日志
-派遣不变。提交的最终路径保留未暂停状态和
-成功期刊；恢复重新应用恢复并且主机重放不执行
-额外的 API 驱动调度。每条路径都会隔离更改的请求和陈旧的请求
-主机和来宾代，强制删除恢复的代，然后恢复
-每个库存。工艺用途
-`a3s.oci.linux-kvm-processes-reopen-matrix.v1`。每一位更换车主
-重建 Create、Start 和提交的终端 Exec，重新绑定两者
-正进程 PID，并验证两个随机数绑定标记。因为
-查询是只读的，所有九个路径仅在之后调度一次进程
-重新打开，包括交付的最终响应路径。每个库存包含
-只有 init 和原始 Exec 目标位于保留代
-替换 PID。每条路径都拒绝陈旧的主机和来宾代，
-强制删除工作负载，并恢复每个清单。更新用途
-`a3s.oci.linux-kvm-update-reopen-matrix.v1`。它的前八条路径保留了
-准备日志并分派未更改的完整 Linux 资源请求
-恢复后一次。提交的最终路径保留了一个成功的日志；
-recovery 将请求重新应用到新的 cgroup，并且主机重放执行 no
-额外的 API 驱动调度。每条路径都会验证 512 MiB 限制并实时
-通过直接访客统计进行计数器，拒绝更改的请求和过时的请求
-主机/来宾生成，强制删除工作负载，并恢复每个
-库存。统计使用`a3s.oci.linux-kvm-stats-reopen-matrix.v1`。每个
-替换所有者重建创建、启动和之前提交的更新
-分派一个新的只读查询。在`guest-after-response-write`，
-第一个交付的快照和较新的替换快照都保留
-准确的生成和更新的资源配置文件。每条路径都拒绝陈旧的主机
-和来宾代，强制删除工作负载，并恢复每个
-库存。读取输出用途
-`a3s.oci.linux-kvm-read-output-reopen-matrix.v1`。每一位更换车主
-使用反弹 PID 重建 Create、Start 和实时非终端 Exec，
-然后调度一个新的查询，其中包含确切的进程目标、游标、字节
-限制和超时。 `guest-after-response-write`，双方均先交付
-块和替换块等于随机数绑定的标准输出。每一条路
-拒绝过时的主机和来宾代，强制删除工作负载，以及
-恢复所有库存。 WriteStdin 使用
-`a3s.oci.linux-kvm-write-stdin-reopen-matrix.v1`。它的前八条路径保留
-准备好的主机日志并在恢复后分派准确的字节一次。在
-`guest-after-response-write`，恢复将提交的字节写入
-重建管道支持的 Exec 并且 API 重试不执行额外的调度。
-每条路径都拒绝更改的字节和陈旧的主机和访客生成，验证
-随机数绑定效果标记，强制删除工作负载，并恢复每个
-库存。 CloseStdin 使用
-`a3s.oci.linux-kvm-close-stdin-reopen-matrix.v1`。它的前八条路径保留
-准备好的主机日志并在恢复后发送准确的 EOF。在
-`guest-after-response-write`，恢复关闭重建的管道支持的 Exec
-并且 API 重试不执行额外的调度。每条路径都拒绝
-更改了进程目标和过时的主机和来宾代，验证
-随机数绑定的 EOF 标记，强制删除工作负载，并恢复每个
-库存。 Resize、File 和 Filesystem 使用相同的九级门；当前
-x86_64 证据现在涵盖所有 20 个工作负载操作。主机关闭依然存在
-明确的准备门。
+`a3s.oci.linux-kvm-create-reopen-matrix.v1` entry 在 KVM unavailable 时也
+跳过 Alpine。有 KVM 时，在九个 real Host/Guest interruption point 上保留
+exact durable generation 与 Create operation identity，包括在 distinct
+replacement Guest 中 rehydrate committed `guest-after-response-write`
+outcome。所有 case force-delete 并恢复 bootstrap、endpoint、process、
+bundle-handoff、runtime-share、recovery-report 与 marker inventory。
+`a3s.oci.linux-kvm-state-reopen-matrix.v1` 关卡对 State 应用相同九点。前
+八点 retain exact Created record 且不返回 response；`guest-after-response-
+write` 在 disconnect probe 证明 owner loss 前 deliver exact response。
+Replacement recovery 必须 rebuild Created state，preserve setup Create
+identity 与 generation，返回 recovered durable record，并恢复相同 cleanup
+inventory。`a3s.oci.linux-kvm-start-reopen-matrix.v1` 关卡随后对 Start 应用
+相同点。前八条 path retain Created state，经 replacement driver dispatch
+exact Start 一次。final path retain Running state；recovery recreate 并
+start workload，rebind replacement PID，regenerate exact marker，让 Host
+replay completed journal 而无需再次 API-driven Start dispatch。
+`a3s.oci.linux-kvm-kill-reopen-matrix.v1` 关卡对 Kill 应用相同九点。前八条
+path retain Running state；replacement recovery recreate 并 start workload，
+repair setup response，dispatch unchanged SIGKILL 一次。final path retain
+Stopped state；recovery recreate、start 并 kill replacement workload 以
+reconstruct Guest tombstone，然后 Host replay completed Kill journal 而无需
+再次 API-driven dispatch。每条 path 验证 replacement marker 并使用
+stopped-only Delete。`a3s.oci.linux-kvm-delete-reopen-matrix.v1` 关卡随后
+对 Delete 应用全部九点。前八条 path retain Stopped state 与 Prepared
+journal；replacement recovery 以 original setup identity recreate、start
+并 kill workload，然后 dispatch unchanged Delete 一次。committed final path
+retain empty inventory 与 SucceededEmpty journal，因此 distinct empty
+replacement owner 在 Host replay 前不做 workload recovery 或 driver Delete。
+`a3s.oci.linux-kvm-wait-reopen-matrix.v1` 关卡在全部九点 rebuild stopped
+tombstone。前八条 path dispatch exact resolved Wait target 一次，并 durable
+cache `signal=9, oom_killed=false`；committed final path 保留该 cache，让
+replacement 与后续 Wait call replay 而无需 driver dispatch。每条 path reject
+stale generation（Host 与 Guest boundary），使用 stopped-only Delete，并
+恢复全部 inventory。`a3s.oci.linux-kvm-exec-reopen-matrix.v1` 关卡对
+terminal Exec 应用全部九点。前八条 path retain Prepared journal，仅 recover
+Running init process，并 dispatch byte-identical process、terminal、I/O、
+generation 与 operation identity 一次。committed final path retain Succeeded
+process journal，recreate init 与 Exec（fresh positive PID），rebind setup
+与 Exec response，并 replay Host request 而无需再次 driver dispatch。每条
+path 验证 distinct nonce-bound init 与 Exec marker，reject changed request
+与 stale generation，force-delete workload，并恢复全部 inventory。
+`a3s.oci.linux-kvm-signal-process-reopen-matrix.v1` 关卡 retain exact
+terminal Exec，并在全部九点 apply signal 10。前八条 path retain Prepared
+signal journal，rebuild init 与 Exec，并在 API retry 上 dispatch unchanged
+target 与 signal 一次。committed final path retain SucceededEmpty journal，
+rebuild init 与 Exec，wait nonce-bound Exec readiness marker，并在 recovery
+中 reapply signal 恰好一次；Host replay 随后不再 driver dispatch。每条 path
+验证 separate signal marker，reject signal drift 与 stale Host/Guest
+generation，force-delete workload，并恢复全部 inventory。WaitProcess 的
+equivalent coverage 使用
+`a3s.oci.linux-kvm-wait-process-reopen-matrix.v1`。前八条 path 无 Host exit
+cache，因此 recovery rebuild 并 terminate exact Exec，然后一次 resolved
+WaitProcess dispatch 持久化 `signal=10, oom_killed=false`。在
+`guest-after-response-write`，cache 已 durable；recovery 仍 recreate 并
+terminate Exec，但 omit 它于 live inventory，replacement 与后续 wait 均以
+零 driver dispatch replay。每条 path 复用全部 setup identity，reject stale
+Host 与 Guest generation，force-delete workload，并恢复每个 inventory。
+Pause 的 equivalent coverage 使用 `a3s.oci.linux-kvm-pause-reopen-matrix.v1`。
+前八条 path retain Running state 与 Prepared Pause journal，rebuild unpaused
+init，并 dispatch unchanged Pause 一次。committed final path retain paused
+state 与 Succeeded journal；recovery start replacement init，wait marker，
+reapply Pause，并在 Host replay 前 report recreated-paused-running evidence。
+每条 path fence changed request 与 stale Host/Guest generation，force-delete
+paused generation，并恢复每个 inventory。Resume 使用
+`a3s.oci.linux-kvm-resume-reopen-matrix.v1`。每个 replacement owner
+reconstruct Create、Start 与 Pause（rebound PID）。前八条 path retain paused
+state 与 Prepared Resume journal，然后 unchanged dispatch 一次。committed
+final path retain unpaused state 与 Succeeded journal；recovery reapply
+Resume，Host replay 不再 additional API-driven dispatch。每条 path fence
+changed request 与 stale Host/Guest generation，force-delete resumed
+generation，并恢复每个 inventory。Processes 使用
+`a3s.oci.linux-kvm-processes-reopen-matrix.v1`。每个 replacement owner
+reconstruct Create、Start 与 committed terminal Exec，rebind 两个 positive
+process PID，并 verify 两个 nonce-bound marker。因 query 为 read-only，全部
+九条 path 在 reopen 后 dispatch Processes 恰好一次，包括 delivered final
+response path。每个 inventory 仅含 init 与 original Exec target，generation
+不变，PID 为 replacement。每条 path reject stale Host/Guest generation，
+force-delete workload，并恢复每个 inventory。Update 使用
+`a3s.oci.linux-kvm-update-reopen-matrix.v1`。前八条 path preserve Prepared
+journal，并在 recovery 后 dispatch unchanged complete Linux resource request
+一次。committed final path preserve Succeeded journal；recovery 将 request
+reapply 到 fresh cgroup，Host replay 不再 additional API-driven dispatch。
+每条 path 经 direct Guest Stats 验证 512 MiB limit 与 live counter，reject
+changed request 与 stale Host/Guest generation，force-delete workload，并
+恢复每个 inventory。Stats 使用
+`a3s.oci.linux-kvm-stats-reopen-matrix.v1`。每个 replacement owner
+reconstruct Create、Start 与 committed Update，然后 dispatch 一次 fresh
+read-only query。在 `guest-after-response-write`，first delivered snapshot
+与 newer replacement snapshot 均 retain exact generation 与 updated resource
+profile。每条 path reject stale Host/Guest generation，force-delete workload，
+并恢复每个 inventory。ReadOutput 使用
+`a3s.oci.linux-kvm-read-output-reopen-matrix.v1`。每个 replacement owner
+reconstruct Create、Start 与 live non-terminal Exec（rebound PID），然后
+dispatch 一次 fresh query，process target、cursor、byte limit 与 timeout
+不变。在 `guest-after-response-write`，delivered first chunk 与 replacement
+chunk 均等于 nonce-bound stdout。每条 path reject stale Host/Guest
+generation，force-delete workload，并恢复每个 inventory。WriteStdin 使用
+`a3s.oci.linux-kvm-write-stdin-reopen-matrix.v1`。前八条 path retain
+Prepared Host journal，并在 recovery 后 dispatch exact bytes 一次。在
+`guest-after-response-write`，recovery 将 committed bytes 写入 rebuilt
+pipe-backed Exec，API retry 不再 additional dispatch。每条 path reject
+changed bytes 与 stale Host/Guest generation，verify nonce-bound effect
+marker，force-delete workload，并恢复每个 inventory。CloseStdin 使用
+`a3s.oci.linux-kvm-close-stdin-reopen-matrix.v1`。前八条 path retain
+Prepared Host journal，并在 recovery 后 dispatch exact EOF 一次。在
+`guest-after-response-write`，recovery close rebuilt pipe-backed Exec，API
+retry 不再 additional dispatch。每条 path reject changed process target 与
+stale Host/Guest generation，verify nonce-bound EOF marker，force-delete
+workload，并恢复每个 inventory。Resize、File 与 Filesystem 使用相同九阶段
+关卡；current x86_64 证据现已覆盖全部 20 个 workload operation。Host
+shutdown 仍是 explicit readiness 关卡。
 
-|业主|保持|一定不能吸收|
+| 所有者 | 保留 | 不得吸收 |
 | --- | --- | --- |
-| A3S Box产品专机|所需状态、映像/构建、命名卷、产品网络、Compose、运行状况/重启策略、日志保留和秘密授权 |实际 PID/VM 身份或运行时操作日志 |
-| OCI 运行时控制平面 |精确的 OCI 验证、实际状态、生成、重放、退出状态、驱动程序选择、恢复和清理 |注册表拉取、映像构建、Compose 或静默隔离后备 |
-|平台执行面| Linux 实施、utility VM、传输、过程控制和运行时附件 |产品编排或第二个持久生命周期|
+| A3S Box 产品平面 | 期望状态、镜像/构建、命名卷、产品网络、Compose、健康/重启策略、日志保留与密钥授权 | 实际 PID/VM 身份或 runtime operation journal |
+| OCI Runtime 控制平面 | 精确 OCI 校验、实际状态、代次、重放、退出状态、驱动选择、恢复与清理 | Registry pull、镜像构建、Compose 或静默 isolation fallback |
+| 平台执行平面 | Linux 强制执行、辅助虚拟机、传输、进程控制与 runtime attachment | 产品编排或第二套 durable lifecycle |
 
-## 运行真实门禁
+## 运行真实环境验证关卡
 
-便携式工作区门是：
+可移植工作区关卡为：
 
 ```bash
 cargo fmt --all -- --check
@@ -1328,340 +1276,314 @@ cargo test --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-当前发布工作流程生成的完整运行时标签包括签名的 SLSA
-为所有五个档案和`SHA256SUMS`以及便携式
-Sigstore 捆绑包。关注
-[Release verification](docs/release-verification.md) 强制执行存储库，
-工作流程、标签和摘要身份。验证成功不推广
-所选驱动程序的广告准备就绪或更换其真实主机门。
-每个 Linux 主机运行时存档还带有摘要和模式绑定
-`package-manifest.json` 连接其确切的运行时、Agent、containerd shim、
-资格验证报告、containerd兼容性契约；包装好的
-验证者可以在安装前离线验证它。
+当前 release workflow 产生的完整 Runtime tag 包含全部五个 archive 的
+signed SLSA build provenance 与 `SHA256SUMS`，以及可移植 Sigstore bundle。
+遵循 [Release verification](docs/release-verification.md) 以强制
+repository、workflow、tag 与 digest identity。验证成功不会提升所选 driver
+advertised readiness，也不会替代其 real-host 关卡。每个 Linux host-runtime
+archive 还携带 digest-and-mode-bound `package-manifest.json`，链接其 exact
+runtime、Agent、containerd shim、qualification report 与 containerd
+compatibility contract；packaged verifier 可在安装前 offline 校验。
 
-真正的执行门需要准备好的主机和隔离的运行时根。
+真实 execution 关卡需要 prepared host 与 isolated runtime root。
 
-|主持人|切入点|指南|
-| ---| ---| ---|
-| Linux x86_64/aarch64 | `bash .github/scripts/native-linux-smoke.sh`、`bash .github/scripts/native-linux-checkpoint.sh` 具有精确的 CRIU 二进制文件，以及 `bash .github/scripts/linux-kvm-lifecycle.sh` 具有固定的 KVM 清单 | [Native Linux development](docs/linux-native.md) |
-|苹果芯片 | `cargo run -p a3s-oci-cli -- hvf-smoke` 后跟已签名的实用程序虚拟机配置文件 | [macOS HVF development](docs/macos-hvf.md) |
-| Windows x86_64 | `scripts/windows-whpx-driver-smoke.ps1` 和 `scripts/windows-whpx-recovery-smoke.ps1` 以及经过验证的容器根文件系统存档和 `windows-system-image` 清单 | [Windows WHPX development](docs/windows-whpx.md) |
+| 主机 | 入口 | 指南 |
+| --- | --- | --- |
+| Linux x86_64/aarch64 | `bash .github/scripts/native-linux-smoke.sh`、`bash .github/scripts/native-linux-checkpoint.sh`（需 exact CRIU binary），以及带 pinned KVM manifest 的 `bash .github/scripts/linux-kvm-lifecycle.sh` | [Native Linux development](docs/linux-native.md) |
+| Apple Silicon | `cargo run -p a3s-oci-cli -- hvf-smoke`，随后 signed utility-VM profile | [macOS HVF development](docs/macos-hvf.md) |
+| Windows x86_64 | `scripts/windows-whpx-driver-smoke.ps1` 与 `scripts/windows-whpx-recovery-smoke.ps1`（需 verified container-rootfs archive 与 `windows-system-image` manifest） | [Windows WHPX development](docs/windows-whpx.md) |
 
-Linux Smoke 为以下对象准备了一个明确的用户拥有的 cgroup-v2 子树：
-无根 v4 门。在 Tokio 启动之前，CLI 保留该确切的委派，
-启动父级绑定的有效根助手，并永久删除运行时
-所有者的真实身份。普通无根启动使用helper提供
-六个 OCI 默认设备节点并安装相同的不可变清单
-边界作为根执行；它没有发明`linux.resources.devices`
-政策。单独的 A3S Box 配置文件还执行有界设备访问 BPF
-替换和回滚。运行时提交`bed43d2`
-在 CI 运行 `31714178349` 中通过了 x86_64 和 aarch64 上的完整策略配置文件。
-v4 门验证创建、实时更新/统计、经过工作负载验证的暂停/恢复、
-持久事件、所有六个节点、根据要求进行的精确策略更新，以及
-完成 cgroup、运行时、会话和标记清理。更广泛的授权
-简介仍然是未做广告的推广工作。
+Linux smoke 为 rootless v4 关卡准备 explicit user-owned cgroup-v2 subtree。
+Tokio 启动前，CLI retain 该 exact delegation，启动 parent-bound effective-root
+helper，并永久 drop runtime owner 到 real identity。普通 rootless launch 使用
+helper 提供六个 OCI default device node，并安装与 rootful execution 相同的
+immutable inventory boundary；它不会发明 `linux.resources.devices` policy。
+独立 A3S Box profile 还 exercise bounded device-access BPF replacement 与
+rollback。Runtime commit `bed43d2` 在 CI run `31714178349` 上于 x86_64 与
+aarch64 通过 full policy profile。v4 关卡验证 create、live update/stats、
+workload-proven pause/resume、durable event、全部六个 node、请求的 exact
+policy update，以及完整 cgroup、runtime、session 与 marker cleanup。更广
+delegated profile 仍是 unadvertised promotion work。
 
-rootful 设备边界配置文件有意省略 `linux.cgroupsPath`，
-授予`CAP_MKNOD`，并证明仅保留声明/默认身份
-可用。它还会在工作负载内重新安装 `nodev` 与 `dev` 绑定源
-并验证后期设备访问仍然失败，并显示`EPERM`。运行
-聚焦门与
+rootful device-boundary profile 刻意 omit `linux.cgroupsPath`，grant
+`CAP_MKNOD`，并证明仅 declared/default identity 仍可用。它还将 `nodev` bind
+source 在 workload 内 remount 为 `dev`，并验证 late device access 仍以
+`EPERM` fail。运行聚焦关卡：
 `A3S_OCI_NATIVE_FOCUS=device-boundary bash .github/scripts/native-linux-smoke.sh`。
 
-可写 OCI cgroup 挂载现在遵循 OCI 1.3 委派边界。的
-执行者仅更改确切的`source: "cgroup"`挂载的所有权
-`/sys/fs/cgroup`，没有 `ro` 选项和新创建的 cgroup 命名空间。它
-将 `process.user.uid` 映射到主机 UID，保留组，并且仅更改
-容器 cgroup 目录以及列出的现有文件
-`/sys/kernel/cgroup/delegate`;如果该库存不存在，则会使用这三个
-规范后备文件。重点关注的 Native Linux Gate 也证明了
-只读 cgroup 挂载和未列出的控制器文件保留其所有权：
+writable OCI cgroup mount 现遵循 OCI 1.3 delegation boundary。executor 仅
+对 exact `source: "cgroup"` mount 于 `/sys/fs/cgroup`（无 `ro` option 且
+新建 cgroup namespace）变更 ownership。它将 `process.user.uid` map 到 host
+UID，preserve group，并仅变更 container cgroup directory 与
+`/sys/kernel/cgroup/delegate` 列出的 existing file；若 inventory 缺失，使用
+三个 normative fallback file。聚焦 Native Linux 关卡还证明 read-only cgroup
+mount 与 unlisted controller file 保持 ownership：
 `A3S_OCI_NATIVE_FOCUS=cgroup-ownership bash .github/scripts/native-linux-smoke.sh`。
 
-rootful 终端初始化配置文件从 `process.terminal` 派生 init I/O，
-在启动前应用配置的 120x40 大小，并绑定确切的 PTY 从属
-到`/dev/console`。它还在 `/dev` 外部创建一个已配置的 FIFO，并映射
-模式和所有权。该门使用新的控制台目标运行一次，并使用
-调用者拥有的占位符；删除仅删除运行时创建的目标，并且
-恢复预先存在的文件不变。
+rootful terminal-init profile 从 `process.terminal` 派生 init I/O，在 launch
+前 apply configured 120x40 size，并将 exact PTY slave bind 到 `/dev/console`。
+它还于 `/dev` 外 create configured FIFO，含 mapped mode 与 ownership。关卡
+运行一次（新 console target）与一次（caller-owned placeholder）；Delete 仅
+remove runtime-created target，并将 pre-existing file 恢复不变。
 
-当容器创建私有挂载命名空间但加入现有用户时
-命名空间，执行器固定并类型检查该命名空间，观察其真实的
-UID/GID 通过短暂的命名空间助手进行映射，并重新检查命名空间
-入境前的身份。然后，相同的分离式安装路径为六个
-具有命名空间根所有权的默认设备。本机 Linux 多容器
-v20 和真正的 Apple Silicon 实用程序-VM 多容器 v11 都验证了
-设备类型、主/次编号、模式、所有权、工作负载访问和清理。
-相同的报告使用新的 tmpfs 覆盖图像的 `/dev` 并要求
-四个 OCI Linux 链接解析到其确切的 `/proc/self/fd` 目标
-每个配置的安装都已就位。
+当 container create private mount namespace 但 join existing user namespace
+时，executor pin 并 type-check 该 namespace，经 short-lived namespace helper
+observe real UID/GID map，并在 entry 前 recheck namespace identity。同一
+detached-mount path 随后以 namespace-root ownership 提供六个 default device。
+Native Linux multi-container v20 与 real Apple Silicon utility-VM multi-
+container v11 均 verify device type、major/minor number、mode、ownership、
+workload access 与 cleanup。同一 report 覆盖 image `/dev`（fresh tmpfs），并
+要求四个 OCI Linux link 在每个 configured mount 就位后 resolve 到 exact
+`/proc/self/fd` target。
 
-挂载选项发现和执行现在共享 SDK 的固定 61 条目 OCI
-1.3 注册表。执行器消耗所有必需和推荐的控制
-选项而不将它们泄漏到文件系统数据中，将未知字符串视为
-文件系统特定的数据，并返回一个类型化的`Unsupported`错误
-可选的 `tmpcopyup` 行为。功能发现报告了 60 个已实施的功能
-OCI 名称加上 `rnodev` 扩展名，按排序顺序排列，并且不做广告
-`tmpcopyup`。
+mount-option discovery 与 execution 现共享 SDK pinned 61-entry OCI 1.3
+registry。executor 消费全部 required 与 recommended control option，不将其
+泄漏到 filesystem data，将 unknown string 视为 filesystem-specific data，并对
+optional `tmpcopyup` behavior 返回 typed `Unsupported` error。Feature
+discovery 按 sorted order 报告 60 个 implemented OCI name 与 `rnodev`
+extension，不 advertise `tmpcopyup`。
 
-所有剩余的 OCI Linux 功能报告都遵循相同的规则。每个
-`RuntimeDriver` 当主机
-服务开启。注册表冻结该值，拒绝多驱动程序集，如果
-任何配置文件都不同，并从中构建`Features`。创建、执行和更新
-在持久突变之前检查相同的值； Linux代理重用共享的
-init、进程和 cgroup 规划中的配置文件。 AppArmor、SELinux、挂载标签、
-因此，无法通告未通告的 Seccomp 控制以及仅限 cgroup-v1 的资源
-报道一种方式，承认另一种方式。
+其余 OCI Linux capability reporting 遵循相同规则。每个 `RuntimeDriver` 在
+Host Service open 时 supply 一个 validated `OciLinuxSupport` value。registry
+freeze 该 value，若 multi-driver set 中任一 profile 不同则 reject，并据此
+build `Features`。Create、Exec 与 Update 在 durable mutation 前 check 同一
+value；Linux Agent 在 init、process 与 cgroup planning 复用 shared profile。
+AppArmor、SELinux、mount label、unadvertised Seccomp control 与 cgroup-v1-
+only resource 因此不能一种方式 report、另一种方式 admit。
 
-配置的主机服务还报告每个可以改变的内置注释
-运行时行为，以及由注释支持的扩展
-他们的活跃司机。仅探针发现保持空白，并且特定于驱动程序
-诸如捆绑切换之类的扩展仅在选定的驱动程序集时出现
-实际上是在给他们做广告。
+configured host service 还 report 每个可改变 runtime behavior 的 built-in
+annotation，以及 active driver 实现的 annotation-backed extension。probe-only
+discovery 保持 empty，driver-specific extension（如 bundle handoff）仅当
+selected driver set 实际 advertise 时出现。
 
-`RuntimeInfo::extensions` 是版本化的 `a3s.oci.extensions.v1` 源
-选择特定于驾驶员的表面的真相。它将目录绑定到
-运行主机可执行文件的 SHA-256 并发布规范的操作合约
-每个可启动驱动程序的附件版本及其独特的隔离
-类。 `RuntimeNegotiationRequest` 通过类型化 `IsolationClass` 选择并
-如果缺少任何请求的版本，则在工作负载准备之前失败。的
-传统平面 `operations` 和 `attachments` 字段仅公开交集
-对每位注册司机来说都是安全的；来自较旧对等方的响应默认为
-目录空空如也，无法默默满足谈判。
+`RuntimeInfo::extensions` 是选择该 driver-specific surface 的 versioned
+`a3s.oci.extensions.v1` source of truth。它将 catalog 绑定到 running Host
+executable 的 SHA-256，并为每个 launch-ready driver 及其 unique isolation
+class 发布 canonical operation-contract 与 attachment version。
+`RuntimeNegotiationRequest` 按 typed `IsolationClass` 选择，若任一 requested
+version 缺失则在 workload preparation 前 fail。legacy flat `operations` 与
+`attachments` field 仅 expose 对每个 registered driver 安全的 intersection；
+older peer 的 response 默认 empty catalog，不能 silently satisfy negotiation。
 
-`a3s.oci.attachments.v2` 将已授权的存储绑定到确切的 OCI
-mount，不可变的调用者发布的分配身份，匹配只读或
-读写访问、调用者所有权和仅分离清理。运行时从不
-解析命名卷或快照，并且永远不会删除调用者拥有的备份
-资源。存储创建需要 SDK 协议 5，而 v1 创建清单
-保留协议 3 兼容性。每次恢复都需要不可变的
-协议 8 检查点参考如下所述。
+`a3s.oci.attachments.v2` 将 already-authorized storage bind 到 exact OCI
+mount、immutable caller-issued allocation identity、matching read-only 或
+read-write access、caller ownership 与 detach-only cleanup。runtime 从不
+resolve named volume 或 snapshot，也从不 delete caller-owned backing resource。
+Storage create 要求 SDK protocol 5，而 v1 create manifest 保留 protocol-3
+compatibility。每次 restore 要求下文 immutable protocol-8 checkpoint reference。
 
-`a3s.oci.attachments.v3` 将已经授权的Linux接口绑定到
-确切的 OCI 网络命名空间和 `linux.netDevices` 条目，以及
-不可变的命名空间、接口和清理身份。运行时创建
-命名空间随容器一起释放；加入的调用者命名空间是
-保存下来。 IPAM、DNS、路由、别名、策略和支持网络清理保持不变
-在A3S盒子里。网络创建需要SDK协议6；恢复需要协议
-8. Rootful Native Linux 通告累积 v1-v3；无根的原住民住宿
-v1-v2，因为它没有主机网络设备权限。现在专用 Linux KVM
-具有内部失败即关闭 v2/v3 传输。调用者拥有的非绑定 `ext4` raw
-图像仍然存在
-在运行时共享之外，并被描述符固定为只读或
-读写 virtio-blk 设备；访客与他们的 libkrun 序列、大小相匹配，
-仅重写授权的 OCI 安装源之前处于只读状态。安
-精确生成的私有清单还绑定授权网络 JSON 指针
-以及确定性访客 MAC 的附件证据；访客仅重命名
-唯一匹配的 VMM NIC。加入调用者命名空间和可重用的来宾
-会话被拒绝。尽管如此，KVM 仍继续宣传 v1，直到其发布为止。
-累积 v2/v3 破坏性真实主机重启、清理、重放和浸泡
-资格通过。 HVF 保持 v1，直到获得同等独立性
-运输和证据。
+`a3s.oci.attachments.v3` 将 already-authorized Linux interface bind 到 exact
+OCI network namespace 与 `linux.netDevices` entry，以及 immutable namespace、
+interface 与 cleanup identity。Runtime-created namespace 随 container release；
+joined caller namespace 保留。IPAM、DNS、route、alias、policy 与 backing-
+network cleanup 留在 A3S Box。Network create 要求 SDK protocol 6；restore
+要求 protocol 8。Rootful Native Linux advertise cumulative v1-v3；rootless
+Native 保持 v1-v2，因无 host network-device authority。Dedicated Linux KVM 现
+有 internal、fail-closed v2/v3 transport。Caller-owned non-bind `ext4` raw
+image 仍在 runtime share 外，descriptor-pinned 为 read-only 或 read-write
+virtio-blk device；Guest 在 rewrite 仅 authorized OCI mount source 前 match
+libkrun serial、size 与 read-only state。Exact-generation private manifest 还
+bind authorized network JSON pointer 与 attachment evidence 到 deterministic
+Guest MAC；Guest 仅 rename uniquely matching VMM NIC。Joined caller namespace
+与 reusable Guest session 被拒绝。KVM  nevertheless 继续 advertise v1，直到
+其 cumulative v2/v3 destructive real-host restart、cleanup、replay 与 soak
+qualification 通过。HVF 保持 v1，直到获得 equivalent independent transport
+与 evidence。
 
-`dev.a3s.network.enforcement@1` 是独立协商的要求
-v3 上的扩展。它绑定一个不透明的调用者编译的执行化身
-以及可选的不透明本地重定向化身到确切的连接，
-调用者拥有的命名空间，仅使用正代和小写 SHA-256
-消化。运行时既不接收策略内容也不获得机制清理
-权威。准确的解码绑定保留在
-`ContainerRecord::network_enforcement` 并对照耐用舱单进行检查
-以及重新打开后的配置快照。 SDK/Host 合约和 rootful
-原生 Linux 实现是合格的；无根本机和虚拟机驱动程序
-继续忽略此功能，等待他们自己的权威模型，并且
-驾驶员特定的真实主持人资格。
+`dev.a3s.network.enforcement@1` 是 v3 上 independently negotiated required
+extension。它将一个 opaque caller-compiled enforcement incarnation 与 optional
+opaque local-redirect incarnation bind 到 exact joined caller-owned namespace，
+仅使用 positive generation 与 lowercase SHA-256 digest。Runtime 既不 receive
+policy content，也不获得 mechanism cleanup authority。exact decoded binding
+留存于 `ContainerRecord::network_enforcement`，并在 reopen 后对照 durable
+manifest 与 configuration snapshot check。SDK/Host contract 与 rootful Native
+Linux implementation 已 qualified；rootless Native 与 VM driver 在各自
+authority model 与 driver-specific real-host qualification 完成前继续 omit
+该 capability。
 
-`a3s.oci.attachments.v4` 将 SharedGuestKernel 请求绑定到一个可重用的
-访客会话 ID 和积极化身，请求的不可变信任
-域、限制为 64 个成员的容量、运行时所有权以及显式的
-空会话重置模式。创建需要SDK协议7，而恢复则需要
-需要协议 8。确切的绑定保留在 `ContainerRecord` 中并且
-重新打开后根据持久清单重新验证。常见的HVF/KVM
-实施强制准入、容量、重置、发电轮换、
-成员清理和共享所有者回收，但没有生产实用程序-VM
-驱动程序通告 v4，直到其必备的存储/网络传输和
-真机重启/泄漏资格通过。请参阅
-[attachment contract](docs/attachment-contracts.md) 用于失败即关闭
-组成规则。
+`a3s.oci.attachments.v4` 将 SharedGuestKernel request bind 到一个 reusable
+guest-session ID 与 positive incarnation、request 的 immutable trust domain、
+capacity 上限 64 member、runtime ownership 与 explicit empty-session reset
+mode。Create 要求 SDK protocol 7，restore 要求 protocol 8。exact binding
+留存于 `ContainerRecord`，并在 reopen 后 revalidate 对照 durable manifest。
+common HVF/KVM implementation 强制执行 admission、capacity、reset、
+generation rotation、member cleanup 与 shared-owner reclamation，但无
+production utility-VM driver advertise v4，直到其 prerequisite storage/network
+transport 与 real-host restart/leak qualification 通过。fail-closed composition
+规则见 [attachment contract](docs/attachment-contracts.md)。
 
-SDK 协议 8 冻结 `a3s.oci.checkpoint-reference.v1`：一个确切的暂停
-源代码生成、配置和附件摘要、驱动程序/隔离、
-平台和架构、主机可执行文件和驱动程序构建证据、
-驱动程序定义的格式以及准确的工件摘要和大小。检查站接受
-仅一个已经暂停的正在运行的生成并将其保留为暂停状态；恢复回报
-一个新的暂停运行的生成，需要一个显式的稍后`resume`。
-工件存储、沿袭、保留和对象策略仍然由调用者拥有。
-主机现在拥有持久检查点和恢复编排。检查站
-隔离确切的暂停源和所有进程 I/O。恢复第一个重放任何
-提交 v5 或 v6 结果而不重新打开调用者数据；否则它
-之前验证不可变的工件和确切的运行时/驱动程序兼容性
-分配一代，调度幂等驱动程序恢复，并提交
-暂停的运行记录。终端恢复失败仅隔离其
-分配的一代，以便 ID 可以单调地重用。注册表
-仅接受来自明确广告的当前平台的`Checkpoint`
-司机并仅接受 `Restore` 和 `Checkpoint`。默认
-原生Linux清单和普通实验构造函数广告
-都没有操作。单独的根`open_experimental_with_criu`
-构造函数绑定一个确切的 CRIU 可执行文件并通告 Checkpoint 和
-恢复。
-它的 `native-linux-criu` v1 后端以原子方式通告这两个操作
-发布一个流式摘要绑定工件，重新创建一个更新的精确暂停
-通过 CRIU 生成，通过重放检查点/恢复响应丢失
-主机边界，使源暂停，并具有有限的实内核正数
-门加上私有 PID 和配置的网络命名空间负门。它的v3
-在 Restore 驱动程序调用之后以及之后，gate 还会替换运行时所有者
-完成主机操作目录同步；重新开放新的服务和司机
-相同的根，从保留的不可变中重新创建实时暂停的一代
-图像、重放准确的响应、保留工件并清理每个
-恢复日志、暂存、执行器和会话路径。包资格 v6
-使用分阶段静态 CLI 和代理运行相同的三报告门，绑定
-运行时和主机提供的 CRIU 摘要，并将报告保留在存档中。
-2026 年 9 月 8 日来自干净修订版的裸机 x86_64 观察结果
-`a35703c` 保留了针对固定 CRIU 4.2.1 的相同三报告门；是的
-源构建的观察证据，并且不关闭标记的多架构
-或生产准备情况。更广泛的命名空间和描述符配置文件、跨驱动程序
-并保留标记的多架构资格和生产准备情况
-保持开放。请参阅[immutable checkpoint contract](docs/checkpoint-contract.md)。
+SDK protocol 8 freeze `a3s.oci.checkpoint-reference.v1`：一个 exact paused
+source generation、configuration 与 attachment digest、driver/isolation、
+platform 与 architecture、Host executable 与 driver-build evidence、
+driver-defined format，以及 exact artifact digest 与 size。Checkpoint 仅接受
+already-paused running generation 并保持 paused；restore 返回 new paused
+running generation，并 require explicit later `resume`。Artifact storage、
+lineage、retention 与 object policy 仍由 caller 持有。Host 现拥有 durable
+checkpoint 与 restore orchestration。Checkpoint fence exact paused source 与
+全部 process I/O。Restore 先 replay 任何 committed v5 或 v6 outcome，不
+reopen caller data；否则 validate immutable artifact 与 exact runtime/driver
+compatibility，然后 allocate generation，dispatch idempotent driver restore，
+并 commit paused running record。Terminal restore failure 仅 quarantine 其
+allocated generation，以便 ID 可 monotonically reuse。registry 仅 accept
+`Checkpoint` 来自 explicitly advertising current-platform driver，并仅在与
+`Checkpoint` 一起 accept `Restore`。default Native Linux inventory 与
+ordinary experimental constructor 均不 advertise 任一 operation。独立 rootful
+`open_experimental_with_criu` constructor bind 一个 exact CRIU executable 并
+advertise Checkpoint 与 Restore。其 `native-linux-criu` v1 backend advertise
+两项 operation，atomically publish 一个 streaming digest-bound artifact，经
+CRIU recreate newer exact paused generation，经 Host boundary replay
+checkpoint/restore response loss，leave source paused，并有 bounded real-
+kernel positive gate 加 private-PID 与 configured-network-namespace negative
+gate。其 v3 gate 还在 Restore driver call 与 completed Host-operation
+directory sync 后 replace runtime owner；fresh service 与 driver reopen 相同
+root，从 retained immutable image recreate live paused generation，replay
+exact response，preserve artifact，并 clean 每个 restore journal、staging、
+executor 与 session path。Package qualification v6 以 staged static CLI 与
+Agent 运行相同 three-report gate，bind runtime 与 host-provided CRIU digest，
+并将 report 留存于 archive。2026 年 9 月 8 日 bare-metal x86_64 observation
+（clean revision `a35703c`）在 pinned CRIU 4.2.1 上 retain 相同 three-report
+gate；它是 source-built observation evidence，不关闭 tagged multi-architecture
+或 production readiness。更广 namespace 与 descriptor profile、cross-driver 与
+retained tagged multi-architecture qualification，以及 production readiness
+仍开放。见 [immutable checkpoint contract](docs/checkpoint-contract.md)。
 
-containerd runtime-v2 shim 现在公开了这个可选合约，而无需
-使其成为端点的 18 操作基本准入集的一部分。停顿了一下
-任务检查点写入`a3s-oci-checkpoint-v1.bin`加上原子提交
-`a3s-oci-checkpoint-v1.json` 将清单引用到containerd的请求中
-目录。使用该目录创建会验证不可变包并
-调用 SDK 恢复。虽然 SDK 恢复返回暂停运行的生成，
-填充程序报告 CREATED 直到第一个 Start 执行一次重放稳定
-简历； schema-v10 元数据和 schema-v2 创建意图恢复双方
-垫片崩溃后的障碍。不受支持的选定驱动程序返回
-仅针对可选请求未实现。增量检查点和
-非中性 runc 检查点选项仍被拒绝。
+containerd runtime-v2 shim 现 expose 该 optional contract，但不将其纳入
+endpoint 18-operation base admission set。paused Task Checkpoint 写入
+`a3s-oci-checkpoint-v1.bin` 加 atomically committed `a3s-oci-checkpoint-v1.json`
+reference manifest 到 containerd requested directory。Create 带该 directory
+validate immutable package 并 call SDK Restore。虽 SDK restore 返回 paused
+running generation，shim 报告 CREATED，直到 first Start 执行一次 replay-
+stable Resume；schema-v10 metadata 与 schema-v2 create intent 在 shim crash
+后 recover barrier 两侧。Unsupported selected driver 仅对 optional request
+返回 Unimplemented。Incremental checkpoint 与 non-neutral runc checkpoint
+option 仍 rejected。
 
-SDK协议9增加了策略中立的TEE机制边界。专用虚拟机
-创建或恢复可能只需要一个 `dev.a3s.tee.amd-sev-snp@1` 或
-`dev.a3s.tee.intel-tdx@1` 显式启动扩展 `hardware` 或
-`simulated`模式。独立耐用的`attest`操作具有精确的
-64 字节报告数据绑定并返回有界不透明提供者证据以及
-启动测量、配置和附件摘要、驱动程序和
-驱动程序构建身份和确切的主机工件。运行时验证和重放
-这些绑定但不验证提供者声明或进行授权
-决定； Box 或 Cloud 拥有评估和政策。司机可能会做广告
-`Attest` 仅与至少一个精确的 TEE 扩展和专用 VM 一起使用
-隔离。没有生产驱动程序宣传 TEE 扩展或 `Attest`
-直到硬件执行、取证、重启、升级、
-破坏性真主资格通行证。请参阅[TEE launch and attestation
+SDK protocol 9 增加 policy-neutral TEE mechanism boundary。dedicated-VM
+create 或 restore 可 require 恰好一个 `dev.a3s.tee.amd-sev-snp@1` 或
+`dev.a3s.tee.intel-tdx@1` launch extension，mode 为 explicit `hardware` 或
+`simulated`。独立 durable `attest` operation 携带 exact 64-byte report-data
+binding，返回 bounded opaque provider evidence 加 launch measurement、
+configuration 与 attachment digest、driver 与 driver-build identity，以及
+exact Host artifact。Runtime validate 与 replay 这些 binding，但不 verify
+provider claim 或做 authorization decision；Box 或 Cloud 拥有 appraisal 与
+policy。driver 仅在与至少一个 exact TEE extension 及 dedicated-VM isolation
+一起时 advertise `Attest`。无 production driver advertise 任一 TEE extension
+或 `Attest`，直到 hardware execution、evidence collection、restart、upgrade
+与 destructive real-host qualification 通过。见 [TEE launch and attestation
 contract](docs/tee-attestation-contract.md)。
 
-这些命令可能需要 root 权限、虚拟机管理程序访问权限、签名
-工件，或显式提供的测试根中的破坏性清理。
-在运行它们之前请阅读链接的主机指南。
+这些 command 可能需要 root privilege、hypervisor access、signed artifact，
+或在 explicitly supplied test root 内 destructive cleanup。运行前请阅读链接的
+host guide。
 
 ## 证据，而非口号
 
-存储库将发布声明转换为检查清单：
+本仓库将发布声明转化为可检查的 inventory：
 
-|证据|当前锁|
-| ---| ---: |
-|命名 OCI 架构属性和枚举值分类 | 423 | 423
-| OCI 架构配置 | 257 个强制执行 · 2 个已验证 · 75 个被拒绝 不受支持 · 89 个被拒绝 不适用 · 0 个待定 · 0 个符合 |
-|审查架构证据 | 31 个绑定中的 334 个适用项目 · 132 条规则 · 103 项测试 |
-| OCI Linux 配置和功能简介 | 190 / 190 架构项：145 强制执行 · 45 拒绝不受支持； 218 / 218 `config-linux.md`：206 个强制执行 · 9 个已验证 · 3 个一致； 41 / 41 `features-linux.md` 强制执行 |
-| OCI 虚拟机配置文件 | 26 / 26 模式项 · 24 / 24 规范要求 · 4 个经过验证的绝对路径 · 20 个失败即关闭运行时拥有的控件 |
-|固定 OCI JSON 架构套件 | 19 / 19 上游装置​​ · 4 / 4 启动配置文件，包括配置、功能和创建/运行/停止状态文档 |
-|官方 OCI 运行时工具捆绑包 |运行时工具 0.9.0，`8a4db579f5c88af5a0d036fad34bddc9c1f703f3` · OCI 1.3.0 本机 Linux 和实用程序 VM 捆绑包 · 必须级别 · 转义 rootfs 负面 |
-| RFC 2119 在 15 个固定规范 OCI 1.3 文档中出现 | 764 | 764
-|类型化语义验证规则 | 95 | 95
-|所有者绑定的非语义规则 | 156 | 156
-| OCI 规范处置 | 578 项已强制执行 · 51 项已验证 · 12 项符合 · 14 项经过外部审核 · 0 项待审核 |
-|已注册的持久提交错误阶段 | 877 | 877
-|耐用状态更换资格验证 | macOS/Linux/Windows 完整，包括真正的 Linux 绑定安装和 Windows 重解析点矩阵 |
-|直播containerd终端init-Kill补水| 2026 年 8 月 24 日 3 / 3 个连续的同主机 Ubuntu arm64/containerd 2.2.2 矩阵 |
-|实时containerd `DeleteProcess`响应重放 | 2026 年 8 月 24 日 3 / 3 个连续的同主机 Ubuntu arm64/containerd 2.2.2 矩阵 |
-|实时containerd任务删除响应重放| 2026 年 8 月 24 日的 3 / 3 个连续同一主机 Ubuntu x86_64/containerd 2.2.3 矩阵 |
-|提交后containerd `WriteStdin` 强制清理 | 2026 年 8 月 24 日的 3 / 3 个连续同一主机 Ubuntu x86_64/containerd 2.2.3 矩阵 |
-|提交后containerd `CloseStdin` 强制清理 | 2026 年 8 月 24 日的 3 / 3 个连续同一主机 Ubuntu x86_64/containerd 2.2.3 矩阵 |
-|提交后containerd `ResizePty` 强制清理 | 2026 年 8 月 28 日的 3 / 3 个连续同一主机 Ubuntu 24.04.3 LTS/WSL2 x86_64 观察结果 |
-| `RuntimeDriver` 断层边界之前/之后 | 52 | 52
-|已验证的代理操作阶段故障对 | 180 | 180
-|便携式创建/状态/启动/终止/删除/等待/执行/SignalProcess/WaitProcess/暂停/恢复/进程/更新/统计/ReadOutput/WriteStdin/CloseStdin/调整大小/文件/文件系统主机服务重新打开对| 180 | 180
-|真正的 HVF 创建主机/访客加上主机关闭中断和清理阶段 | 11 | 11
-|真正的 HVF 持久创建重新打开以及虚拟机/会话所有者替换路径 | 9 |
-|真正的 HVF 持久状态重新打开以及虚拟机/会话所有者替换路径 | 9 |
-|真正的 HVF 持久启动重新打开以及虚拟机/会话所有者替换路径 | 9 |
-|真正的 HVF 持久终止重新打开以及虚拟机/会话所有者替换路径 | 9 |
-|真正的 HVF 持久删除重新打开以及虚拟机/会话所有者替换路径 | 9 |
-|真正的 HVF 持久等待重新打开以及虚拟机/会话所有者替换路径 | 9 |
-|真正的 HVF 持久 Exec 重新打开以及 VM/会话所有者替换路径 | 9 |
-|真正的 HVF 持久 SignalProcess 重新打开以及 VM/会话所有者替换路径 | 9 |
-|真正的 HVF 持久 WaitProcess 重新打开以及 VM/会话所有者替换路径 | 9 |
-|真正的 HVF 持久暂停重新打开以及虚拟机/会话所有者替换路径 | 9 |
-|真正的 HVF 持久恢复重新打开以及虚拟机/会话所有者替换路径 | 9 |
-|真正的 HVF 持久进程重新打开以及虚拟机/会话所有者替换路径 | 9 |
-|真正的 HVF 持久更新重新打开以及虚拟机/会话所有者替换路径 | 9 |
-|真正的 HVF 持久统计数据重新打开以及虚拟机/会话所有者替换路径 | 9 |
-|真正的 HVF 持久 ReadOutput 重新打开以及 VM/会话所有者替换路径 | 9 |
-|真正的 HVF 持久 WriteStdin 重新打开以及 VM/会话所有者替换路径 | 9 |
-|真正的 HVF 持久 CloseStdin 重新打开以及 VM/会话所有者替换路径 | 9 |
-|真正的 HVF 持久调整大小重新打开以及虚拟机/会话所有者替换路径 | 9 |
-|真正的 HVF 持久文件重新打开以及虚拟机/会话所有者替换路径 | 9 |
-|真正的 HVF 持久文件系统重新打开以及虚拟机/会话所有者替换路径 | 9 |
-|真正的HVF操作更换覆盖| 180 / 180 条路径（20 / 20 次操作）|
-|真实 HVF 记录响应后确认重放 | 2026 年 8 月 15 日 14 / 14 突变 |
-|真正的 HVF 生命周期/运输清理故障点 | 14 / 14 | 14
-|真正的 HVF 不可变系统图像浸泡 | 25 / 25 个新虚拟机（75 个主要代）|
-| macOS HVF R2M 实施门 | 15 / 15 | 15 / 15
-|公共 macOS HVF 主机服务实施 |完全的;修订版 `a5a6b53` 通过了 23/23 操作、所有者更换和 25/25 新虚拟机 |
-| Linux KVM 17个案例生命周期入门 |针对 x86_64 和 AArch64 实现；干净的修订版`e7567f9`保留了x86_64上的`available`证据，因此新鲜主机证据是1 / 2架构|
-| Linux KVM属主-死亡/重启入门 |针对 x86_64 和 AArch64 实现；干净的修订版 `e7567f9` 保留了 `available` x86_64 上的证据，因此新主机证据是 1 / 2 架构 |
-| Linux KVM 有界浸泡入门 |在 x86_64 和 AArch64 的第 25 代中实现；干净的修订版 `e7567f9` 在 x86_64 上保留了 25 / 25，因此新鲜主机证据是 1 / 2 架构 |
-| Linux KVM创建操作阶段所有者更换|两种架构均已实施并通过 CI 连接；干净的修订版 `c435e26` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构和 9 / 180 工作负载操作路径 |
-| Linux KVM状态运行-阶段所有者更换|两种架构均已实施并通过 CI 连接；干净的修订版 `d0c29e2` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构，保留的总工作负载操作覆盖范围是 18 / 180 个路径 |
-| Linux KVM启动运营阶段业主更换|两种架构均已实施并通过 CI 连接；干净的修订版 `3bbdeda` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构，保留的总工作负载操作覆盖范围是 27 / 180 个路径 |
-| Linux KVM Kill运行阶段所有者更换|两种架构均已实施并通过 CI 连接；干净的修订版 `336bd5e` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构，保留的总工作负载操作覆盖范围是 36 / 180 个路径 |
-| Linux KVM删除操作-阶段所有者更换|两种架构均已实施并通过 CI 连接；干净的修订版 `3227ace` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构，保留的总工作负载操作覆盖范围是 45 / 180 个路径 |
-| Linux KVM等待运行阶段业主更换|两种架构均已实施并通过 CI 连接；干净的修订版 `b491195` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构，保留的总工作负载操作覆盖范围是 54 / 180 个路径 |
-| Linux KVM Exec运行阶段所有者更换|两种架构均已实施并通过 CI 连接；干净的修订版 `18ecaf1` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构，保留的总工作负载操作覆盖范围是 63 / 180 个路径 |
-| Linux KVM SignalProcess 操作阶段所有者更换 |两种架构均已实施并通过 CI 连接；干净的修订版 `2f5456c` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构，保留的总工作负载操作覆盖范围是 72 / 180 个路径 |
-| Linux KVM WaitProcess运行阶段所有者更换|两种架构均已实施并通过 CI 连接；干净的修订版 `4338d37` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构，保留的总工作负载操作覆盖范围是 81 / 180 个路径 |
-| Linux KVM暂停运行-阶段所有者更换|两种架构均已实施并通过 CI 连接；干净的修订版 `3e9fc4b` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构，保留的总工作负载操作覆盖范围是 90 / 180 个路径（10 / 20 个操作） |
-| Linux KVM恢复运行阶段所有者更换|两种架构均已实施并通过 CI 连接；干净的修订版 `b4c3a85` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构，保留的总工作负载操作覆盖范围是 99 / 180 个路径（11 / 20 个操作） |
-| Linux KVM进程操作阶段所有者更换|两种架构均已实施并通过 CI 连接；干净的修订版 `9a1a37c` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构，保留的总工作负载操作覆盖范围是 108 / 180 个路径（12 / 20 个操作） |
-| Linux KVM更新操作-阶段所有者更换|两种架构均已实施并通过 CI 连接；干净的修订版 `aa0f56a` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构，保留的总工作负载操作覆盖范围是 117 / 180 个路径（13 / 20 个操作） |
-| Linux KVM Stats 运行阶段所有者更换 |两种架构均已实施并通过 CI 连接；干净的修订版 `09286d8` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构，保留的总工作负载操作覆盖范围是 126 / 180 个路径（14 / 20 个操作） |
-| Linux KVM ReadOutput操作阶段所有者更换|两种架构均已实施并通过 CI 连接；干净的修订版 `dd47146` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构，保留的总工作负载操作覆盖范围是 135 / 180 个路径（15 / 20 个操作） |
-| Linux KVM WriteStdin操作阶段所有者更换|两种架构均已实施并通过 CI 连接；干净的修订版 `17b307d` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构，保留的总工作负载操作覆盖范围是 144 / 180 个路径（16 / 20 个操作） |
-| Linux KVM CloseStdin运行阶段所有者更换|两种架构均已实施并通过 CI 连接；干净的修订版 `31d35c3` 在 x86_64 上保留了 9 / 9，因此新主机证据是 1 / 2 架构，保留的总工作负载操作覆盖范围是 153 / 180 个路径（17 / 20 个操作） |
-| Linux KVM Resize操作阶段所有者更换|两种架构均已实施并通过 CI 连接； clean x86_64 资格保留了 9 / 9 个阶段，完整的 Linux KVM 操作阶段实现集现在涵盖了 20 / 20 个操作 |
-| Linux KVM文件操作-阶段所有者更换|两种架构均已实施并通过 CI 连接；干净的修订版 `fa4c593` 在 x86_64 上保留了 9 / 9 个阶段（报告 `8bd1bb731198c5a28659a47e85d146a5e8285483488a6540acda8d1596d51ec3`），新主机证据仍然是 1 / 2 架构 |
-| Linux KVM 文件系统操作阶段所有者更换 |两种架构均已实施并通过 CI 连接；干净的修订版 `fa4c593` 在 x86_64 上保留了 9 / 9 个阶段（报告 `205e3b493e218a3fc3d8bc50f4d4b3af14ccf0156846352dfa00bd1d84d67c19`），新主机证据仍然是 1 / 2 架构 |
-| Linux KVM运营阶段业主更换覆盖|在 20 个操作中实施并连接了 180 / 180 条路径；可用的 x86_64 证据在保留的当前和之前的干净修订中已完成，而新的 AArch64 证据正在等待 |
-|协议 v10 背后的来宾操作 | 21（20 个公共工作负载操作 + 1 个维护确认）|
+| 证据 | 当前锁定 |
+| --- | ---: |
+| 已分类的命名 OCI schema 属性与 enum 值 | 423 |
+| OCI schema disposition | 257 enforced · 2 validated · 75 rejected unsupported · 89 rejected inapplicable · 0 pending · 0 conformant |
+| 已审查的 schema 证据 | 334 applicable items in 31 bindings · 132 rules · 103 tests |
+| OCI Linux configuration 与 Features profile | 190 / 190 schema items: 145 enforced · 45 rejected unsupported; 218 / 218 `config-linux.md`: 206 enforced · 9 validated · 3 conformant; 41 / 41 `features-linux.md` enforced |
+| OCI VM configuration profile | 26 / 26 schema items · 24 / 24 normative requirements · 4 validated absolute paths · 20 fail-closed runtime-owned controls |
+| Pinned OCI JSON Schema 套件 | 19 / 19 upstream fixtures · 4 / 4 launch profiles with configuration, Features, and created/running/stopped State documents |
+| 官方 OCI Runtime Tools bundle 关卡 | Runtime Tools 0.9.0 at `8a4db579f5c88af5a0d036fad34bddc9c1f703f3` · OCI 1.3.0 Native Linux and utility-VM bundles · MUST level · escaping-rootfs negative |
+| 15 份 pinned normative OCI 1.3 文档中的 RFC 2119 出现次数 | 764 |
+| Typed semantic validation rule | 95 |
+| Owner-bound non-semantic rule | 156 |
+| OCI normative disposition | 578 enforced · 51 validated · 12 conformant · 14 reviewed external · 0 pending review |
+| 已注册 durable commit fault stage | 877 |
+| Durable-state replacement qualification | macOS/Linux/Windows 完成，含 real Linux bind mount 与 Windows reparse-point matrix |
+| Live containerd terminal init-Kill rehydration | 3 / 3 consecutive same-Host Ubuntu arm64/containerd 2.2.2 matrices on August 24, 2026 |
+| Live containerd `DeleteProcess` response replay | 3 / 3 consecutive same-Host Ubuntu arm64/containerd 2.2.2 matrices on August 24, 2026 |
+| Live containerd task Delete response replay | 3 / 3 consecutive same-Host Ubuntu x86_64/containerd 2.2.3 matrices on August 24, 2026 |
+| Post-commit containerd `WriteStdin` forced cleanup | 3 / 3 consecutive same-Host Ubuntu x86_64/containerd 2.2.3 matrices on August 24, 2026 |
+| Post-commit containerd `CloseStdin` forced cleanup | 3 / 3 consecutive same-Host Ubuntu x86_64/containerd 2.2.3 matrices on August 24, 2026 |
+| Post-commit containerd `ResizePty` forced cleanup | 3 / 3 consecutive same-Host Ubuntu 24.04.3 LTS/WSL2 x86_64 observations on August 28, 2026 |
+| Before/after `RuntimeDriver` fault boundary | 52 |
+| Authenticated agent operation-stage fault pair | 180 |
+| Portable Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host-service reopen pair | 180 |
+| Real HVF Create Host/Guest 加 Host shutdown interruption 与 cleanup stage | 11 |
+| Real HVF durable Create reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable State reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable Start reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable Kill reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable Delete reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable Wait reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable Exec reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable SignalProcess reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable WaitProcess reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable Pause reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable Resume reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable Processes reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable Update reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable Stats reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable ReadOutput reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable WriteStdin reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable CloseStdin reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable Resize reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable File reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF durable Filesystem reopen 加 VM/session-owner replacement path | 9 |
+| Real HVF operation replacement coverage | 180 / 180 paths (20 / 20 operations) |
+| Real HVF journaled post-response acknowledgement rerun | 14 / 14 mutations on August 15, 2026 |
+| Real HVF lifecycle/transport cleanup fault point | 14 / 14 |
+| Real HVF immutable-system-image soak | 25 / 25 fresh VMs (75 primary generations) |
+| macOS HVF R2M implementation gate | 15 / 15 |
+| Public macOS HVF Host Service implementation | Complete; revision `a5a6b53` passed 23/23 operations, owner replacement, and 25/25 fresh VMs |
+| Linux KVM 17-case lifecycle entry | Implemented for x86_64 and AArch64; clean revision `e7567f9` retained `available` evidence on x86_64, so fresh-host evidence is 1 / 2 architectures |
+| Linux KVM owner-death/restart entry | Implemented for x86_64 and AArch64; clean revision `e7567f9` retained `available` evidence on x86_64, so fresh-host evidence is 1 / 2 architectures |
+| Linux KVM bounded soak entry | Implemented at 25 fresh generations for x86_64 and AArch64; clean revision `e7567f9` retained 25 / 25 on x86_64, so fresh-host evidence is 1 / 2 architectures |
+| Linux KVM Create operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `c435e26` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and 9 / 180 workload-operation paths |
+| Linux KVM State operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `d0c29e2` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 18 / 180 paths |
+| Linux KVM Start operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `3bbdeda` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 27 / 180 paths |
+| Linux KVM Kill operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `336bd5e` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 36 / 180 paths |
+| Linux KVM Delete operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `3227ace` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 45 / 180 paths |
+| Linux KVM Wait operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `b491195` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 54 / 180 paths |
+| Linux KVM Exec operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `18ecaf1` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 63 / 180 paths |
+| Linux KVM SignalProcess operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `2f5456c` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 72 / 180 paths |
+| Linux KVM WaitProcess operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `4338d37` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 81 / 180 paths |
+| Linux KVM Pause operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `3e9fc4b` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 90 / 180 paths (10 / 20 operations) |
+| Linux KVM Resume operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `b4c3a85` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 99 / 180 paths (11 / 20 operations) |
+| Linux KVM Processes operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `9a1a37c` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 108 / 180 paths (12 / 20 operations) |
+| Linux KVM Update operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `aa0f56a` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 117 / 180 paths (13 / 20 operations) |
+| Linux KVM Stats operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `09286d8` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 126 / 180 paths (14 / 20 operations) |
+| Linux KVM ReadOutput operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `dd47146` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 135 / 180 paths (15 / 20 operations) |
+| Linux KVM WriteStdin operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `17b307d` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 144 / 180 paths (16 / 20 operations) |
+| Linux KVM CloseStdin operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `31d35c3` retained 9 / 9 on x86_64, so fresh-host evidence is 1 / 2 architectures and total retained workload-operation coverage is 153 / 180 paths (17 / 20 operations) |
+| Linux KVM Resize operation-stage owner replacement | Implemented and CI-wired for both architectures; clean x86_64 qualification retained 9 / 9 stages, and the complete Linux KVM operation-stage implementation set now covers 20 / 20 operations |
+| Linux KVM File operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `fa4c593` retained 9 / 9 stages on x86_64 (report `8bd1bb731198c5a28659a47e85d146a5e8285483488a6540acda8d1596d51ec3`), fresh-host evidence remains 1 / 2 architectures |
+| Linux KVM Filesystem operation-stage owner replacement | Implemented and CI-wired for both architectures; clean revision `fa4c593` retained 9 / 9 stages on x86_64 (report `205e3b493e218a3fc3d8bc50f4d4b3af14ccf0156846352dfa00bd1d84d67c19`), fresh-host evidence remains 1 / 2 architectures |
+| Linux KVM operation-stage owner replacement coverage | 180 / 180 paths implemented and CI-wired across 20 operations; available x86_64 evidence is complete across the retained current and prior clean revisions, while fresh AArch64 evidence is pending |
+| Protocol v10 背后的 Guest operation | 21（20 个公共 workload operation + 1 个有界 maintenance acknowledgement） |
 
-锁证明库存和行使边界，但不完全符合
-他们自己。 OCI 1.3 规范清单没有未分类条目，但是
-上游生命周期套件、对抗性安全性、升级兼容性以及
-在驱动程序成为之前，精确的发布工件资格必须全部通过
-`supported`。
+这些锁定证明 inventory 与已 exercise 的 boundary，本身并不等同于完整
+conformance。OCI 1.3 normative inventory 无 unclassified entry，但 upstream
+lifecycle suite、adversarial security、upgrade compatibility 与 exact release-
+artifact qualification 均须通过，driver 才能成为 `supported`。
 
-### 还是有意开放
+### 仍有意保持开放
 
-- 支持 CAT/MBA 的 Linux 主机上的真实内核 Intel RDT 资格；
-- 每个上的描述符限制文件系统会话的真实主机资格
-  剩余实用程序-VM 驱动程序；
-- 生产就绪的本机 Linux 和utility VM驱动程序；
-- 实时本地 Linux 进程 - I/O 在所有者死亡和精确情况下重新连接
-  当持久性经过身份验证的收割者可以保留它时，它是最终证据；
-- 实施的不可变 WHPX 系统根的新主机资格，以及
-  已实施的KVM系统根的真实进入资格；
--实用程序-VM钩子恢复和安全认证；
-- 默认和跨平台的 A3S Box 切换，加上剩余的
-  容器兼容性、包装和跨驱动程序门；
-- Native Linux CRIU 更广泛的检查点源配置文件、跨驱动程序和
-  保留标记的多架构真实主机资格和生产
-  检查点/恢复准备状态；
-- 生产 SEV-SNP/TDX 启动和认证驱动程序、硬件证据
-  运行时之外的资格认证和验证者策略集成；
-- 精确的已发布包资格、升级、回滚、安全性和
-  长期释放门。
+- 在具备 CAT/MBA 能力的 Linux 主机上进行 real-kernel Intel RDT qualification；
+- 在每个剩余 utility-VM driver 上对 descriptor-confined filesystem session
+  进行 real-host qualification；
+- production-ready Native Linux 与 utility-VM driver；
+- owner death 后 live Native Linux process-I/O reattachment，以及 persistent
+  authenticated reaper 可保留时的 exact terminal evidence；
+- 已实现 immutable WHPX system root 的 fresh-host qualification，以及已实现
+  KVM system root 的 real-entry qualification；
+- utility-VM hook recovery 与 security certification；
+- default 与 cross-platform A3S Box cutover，以及剩余 containerd compatibility、
+  packaging 与 cross-driver 关卡；
+- Native Linux CRIU 更广 checkpoint source profile、cross-driver 与 retained
+  tagged multi-architecture real-host qualification，以及 production
+  checkpoint/restore readiness；
+- production SEV-SNP/TDX launch 与 attestation driver、hardware evidence
+  qualification，以及 Runtime 之外的 verifier-policy integration；
+- exact published-package qualification、upgrade、rollback、security 与
+  long-duration release 关卡。
 
-## 仓库地图
+## 工作区结构
 
 ```text
 crates/sdk/             public async OCI contract, bundle validation, local IPC
@@ -1675,24 +1597,24 @@ crates/cli/             capability inspection and real-host qualification gates
 
 ## 文档
 
-- [Roadmap and release gates](ROADMAP.md)
-- [Release verification](docs/release-verification.md)
-- [Durable lifecycle and recovery](docs/durable-state.md)
-- [SDK transport](docs/sdk-transport.md)
-- [Immutable checkpoint and restore contract](docs/checkpoint-contract.md)
-- [TEE launch and attestation contract](docs/tee-attestation-contract.md)
-- [Versioned attachment contracts](docs/attachment-contracts.md)
-- [Guest-agent protocol](docs/agent-protocol.md)
-- [OCI 1.3 conformance contract](docs/oci-conformance.md)
-- [Normative coverage](docs/normative-coverage.md)
-- [Semantic validation](docs/semantic-validation.md)
-- [Native Linux development](docs/linux-native.md)
-- [macOS HVF development](docs/macos-hvf.md)
-- [Windows WHPX development](docs/windows-whpx.md)
+- [路线图与发布关卡](ROADMAP.md)
+- [发布验证](docs/release-verification.md)
+- [持久化生命周期与恢复](docs/durable-state.md)
+- [SDK 传输](docs/sdk-transport.md)
+- [不可变检查点与恢复契约](docs/checkpoint-contract.md)
+- [TEE 启动与 attestation 契约](docs/tee-attestation-contract.md)
+- [版本化 attachment 契约](docs/attachment-contracts.md)
+- [客户机代理协议](docs/agent-protocol.md)
+- [OCI 1.3 conformance 契约](docs/oci-conformance.md)
+- [规范覆盖](docs/normative-coverage.md)
+- [语义校验](docs/semantic-validation.md)
+- [Native Linux 开发](docs/linux-native.md)
+- [macOS HVF 开发](docs/macos-hvf.md)
+- [Windows WHPX 开发](docs/windows-whpx.md)
 
 ## 开发
 
-从存储库根运行检查：
+从仓库根目录运行检查：
 
 ```bash
 cargo fmt --all -- --check
@@ -1701,8 +1623,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
-交叉检查受支持的 Linux 编译目标，无需处理父级
-monorepo 作为 Rust 工作区：
+交叉检查受支持的 Linux 编译目标，无需将父 monorepo 当作 Rust workspace：
 
 ```bash
 cargo clippy --target x86_64-unknown-linux-gnu \
@@ -1711,44 +1632,38 @@ cargo clippy --target aarch64-unknown-linux-gnu \
   --workspace --all-targets -- -D warnings
 ```
 
-带标签的存档包含主机诊断和匹配的平台资产。
-Linux x86_64 和 arm64 存档带有静态链接的 musl CLI、代理和
-其释放门拒绝 ELF 解释器的 containerd shim 可执行文件
-动态依赖。在归档 Linux 目录之前，其确切位置
-CLI 和 Agent 运行完整的 Native Linux SDK，无根，所有者死亡，
-Hook 恢复、OAR-01 网络强制、故障清除和有界浸泡
-删除了`/dev/kvm`的矩阵。档案保留
-`qualification/native-linux-package.json` 模式 v7 加上十三个摘要绑定，
-常规的非符号链接从属报告标准化为模式`0644`。三个
-这些报告运行 OAR-03 CRIU
-检查点/恢复、替换进程恢复和 PID/网络命名空间
-带有分阶段二进制文件的拒绝门。第四个运行官方 OCI 运行时
-准确提交的工具 0.9.0
-`8a4db579f5c88af5a0d036fad34bddc9c1f703f3` 对抗 Native Linux 和
-utility-VM OCI 1.3.0 捆绑配置和 escaping-rootfs 否定。
-在 x86_64 和 AArch64 上，第五个报告启动固定的上游生命周期
-通过分阶段 CLI 和持久主机服务进行配置文件。兼容性锁
-提供架构匹配的 Alpine 3.22.5 minirootfs，具有精确的 URL、大小、
-和 SHA-256 出处，因为运行时工具本身仅携带 amd64
-固定装置。构建器拒绝不安全的存档路径、缺少 BusyBox 身份、
-和体系结构漂移之前将其安装在预期的文件名下
-上游线束。所有九个选定的测试均执行：七个通过了最初的测试
-TAP 断言，而 `start` 和 `pidfile` 在语义上保留
-符合两个精确的、经过源审核的运行时工具线束缺陷。的
-上游 AArch64 配置的本机和 32 位 ARM seccomp ABI 都是
-使用体系结构范围的系统调用表进行编译。报告记录了
-rootfs 源，都是缺陷标识符，全部已停用的 CLI
-日志、干净的服务关闭以及限定固定核心生命周期
-两种 Linux 架构上的配置文件，而不隐藏两个原始 TAP 故障。
-该工作流程还在固定提交时构建上游 CRIU v4.2.1
-`9539417f3e3cfa4eb84c319cd71f4d52f1f08645`。 CRIU 和运行时工具仍然存在
-主机提供且在存档之外；他们的确切身份和可执行文件
-摘要受包报告的约束。固定核心轮廓不
-限定继承的 stdio 描述符传输、终端控制台套接字、
-`LISTEN_FDS`，更广泛的上游套件，或非 Linux 平台。套餐
-可用性永远不会凌驾于报告的准备状态
-精确的二进制 `features` 结果。
+带 tag 的 archive 包含主机诊断与匹配的平台 asset。Linux x86_64 与 arm64
+archive 携带 static-linked musl CLI、agent 与 containerd shim 可执行文件，其
+release 关卡拒绝 ELF interpreter 与 dynamic dependency。在 archive 任一 Linux
+directory 前，其 exact CLI 与 Agent 运行完整 Native Linux SDK、rootless、
+owner-death、Hook-recovery、OAR-01 network-enforcement、fault-cleanup 与
+bounded-soak matrix，且 `/dev/kvm` 已移除。archive 保留
+`qualification/native-linux-package.json` schema v7，加十三个 digest-bound、
+regular、nonsymlink 从属 report，normalized 为 mode `0644`。其中三个 report
+以 staged binary 运行 OAR-03 CRIU checkpoint/restore、replacement-process
+recovery 与 PID/network namespace rejection 关卡。第四个以 exact commit
+`8a4db579f5c88af5a0d036fad34bddc9c1f703f3` 运行官方 OCI Runtime Tools 0.9.0，
+针对 Native Linux 与 utility-VM OCI 1.3.0 bundle configuration 及
+escaping-rootfs negative。在 x86_64 与 AArch64 上，第五个 report 经 staged CLI
+与 durable Host Service 启动 pinned upstream lifecycle profile。compatibility
+lock 提供 architecture-matched Alpine 3.22.5 minirootfs，含 exact URL、size
+与 SHA-256 provenance，因 Runtime Tools 本身仅携带 amd64 fixture。builder 在
+安装到 upstream harness 期望的文件名前，拒绝 unsafe archive path、缺失 BusyBox
+identity 与 architecture drift。全部九个选定 test 均执行：七个通过原始 TAP
+assertion，而 `start` 与 `pidfile` 在语义上保留 conformant，对应两个 exact、
+source-audited Runtime Tools harness defect。upstream AArch64 configuration 的
+native 与 32-bit ARM seccomp ABI 均用 architecture-scoped syscall table 编译。
+report 记录 rootfs source、两个 defect identifier、全部 retired CLI journal、
+clean service shutdown，并在两种 Linux architecture 上 qualify pinned core
+lifecycle profile，不隐藏两个 raw TAP failure。workflow 还在 pinned commit
+`9539417f3e3cfa4eb84c319cd71f4d52f1f08645` 构建 upstream CRIU v4.2.1。CRIU
+与 Runtime Tools 仍由 host 提供且在 archive 外；其 exact identity 与 executable
+digest 由 package report 绑定。pinned core profile 不 qualify inherited stdio
+descriptor transport、terminal console socket、`LISTEN_FDS`、更广 upstream
+suite 或非 Linux platform。package availability 永不会 override exact binary
+`features` result 所报告的就绪状态。
 
 ## 许可证
 
-A3S OCI Runtime在 [MIT License](LICENSE) 下可用。
+A3S OCI Runtime 在 [MIT License](LICENSE) 下提供。
+
