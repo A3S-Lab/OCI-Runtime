@@ -667,6 +667,31 @@ soak summary and operation-table SHA-256 values are
 existing-host observation only; the freshly provisioned release-host gate
 remains open and the public WHPX candidate stays `probe-only`.
 
+The same host then retained the independent same-process handle-reclamation
+gate on clean revision `afc78ae62f8da8a1d3209edd73a28814136e2fd9`: eight VM
+cycles with cold 119, baseline 126, peak/final 126, final delta 0, and
+`runtime_share_restored=true`. Summary and report SHA-256 values are
+`737207219e4f9f2d051f2532e9de9cda044f9c40344712d815797003ad3b6171` and
+`ef35c904d4daf1d9f8b3fcb2d3dbb630182ef4dd8a3ab78cfa237736cd62453e`. Fresh-host
+SDK/recovery/negative/soak evidence for the parent handle-reclamation gate
+remains open.
+
+Guest-stage transport-fault cases initially failed closed when the Sept 6
+Windows system image still embedded Guest Agent
+`1a1d065ef094b12c1c6821c98caeb06a5032b266e2ff1add66f6b83e76f9ca94`, which
+could not decode the quote-free `base64:` handoff required by the Windows
+kernel cmdline. Rebuilding the immutable Windows system image with current
+musl agent
+`af266852cacac00046a0cc24df4115e9b639a5952b15cfa3a61f44eec99d0dfc` (manifest
+SHA-256 `a29422108d600183214cb133ab242f3b013144188210e2206eece234e5999614`,
+raw image SHA-256
+`bcbf6f955be0a9efc38a772c071faa023fa87bfe96cd57548cf7a1092a14ccb3`) restored
+the full 11/11 `a3s.oci.oci-vm-transport-fault-cleanup.v3` matrix on the same
+revision `afc78ae`; the aggregate summary SHA-256 is
+`9737f6f31547ac253b15819a8793d4159750b3f6f92fafa81805d3e4056d5891`. This
+remains existing-host observation evidence and does not close fresh-host
+promotion.
+
 The August 1, 2026 direct-driver qualification ran from clean commit
 `7bb09dff81b5445e275c31faff6592ad4c32a45f` and emitted
 `a3s.oci.whpx-driver-smoke-run.v1`. From 12:50:37Z through 12:51:08Z it built
