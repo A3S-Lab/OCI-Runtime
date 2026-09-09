@@ -57,9 +57,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
   records six exact dedicated-vm restart boundary IDs (init and exec
   Created/Running/Stopped). First-principles ledger tests reject Native Linux
   `exec-*` names as a DedicatedVm pass. Existing-host WSL2 x86_64 / containerd
-  observation retained (report SHA-256
-  `a54e976ef7fbc8a5e07ab282c4d1e665c1805fd3e013614efc734e080c503f49`);
-  `promotes_readiness=false`. Does not close the full Native Linux
+  observation retained on clean main tip
+  `f14c9401f92a5fa97be62c54f58925f5fc1a2a51` (report SHA-256
+  `6993c4d846d7a6f458c9b103d06cc752659dd11f6adac215274395c91e191e76`; prior
+  `a54e976ef7fbc8a5e07ab282c4d1e665c1805fd3e013614efc734e080c503f49` remains
+  historical). `promotes_readiness=false`. Does not close the full Native Linux
   23-boundary matrix, PTY/FIFO rehydration, fresh-host promotion, or AArch64
   promotion.
 - Extended Linux KVM containerd dedicated-vm vertical slice with Created,
