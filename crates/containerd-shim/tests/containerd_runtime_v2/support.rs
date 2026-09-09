@@ -84,22 +84,115 @@ impl QualificationConfig {
 }
 
 pub(crate) async fn create_container(config: &QualificationConfig, id: &str) -> TestResult<()> {
-    let output = ctr_output(
+    create_container_with_ctr(config, id, None).await
+}
+
+pub(crate) async fn create_dedicated_vm_container(
+    config: &QualificationConfig,
+    channel: &Channel,
+    id: &str,
+) -> TestResult<()> {
+    // ctr cannot marshal Runtime.Options. Use the documented CreateOptions OCI
+    // annotation fallback (same JSON schema); resolve() selects DedicatedVm and
+    // fails closed on conflict with Runtime.Options when both are present.
+    let options = serde_json::json!({
+        "schema_version": 1,
+        "isolation": "dedicated-vm",
+    })
+    .to_string();
+    create_container_with_ctr(
         config,
-        &[
-            "containers",
-            "create",
-            "--runtime",
-            &config.runtime,
-            &config.image,
-            id,
-            "/bin/sh",
-            "-c",
-            "trap 'exit 42' TERM; while :; do sleep 1; done",
-        ],
+        id,
+        Some(("dev.a3s.oci.runtime.v1.CreateOptions", options.as_str())),
     )
     .await?;
+    let container = ContainersClient::new(channel.clone())
+        .get(namespaced(
+            GetContainerRequest {
+                id: id.to_string(),
+            },
+            &config.namespace,
+        )?)
+        .await
+        .map_err(|error| rpc_error("read dedicated-vm container metadata", error))?
+        .into_inner()
+        .container
+        .ok_or_else(|| qualification_error("containerd omitted dedicated-vm container metadata"))?;
+    let spec = container
+        .spec
+        .ok_or_else(|| qualification_error("dedicated-vm container omitted OCI spec"))?;
+    let document: Value = serde_json::from_slice(&spec.value).map_err(|error| {
+        qualification_error(format!("decode dedicated-vm OCI spec: {error}"))
+    })?;
+    let annotation = document
+        .pointer("/annotations/dev.a3s.oci.runtime.v1.CreateOptions")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            qualification_error(
+                "dedicated-vm container Spec omitted CreateOptions annotation after ctr create",
+            )
+        })?;
+    let parsed: Value = serde_json::from_str(annotation).map_err(|error| {
+        qualification_error(format!("decode CreateOptions annotation JSON: {error}"))
+    })?;
+    if parsed.get("isolation").and_then(Value::as_str) != Some("dedicated-vm") {
+        return Err(qualification_error(format!(
+            "CreateOptions annotation isolation was {parsed}, expected dedicated-vm"
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+async fn create_container_with_ctr(
+    config: &QualificationConfig,
+    id: &str,
+    annotation: Option<(&str, &str)>,
+) -> TestResult<()> {
+    let annotation_flag = annotation.map(|(key, value)| format!("{key}={value}"));
+    let mut arguments = vec![
+        "containers".to_string(),
+        "create".to_string(),
+        "--runtime".to_string(),
+        config.runtime.clone(),
+    ];
+    if let Some(flag) = &annotation_flag {
+        arguments.push("--annotation".to_string());
+        arguments.push(flag.clone());
+    }
+    arguments.extend([
+        config.image.clone(),
+        id.to_string(),
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "trap 'exit 42' TERM; while :; do sleep 1; done".to_string(),
+    ]);
+    let argument_refs: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    let output = ctr_output(config, &argument_refs).await?;
     require_success("create container metadata", &output)
+}
+
+pub(crate) async fn read_shim_driver_isolation(
+    config: &QualificationConfig,
+    id: &str,
+) -> TestResult<(String, String)> {
+    let bundle = config.bundle(id);
+    let metadata = tokio::fs::read(bundle.join("a3s-oci-shim-v1.json"))
+        .await
+        .map_err(|error| qualification_error(format!("read shim metadata: {error}")))?;
+    let metadata: Value = serde_json::from_slice(&metadata)
+        .map_err(|error| qualification_error(format!("decode shim metadata: {error}")))?;
+    let driver = metadata
+        .get("driver")
+        .and_then(Value::as_str)
+        .ok_or_else(|| qualification_error("shim metadata omitted driver"))?
+        .to_string();
+    let isolation = metadata
+        .get("isolation")
+        .and_then(Value::as_str)
+        .ok_or_else(|| qualification_error("shim metadata omitted isolation"))?
+        .to_string();
+    Ok((driver, isolation))
 }
 
 pub(crate) async fn delete_container(config: &QualificationConfig, id: &str) -> TestResult<()> {

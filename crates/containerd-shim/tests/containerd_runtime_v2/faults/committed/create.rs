@@ -62,6 +62,7 @@ pub(crate) async fn qualify_create_effect_committed_shim_sigkill(
                     CreateTaskRequest {
                         container_id: create_id,
                         rootfs,
+                        ..Default::default()
                     },
                     &create_namespace,
                 )?)

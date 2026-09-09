@@ -46,6 +46,7 @@ pub(super) async fn qualify_committed_terminal_init_kill(
             CreateTaskRequest {
                 container_id: id.clone(),
                 rootfs,
+                ..Default::default()
             },
             &config.namespace,
         )?)

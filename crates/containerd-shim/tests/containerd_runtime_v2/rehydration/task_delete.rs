@@ -53,6 +53,7 @@ pub(super) async fn qualify(config: &QualificationConfig, prefix: &str) -> TestR
             CreateTaskRequest {
                 container_id: id.clone(),
                 rootfs,
+                ..Default::default()
             },
             &config.namespace,
         )?)

@@ -46,6 +46,7 @@ pub(super) async fn qualify_committed_exec_start(
             CreateTaskRequest {
                 container_id: id.clone(),
                 rootfs,
+                ..Default::default()
             },
             &config.namespace,
         )?)

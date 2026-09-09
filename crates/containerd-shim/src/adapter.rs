@@ -148,6 +148,11 @@ impl RuntimeAdapter {
         }
     }
 
+    #[must_use]
+    pub(crate) fn extensions(&self) -> &RuntimeExtensions {
+        &self.extensions
+    }
+
     #[cfg(test)]
     pub(crate) fn from_client(client: RuntimeClient, isolation: IsolationRequest) -> Self {
         Self {
@@ -197,11 +202,18 @@ impl RuntimeAdapter {
         bundle_directory: &Path,
         io: ProcessIo,
     ) -> Result<ContainerRecord> {
-        let bundle = OciBundle::load(bundle_directory).await?;
-        let attachments = CreateAttachments::from_bundle(&bundle, io)?;
+        let context = task.operation(None, "create")?;
+        let (bundle, attachments) = crate::handoff::materialize_for_create(
+            &self.isolation,
+            &task.container_id,
+            &context,
+            bundle_directory,
+            io,
+        )
+        .await?;
         self.client
             .create(CreateRequest {
-                context: task.operation(None, "create")?,
+                context,
                 id: task.container_id.clone(),
                 bundle,
                 isolation: self.isolation.clone(),

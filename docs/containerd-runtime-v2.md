@@ -12,7 +12,7 @@ qualification remains open.
 | 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Three consecutive same-Host real lifecycle matrices with guest-journal reclamation, exec, deleted exec-ID reuse, exact `DeleteProcess` response replay, FIFO/PTY I/O, repeated controls and signals, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed init-Start, exec-Start, live init-Kill, terminal init-Kill and exec-SignalProcess exit adoption, Pause, Resume, Update, WriteStdin, CloseStdin, SignalProcess, and ResizePty rehydration, post-commit Create/Start/Kill/Delete/Exec/SignalProcess/control cleanup, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
 | 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | 2.2.1 and 2.2.3 observations retained; range qualification pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
-| Any | Utility-VM profile | `dedicated-vm` | Not yet qualified through containerd | Driver-specific gate pending |
+| Any | Utility-VM profile | `dedicated-vm` | Observation-only vertical slice (WSL2 x86_64 / containerd 2.2.1 + `box-kvm-qualification-service`) | `.github/scripts/linux-kvm-containerd-lifecycle.sh`; does not promote readiness or extend Native Linux development claims |
 
 The implementation may interoperate with an unlisted release because the
 runtime-v2 contract is stable. That is not a support claim. Add a release to
@@ -436,11 +436,35 @@ recorded driver contract. This preserves idempotent retries across a capability
 change between shim connections while still rejecting a new request that the
 selected driver does not support.
 
-Create without A3S options selects `shared-host-kernel`. The versioned
-`dev.a3s.oci.runtime.v1.CreateOptions` payload can request
-`shared-host-kernel` or `dedicated-vm`. `shared-guest-kernel`, unknown fields,
-unknown versions, and foreign option types fail closed. The dedicated-VM route
-is not containerd-qualified yet.
+Create without A3S options asks the Host for a default create class: when the
+endpoint advertises SharedHostKernel create it uses that class; otherwise it
+uses the sole advertised create class (for example DedicatedVm-only KVM Hosts).
+Conflicting silent SharedHostKernel defaults against a DedicatedVm-only Host
+fail closed. The versioned `dev.a3s.oci.runtime.v1.CreateOptions` payload can
+request `shared-host-kernel` or `dedicated-vm` via Runtime.Options or the OCI
+annotation fallback of the same JSON schema. `shared-guest-kernel`, unknown
+fields, unknown versions, and foreign option types fail closed.
+
+DedicatedVm creates require `A3S_OCI_RUNTIME_ROOT` to match the Host driver
+runtime root (KVM: `<service --root>/runtime`). The shim copies the
+containerd task bundle into the exact operation-scoped handoff directory,
+annotates `dev.a3s.bundle-handoff=move-to-runtime-v1`, and projects containerd
+host Spec defaults onto the guest contract before Create. SharedHostKernel
+creates keep the caller-owned containerd bundle without handoff.
+
+A Linux KVM containerd vertical-slice gate exercises create/start/kill/wait/
+delete against `box-kvm-qualification-service` through a private
+`KillMode=process` containerd:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_CONTAINERD_REPORT=/absolute/path/to/report.json \
+  bash .github/scripts/linux-kvm-containerd-lifecycle.sh
+```
+
+Existing-host passes emit `a3s.oci.linux-kvm-containerd-lifecycle.v1` with
+`promotes_readiness=false` and do not close packaged or fresh-host containerd
+promotion.
 
 Pause, Resume, and Update share one monotonically increasing per-task control
 sequence. Their SDK operation identities include that sequence, so a later

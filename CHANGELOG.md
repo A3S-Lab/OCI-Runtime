@@ -27,6 +27,22 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added Linux KVM containerd dedicated-vm vertical-slice qualification
+  (`.github/scripts/linux-kvm-containerd-lifecycle.sh`). A private
+  `KillMode=process` containerd plus `box-kvm-qualification-service` Host
+  exercises create/start/kill/wait/delete through
+  `containerd-shim-a3s-oci-v2` with CreateOptions annotation
+  `isolation=dedicated-vm`, records `libkrun-kvm`, and emits
+  `a3s.oci.linux-kvm-containerd-lifecycle.v1` (observation-only; does not
+  promote readiness). Existing-host WSL2 x86_64 / containerd 2.2.1 evidence
+  retained for revision under test against the pinned system image.
+- containerd DedicatedVm creates now materialize the operation-scoped runtime
+  bundle handoff under `A3S_OCI_RUNTIME_ROOT` (KVM driver root:
+  `<service --root>/runtime`), annotate
+  `dev.a3s.bundle-handoff=move-to-runtime-v1`, and project containerd host
+  Spec defaults onto the guest contract (drop `mqueue`/`cgroup`/`cgroup2`
+  mounts; rewrite absolute `linux.cgroupsPath` to a relative identity).
+  SharedHostKernel creates remain on the caller-owned containerd bundle.
 - Added `a3s-oci box-kvm-qualification-service`, a qualification-only Linux
   KVM Host Service scoped to `box-product-lifecycle-only-v1`. The public
   `libkrun-kvm` probe remains non-registerable; Box product opt-in must use
@@ -35,6 +51,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- CreateOptions resolution is Host-aware: an unspecified isolation no longer
+  silently defaults to SharedHostKernel against a DedicatedVm-only Host.
+  Annotation fallback `dev.a3s.oci.runtime.v1.CreateOptions` selects
+  dedicated-vm when Runtime.Options cannot be marshaled by `ctr`.
 - Rootless durable owners that already dropped host effective root no longer
   plan detached `open_tree` clones for read-only binds. Those clones need host
   `CAP_SYS_ADMIN` over the source mount and fail with `EPERM` after device-policy
