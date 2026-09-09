@@ -2,7 +2,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use a3s_oci_sdk::{ContainerId, Result};
+use a3s_oci_sdk::{ContainerId, Error, ErrorCode, Result};
 
 use crate::unix_service::{
     combine_service_and_cleanup, prepare_private_directory, validate_absolute_normalized_path,
@@ -172,6 +172,11 @@ impl NativeLinuxService {
         descriptors: NativeControlDescriptors,
         bootstrap: Option<RootlessDevicePolicyBootstrap>,
     ) -> Result<Self> {
+        reject_delegated_root_without_device_policy(
+            config.delegated_cgroup_root.as_deref(),
+            bootstrap.as_ref(),
+            "bind-native-linux-service",
+        )?;
         prepare_private_directory(&config.root, "native service root").await?;
         prepare_private_directory(&config.state_root(), "native service state root").await?;
         prepare_private_directory(&config.executor_parent(), "native service executor parent")
@@ -186,23 +191,13 @@ impl NativeLinuxService {
                 )
                 .await?
             }
-            None => match config.delegated_cgroup_root.as_deref() {
-                Some(root) => {
-                    NativeLinuxDriver::open_experimental_with_rootless_cgroup_delegation(
-                        config.executor_parent(),
-                        &config.init_executable,
-                        root,
-                    )
-                    .await?
-                }
-                None => {
-                    NativeLinuxDriver::open_experimental(
-                        config.executor_parent(),
-                        &config.init_executable,
-                    )
-                    .await?
-                }
-            },
+            None => {
+                NativeLinuxDriver::open_experimental(
+                    config.executor_parent(),
+                    &config.init_executable,
+                )
+                .await?
+            }
         });
         let runtime_driver: Arc<dyn RuntimeDriver> = driver.clone();
         let service = match HostRuntimeService::open_with_native_control_descriptors(
@@ -283,6 +278,11 @@ impl NativeLinuxHostService {
         config: NativeLinuxHostServiceConfig,
         bootstrap: Option<RootlessDevicePolicyBootstrap>,
     ) -> Result<Self> {
+        reject_delegated_root_without_device_policy(
+            config.delegated_cgroup_root.as_deref(),
+            bootstrap.as_ref(),
+            "bind-native-linux-host-service",
+        )?;
         prepare_private_directory(&config.root, "native host service root").await?;
         prepare_private_directory(&config.state_root(), "native host service state root").await?;
         prepare_private_directory(
@@ -300,23 +300,13 @@ impl NativeLinuxHostService {
                 )
                 .await?
             }
-            None => match config.delegated_cgroup_root.as_deref() {
-                Some(root) => {
-                    NativeLinuxDriver::open_experimental_with_rootless_cgroup_delegation(
-                        config.executor_parent(),
-                        &config.init_executable,
-                        root,
-                    )
-                    .await?
-                }
-                None => {
-                    NativeLinuxDriver::open_experimental(
-                        config.executor_parent(),
-                        &config.init_executable,
-                    )
-                    .await?
-                }
-            },
+            None => {
+                NativeLinuxDriver::open_experimental(
+                    config.executor_parent(),
+                    &config.init_executable,
+                )
+                .await?
+            }
         });
         let runtime_driver: Arc<dyn RuntimeDriver> = driver.clone();
         let service = match HostRuntimeService::open(config.state_root(), runtime_driver).await {
@@ -361,6 +351,21 @@ impl NativeLinuxHostService {
     }
 }
 
+fn reject_delegated_root_without_device_policy(
+    delegated_cgroup_root: Option<&Path>,
+    bootstrap: Option<&RootlessDevicePolicyBootstrap>,
+    operation: &'static str,
+) -> Result<()> {
+    if delegated_cgroup_root.is_some() && bootstrap.is_none() {
+        return Err(Error::new(
+            ErrorCode::FailedPrecondition,
+            "native Linux service with an explicit delegated cgroup root requires rootless device-policy bootstrap before Tokio starts; cgroup-only construction belongs on NativeLinuxDriver::open_experimental_with_rootless_cgroup_delegation",
+        )
+        .for_operation(operation));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,5 +397,57 @@ mod tests {
             config.executor_parent(),
             Path::new("/tmp/a3s-oci-host/executor")
         );
+    }
+
+    #[test]
+    fn delegated_root_without_device_policy_fails_before_side_effects() {
+        let root = format!(
+            "/tmp/a3s-oci-host-device-policy-contract-{}",
+            std::process::id()
+        );
+        let delegated = format!("{root}-cgroup");
+        let config = NativeLinuxHostServiceConfig::new(&root, "/bin/true")
+            .expect("valid native host config")
+            .with_delegated_cgroup_root(&delegated)
+            .expect("valid delegated cgroup root");
+
+        let error = reject_delegated_root_without_device_policy(
+            config.delegated_cgroup_root.as_deref(),
+            None,
+            "bind-native-linux-host-service",
+        )
+        .expect_err("delegated host service must require device-policy bootstrap");
+
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert!(error
+            .to_string()
+            .contains("requires rootless device-policy bootstrap"));
+        assert!(!Path::new(&root).exists());
+        assert!(!Path::new(&delegated).exists());
+    }
+
+    #[tokio::test]
+    async fn host_service_bind_rejects_delegated_root_without_bootstrap() {
+        let root = format!(
+            "/tmp/a3s-oci-host-device-policy-bind-{}",
+            std::process::id()
+        );
+        let delegated = format!("{root}-cgroup");
+        let config = NativeLinuxHostServiceConfig::new(&root, "/bin/true")
+            .expect("valid native host config")
+            .with_delegated_cgroup_root(&delegated)
+            .expect("valid delegated cgroup root");
+
+        let error = match NativeLinuxHostService::bind(config).await {
+            Ok(_) => panic!("bind must fail closed without device-policy bootstrap"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert!(error
+            .to_string()
+            .contains("requires rootless device-policy bootstrap"));
+        assert!(!Path::new(&root).exists());
+        assert!(!Path::new(&delegated).exists());
     }
 }

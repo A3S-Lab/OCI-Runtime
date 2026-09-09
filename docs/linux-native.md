@@ -53,7 +53,11 @@ durable state before it publishes `runtime.sock`; the socket is same-UID
 authenticated, mode `0600`, and removed only when its original inode is still
 present. Multiple clients and containers share the owner, while the durable
 host service keeps every later operation pinned to the driver and generation
-selected at create time.
+selected at create time. When `--delegated-cgroup-root` is supplied, the CLI
+completes the same rootless device-policy bootstrap as `native-linux-service`
+before Tokio starts and passes that handle into bind. Library bind rejects a
+delegated root without that bootstrap so the durable owner cannot silently
+open the weaker cgroup-only constructor.
 
 This command accepts ordinary SDK create attachments and deliberately carries
 no A3S Box FD 3/4/5 resources. It is also the explicitly opted-in x86_64 and
