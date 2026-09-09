@@ -1613,7 +1613,9 @@ release-promotion gates above.
     `a3s.oci.linux-kvm-lifecycle-matrix.v2` report retains endpoint,
     shim-process, runtime-state, bootstrap, token/recovery, and marker cleanup.
     Runners without usable KVM emit `unavailable` with zero cases and skip the
-    Alpine fixture rather than manufacturing a pass.
+    Alpine fixture rather than manufacturing a pass. Clean x86_64 WSL2 revision
+    `2d89f67` retained an available 17/17 lifecycle report; fresh-host
+    promotion evidence remains open.
   - [x] Add a qualification-only Unix Host Service and real-process recovery
     entry. It binds the override to
     `linux-kvm-owner-death-restart-only-v1`, kills the exact live service with
@@ -1622,13 +1624,16 @@ release-promotion gates above.
     verifies exact stopped/Wait replay plus stopped-only Delete and zero
     transient residue. Runners without KVM retain an explicit zero-case
     `a3s.oci.linux-kvm-recovery-matrix.v2` report without downloading Alpine.
+    Clean x86_64 WSL2 revision `2d89f67` retained an available 1/1
+    owner-death/restart report; fresh-host promotion evidence remains open.
   - [x] Add a separately scoped bounded KVM soak for x86_64 and AArch64. One
     durable Host Service runs 25 fresh exact generations by default and retains
     per-wave generation/replay, process-incarnation, descriptor, marker,
     endpoint, bundle-handoff, runtime-share, recovery-report, console, and
     configured Guest `cgroupsPath` lifetime evidence. Unavailable runners emit
     `a3s.oci.linux-kvm-soak-matrix.v2` with zero completed iterations and do not
-    download Alpine.
+    download Alpine. Clean x86_64 WSL2 revision `2d89f67` retained an available
+    25/25 soak report; fresh-host promotion evidence remains open.
   - [x] Close the KVM-independent driver isolation preflight before any Guest
     share or VM exists. Dedicated-VM Create now rejects `SharedHostKernel`,
     `SharedGuestKernel`, an inexact generation, or a missing atomic handoff
@@ -1653,6 +1658,8 @@ release-promotion gates above.
     25-wave soak reports on fresh x86_64 and AArch64 KVM hosts. The lifecycle
     artifact must include the integrated ten-case Guest path-isolation report;
     any other real-entry Guest negative-isolation profiles remain separate.
+    Existing-host x86_64 WSL2 observation on clean revision `2d89f67` is
+    retained in `docs/linux-native.md` and does not satisfy this gate.
 - [x] Retain fail-closed context evidence for invalid, missing, symbolic-link,
   or drifted Linux libkrun, firmware, and exported-kernel assets.
 - [ ] Retain real-entry fail-closed evidence for an initialization-failing KVM

@@ -960,6 +960,21 @@ the injected post-probe fail-closed path after the durable host-service
 device-policy cutover; it still does not close fresh-host or AArch64
 promotion.
 
+On the same day, clean current-main revision
+`2d89f6763e390d844fdedd0a8c3c0b8063ce7f79` reused that pinned system image on
+the same x86_64 WSL2 host (`6.18.33.2-microsoft-standard-WSL2`, `/dev/kvm` API
+version 12) and retained available lifecycle, owner-death/restart, and soak
+reports: 17/17 lifecycle
+(`e81840abb329d1d0d00c2b222639e47820d44be607c33f77492781b45e68ed50`), 1/1
+recovery
+(`d3bd8defd1f99cc680ffc04f8f9757aa05bfd4caa05666687a1aaa75616b6b46`), and
+25/25 fresh-generation soak
+(`97ecd65b29e521b54b5d86fb43975d2ea14aea544bea8c9a773df23b0478f42c`). Each
+report restored endpoint, process, descriptor, runtime-share, recovery-report,
+and handoff inventories under `a3s.oci.linux-kvm-provenance.v1`. This remains
+observation-only WSL2 evidence; fresh-host x86_64 and AArch64 promotion
+artifacts and the public `probe-only` posture are unchanged.
+
 The same current-main source then reran the File and Filesystem operation-stage
 owner-replacement gates. Both matrices passed all 9/9 Host/Guest transport
 boundaries with immutable asset provenance and complete endpoint, process,
