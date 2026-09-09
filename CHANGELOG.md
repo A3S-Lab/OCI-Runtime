@@ -48,6 +48,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
   recovery (1/1), and bounded soak (25/25) evidence for revision `2d89f67`
   against that same pinned system image. Observation-only; promotion gates
   remain open.
+- Retained clean-main Windows WHPX direct-driver, owner-death recovery, and
+  full soak (56/56) evidence for revision `5404704` on Windows 11 Pro 23H2
+  with HypervisorPlatform enabled against the pinned system image.
+  Observation-only; fresh-host promotion remains open.
 
 ### Added
 

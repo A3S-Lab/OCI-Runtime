@@ -647,6 +647,26 @@ the recovery report and summary values are
 These are current-host observations and leave the new-host release gate
 unchanged.
 
+On September 9, 2026, clean current-main revision
+`5404704c367515a38aedd96be824db46fb52f331` reran the WHPX core gates on the
+same Windows 11 Pro 23H2 (build 22631, AMD64) host after HypervisorPlatform
+was Enabled, using the pinned immutable system image (manifest SHA-256
+`55a971935e5686bd05ca77c78ca88ab761ec29c42b2a2ef57effc2605de94968`, raw image
+SHA-256 `2624ef180f86ef6e9619982419997001a73cc46f0494b2ca5477fb7a71e2b364`).
+Direct-driver and owner-death/service-recovery reports both returned
+`available`; their summary SHA-256 values are
+`b85d095ad0aa629a001ed4a526521848c81a00a357f308cce84f72ed85719aab` and
+`d6b9cd32c44790682291ae96e0f61be6c6da0ef48db4942c7ad19ad88329c13e`. The
+`a3s.oci.windows-whpx-soak.v2` report passed all 56 operation samples in
+640.797 seconds (25 serial, three multi-container, three lifecycle-fault, six
+parallel, five workload, ten typed-negative, and four owner-kill cases) with
+empty start and final host-process inventories and verification `PASS`. The
+soak summary and operation-table SHA-256 values are
+`051cefba3895a56478fbc83195138cd717fc590ccb1bf0f4e380f79f28893498` and
+`240a0eaa596f2e7fcce3eabe7af370af6061e75365d8142b56a384a04731d4d3`. This is
+existing-host observation only; the freshly provisioned release-host gate
+remains open and the public WHPX candidate stays `probe-only`.
+
 The August 1, 2026 direct-driver qualification ran from clean commit
 `7bb09dff81b5445e275c31faff6592ad4c32a45f` and emitted
 `a3s.oci.whpx-driver-smoke-run.v1`. From 12:50:37Z through 12:51:08Z it built
