@@ -69,6 +69,8 @@ async fn real_containerd_linux_kvm_dedicated_vm_lifecycle() -> TestResult<()> {
     let config = QualificationConfig::from_environment()?;
     require_root().await?;
     require_command("ctr").await?;
+    require_command("systemctl").await?;
+    require_restart_safe_service(&config).await?;
     connect_ready(&config).await?;
 
     let nonce = SystemTime::now()
