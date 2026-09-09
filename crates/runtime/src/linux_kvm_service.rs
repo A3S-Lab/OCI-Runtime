@@ -9,7 +9,7 @@ use crate::unix_service::{
     SERVICE_SOCKET_NAME,
 };
 use crate::utility_vm_host_service::{UtilityVmHostDriver, UtilityVmHostService};
-use crate::{KvmRuntimeDriver, KvmRuntimeDriverConfig};
+use crate::{KvmRuntimeDriver, KvmRuntimeDriverConfig, RuntimeDriver as _};
 
 const STATE_DIRECTORY_NAME: &str = "state";
 const DRIVER_RUNTIME_DIRECTORY_NAME: &str = "runtime";
@@ -157,6 +157,49 @@ impl LinuxKvmSoakHostServiceConfig {
     }
 }
 
+/// Exact paths for the qualification-only A3S Box/KVM product lifecycle owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinuxKvmBoxHostServiceConfig {
+    inner: LinuxKvmRecoveryHostServiceConfig,
+}
+
+impl LinuxKvmBoxHostServiceConfig {
+    pub fn new(
+        root: impl Into<PathBuf>,
+        shim: impl Into<PathBuf>,
+        system_image_manifest: impl Into<PathBuf>,
+    ) -> Result<Self> {
+        LinuxKvmRecoveryHostServiceConfig::new_for_qualification(
+            root,
+            shim,
+            system_image_manifest,
+            "Linux KVM Box Host Service",
+            "configure-linux-kvm-box-host-service",
+        )
+        .map(|inner| Self { inner })
+    }
+
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        self.inner.root()
+    }
+
+    #[must_use]
+    pub fn socket_path(&self) -> PathBuf {
+        self.inner.socket_path()
+    }
+
+    #[must_use]
+    pub fn shim(&self) -> &Path {
+        self.inner.shim()
+    }
+
+    #[must_use]
+    pub fn system_image_manifest(&self) -> &Path {
+        self.inner.system_image_manifest()
+    }
+}
+
 /// Qualification-only same-UID SDK owner for one KVM VM per generation.
 pub struct LinuxKvmRecoveryHostService {
     inner: UtilityVmHostService<KvmRuntimeDriver>,
@@ -164,6 +207,11 @@ pub struct LinuxKvmRecoveryHostService {
 
 /// Qualification-only same-UID SDK owner for bounded KVM soak waves.
 pub struct LinuxKvmSoakHostService {
+    inner: UtilityVmHostService<KvmRuntimeDriver>,
+}
+
+/// Qualification-only same-UID SDK owner for the A3S Box product lifecycle.
+pub struct LinuxKvmBoxHostService {
     inner: UtilityVmHostService<KvmRuntimeDriver>,
 }
 
@@ -180,6 +228,52 @@ impl LinuxKvmSoakHostService {
         config: LinuxKvmSoakHostServiceConfig,
         driver: Arc<KvmRuntimeDriver>,
     ) -> Result<Self> {
+        let inner =
+            UtilityVmHostService::bind(&config.inner.root, &config.inner.state_root(), driver)
+                .await?;
+        Ok(Self { inner })
+    }
+
+    #[must_use]
+    pub fn socket_path(&self) -> &Path {
+        self.inner.socket_path()
+    }
+
+    pub async fn serve_until<F>(self, shutdown: F) -> Result<()>
+    where
+        F: Future<Output = ()> + Send,
+    {
+        self.inner.serve_until(shutdown).await
+    }
+}
+
+impl LinuxKvmBoxHostService {
+    /// Bind only with the narrow Box product-lifecycle registration override.
+    pub async fn bind(config: LinuxKvmBoxHostServiceConfig) -> Result<Self> {
+        LinuxKvmRecoveryHostService::prepare_layout(&config.inner).await?;
+        let driver = Arc::new(
+            KvmRuntimeDriver::open_box_qualification(config.inner.driver_config()?).await?,
+        );
+        Self::bind_driver(config, driver).await
+    }
+
+    async fn bind_driver(
+        config: LinuxKvmBoxHostServiceConfig,
+        driver: Arc<KvmRuntimeDriver>,
+    ) -> Result<Self> {
+        let capability = driver.capability();
+        let scoped = capability.readiness == a3s_oci_core::DriverReadiness::Experimental
+            && capability
+                .evidence
+                .get("qualification_scope")
+                .is_some_and(|value| value == crate::kvm_driver::LINUX_KVM_BOX_QUALIFICATION_SCOPE);
+        if !scoped {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "KVM Box service did not retain its qualification-only scope",
+            )
+            .for_operation("bind-linux-kvm-box-host-service"));
+        }
         let inner =
             UtilityVmHostService::bind(&config.inner.root, &config.inner.state_root(), driver)
                 .await?;
@@ -492,6 +586,32 @@ mod tests {
         assert_qualification_scope(
             service.inner,
             crate::kvm_driver::LINUX_KVM_SOAK_QUALIFICATION_SCOPE,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn box_socket_advertises_only_the_product_lifecycle_route() {
+        let temporary = tempfile::tempdir().expect("temporary Host Service fixture");
+        let recovery_config = config(&temporary);
+        LinuxKvmRecoveryHostService::prepare_layout(&recovery_config)
+            .await
+            .expect("private host layout");
+        let box_config = LinuxKvmBoxHostServiceConfig {
+            inner: recovery_config.clone(),
+        };
+        let service = LinuxKvmBoxHostService::bind_driver(
+            box_config,
+            driver(
+                &recovery_config,
+                crate::kvm_driver::LINUX_KVM_BOX_QUALIFICATION_SCOPE,
+            ),
+        )
+        .await
+        .expect("bind test KVM Box Host Service");
+        assert_qualification_scope(
+            service.inner,
+            crate::kvm_driver::LINUX_KVM_BOX_QUALIFICATION_SCOPE,
         )
         .await;
     }

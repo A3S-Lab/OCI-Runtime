@@ -294,6 +294,18 @@ fn dispatch(
             target_os = "linux",
             any(target_arch = "x86_64", target_arch = "aarch64")
         ))]
+        Command::BoxKvmQualificationService {
+            root,
+            shim,
+            system_image_manifest,
+        } => command_future!({
+            linux_kvm_service::run_box(root, shim, system_image_manifest).await?;
+            Ok(ExitCode::SUCCESS)
+        }),
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
         Command::LinuxKvmRecoverySmoke {
             shim,
             system_image_manifest,

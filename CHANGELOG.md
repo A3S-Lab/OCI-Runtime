@@ -25,6 +25,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added `a3s-oci box-kvm-qualification-service`, a qualification-only Linux
+  KVM Host Service scoped to `box-product-lifecycle-only-v1`. The public
+  `libkrun-kvm` probe remains non-registerable; Box product opt-in must use
+  this explicit Unix owner, which is distinct from owner-death recovery and
+  bounded soak.
+
 ### Fixed
 
 - `native-linux-host-service` with `--delegated-cgroup-root` now completes the

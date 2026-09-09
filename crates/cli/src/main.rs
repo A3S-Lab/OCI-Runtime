@@ -297,6 +297,23 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         system_image_manifest: PathBuf,
     },
+    /// Serve the KVM candidate only for A3S Box product-lifecycle qualification.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[command(name = "box-kvm-qualification-service", hide = true)]
+    BoxKvmQualificationService {
+        /// Private absolute root containing runtime.sock, state, and runtime data.
+        #[arg(long, value_name = "DIR")]
+        root: PathBuf,
+        /// Absolute isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Absolute immutable Linux KVM utility-VM system-image manifest.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
+    },
     /// Qualify KVM owner SIGKILL and replacement Host Service recovery.
     #[cfg(all(
         target_os = "linux",
