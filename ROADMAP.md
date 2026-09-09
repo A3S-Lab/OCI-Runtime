@@ -1266,7 +1266,12 @@ enforce it. No property is silently ignored.
   stages plus both Host shutdown stages). Clean commit `35ed746` retained an
   available existing-host summary
   (`475143c36a07296e10910bba92b639d8bf3b2e5bb798f6839302b51873989b0b`) covering
-  all 11 stages. The same commit also retained an existing-host
+  all 11 stages. Clean revision `afc78ae` later retained the same 11/11 matrix
+  after rebuilding the Windows system image with Guest Agent `af266852`
+  (summary
+  `9737f6f31547ac253b15819a8793d4159750b3f6f92fafa81805d3e4056d5891`); the prior
+  Sept 6 image agent could not decode the Windows `base64:` handoff. The same
+  commit also retained an existing-host
   `a3s.oci.windows-whpx-release-matrix.v1` observation run
   (`b51fe030b2967122d9ad4bc78abe7bb210dd4d33b124f7dee1cc84bc6daf1bdc`,
   `host_class=existing`, `promotes_readiness=false`) binding handle-reclamation,
@@ -1416,7 +1421,10 @@ real-driver coverage remains open for the other utility-VM backends.
     Host validation require exact equality before cleanup can succeed.
   - [x] Run an independent same-process WHPX reclamation gate for 8 VM cycles;
     the retained current-host evidence was 115 cold, 122 baseline, 122 final,
-    zero final delta, and a restored runtime share.
+    zero final delta, and a restored runtime share. Clean revision `afc78ae`
+    later retained 119 cold, 126 baseline, 126 final, zero final delta, and a
+    restored runtime share on Windows 11 Pro 23H2 with HypervisorPlatform
+    enabled.
   - [ ] Retain that exact evidence across the complete fresh-host WHPX SDK,
     recovery, negative, and soak matrices.
 

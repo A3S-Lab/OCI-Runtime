@@ -52,6 +52,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
   full soak (56/56) evidence for revision `5404704` on Windows 11 Pro 23H2
   with HypervisorPlatform enabled against the pinned system image.
   Observation-only; fresh-host promotion remains open.
+- Retained clean-main Windows WHPX same-process handle-reclamation evidence
+  for revision `afc78ae` (8/8 cycles, final handle delta 0). Observation-only;
+  fresh-host promotion remains open.
+- Rebuilt the Windows immutable system image with Guest Agent `af266852` so
+  the quote-free `base64:` transport-qualification handoff matches current
+  host encoding, then retained available 11/11 WHPX transport-fault cleanup
+  evidence on revision `afc78ae`. Observation-only; fresh-host promotion
+  remains open.
 
 ### Added
 
