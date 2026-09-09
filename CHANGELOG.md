@@ -27,6 +27,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Wired Native Linux Host reopen through session-supervisor **live recovery**.
+  When `recover_stale_generation` finds a recorded live `sessionSupervisor`, it
+  reattaches control via `HostSessionSupervisor::reattach` and returns
+  `StaleGenerationRecovery::Live(LinuxLiveSupervisedSession)` instead of the
+  previous forever fail-closed `FailedPrecondition`. The live handle supports
+  authentic `wait_launcher` / `kill_launcher` (and init kill) without inventing
+  exit status; stopped-only delete is allowed only after launcher and init have
+  exited. Shared supervisors are not torn down by per-generation delete.
+  Default create stays Host-bound. Full `PreparedProcess` / I/O session restore
+  remains open.
 - Added Native Linux session-supervisor **control reattach** after Host
   channel EOF. On unexpected EOF the supervisor publishes a deterministic
   abstract unix endpoint (`a3s.oci.session-supervise.<pid>.<start_time_ticks>`),
@@ -34,9 +44,7 @@ All notable changes to A3S OCI Runtime are documented in this file.
   `HostSessionSupervisor::reattach` authenticates PID + start-time and resumes
   wait/spawn without inventing exit status. Re-exec of a new supervisor remains
   rejected as incorrect (PDEATHSIG parent must stay the recorded supervisor).
-  Default create stays Host-bound; `recover_stale_generation` still fail-closes
-  on a live recorded supervisor until full `PreparedProcess` / I/O reopen is
-  wired through reattach.
+  Default create stays Host-bound.
 - Added a Native Linux session-supervisor foundation for Box B2 / OCI R6 live
   process-session recovery. `session_supervisor` proves that workload
   `PR_SET_PDEATHSIG` can bind to an authenticated host-surviving supervisor
@@ -49,7 +57,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   `a3s.oci.native-linux-recovery.v4` with an optional `sessionSupervisor`
   identity. Older v1–v3 records still normalize. Stale recovery still
   fail-closes when a recorded session supervisor is live until Host reopen
-  restores `PreparedProcess` through control reattach.
+  restores process wait/kill through control reattach (now landed as
+  `StaleGenerationRecovery::Live`); full `PreparedProcess` / I/O restore remains.
 - Added the production `HostSessionSupervisor` service (`session-supervise`)
   that can parent workloads with PDEATHSIG, survives Host channel EOF, and
   authenticates by PID + start-time. First-principles tests cover the

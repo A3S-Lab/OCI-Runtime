@@ -1,6 +1,6 @@
 use std::{io, path::Path};
 
-use a3s_oci_agent::LinuxExecutor;
+use a3s_oci_agent::{LinuxExecutor, StaleGenerationRecovery};
 use a3s_oci_agent_protocol::{AgentCreateRequest, AgentState};
 use a3s_oci_core::{DriverKind, HostPlatform, IsolationClass};
 use a3s_oci_sdk::{
@@ -219,11 +219,20 @@ impl NativeCriuCheckpoint {
             record.mark_prepared(manifest);
             self.journals.store_restore(&record).await?;
         }
-        if let Some(tombstone) = executor
+        match executor
             .recover_stale_generation(&target, &durable.config_digest, *durable.state.pid())
             .await?
         {
-            executor.delete_stale_generation(&tombstone).await?;
+            Some(StaleGenerationRecovery::Stopped(tombstone)) => {
+                executor.delete_stale_generation(&tombstone).await?;
+            }
+            Some(StaleGenerationRecovery::Live(_)) => {
+                return Err(checkpoint_error(
+                    ErrorCode::FailedPrecondition,
+                    "native restore cannot replace a generation that still has a live session supervisor",
+                ));
+            }
+            None => {}
         }
 
         match *durable.state.status() {

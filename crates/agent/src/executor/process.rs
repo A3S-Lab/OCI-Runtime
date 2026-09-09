@@ -44,7 +44,9 @@ use super::plan::InitPlan;
 use super::process_group::ProcessGroupLease;
 use super::seccomp::SeccompPlan;
 use super::RootfsScope;
-pub(super) use launch::{bind_control_listener, terminate, terminate_host_child, SharedSessionSupervisor};
+pub(super) use launch::{
+    bind_control_listener, terminate, terminate_host_child, SharedSessionSupervisor,
+};
 use launch::{
     cleanup_uncommitted_create, cleanup_unstarted_cgroup, prepare_supervised_stdio,
     retain_original_rootfs, validate_rootless_device_mounts, LauncherChild,

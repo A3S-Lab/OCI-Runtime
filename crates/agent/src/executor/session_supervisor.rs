@@ -111,6 +111,16 @@ impl SessionSupervisorIdentity {
         })
     }
 
+    /// Build an identity from an already-authenticated PID + start-time pair
+    /// (for example recovery v4 `sessionSupervisor`).
+    pub(crate) fn from_authenticated(pid: i32, start_time_ticks: u64) -> Self {
+        Self {
+            schema_version: IDENTITY_SCHEMA_VERSION.to_string(),
+            pid,
+            start_time_ticks,
+        }
+    }
+
     /// Reject PID-only authentication. The observed start-time must match.
     pub(crate) fn authenticate_live(&self) -> Result<()> {
         if self.schema_version != IDENTITY_SCHEMA_VERSION {

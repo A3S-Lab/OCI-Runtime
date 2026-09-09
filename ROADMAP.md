@@ -2237,10 +2237,12 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   publishes `a3s.oci.session-supervise.<pid>.<start_time>` and
   `HostSessionSupervisor::reattach` authenticates and resumes wait/spawn
   without inventing exit status (re-exec remains wrong for PDEATHSIG
-  parentage). Full Host reopen still fail-closes in
-  `recover_stale_generation` until `PreparedProcess` / I/O session restore
-  uses that reattached control; the real-host Box live-session gate and
-  default create Host-bound policy remain open.
+  parentage). Host reopen now reattaches a live recorded supervisor in
+  `recover_stale_generation` and returns `StaleGenerationRecovery::Live` with
+  wait/kill of the supervised launcher; stopped-only delete proceeds only after
+  launcher/init exit. Full `PreparedProcess` / I/O session restore, multi-
+  container shared-supervisor Host reopen, the real-host Box live-session gate,
+  and default create Host-bound policy remain open.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,

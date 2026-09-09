@@ -226,9 +226,9 @@ impl ProcessIoHandle {
         }
 
         let stdin = match (io.stdin, stdin) {
-            (IoMode::Pipe, Some(fd)) => {
-                Some(ProcessStdin::OwnedPipe(owned_fd_to_async_reader(fd, "stdin")?))
-            }
+            (IoMode::Pipe, Some(fd)) => Some(ProcessStdin::OwnedPipe(owned_fd_to_async_reader(
+                fd, "stdin",
+            )?)),
             (IoMode::Null, None) => None,
             (IoMode::Pipe, None) => {
                 return Err(io_error(
