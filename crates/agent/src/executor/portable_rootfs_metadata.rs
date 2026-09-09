@@ -186,12 +186,7 @@ fn decode_and_validate(
             ));
         }
         let target = resolve_without_symlink_parent(root, &relative)?;
-        let current = std::fs::symlink_metadata(&target).map_err(|error| {
-            precondition(format!(
-                "failed to inspect portable rootfs metadata target {}: {error}",
-                target.display()
-            ))
-        })?;
+        let current = inspect_entry_metadata(root, &relative, &target)?;
         let actual_kind = if current.file_type().is_dir() {
             PortableRootfsEntryKind::Directory
         } else if current.file_type().is_file() {
@@ -221,6 +216,31 @@ fn decode_and_validate(
         });
     }
     Ok(decoded)
+}
+
+fn inspect_entry_metadata(
+    root: &Path,
+    relative: &Path,
+    target: &Path,
+) -> Result<std::fs::Metadata> {
+    if relative.as_os_str().is_empty() {
+        // Utility-VM guests often expose the rootfs through /proc/self/fd/<n>.
+        // symlink_metadata would observe the magic link itself, not the directory.
+        return File::open(root)
+            .and_then(|file| file.metadata())
+            .map_err(|error| {
+                precondition(format!(
+                    "failed to inspect portable rootfs metadata root {}: {error}",
+                    root.display()
+                ))
+            });
+    }
+    std::fs::symlink_metadata(target).map_err(|error| {
+        precondition(format!(
+            "failed to inspect portable rootfs metadata target {}: {error}",
+            target.display()
+        ))
+    })
 }
 
 fn decode_relative_path(encoded: &str) -> Result<PathBuf> {
@@ -337,6 +357,10 @@ fn apply_ownership(entries: &[DecodedEntry]) -> Result<()> {
         if entry.metadata.uid == entry.current_uid && entry.metadata.gid == entry.current_gid {
             continue;
         }
+        if entry.relative.as_os_str().is_empty() {
+            restore_root_ownership(entry)?;
+            continue;
+        }
         if entry.metadata.kind != PortableRootfsEntryKind::Symlink
             && entry.current_mode & 0o200 == 0
         {
@@ -379,25 +403,86 @@ fn apply_ownership(entries: &[DecodedEntry]) -> Result<()> {
     Ok(())
 }
 
+fn restore_root_ownership(entry: &DecodedEntry) -> Result<()> {
+    use std::os::unix::io::AsRawFd as _;
+
+    let file = File::open(&entry.target).map_err(|error| {
+        precondition(format!(
+            "failed to open portable rootfs metadata root {}: {error}",
+            entry.target.display()
+        ))
+    })?;
+    // SAFETY: the descriptor owns an opened directory; both IDs are bounded.
+    if unsafe {
+        libc::fchown(
+            file.as_raw_fd(),
+            entry.metadata.uid as libc::uid_t,
+            entry.metadata.gid as libc::gid_t,
+        )
+    } != 0
+    {
+        return Err(precondition(format!(
+            "failed to restore portable rootfs ownership at {} to {}:{}: {}",
+            entry.target.display(),
+            entry.metadata.uid,
+            entry.metadata.gid,
+            std::io::Error::last_os_error()
+        )));
+    }
+    Ok(())
+}
+
 fn apply_modes(entries: &[DecodedEntry]) -> Result<()> {
     for entry in entries {
         if entry.metadata.kind == PortableRootfsEntryKind::Symlink {
             continue;
         }
         let desired = runtime_managed_mode(&entry.relative).unwrap_or(entry.metadata.mode & 0o7777);
-        let current = std::fs::symlink_metadata(&entry.target)
-            .map_err(metadata_io)?
-            .mode()
-            & 0o7777;
+        let current = if entry.relative.as_os_str().is_empty() {
+            File::open(&entry.target)
+                .and_then(|file| file.metadata())
+                .map_err(metadata_io)?
+                .mode()
+                & 0o7777
+        } else {
+            std::fs::symlink_metadata(&entry.target)
+                .map_err(metadata_io)?
+                .mode()
+                & 0o7777
+        };
         if current != desired {
-            std::fs::set_permissions(&entry.target, std::fs::Permissions::from_mode(desired))
-                .map_err(|error| {
-                    precondition(format!(
-                        "failed to restore portable rootfs mode at {} to {desired:o}: {error}",
-                        entry.target.display()
-                    ))
-                })?;
+            if entry.relative.as_os_str().is_empty() {
+                restore_root_mode(entry, desired)?;
+            } else {
+                std::fs::set_permissions(&entry.target, std::fs::Permissions::from_mode(desired))
+                    .map_err(|error| {
+                        precondition(format!(
+                            "failed to restore portable rootfs mode at {} to {desired:o}: {error}",
+                            entry.target.display()
+                        ))
+                    })?;
+            }
         }
+    }
+    Ok(())
+}
+
+fn restore_root_mode(entry: &DecodedEntry, desired: u32) -> Result<()> {
+    use std::os::unix::io::AsRawFd as _;
+
+    let file = File::open(&entry.target).map_err(|error| {
+        precondition(format!(
+            "failed to open portable rootfs metadata root {}: {error}",
+            entry.target.display()
+        ))
+    })?;
+    // SAFETY: the descriptor owns an opened directory.
+    if unsafe { libc::fchmod(file.as_raw_fd(), desired as libc::mode_t) } != 0 {
+        return Err(precondition(format!(
+            "failed to restore portable rootfs mode at {} to {desired:o}: {}",
+            entry.target.display(),
+            std::io::Error::last_os_error()
+        )));
     }
     Ok(())
 }
@@ -502,6 +587,22 @@ mod tests {
             Path::new("tool")
         );
         assert!(!root.join(PORTABLE_ROOTFS_METADATA_FILE).exists());
+    }
+
+    #[test]
+    fn root_entry_accepts_directory_fd_magic_links() {
+        let directory = tempfile::tempdir().expect("rootfs");
+        let real_root = directory.path().join("real");
+        std::fs::create_dir(&real_root).expect("real root");
+        std::fs::set_permissions(&real_root, std::fs::Permissions::from_mode(0o755))
+            .expect("root mode");
+        write_manifest(&real_root, vec![entry(b".", "directory", 0o755, None)]);
+
+        let alias = directory.path().join("fd-alias");
+        std::os::unix::fs::symlink(&real_root, &alias).expect("fd-like alias");
+
+        replay_if_requested(&annotations(), &alias).expect("root through magic-link alias");
+        assert!(!real_root.join(PORTABLE_ROOTFS_METADATA_FILE).exists());
     }
 
     #[test]
