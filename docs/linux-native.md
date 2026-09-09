@@ -942,6 +942,24 @@ retained all 11 stages including both Host-shutdown points on clean revision
 `9021b194dfcdd732cd199b68785db1d3a841edd9` (matrix SHA-256
 `0fb26ebac0ff05797851bf751bb8443d46a5ac4fdc8b91f91e8b380d281cd6d7`).
 
+On September 9, 2026, clean current-main revision
+`39b7e56b9b4381ba9b4cb72fbb5cfd1ca007df57` rebuilt the pinned Alpine 3.22.5
+x86_64 system image with the exact musl Guest Agent
+(`af266852cacac00046a0cc24df4115e9b639a5952b15cfa3a61f44eec99d0dfc`) and
+re-ran `linux-kvm-agent-entry.sh` on the same class of x86_64 WSL2 host with
+`/dev/kvm` API version 12. Both retained reports are `available`:
+`a3s.oci.linux-kvm-agent-entry.v1`
+(`964e32d7d0ce2fa011ccddf7bfc1d831408cbdaae823ae88ef4a833edd1dfc56`) and
+`a3s.oci.linux-kvm-post-probe-failure.v1`
+(`5b529e85069419a2a8a3b06a318b16868c6f4939d4c49e23a9408d2a8542b728`), each
+bound by `a3s.oci.linux-kvm-provenance.v1` to that source revision, a clean
+tree, system-image manifest
+`fe08281c5b4c3ae650368c2a2d1677e457051bc4d2e9ca7d7abef4b8fc899922`, and the
+debug CLI/shim pair used by the gate. This reconfirms authenticated entry and
+the injected post-probe fail-closed path after the durable host-service
+device-policy cutover; it still does not close fresh-host or AArch64
+promotion.
+
 The same current-main source then reran the File and Filesystem operation-stage
 owner-replacement gates. Both matrices passed all 9/9 Host/Guest transport
 boundaries with immutable asset provenance and complete endpoint, process,
