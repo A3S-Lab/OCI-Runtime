@@ -1883,8 +1883,12 @@ keep running after the Host control channel closes. Native recovery schema
 identity. Control-channel reattach after Host EOF is implemented. Host reopen
 through `recover_stale_generation` reattaches a live recorded supervisor and
 returns `StaleGenerationRecovery::Live(LinuxLiveSupervisedSession)` so
-wait/kill of the supervised launcher use authentic supervised status. Full
-`PreparedProcess` / I/O session restore remains open.
+wait/kill of the supervised launcher use authentic supervised status.
+Multi-container Hosts share one supervisor; reopen caches the reattached
+control connection in `SessionSupervisorReattachCache` so every generation
+that records the same `sessionSupervisor` identity reuses one control Arc
+instead of attempting a second accept. Full `PreparedProcess` / I/O session
+restore remains open.
 
 Qualification may enable supervised create with
 `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. When set, Native create starts one
@@ -1907,8 +1911,10 @@ the live PID + start-time, reconnects, and resumes `MSG_WAIT` /
 `MSG_SPAWN` without inventing exit status. Host reopen uses that reattach
 inside `recover_stale_generation` and exposes
 `StaleGenerationRecovery::Live` for wait/kill/delete of the recorded launcher
-without inventing exit status. Restoring full `PreparedProcess` / I/O sessions
-onto the replacement Host remains a later slice.
+without inventing exit status. When several containers share one supervisor,
+`SessionSupervisorReattachCache` ensures only one control reconnect happens
+for that PID + start-time identity. Restoring full `PreparedProcess` / I/O
+sessions onto the replacement Host remains a later slice.
 
 ### Hook owner-death crash boundary
 

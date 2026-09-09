@@ -108,6 +108,7 @@ use trusted_executable::PinnedExecutable;
 pub use checkpoint::LinuxExecutorCheckpointSource;
 pub use inherited_descriptor::InheritedDescriptorPlan;
 pub(crate) use pidfd::verify_support as verify_pidfd_support;
+pub(crate) use recovery::SessionSupervisorReattachCache;
 pub use recovery::{LinuxExecutorTombstone, LinuxLiveSupervisedSession, StaleGenerationRecovery};
 pub use restore::{LinuxRestoreSpawnRequest, LinuxRestoreSpawner};
 
@@ -213,6 +214,7 @@ pub struct LinuxExecutor {
     state: Arc<Mutex<ExecutorState>>,
     shutdown: Arc<Mutex<Option<Arc<ExecutorShutdownCompletion>>>>,
     session_supervisor: StdMutex<Option<SharedSessionSupervisor>>,
+    session_supervisor_reattach: SessionSupervisorReattachCache,
 }
 
 /// Immutable executor authority retained by a detached create operation.
@@ -595,6 +597,7 @@ impl LinuxExecutor {
             state: Arc::new(Mutex::new(ExecutorState::default())),
             shutdown: Arc::new(Mutex::new(None)),
             session_supervisor: StdMutex::new(None),
+            session_supervisor_reattach: SessionSupervisorReattachCache::default(),
         })
     }
 
@@ -1109,6 +1112,8 @@ impl LinuxExecutor {
     /// delete. Live outcomes reattach an authenticated session supervisor so
     /// wait/kill can use exact supervised status without inventing exit
     /// evidence or restoring full `PreparedProcess` / I/O sessions yet.
+    /// Generations that share one `sessionSupervisor` identity reuse one
+    /// control connection through [`SessionSupervisorReattachCache`].
     pub async fn recover_stale_generation(
         &self,
         target: &a3s_oci_sdk::ContainerTarget,
@@ -1127,6 +1132,7 @@ impl LinuxExecutor {
             target,
             config_digest,
             durable_pid,
+            &self.session_supervisor_reattach,
         )
         .await
     }
@@ -2117,6 +2123,7 @@ mod rootless_device_tests {
             state: Arc::new(Mutex::new(ExecutorState::default())),
             shutdown: Arc::new(Mutex::new(None)),
             session_supervisor: std::sync::Mutex::new(None),
+            session_supervisor_reattach: super::SessionSupervisorReattachCache::default(),
         };
 
         let error = executor
@@ -2210,6 +2217,7 @@ mod rootless_device_tests {
             state: Arc::new(Mutex::new(ExecutorState::default())),
             shutdown: Arc::new(Mutex::new(None)),
             session_supervisor: std::sync::Mutex::new(None),
+            session_supervisor_reattach: super::SessionSupervisorReattachCache::default(),
         };
 
         let error = executor

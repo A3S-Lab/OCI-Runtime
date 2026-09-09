@@ -27,6 +27,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added a Native Linux `SessionSupervisorReattachCache` so multi-container Host
+  reopen reuses one authenticated session-supervisor control connection. After
+  Host EOF the supervisor accepts exactly one replacement control socket;
+  recovering several generations that record the same `sessionSupervisor`
+  identity now shares one `HostSessionSupervisor` Arc instead of calling
+  `reattach` per container. First-principles recovery proves two live
+  generations wait/kill through the shared handle and that deleting the first
+  generation does not shut down the supervisor still parenting the second.
+  Default create stays Host-bound. Full `PreparedProcess` / I/O session restore
+  and the real-host Box live-session gate remain open.
 - Wired Native Linux Host reopen through session-supervisor **live recovery**.
   When `recover_stale_generation` finds a recorded live `sessionSupervisor`, it
   reattaches control via `HostSessionSupervisor::reattach` and returns
