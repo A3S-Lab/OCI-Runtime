@@ -1296,6 +1296,12 @@ enforce it. No property is silently ignored.
   `host_class=existing|fresh` and digest-bound
   `a3s.oci.linux-kvm-fresh-host-attestation.v1` gate pattern as WHPX;
   only `host_class=fresh` with attestation may set `promotes_readiness`.
+  Existing-host WSL2 x86_64 evidence retained on clean revision
+  `95d624f9831b79abf86bc8e369df849054c63eaf` (all six core gates
+  `available`; matrix SHA-256
+  `5c701cb6116170483b666df966c9304e224640e37f07966079b2f0d7e923cd8b`;
+  `promotes_readiness=false`). Fresh-host attestation and AArch64 retained
+  reports are still required before this checklist item can close.
 - [x] Implement all OCI hook phases with typed prestart, createRuntime,
   createContainer, startContainer, and poststart failure rollback, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
