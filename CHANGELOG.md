@@ -45,6 +45,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
   authenticates by PID + start-time. First-principles tests cover the
   production spawn path; default create still uses Host-bound PDEATHSIG until
   launcher spawn is moved under the supervisor.
+- Opt-in Native create can spawn the container launcher as a real child of
+  `HostSessionSupervisor` (`A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`). Supervised
+  create arms `container-init` PDEATHSIG against the supervisor PID, transfers
+  cgroup + stdio descriptors via SCM_RIGHTS (up to 6 FDs), and persists the
+  authenticated supervisor identity in recovery v4 `sessionSupervisor`. Default
+  create remains Host-bound and does not write `sessionSupervisor`.
 - Extended Linux KVM containerd dedicated-vm vertical slice with exec
   Created/Running/Stopped daemon-restart boundaries after the existing init
   slice. Report schema is now `a3s.oci.linux-kvm-containerd-lifecycle.v3` and

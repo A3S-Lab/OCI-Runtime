@@ -69,7 +69,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use a3s_oci_agent_protocol::{
@@ -97,7 +97,8 @@ use cgroup::{CgroupManager, RootlessCgroupDelegation};
 use hook::HookStateTemplate;
 use pidfd::SignalOutcome;
 use plan::InitPlan;
-use process::{PreparedProcess, ProcessSpawnContext};
+use process::{PreparedProcess, ProcessSpawnContext, SharedSessionSupervisor};
+use session_supervisor::{session_supervisor_opt_in, HostSessionSupervisor};
 use state::{
     ContainerKey, ContainerRecord, ExecutorState, MutationKind, RecordedOutcome, RecordedRequest,
     StateOperationPreparation, UnitOperationPreparation,
@@ -211,6 +212,7 @@ pub struct LinuxExecutor {
     vm_attachments: Option<crate::UtilityVmAttachmentBinding>,
     state: Arc<Mutex<ExecutorState>>,
     shutdown: Arc<Mutex<Option<Arc<ExecutorShutdownCompletion>>>>,
+    session_supervisor: StdMutex<Option<SharedSessionSupervisor>>,
 }
 
 /// Immutable executor authority retained by a detached create operation.
@@ -231,6 +233,7 @@ struct CreateOperationContext {
     user_mapping_runtime: namespace::UserMappingRuntime,
     rootless_cgroup_delegation: Option<RootlessCgroupDelegation>,
     vm_storage_sources: UtilityVmStorageSources,
+    session_supervisor: Option<SharedSessionSupervisor>,
 }
 
 /// Rendezvous for the executor's one destructive shutdown operation.
@@ -591,6 +594,7 @@ impl LinuxExecutor {
             vm_attachments,
             state: Arc::new(Mutex::new(ExecutorState::default())),
             shutdown: Arc::new(Mutex::new(None)),
+            session_supervisor: StdMutex::new(None),
         })
     }
 
@@ -651,7 +655,13 @@ impl LinuxExecutor {
             }
         };
 
-        completion.wait().await
+        let result = completion.wait().await;
+        if let Ok(mut slot) = self.session_supervisor.lock() {
+            // Drop after containers are stopped so supervised launchers are reaped
+            // before the supervisor's Drop tears down the durable parent.
+            slot.take();
+        }
+        result
     }
 }
 
@@ -763,6 +773,7 @@ impl LinuxExecutor {
             .map(crate::UtilityVmAttachmentBinding::storage_sources)
             .cloned()
             .unwrap_or_default();
+        let session_supervisor = self.ensure_session_supervisor(&init_executable)?;
         Ok(CreateOperationContext {
             init_executable,
             _init_executable_file: init_executable_file,
@@ -774,7 +785,30 @@ impl LinuxExecutor {
             user_mapping_runtime: self.user_mapping_runtime.clone(),
             rootless_cgroup_delegation: self.rootless_cgroup_delegation.clone(),
             vm_storage_sources,
+            session_supervisor,
         })
+    }
+
+    fn ensure_session_supervisor(
+        &self,
+        init_executable: &Path,
+    ) -> Result<Option<SharedSessionSupervisor>> {
+        if !session_supervisor_opt_in() {
+            return Ok(None);
+        }
+        let mut slot = self.session_supervisor.lock().map_err(|_| {
+            executor_error(
+                ErrorCode::Internal,
+                "session supervisor slot lock is poisoned",
+            )
+        })?;
+        if let Some(supervisor) = slot.as_ref() {
+            return Ok(Some(Arc::clone(supervisor)));
+        }
+        let supervisor = HostSessionSupervisor::start(init_executable)?;
+        let shared = Arc::new(StdMutex::new(supervisor));
+        *slot = Some(Arc::clone(&shared));
+        Ok(Some(shared))
     }
 
     async fn create_new(
@@ -950,6 +984,7 @@ impl LinuxExecutor {
                 user_mapping_runtime: &context.user_mapping_runtime,
                 device_source_directory: &device_source_directory,
                 vm_storage_sources,
+                session_supervisor: context.session_supervisor.clone(),
             },
         )
         .await
@@ -992,6 +1027,22 @@ impl LinuxExecutor {
             }
         }
         if let Some(owner) = context.owner_identity {
+            let session_supervisor = match context.session_supervisor.as_ref() {
+                Some(supervisor) => {
+                    let guard = supervisor.lock().map_err(|_| {
+                        executor_error(
+                            ErrorCode::Internal,
+                            "session supervisor lock is poisoned before recovery evidence",
+                        )
+                    })?;
+                    let identity = guard.identity();
+                    Some(recovery::ProcessIdentity::from_authenticated(
+                        identity.pid(),
+                        identity.start_time_ticks(),
+                    ))
+                }
+                None => None,
+            };
             if let Err(error) = recovery::write_container_record(
                 &runtime_directory,
                 &config_snapshot,
@@ -1000,7 +1051,7 @@ impl LinuxExecutor {
                 owner,
                 &process,
                 state.cgroup_manager.as_ref(),
-                None,
+                session_supervisor,
             )
             .await
             {
@@ -2063,6 +2114,7 @@ mod rootless_device_tests {
             vm_attachments: None,
             state: Arc::new(Mutex::new(ExecutorState::default())),
             shutdown: Arc::new(Mutex::new(None)),
+            session_supervisor: std::sync::Mutex::new(None),
         };
 
         let error = executor
@@ -2155,6 +2207,7 @@ mod rootless_device_tests {
             vm_attachments: None,
             state: Arc::new(Mutex::new(ExecutorState::default())),
             shutdown: Arc::new(Mutex::new(None)),
+            session_supervisor: std::sync::Mutex::new(None),
         };
 
         let error = executor

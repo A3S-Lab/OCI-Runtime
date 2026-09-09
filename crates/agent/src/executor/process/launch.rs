@@ -1,17 +1,169 @@
 use std::fs::File;
-use std::os::fd::OwnedFd;
+use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr as StdSocketAddr, UnixListener as StdUnixListener};
+use std::os::unix::process::ExitStatusExt;
+use std::process::ExitStatus as ProcessExitStatus;
+use std::sync::{Arc, Mutex};
 
 use a3s_oci_agent_protocol::AgentVsockEndpoint;
-use a3s_oci_sdk::{Error, ErrorCode, Result};
+use a3s_oci_sdk::{Error, ErrorCode, IoMode, ProcessIo, Result};
 use tokio::net::UnixListener;
 use tokio::process::Child;
 
 use super::super::bundle_scope::{PinnedBundleDirectory, PinnedRootfsDirectory};
 use super::super::cgroup::CgroupHandle;
 use super::super::plan::InitPlan;
+use super::super::session_supervisor::HostSessionSupervisor;
 use super::{append_cleanup_error, process_error};
+
+/// Shared production session supervisor used by supervised launcher spawns.
+pub(crate) type SharedSessionSupervisor = Arc<Mutex<HostSessionSupervisor>>;
+
+/// Local Host-parented child or supervisor-parented launcher.
+#[derive(Debug)]
+pub(in crate::executor) enum LauncherChild {
+    Local(Child),
+    Supervised {
+        pid: u32,
+        supervisor: SharedSessionSupervisor,
+        status: Option<ProcessExitStatus>,
+    },
+}
+
+impl LauncherChild {
+    pub(super) fn id(&self) -> Option<u32> {
+        match self {
+            Self::Local(child) => child.id(),
+            Self::Supervised { pid, .. } => Some(*pid),
+        }
+    }
+
+    pub(super) fn try_wait(&mut self) -> std::io::Result<Option<ProcessExitStatus>> {
+        match self {
+            Self::Local(child) => child.try_wait(),
+            Self::Supervised { status, .. } => Ok(status.clone()),
+        }
+    }
+
+    pub(super) async fn wait(&mut self) -> std::io::Result<ProcessExitStatus> {
+        match self {
+            Self::Local(child) => child.wait().await,
+            Self::Supervised {
+                pid,
+                supervisor,
+                status,
+            } => {
+                if let Some(status) = status.clone() {
+                    return Ok(status);
+                }
+                let supervisor = Arc::clone(supervisor);
+                let pid = i32::try_from(*pid).map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "supervised launcher PID does not fit i32",
+                    )
+                })?;
+                let raw = tokio::task::spawn_blocking(move || {
+                    supervisor
+                        .lock()
+                        .map_err(|_| std::io::Error::other("session supervisor lock is poisoned"))?
+                        .wait_launcher(pid)
+                        .map_err(|error| std::io::Error::other(error.to_string()))
+                })
+                .await
+                .map_err(std::io::Error::other)??;
+                let waited = ProcessExitStatus::from_raw(raw);
+                *status = Some(waited.clone());
+                Ok(waited)
+            }
+        }
+    }
+}
+
+/// Host-retained stdio pipe ends for a supervised launcher.
+pub(super) struct SupervisedIoPipes {
+    pub(super) stdin: Option<OwnedFd>,
+    pub(super) stdout: Option<OwnedFd>,
+    pub(super) stderr: Option<OwnedFd>,
+}
+
+/// Child-side stdio descriptors that must stay open until SCM_RIGHTS send completes.
+pub(super) struct SupervisedChildStdio {
+    pub(super) stdin: Option<OwnedFd>,
+    pub(super) stdout: Option<OwnedFd>,
+    pub(super) stderr: Option<OwnedFd>,
+}
+
+/// Prepare Host/child stdio pipe ends for supervised spawn.
+pub(super) fn prepare_supervised_stdio(
+    io: &ProcessIo,
+) -> Result<(SupervisedIoPipes, SupervisedChildStdio)> {
+    if matches!(io.stdin, IoMode::Terminal)
+        || matches!(io.stdout, IoMode::Terminal)
+        || matches!(io.stderr, IoMode::Terminal)
+        || io.terminal_size.is_some()
+    {
+        return Err(process_error(
+            ErrorCode::Unsupported,
+            "session-supervisor create does not support terminal process I/O yet",
+        ));
+    }
+    if matches!(io.stdin, IoMode::Inherit)
+        || matches!(io.stdout, IoMode::Inherit)
+        || matches!(io.stderr, IoMode::Inherit)
+    {
+        return Err(process_error(
+            ErrorCode::Unsupported,
+            "session-supervisor create does not support inherited process I/O yet",
+        ));
+    }
+
+    let mut host = SupervisedIoPipes {
+        stdin: None,
+        stdout: None,
+        stderr: None,
+    };
+    let mut child = SupervisedChildStdio {
+        stdin: None,
+        stdout: None,
+        stderr: None,
+    };
+
+    if matches!(io.stdin, IoMode::Pipe) {
+        let (read, write) = create_pipe()?;
+        child.stdin = Some(read);
+        host.stdin = Some(write);
+    }
+    if matches!(io.stdout, IoMode::Capture) {
+        let (read, write) = create_pipe()?;
+        host.stdout = Some(read);
+        child.stdout = Some(write);
+    }
+    if matches!(io.stderr, IoMode::Capture) {
+        let (read, write) = create_pipe()?;
+        host.stderr = Some(read);
+        child.stderr = Some(write);
+    }
+
+    Ok((host, child))
+}
+
+fn create_pipe() -> Result<(OwnedFd, OwnedFd)> {
+    let mut fds = [0, 0];
+    // SAFETY: pipe writes two open descriptors into the stack array.
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return Err(process_error(
+            ErrorCode::Internal,
+            format!(
+                "failed to create session-supervisor stdio pipe: {}",
+                std::io::Error::last_os_error()
+            ),
+        ));
+    }
+    // SAFETY: successful pipe returns two owned descriptors.
+    Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+}
 
 pub(super) fn validate_rootless_device_mounts(
     mounts: &[OwnedFd],
@@ -107,9 +259,35 @@ pub(in crate::executor) fn bind_control_listener() -> Result<(UnixListener, Stri
     Ok((listener, control_name))
 }
 
-pub(in crate::executor) async fn terminate(child: &mut Child) {
+pub(in crate::executor) async fn terminate_host_child(child: &mut Child) {
     let _ = child.kill().await;
     let _ = child.wait().await;
+}
+
+pub(in crate::executor) async fn terminate(child: &mut LauncherChild) {
+    match child {
+        LauncherChild::Local(child) => {
+            terminate_host_child(child).await;
+        }
+        LauncherChild::Supervised {
+            pid,
+            supervisor,
+            status,
+        } => {
+            if status.is_some() {
+                return;
+            }
+            let Ok(pid) = i32::try_from(*pid) else {
+                return;
+            };
+            super::super::pid_supervisor::terminate_pid(pid);
+            if let Ok(mut guard) = supervisor.lock() {
+                if let Ok(raw) = guard.wait_launcher(pid) {
+                    *status = Some(ProcessExitStatus::from_raw(raw));
+                }
+            }
+        }
+    }
 }
 
 pub(super) fn cleanup_unstarted_cgroup(
@@ -129,7 +307,7 @@ pub(super) fn cleanup_unstarted_cgroup(
 }
 
 pub(super) async fn cleanup_uncommitted_create(
-    child: &mut Child,
+    child: &mut LauncherChild,
     cgroup: &mut Option<CgroupHandle>,
     mut primary: Error,
 ) -> Error {

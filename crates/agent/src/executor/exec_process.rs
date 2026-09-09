@@ -14,7 +14,7 @@ use super::io::ProcessIoHandle;
 use super::namespace::RetainedNamespaceArgument;
 use super::pid;
 use super::pidfd::{PidFd, SignalOutcome};
-use super::process::{bind_control_listener, convert_exit_status, terminate};
+use super::process::{bind_control_listener, convert_exit_status, terminate_host_child};
 use super::process_group::ProcessGroupLease;
 
 mod helper;
@@ -86,12 +86,12 @@ impl ExecProcess {
         let process_io = match ProcessIoHandle::attach(io_setup, &mut child, io) {
             Ok(process_io) => process_io,
             Err(error) => {
-                terminate(&mut child).await;
+                terminate_host_child(&mut child).await;
                 return Err(error);
             }
         };
         let Some(raw_launcher_pid) = child.id() else {
-            terminate(&mut child).await;
+            terminate_host_child(&mut child).await;
             return Err(exec_error(
                 ErrorCode::Internal,
                 "spawned container exec helper has no live process ID",
@@ -100,7 +100,7 @@ impl ExecProcess {
         let launcher_pid = match i32::try_from(raw_launcher_pid) {
             Ok(pid) => pid,
             Err(error) => {
-                terminate(&mut child).await;
+                terminate_host_child(&mut child).await;
                 return Err(exec_error(
                     ErrorCode::ResourceExhausted,
                     format!(
@@ -124,7 +124,7 @@ impl ExecProcess {
         let mut control = match ready {
             Ok(ReadyOutcome::Connected(Ok((control, _)))) => control,
             Ok(ReadyOutcome::Connected(Err(error))) => {
-                terminate(&mut child).await;
+                terminate_host_child(&mut child).await;
                 return Err(exec_error(
                     ErrorCode::Internal,
                     format!("failed to accept container exec control connection: {error}"),
@@ -143,7 +143,7 @@ impl ExecProcess {
                 ));
             }
             Err(_) => {
-                terminate(&mut child).await;
+                terminate_host_child(&mut child).await;
                 return Err(exec_error(
                     ErrorCode::DeadlineExceeded,
                     "timed out waiting for the container exec helper",
@@ -153,7 +153,7 @@ impl ExecProcess {
         let peer = match control.peer_cred() {
             Ok(peer) => peer,
             Err(error) => {
-                terminate(&mut child).await;
+                terminate_host_child(&mut child).await;
                 return Err(exec_error(
                     ErrorCode::Internal,
                     format!("failed to read container exec helper credentials: {error}"),
@@ -161,7 +161,7 @@ impl ExecProcess {
             }
         };
         if peer.pid() != Some(launcher_pid) {
-            terminate(&mut child).await;
+            terminate_host_child(&mut child).await;
             return Err(exec_error(
                 ErrorCode::PermissionDenied,
                 format!(
@@ -180,43 +180,43 @@ impl ExecProcess {
                 namespace_init_pid: Some(pid),
                 ..
             })) => {
-                terminate(&mut child).await;
+                terminate_host_child(&mut child).await;
                 return Err(exec_error(
                     ErrorCode::PermissionDenied,
                     format!("exec helper unexpectedly reported namespace init PID {pid}"),
                 ));
             }
             Ok(Ok(InitOutcome::Rejected(error))) => {
-                terminate(&mut child).await;
+                terminate_host_child(&mut child).await;
                 return Err(error);
             }
             Ok(Ok(InitOutcome::UserMappingRequired)) => {
-                terminate(&mut child).await;
+                terminate_host_child(&mut child).await;
                 return Err(exec_error(
                     ErrorCode::PermissionDenied,
                     "exec helper requested an unexpected user mapping",
                 ));
             }
             Ok(Ok(InitOutcome::OrderedIdmapRequired { .. })) => {
-                terminate(&mut child).await;
+                terminate_host_child(&mut child).await;
                 return Err(exec_error(
                     ErrorCode::PermissionDenied,
                     "exec helper requested an unexpected ordered ID-mapped mount",
                 ));
             }
             Ok(Ok(InitOutcome::CreateHooksReady { .. })) => {
-                terminate(&mut child).await;
+                terminate_host_child(&mut child).await;
                 return Err(exec_error(
                     ErrorCode::PermissionDenied,
                     "exec helper reported an unexpected create-hook barrier",
                 ));
             }
             Ok(Err(error)) => {
-                terminate(&mut child).await;
+                terminate_host_child(&mut child).await;
                 return Err(error);
             }
             Err(_) => {
-                terminate(&mut child).await;
+                terminate_host_child(&mut child).await;
                 return Err(exec_error(
                     ErrorCode::DeadlineExceeded,
                     "timed out reading container exec readiness",
@@ -226,31 +226,31 @@ impl ExecProcess {
         let pidfd = match PidFd::open(runtime_pid) {
             Ok(pidfd) => pidfd,
             Err(error) => {
-                terminate(&mut child).await;
+                terminate_host_child(&mut child).await;
                 return Err(error);
             }
         };
         if let Err(error) = pid::validate_exec_runtime_pid(launcher_pid, runtime_pid, context).await
         {
-            terminate(&mut child).await;
+            terminate_host_child(&mut child).await;
             return Err(error);
         }
         match init_process.signal(0) {
             Ok(SignalOutcome::Delivered) => {}
             Ok(SignalOutcome::Exited) => {
-                terminate(&mut child).await;
+                terminate_host_child(&mut child).await;
                 return Err(exec_error(
                     ErrorCode::FailedPrecondition,
                     "configured container process exited before exec release",
                 ));
             }
             Err(error) => {
-                terminate(&mut child).await;
+                terminate_host_child(&mut child).await;
                 return Err(error);
             }
         }
         if let Err(error) = control.write_all(&[START_BYTE]).await {
-            terminate(&mut child).await;
+            terminate_host_child(&mut child).await;
             return Err(exec_error(
                 ErrorCode::Unavailable,
                 format!("failed to release prepared exec process: {error}"),
@@ -268,7 +268,7 @@ impl ExecProcess {
         let warnings = match started {
             Ok(warnings) => warnings,
             Err(error) => {
-                terminate(&mut child).await;
+                terminate_host_child(&mut child).await;
                 return Err(error);
             }
         };
@@ -327,7 +327,7 @@ impl ExecProcess {
         match self.signal_all(libc::SIGKILL) {
             Ok(SignalOutcome::Delivered | SignalOutcome::Exited) => {}
             Err(error) => {
-                terminate(&mut self.child).await;
+                terminate_host_child(&mut self.child).await;
                 return Err(error);
             }
         }
@@ -342,7 +342,7 @@ impl ExecProcess {
                 ));
             }
             Err(_) => {
-                terminate(&mut self.child).await;
+                terminate_host_child(&mut self.child).await;
                 return Err(exec_error(
                     ErrorCode::DeadlineExceeded,
                     "timed out reaping exec helper during cleanup",

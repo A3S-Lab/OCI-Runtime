@@ -1881,9 +1881,17 @@ agent binary) can parent workloads, omit Host-bound PDEATHSIG on itself, and
 keep running after the Host control channel closes. Native recovery schema
 `a3s.oci.native-linux-recovery.v4` can record an optional `sessionSupervisor`
 identity and fail-closes stale reopen while that supervisor is still live.
-Default create still arms launcher PDEATHSIG against the Host owner; moving
-launcher spawn under the supervisor (and persisting its identity on create)
-remains the next R6 slice before the Box real-host live-session gate.
+
+Qualification may enable supervised create with
+`A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. When set, Native create starts one
+durable supervisor, spawns the container launcher as its real child
+(`Host → Supervisor → Launcher`), passes `expected_owner_pid` as the
+supervisor PID so `container-init` re-arms PDEATHSIG correctly, and writes the
+authenticated supervisor identity into the recovery v4 record. Default create
+(no env) keeps Host-bound PDEATHSIG and omits `sessionSupervisor` so existing
+stopped-only recovery gates stay green. Supervised create currently rejects
+terminal/inherit I/O, pinned utility-VM bundles, rootless device mounts, and
+inherited Box control descriptors.
 
 ### Hook owner-death crash boundary
 

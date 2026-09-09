@@ -46,8 +46,13 @@ const MSG_WAIT: u8 = 6;
 const MSG_WAITED: u8 = 7;
 const MAX_SPAWN_ARGS: usize = 64;
 const MAX_ARG_BYTES: usize = 8 * 1024;
-#[allow(dead_code)] // Read by session_supervisor_opt_in for create wiring.
+const MAX_SPAWN_FDS: usize = 6;
 const ENV_OPT_IN: &str = "A3S_OCI_NATIVE_SESSION_SUPERVISOR";
+const FLAG_JOIN_CGROUP: u8 = 0b0000_0001;
+const FLAG_CONTROL_WORKLOAD: u8 = 0b0000_0010;
+const FLAG_STDIN: u8 = 0b0000_0100;
+const FLAG_STDOUT: u8 = 0b0000_1000;
+const FLAG_STDERR: u8 = 0b0001_0000;
 
 /// Authenticated identity of a host-surviving session supervisor.
 ///
@@ -153,7 +158,6 @@ impl SessionSupervisorIdentity {
 }
 
 /// Whether Native create should attach workloads to a host-surviving supervisor.
-#[allow(dead_code)] // Wired into create when launcher spawn moves under the supervisor.
 pub(crate) fn session_supervisor_opt_in() -> bool {
     matches!(std::env::var_os(ENV_OPT_IN), Some(value) if value == "1")
 }
@@ -168,7 +172,6 @@ pub(crate) struct HostSessionSupervisor {
 
 impl HostSessionSupervisor {
     /// Start a durable supervisor process (same agent binary, `session-supervise`).
-    #[allow(dead_code)] // Create path adopts this once launcher spawn is supervised.
     pub(crate) fn start(init_executable: &Path) -> Result<Self> {
         let (parent_side, child_side) = UnixStream::pair().map_err(|error| {
             supervisor_error(
@@ -259,16 +262,21 @@ impl HostSessionSupervisor {
             &[seconds.to_string().into()],
             None,
             None,
+            None,
         )
     }
 
     /// Spawn a process as a real child of the supervisor with PDEATHSIG armed.
+    ///
+    /// `stdio` is `(stdin, stdout, stderr)` child-side descriptors. Present
+    /// options are installed onto 0/1/2 in the launcher via `dup2`.
     pub(crate) fn spawn_launcher(
         &mut self,
         program: &Path,
         args: &[std::ffi::OsString],
         join_cgroup_procs: Option<RawFd>,
         control_workload: Option<(RawFd, RawFd)>,
+        stdio: Option<(Option<RawFd>, Option<RawFd>, Option<RawFd>)>,
     ) -> Result<i32> {
         if args.len() > MAX_SPAWN_ARGS {
             return Err(supervisor_error(
@@ -294,13 +302,27 @@ impl HostSessionSupervisor {
         let mut fds = Vec::new();
         let mut flags = 0_u8;
         if let Some(descriptor) = join_cgroup_procs {
-            flags |= 0b001;
+            flags |= FLAG_JOIN_CGROUP;
             fds.push(descriptor);
         }
         if let Some((control, workload)) = control_workload {
-            flags |= 0b010;
+            flags |= FLAG_CONTROL_WORKLOAD;
             fds.push(control);
             fds.push(workload);
+        }
+        if let Some((stdin, stdout, stderr)) = stdio {
+            if let Some(descriptor) = stdin {
+                flags |= FLAG_STDIN;
+                fds.push(descriptor);
+            }
+            if let Some(descriptor) = stdout {
+                flags |= FLAG_STDOUT;
+                fds.push(descriptor);
+            }
+            if let Some(descriptor) = stderr {
+                flags |= FLAG_STDERR;
+                fds.push(descriptor);
+            }
         }
         payload.push(flags);
         self.control.write_all(&[MSG_SPAWN]).map_err(|error| {
@@ -332,7 +354,6 @@ impl HostSessionSupervisor {
     }
 
     /// Block until a supervised child exits and return its raw wait status.
-    #[allow(dead_code)] // Used when create launcher spawn moves under the supervisor.
     pub(crate) fn wait_launcher(&mut self, pid: i32) -> Result<i32> {
         let mut payload = Vec::with_capacity(5);
         payload.push(MSG_WAIT);
@@ -515,14 +536,18 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
         argv.push(read_os_string(control)?);
     }
     let flags = read_u8(control)?;
-    let expected_fds = usize::from(flags & 0b001) + (2 * usize::from((flags & 0b010) != 0));
+    let expected_fds = usize::from((flags & FLAG_JOIN_CGROUP) != 0)
+        + (2 * usize::from((flags & FLAG_CONTROL_WORKLOAD) != 0))
+        + usize::from((flags & FLAG_STDIN) != 0)
+        + usize::from((flags & FLAG_STDOUT) != 0)
+        + usize::from((flags & FLAG_STDERR) != 0);
     let fds = if expected_fds == 0 {
         Vec::new()
     } else {
         receive_fds(control.as_raw_fd(), expected_fds)?
     };
     let mut fd_iter = fds.into_iter();
-    let join_cgroup = if flags & 0b001 != 0 {
+    let join_cgroup = if flags & FLAG_JOIN_CGROUP != 0 {
         Some(fd_iter.next().ok_or_else(|| {
             supervisor_error(
                 ErrorCode::Internal,
@@ -532,7 +557,7 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
     } else {
         None
     };
-    let control_workload = if flags & 0b010 != 0 {
+    let control_workload = if flags & FLAG_CONTROL_WORKLOAD != 0 {
         let control_fd = fd_iter.next().ok_or_else(|| {
             supervisor_error(
                 ErrorCode::Internal,
@@ -546,6 +571,36 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
             )
         })?;
         Some((control_fd, workload_fd))
+    } else {
+        None
+    };
+    let stdin = if flags & FLAG_STDIN != 0 {
+        Some(fd_iter.next().ok_or_else(|| {
+            supervisor_error(
+                ErrorCode::Internal,
+                "session supervisor spawn missing stdin descriptor",
+            )
+        })?)
+    } else {
+        None
+    };
+    let stdout = if flags & FLAG_STDOUT != 0 {
+        Some(fd_iter.next().ok_or_else(|| {
+            supervisor_error(
+                ErrorCode::Internal,
+                "session supervisor spawn missing stdout descriptor",
+            )
+        })?)
+    } else {
+        None
+    };
+    let stderr = if flags & FLAG_STDERR != 0 {
+        Some(fd_iter.next().ok_or_else(|| {
+            supervisor_error(
+                ErrorCode::Internal,
+                "session supervisor spawn missing stderr descriptor",
+            )
+        })?)
     } else {
         None
     };
@@ -567,6 +622,9 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
     let control_raw = control_workload
         .as_ref()
         .map(|(control_fd, workload_fd)| (control_fd.as_raw_fd(), workload_fd.as_raw_fd()));
+    let stdin_raw = stdin.as_ref().map(AsRawFd::as_raw_fd);
+    let stdout_raw = stdout.as_ref().map(AsRawFd::as_raw_fd);
+    let stderr_raw = stderr.as_ref().map(AsRawFd::as_raw_fd);
     // SAFETY: pre_exec only installs already-open descriptors and arms PDEATHSIG.
     unsafe {
         command.pre_exec(move || {
@@ -581,6 +639,7 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
                     workload_fd,
                 )?;
             }
+            install_stdio_from_pre_exec(stdin_raw, stdout_raw, stderr_raw)?;
             Ok(())
         });
     }
@@ -592,6 +651,9 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
     })?;
     drop(join_cgroup);
     drop(control_workload);
+    drop(stdin);
+    drop(stdout);
+    drop(stderr);
     let pid = match i32::try_from(child.id()) {
         Ok(pid) => pid,
         Err(error) => {
@@ -607,6 +669,45 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
     // opportunistic reap loop while the Host still owns the generation.
     std::mem::forget(child);
     Ok(pid)
+}
+
+fn install_stdio_from_pre_exec(
+    stdin: Option<RawFd>,
+    stdout: Option<RawFd>,
+    stderr: Option<RawFd>,
+) -> io::Result<()> {
+    if let Some(descriptor) = stdin {
+        if unsafe { libc::dup2(descriptor, 0) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        clear_cloexec_raw(0)?;
+    }
+    if let Some(descriptor) = stdout {
+        if unsafe { libc::dup2(descriptor, 1) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        clear_cloexec_raw(1)?;
+    }
+    if let Some(descriptor) = stderr {
+        if unsafe { libc::dup2(descriptor, 2) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        clear_cloexec_raw(2)?;
+    }
+    Ok(())
+}
+
+fn clear_cloexec_raw(fd: RawFd) -> io::Result<()> {
+    // SAFETY: fcntl F_GETFD/F_SETFD operate on an open descriptor owned by us.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let flags = flags & !libc::FD_CLOEXEC;
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn handle_wait_request(control: &mut UnixStream) -> Result<i32> {
@@ -814,10 +915,13 @@ fn clear_cloexec(fd: RawFd) -> Result<()> {
 }
 
 fn send_with_fds(socket: RawFd, payload: &[u8], fds: &[RawFd]) -> Result<()> {
-    if fds.len() > 3 {
+    if fds.len() > MAX_SPAWN_FDS {
         return Err(supervisor_error(
             ErrorCode::InvalidArgument,
-            format!("session supervisor spawn supports at most 3 FDs; received {}", fds.len()),
+            format!(
+                "session supervisor spawn supports at most {MAX_SPAWN_FDS} FDs; received {}",
+                fds.len()
+            ),
         ));
     }
     let mut iov = libc::iovec {
@@ -861,10 +965,12 @@ fn receive_fds(socket: RawFd, expected: usize) -> Result<Vec<OwnedFd>> {
     if expected == 0 {
         return Ok(Vec::new());
     }
-    if expected > 3 {
+    if expected > MAX_SPAWN_FDS {
         return Err(supervisor_error(
             ErrorCode::InvalidArgument,
-            format!("session supervisor spawn supports at most 3 FDs; expected {expected}"),
+            format!(
+                "session supervisor spawn supports at most {MAX_SPAWN_FDS} FDs; expected {expected}"
+            ),
         ));
     }
     let mut payload = [0_u8; 1];
@@ -1382,6 +1488,103 @@ mod tests {
         assert!(
             wait_until_dead(workload_pid, Duration::from_secs(2)),
             "workload must die when production supervisor dies"
+        );
+        let _ = wait_for_child(identity.pid());
+    }
+
+    #[test]
+    fn supervised_launcher_with_stdio_survives_host_death_and_stays_authenticated() {
+        let (mut parent_ready, mut child_ready) =
+            UnixStream::pair().expect("stdio supervisor ready channel");
+        // SAFETY: parent reaps the fake Host; child owns the production supervisor.
+        let host_pid = unsafe { libc::fork() };
+        assert!(host_pid >= 0, "fork fake host for stdio survival");
+        if host_pid == 0 {
+            drop(parent_ready);
+            let mut supervisor = match HostSessionSupervisor::start_via_fork() {
+                Ok(supervisor) => supervisor,
+                Err(_) => unsafe { libc::_exit(101) },
+            };
+            let mut pipe_fds = [0, 0];
+            if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } != 0 {
+                unsafe { libc::_exit(102) }
+            }
+            let child_stdout = pipe_fds[1];
+            let host_stdout = pipe_fds[0];
+            let launcher_pid = match supervisor.spawn_launcher(
+                Path::new("/bin/sleep"),
+                &["30".into()],
+                None,
+                None,
+                Some((None, Some(child_stdout), None)),
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(103) },
+            };
+            // Close the child write end in the fake Host; the launcher keeps its copy.
+            unsafe {
+                libc::close(child_stdout);
+            }
+            let identity = supervisor.identity().clone();
+            let mut payload = Vec::with_capacity(20);
+            payload.extend_from_slice(&identity.pid().to_be_bytes());
+            payload.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+            payload.extend_from_slice(&launcher_pid.to_be_bytes());
+            payload.extend_from_slice(&host_stdout.to_be_bytes());
+            if child_ready.write_all(&payload).is_err() {
+                unsafe { libc::_exit(104) }
+            }
+            std::mem::forget(supervisor);
+            loop {
+                unsafe { libc::pause() };
+            }
+        }
+        drop(child_ready);
+        let mut payload = [0_u8; 20];
+        parent_ready
+            .read_exact(&mut payload)
+            .expect("read stdio supervisor evidence");
+        let identity = SessionSupervisorIdentity {
+            schema_version: IDENTITY_SCHEMA_VERSION.to_string(),
+            pid: i32::from_be_bytes(payload[0..4].try_into().expect("pid bytes")),
+            start_time_ticks: u64::from_be_bytes(payload[4..12].try_into().expect("start bytes")),
+        };
+        let launcher_pid = i32::from_be_bytes(payload[12..16].try_into().expect("launcher bytes"));
+        let host_stdout = i32::from_be_bytes(payload[16..20].try_into().expect("stdout bytes"));
+        terminate_pid(host_pid);
+        let _ = wait_for_child(host_pid);
+        // The fake Host's stdout read end dies with the Host process; that is
+        // intentional. The invariant under test is supervisor + launcher lifetime.
+        let _ = host_stdout;
+        identity
+            .authenticate_live()
+            .expect("replacement must authenticate supervisor after Host death with stdio spawn");
+        assert!(
+            process_is_live(identity.pid()),
+            "supervisor must survive Host death after stdio-capable launcher spawn"
+        );
+        assert!(
+            process_is_live(launcher_pid),
+            "stdio launcher parented by supervisor must survive Host death"
+        );
+        // Prove the launcher is still a real child of the supervisor, not Host.
+        let status = std::fs::read_to_string(format!("/proc/{launcher_pid}/status"))
+            .expect("read launcher status");
+        let ppid = status
+            .lines()
+            .find_map(|line| line.strip_prefix("PPid:\t"))
+            .expect("launcher status must report PPid")
+            .parse::<i32>()
+            .expect("parse launcher PPid");
+        assert_eq!(
+            ppid,
+            identity.pid(),
+            "supervised launcher must remain parented by the supervisor after Host death"
+        );
+        terminate_pid(identity.pid());
+        assert!(
+            wait_until_dead(launcher_pid, Duration::from_secs(2)),
+            "stdio launcher must die when its supervisor dies"
         );
         let _ = wait_for_child(identity.pid());
     }

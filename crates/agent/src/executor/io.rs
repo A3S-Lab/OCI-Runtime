@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,6 +39,7 @@ struct ProcessIoInner {
 #[derive(Debug)]
 enum ProcessStdin {
     Pipe(ChildStdin),
+    OwnedPipe(tokio::fs::File),
     Terminal(TerminalHandle),
 }
 
@@ -193,6 +195,113 @@ impl ProcessIoHandle {
         })
     }
 
+    /// Attach Host-retained pipe ends prepared for a supervised launcher spawn.
+    ///
+    /// Terminal and inherit modes are rejected by `prepare_supervised_stdio`
+    /// before this path runs.
+    pub(super) fn attach_from_owned_fds(
+        io: &ProcessIo,
+        stdin: Option<OwnedFd>,
+        stdout: Option<OwnedFd>,
+        stderr: Option<OwnedFd>,
+    ) -> Result<Self> {
+        if matches!(io.stdin, IoMode::Terminal)
+            || matches!(io.stdout, IoMode::Terminal)
+            || matches!(io.stderr, IoMode::Terminal)
+            || io.terminal_size.is_some()
+        {
+            return Err(io_error(
+                ErrorCode::Unsupported,
+                "session-supervisor create does not support terminal process I/O yet",
+            ));
+        }
+        if matches!(io.stdin, IoMode::Inherit)
+            || matches!(io.stdout, IoMode::Inherit)
+            || matches!(io.stderr, IoMode::Inherit)
+        {
+            return Err(io_error(
+                ErrorCode::Unsupported,
+                "session-supervisor create does not support inherited process I/O yet",
+            ));
+        }
+
+        let stdin = match (io.stdin, stdin) {
+            (IoMode::Pipe, Some(fd)) => {
+                Some(ProcessStdin::OwnedPipe(owned_fd_to_async_reader(fd, "stdin")?))
+            }
+            (IoMode::Null, None) => None,
+            (IoMode::Pipe, None) => {
+                return Err(io_error(
+                    ErrorCode::Internal,
+                    "supervised spawn did not retain the configured stdin pipe",
+                ));
+            }
+            (IoMode::Null, Some(_)) => {
+                return Err(io_error(
+                    ErrorCode::Internal,
+                    "supervised spawn retained an unexpected stdin pipe",
+                ));
+            }
+            (mode, _) => return Err(unsupported_mode("stdin", mode)),
+        };
+        let stdout = match (io.stdout, stdout) {
+            (IoMode::Capture, Some(fd)) => Some(owned_fd_to_async_reader(fd, "stdout")?),
+            (IoMode::Null, None) => None,
+            (IoMode::Capture, None) => {
+                return Err(io_error(
+                    ErrorCode::Internal,
+                    "supervised spawn did not retain the configured stdout pipe",
+                ));
+            }
+            (IoMode::Null, Some(_)) => {
+                return Err(io_error(
+                    ErrorCode::Internal,
+                    "supervised spawn retained an unexpected stdout pipe",
+                ));
+            }
+            (mode, _) => return Err(unsupported_mode("stdout", mode)),
+        };
+        let stderr = match (io.stderr, stderr) {
+            (IoMode::Capture, Some(fd)) => Some(owned_fd_to_async_reader(fd, "stderr")?),
+            (IoMode::Null, None) => None,
+            (IoMode::Capture, None) => {
+                return Err(io_error(
+                    ErrorCode::Internal,
+                    "supervised spawn did not retain the configured stderr pipe",
+                ));
+            }
+            (IoMode::Null, Some(_)) => {
+                return Err(io_error(
+                    ErrorCode::Internal,
+                    "supervised spawn retained an unexpected stderr pipe",
+                ));
+            }
+            (mode, _) => return Err(unsupported_mode("stderr", mode)),
+        };
+
+        let captured_streams = usize::from(stdout.is_some()) + usize::from(stderr.is_some());
+        let output =
+            (captured_streams > 0).then(|| Arc::new(OutputBuffer::new(captured_streams as u8)));
+        if let (Some(reader), Some(buffer)) = (stdout, output.as_ref()) {
+            spawn_output_reader(reader, OutputStream::Stdout, Arc::clone(buffer));
+        }
+        if let (Some(reader), Some(buffer)) = (stderr, output.as_ref()) {
+            spawn_output_reader(reader, OutputStream::Stderr, Arc::clone(buffer));
+        }
+
+        let (serving_stdin_operation, _) = watch::channel(0);
+        Ok(Self {
+            inner: Arc::new(ProcessIoInner {
+                stdin_mode: io.stdin,
+                stdin: Mutex::new(stdin),
+                next_stdin_operation: AtomicU64::new(0),
+                serving_stdin_operation,
+                output,
+                terminal: None,
+            }),
+        })
+    }
+
     pub(super) async fn read_output(
         &self,
         after_sequence: u64,
@@ -261,6 +370,10 @@ impl ProcessIoHandle {
         })?;
         match stdin {
             ProcessStdin::Pipe(stdin) => {
+                stdin.write_all(data).await.map_err(stdin_write_error)?;
+                stdin.flush().await.map_err(stdin_write_error)
+            }
+            ProcessStdin::OwnedPipe(stdin) => {
                 stdin.write_all(data).await.map_err(stdin_write_error)?;
                 stdin.flush().await.map_err(stdin_write_error)
             }
@@ -618,6 +731,15 @@ fn spawn_output_reader(
             }
         }
     });
+}
+
+fn owned_fd_to_async_reader(fd: OwnedFd, stream: &str) -> Result<tokio::fs::File> {
+    // SAFETY: ownership of the Host read end transfers into a std File.
+    let std_file = unsafe { std::fs::File::from_raw_fd(fd.into_raw_fd()) };
+    // Tokio's File::from_std is infallible; keep the stream name for diagnostics
+    // if callers later need to distinguish stdout vs stderr attach failures.
+    let _ = stream;
+    Ok(tokio::fs::File::from_std(std_file))
 }
 
 fn spawn_terminal_reader(terminal: TerminalHandle, buffer: Arc<OutputBuffer>) {
