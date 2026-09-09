@@ -3,21 +3,23 @@ mod restore;
 #[cfg(test)]
 mod tests;
 
+use std::ffi::OsString;
 use std::io;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus as ProcessExitStatus;
+use std::sync::Arc;
 use std::time::Duration;
 
 use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
 use a3s_oci_sdk::{
-    ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus, ProcessIo, Result,
+    ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus, IoMode, ProcessIo, Result,
     CONTROL_CGROUP_PROCS_FD, WORKLOAD_CGROUP_PROCS_FD,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::time::timeout;
 
 use super::bundle_scope::{PinnedBundleDirectory, UTILITY_VM_BUNDLE_FD, UTILITY_VM_ROOTFS_FD};
@@ -42,17 +44,17 @@ use super::plan::InitPlan;
 use super::process_group::ProcessGroupLease;
 use super::seccomp::SeccompPlan;
 use super::RootfsScope;
-pub(super) use launch::{bind_control_listener, terminate};
+pub(super) use launch::{bind_control_listener, terminate, terminate_host_child, SharedSessionSupervisor};
 use launch::{
-    cleanup_uncommitted_create, cleanup_unstarted_cgroup, retain_original_rootfs,
-    validate_rootless_device_mounts,
+    cleanup_uncommitted_create, cleanup_unstarted_cgroup, prepare_supervised_stdio,
+    retain_original_rootfs, validate_rootless_device_mounts, LauncherChild,
 };
 
 const INIT_READY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub(super) struct PreparedProcess {
-    child: Child,
+    child: LauncherChild,
     control: Option<UnixStream>,
     pid: i32,
     namespace_init_pid: Option<i32>,
@@ -80,6 +82,7 @@ pub(super) struct ProcessSpawnContext<'a> {
     pub(super) user_mapping_runtime: &'a UserMappingRuntime,
     pub(super) device_source_directory: &'a Path,
     pub(super) vm_storage_sources: &'a crate::vm_attachment::UtilityVmStorageSources,
+    pub(super) session_supervisor: Option<SharedSessionSupervisor>,
 }
 
 impl PreparedProcess {
@@ -100,8 +103,49 @@ impl PreparedProcess {
             user_mapping_runtime,
             device_source_directory,
             vm_storage_sources,
+            session_supervisor,
         } = context;
         let rootless = user_mapping_runtime.is_rootless();
+        let supervised = session_supervisor.is_some();
+        if supervised {
+            if pinned_bundle.is_some() {
+                return Err(process_error(
+                    ErrorCode::Unsupported,
+                    "session-supervisor create does not support descriptor-pinned utility-VM bundles yet",
+                ));
+            }
+            if !rootless_device_mounts.is_empty() {
+                return Err(process_error(
+                    ErrorCode::Unsupported,
+                    "session-supervisor create does not support rootless device mounts yet",
+                ));
+            }
+            if inherited_descriptors.schema().is_some() {
+                return Err(process_error(
+                    ErrorCode::Unsupported,
+                    "session-supervisor create does not support inherited workload descriptors yet",
+                ));
+            }
+            if matches!(io.stdin, IoMode::Terminal)
+                || matches!(io.stdout, IoMode::Terminal)
+                || matches!(io.stderr, IoMode::Terminal)
+                || io.terminal_size.is_some()
+            {
+                return Err(process_error(
+                    ErrorCode::Unsupported,
+                    "session-supervisor create does not support terminal process I/O yet",
+                ));
+            }
+            if matches!(io.stdin, IoMode::Inherit)
+                || matches!(io.stdout, IoMode::Inherit)
+                || matches!(io.stderr, IoMode::Inherit)
+            {
+                return Err(process_error(
+                    ErrorCode::Unsupported,
+                    "session-supervisor create does not support inherited process I/O yet",
+                ));
+            }
+        }
         let (original_rootfs, pinned_rootfs) =
             retain_original_rootfs(plan, pinned_bundle.as_ref()).await?;
         let process_group = ProcessGroupLease::open_for_snapshot(config_snapshot).await?;
@@ -120,8 +164,18 @@ impl PreparedProcess {
         )?;
         let mut intel_rdt = IntelRdtHandle::create(plan.intel_rdt.as_ref(), hook_state.id())?;
         let (listener, control_name) = bind_control_listener()?;
-        // SAFETY: getpid has no preconditions and cannot fail.
-        let expected_owner_pid = unsafe { libc::getpid() };
+        let expected_owner_pid = if let Some(supervisor) = session_supervisor.as_ref() {
+            let guard = supervisor.lock().map_err(|_| {
+                process_error(
+                    ErrorCode::Internal,
+                    "session supervisor lock is poisoned before launcher spawn",
+                )
+            })?;
+            guard.identity().pid()
+        } else {
+            // SAFETY: getpid has no preconditions and cannot fail.
+            unsafe { libc::getpid() }
+        };
         let process_io_json = serde_json::to_string(io).map_err(|error| {
             process_error(
                 ErrorCode::Internal,
@@ -139,28 +193,6 @@ impl PreparedProcess {
             ));
         }
         let vm_storage_sources_json = vm_storage_sources.to_json()?;
-        let mut command = Command::new(init_executable);
-        command
-            .arg("container-init")
-            .arg(config_snapshot)
-            .arg(&plan.bundle_directory)
-            .arg(&control_name)
-            .arg(hook_state.id())
-            .arg(rootfs_scope.internal_argument())
-            .arg(if pinned_bundle.is_some() {
-                "pinned-bundle-fd"
-            } else {
-                "bundle-path"
-            })
-            .arg(expected_owner_pid.to_string())
-            .arg(if rootless { "rootless" } else { "privileged" })
-            .arg(device_source_directory)
-            .arg(vm_storage_sources_json)
-            .arg(process_io_json)
-            .env_clear()
-            .kill_on_drop(true);
-        let io_setup = ProcessIoHandle::configure(&mut command, io)?;
-        let terminal = io_setup.uses_terminal();
         let mut cgroup = CgroupHandle::create(
             &plan.cgroup,
             &plan.cgroup_ownership,
@@ -178,50 +210,173 @@ impl PreparedProcess {
             );
             return Err(cleanup_unstarted_cgroup(&mut cgroup, error));
         }
-        // SAFETY: the callback runs in the freshly forked command child and
-        // performs one bounded write to the already-open outer cgroup.procs
-        // file, installs fixed control/workload descriptors, establishes the
-        // configured controlling terminal when present, and installs the
-        // already-validated caller descriptors with bounded dup2.
-        unsafe {
-            command.pre_exec(move || {
-                super::fd_boundary::mark_private_descriptors_close_on_exec()?;
-                pid_supervisor::verify_and_arm_parent_death_signal(
-                    expected_owner_pid,
-                    "container launcher",
+
+        let (mut child, process_io) = if let Some(supervisor) = session_supervisor {
+            let init_args: Vec<OsString> = vec![
+                "container-init".into(),
+                config_snapshot.as_os_str().to_os_string(),
+                plan.bundle_directory.as_os_str().to_os_string(),
+                control_name.clone().into(),
+                hook_state.id().into(),
+                rootfs_scope.internal_argument().into(),
+                "bundle-path".into(),
+                expected_owner_pid.to_string().into(),
+                if rootless {
+                    "rootless".into()
+                } else {
+                    "privileged".into()
+                },
+                device_source_directory.as_os_str().to_os_string(),
+                vm_storage_sources_json.clone().into(),
+                process_io_json.clone().into(),
+            ];
+            let (host_pipes, child_stdio) = match prepare_supervised_stdio(io) {
+                Ok(pipes) => pipes,
+                Err(error) => return Err(cleanup_unstarted_cgroup(&mut cgroup, error)),
+            };
+            let stdio = Some((
+                child_stdio.stdin.as_ref().map(AsRawFd::as_raw_fd),
+                child_stdio.stdout.as_ref().map(AsRawFd::as_raw_fd),
+                child_stdio.stderr.as_ref().map(AsRawFd::as_raw_fd),
+            ));
+            let spawned = {
+                let mut guard = match supervisor.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        let error = process_error(
+                            ErrorCode::Internal,
+                            "session supervisor lock is poisoned during launcher spawn",
+                        );
+                        return Err(cleanup_unstarted_cgroup(&mut cgroup, error));
+                    }
+                };
+                guard.spawn_launcher(
+                    init_executable,
+                    &init_args,
+                    init_cgroup_procs,
+                    control_workload_descriptors,
+                    stdio,
                 )
-                .map_err(|error| io::Error::other(error.to_string()))?;
-                if let Some(descriptor) = init_cgroup_procs {
-                    cgroup::join_current_process(descriptor)?;
+            };
+            // Child-side pipe ends must outlive SCM_RIGHTS + supervised spawn.
+            drop(child_stdio);
+            let pid = match spawned {
+                Ok(pid) => pid,
+                Err(error) => {
+                    return Err(cleanup_unstarted_cgroup(&mut cgroup, error));
                 }
-                if let Some((control, workload)) = control_workload_descriptors {
-                    cgroup::install_control_workload_descriptors_from_pre_exec(control, workload)?;
+            };
+            let raw_pid = match u32::try_from(pid) {
+                Ok(pid) => pid,
+                Err(_) => {
+                    let error = process_error(
+                        ErrorCode::ResourceExhausted,
+                        format!("supervised launcher PID {pid} does not fit the process model"),
+                    );
+                    let mut child = LauncherChild::Supervised {
+                        pid: pid.max(0) as u32,
+                        supervisor: Arc::clone(&supervisor),
+                        status: None,
+                    };
+                    return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
                 }
-                if let Some(bundle) = pinned_bundle.as_ref() {
-                    bundle.install_in_child()?;
+            };
+            let process_io = match ProcessIoHandle::attach_from_owned_fds(
+                io,
+                host_pipes.stdin,
+                host_pipes.stdout,
+                host_pipes.stderr,
+            ) {
+                Ok(process_io) => process_io,
+                Err(error) => {
+                    let mut child = LauncherChild::Supervised {
+                        pid: raw_pid,
+                        supervisor: Arc::clone(&supervisor),
+                        status: None,
+                    };
+                    return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
                 }
-                if let Some(rootfs) = pinned_rootfs.as_ref() {
-                    rootfs.install_in_child()?;
-                }
-                super::terminal::prepare_child_terminal(terminal)?;
-                inherited_descriptors.install_in_child()
-            });
-        }
-        let mut child = match command.spawn() {
-            Ok(child) => child,
-            Err(error) => {
-                let error = process_error(
-                    ErrorCode::Internal,
-                    format!("failed to spawn prepared container init: {error}"),
-                );
-                return Err(cleanup_unstarted_cgroup(&mut cgroup, error));
+            };
+            (
+                LauncherChild::Supervised {
+                    pid: raw_pid,
+                    supervisor,
+                    status: None,
+                },
+                process_io,
+            )
+        } else {
+            let mut command = Command::new(init_executable);
+            command
+                .arg("container-init")
+                .arg(config_snapshot)
+                .arg(&plan.bundle_directory)
+                .arg(&control_name)
+                .arg(hook_state.id())
+                .arg(rootfs_scope.internal_argument())
+                .arg(if pinned_bundle.is_some() {
+                    "pinned-bundle-fd"
+                } else {
+                    "bundle-path"
+                })
+                .arg(expected_owner_pid.to_string())
+                .arg(if rootless { "rootless" } else { "privileged" })
+                .arg(device_source_directory)
+                .arg(vm_storage_sources_json)
+                .arg(process_io_json)
+                .env_clear()
+                .kill_on_drop(true);
+            let io_setup = ProcessIoHandle::configure(&mut command, io)?;
+            let terminal = io_setup.uses_terminal();
+            // SAFETY: the callback runs in the freshly forked command child and
+            // performs one bounded write to the already-open outer cgroup.procs
+            // file, installs fixed control/workload descriptors, establishes the
+            // configured controlling terminal when present, and installs the
+            // already-validated caller descriptors with bounded dup2.
+            unsafe {
+                command.pre_exec(move || {
+                    super::fd_boundary::mark_private_descriptors_close_on_exec()?;
+                    pid_supervisor::verify_and_arm_parent_death_signal(
+                        expected_owner_pid,
+                        "container launcher",
+                    )
+                    .map_err(|error| io::Error::other(error.to_string()))?;
+                    if let Some(descriptor) = init_cgroup_procs {
+                        cgroup::join_current_process(descriptor)?;
+                    }
+                    if let Some((control, workload)) = control_workload_descriptors {
+                        cgroup::install_control_workload_descriptors_from_pre_exec(
+                            control, workload,
+                        )?;
+                    }
+                    if let Some(bundle) = pinned_bundle.as_ref() {
+                        bundle.install_in_child()?;
+                    }
+                    if let Some(rootfs) = pinned_rootfs.as_ref() {
+                        rootfs.install_in_child()?;
+                    }
+                    super::terminal::prepare_child_terminal(terminal)?;
+                    inherited_descriptors.install_in_child()
+                });
             }
-        };
-        let process_io = match ProcessIoHandle::attach(io_setup, &mut child, io) {
-            Ok(process_io) => process_io,
-            Err(error) => {
-                return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
-            }
+            let mut local = match command.spawn() {
+                Ok(child) => child,
+                Err(error) => {
+                    let error = process_error(
+                        ErrorCode::Internal,
+                        format!("failed to spawn prepared container init: {error}"),
+                    );
+                    return Err(cleanup_unstarted_cgroup(&mut cgroup, error));
+                }
+            };
+            let process_io = match ProcessIoHandle::attach(io_setup, &mut local, io) {
+                Ok(process_io) => process_io,
+                Err(error) => {
+                    let mut child = LauncherChild::Local(local);
+                    return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
+                }
+            };
+            (LauncherChild::Local(local), process_io)
         };
         let Some(raw_pid) = child.id() else {
             let error = process_error(
@@ -1053,7 +1208,7 @@ impl PreparedProcess {
 }
 
 async fn cleanup_failed_create(
-    child: &mut Child,
+    child: &mut LauncherChild,
     cgroup: &mut Option<CgroupHandle>,
     hooks: &HookSet,
     hook_state: &HookStateTemplate,

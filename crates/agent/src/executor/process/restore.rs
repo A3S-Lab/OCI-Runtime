@@ -25,7 +25,7 @@ use super::super::trusted_executable::PinnedExecutable;
 use super::super::{restore_cgroup_namespace, restore_supervisor};
 use super::launch::{
     bind_control_listener, cleanup_uncommitted_create, cleanup_unstarted_cgroup,
-    retain_original_rootfs,
+    retain_original_rootfs, LauncherChild,
 };
 use super::{append_cleanup_error, process_error, PreparedProcess, INIT_READY_TIMEOUT};
 
@@ -127,7 +127,7 @@ impl PreparedProcess {
             external_mounts,
         };
         let mut child = match spawner.spawn(spawn_request).await {
-            Ok(child) => child,
+            Ok(child) => LauncherChild::Local(child),
             Err(mut error) => {
                 if let Err(cleanup) = rootfs_mount.cleanup() {
                     append_cleanup_error(&mut error, "release the restore rootfs mount", &cleanup);
@@ -401,7 +401,7 @@ impl PreparedProcess {
 }
 
 async fn cleanup_failed_restore(
-    child: &mut Child,
+    child: &mut LauncherChild,
     cgroup: &mut Option<CgroupHandle>,
     rootfs_mount: &mut RestoreRootfsMount,
     primary: Error,
