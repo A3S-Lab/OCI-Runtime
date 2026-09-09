@@ -649,8 +649,18 @@ impl MountPlan {
         let requests_readonly = flags & libc::MS_RDONLY != 0
             || recursive_attributes
                 .is_some_and(|attributes| attributes.attr_set & attributes::MOUNT_ATTR_RDONLY != 0);
-        let detached_bind =
-            namespaces.new_user() && bind && requests_readonly && detached_bind_compatible;
+        // Detached open_tree clones require host CAP_SYS_ADMIN over the source
+        // mount. After rootless device-policy drop the durable owner is a
+        // non-root host UID; open_tree then fails with EPERM even once the
+        // create path becomes userns root. Fall back to ordinary MS_BIND when
+        // the planner is not host effective root — mapped userns root can still
+        // bind sources owned by the durable host identity.
+        let host_effective_root = unsafe { libc::geteuid() } == 0;
+        let detached_bind = namespaces.new_user()
+            && bind
+            && requests_readonly
+            && detached_bind_compatible
+            && host_effective_root;
         // An explicit bind remount applies the requested attributes in the
         // first mount(2) call. Only ordinary bind creation needs the follow-up
         // remount used to apply VFS attributes.
