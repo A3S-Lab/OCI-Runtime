@@ -27,6 +27,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added a Native Linux session-supervisor foundation for Box B2 / OCI R6 live
+  process-session recovery. `session_supervisor` proves that workload
+  `PR_SET_PDEATHSIG` can bind to an authenticated host-surviving supervisor
+  (PID + start-time ticks), that owner death then leaves the workload live, and
+  that the current Host-bound PDEATHSIG model still terminates on owner death.
+  Authentication rejects start-time drift, absent PIDs, and unknown identity
+  schemas. This does not wire the supervisor into the production executor or
+  close default Sandbox/MicroVM cutover.
 - Extended Linux KVM containerd dedicated-vm vertical slice with exec
   Created/Running/Stopped daemon-restart boundaries after the existing init
   slice. Report schema is now `a3s.oci.linux-kvm-containerd-lifecycle.v3` and
