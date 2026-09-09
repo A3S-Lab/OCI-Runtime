@@ -1880,7 +1880,9 @@ The production `HostSessionSupervisor` service (`session-supervise` on the
 agent binary) can parent workloads, omit Host-bound PDEATHSIG on itself, and
 keep running after the Host control channel closes. Native recovery schema
 `a3s.oci.native-linux-recovery.v4` can record an optional `sessionSupervisor`
-identity and fail-closes stale reopen while that supervisor is still live.
+identity. Control-channel reattach after Host EOF is implemented; stale Host
+reopen still fail-closes in `recover_stale_generation` while that supervisor is
+live until `PreparedProcess` restore is wired.
 
 Qualification may enable supervised create with
 `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. When set, Native create starts one
@@ -1892,6 +1894,18 @@ authenticated supervisor identity into the recovery v4 record. Default create
 stopped-only recovery gates stay green. Supervised create currently rejects
 terminal/inherit I/O, pinned utility-VM bundles, rootless device mounts, and
 inherited Box control descriptors.
+
+When the original Host control socketpair closes (owner death), the supervisor
+does **not** reap waitable children and does **not** start a replacement
+supervisor. Re-exec would break PDEATHSIG parentage and invent wait status.
+Instead it publishes a deterministic abstract unix endpoint named
+`a3s.oci.session-supervise.<pid>.<start_time_ticks>` and accepts one
+replacement control connection. `HostSessionSupervisor::reattach` authenticates
+the live PID + start-time, reconnects, and resumes `MSG_WAIT` /
+`MSG_SPAWN` without inventing exit status. This is the control-channel slice
+only: `recover_stale_generation` still fail-closes while a recorded supervisor
+is live until Host reopen restores `PreparedProcess` / I/O sessions through
+that reattached control.
 
 ### Hook owner-death crash boundary
 

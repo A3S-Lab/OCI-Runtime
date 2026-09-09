@@ -8,7 +8,11 @@
 //! 1. a durable supervisor outlives Host Service death;
 //! 2. workload helpers arm parent-death against that supervisor (real parent);
 //! 3. a replacement Host authenticates the supervisor by PID **and** start-time
-//!    ticks before claiming any live session.
+//!    ticks before claiming any live session;
+//! 4. after Host control EOF, the same supervisor publishes a deterministic
+//!    abstract reattach endpoint so the replacement can resume wait/spawn
+//!    without re-exec (re-exec would break PDEATHSIG parentage and invent wait
+//!    status).
 //!
 //! Qualification may enable production wiring with
 //! `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. Default create keeps Host-bound
@@ -17,8 +21,9 @@
 use std::ffi::OsStr;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::linux::net::SocketAddrExt;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -28,7 +33,7 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 use serde::{Deserialize, Serialize};
 
 use super::pid_supervisor::{
-    terminate_pid, wait_for_child, verify_and_arm_parent_death_signal, ChildOutcome,
+    terminate_pid, verify_and_arm_parent_death_signal, wait_for_child, ChildOutcome,
 };
 use super::pidfd::PidFd;
 
@@ -53,6 +58,10 @@ const FLAG_CONTROL_WORKLOAD: u8 = 0b0000_0010;
 const FLAG_STDIN: u8 = 0b0000_0100;
 const FLAG_STDOUT: u8 = 0b0000_1000;
 const FLAG_STDERR: u8 = 0b0001_0000;
+const REATTACH_ENDPOINT_PREFIX: &str = "a3s.oci.session-supervise.";
+const REATTACH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const REATTACH_ACCEPT_TIMEOUT: Duration = Duration::from_secs(30);
+const REATTACH_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Authenticated identity of a host-surviving session supervisor.
 ///
@@ -155,6 +164,18 @@ impl SessionSupervisorIdentity {
     pub(crate) const fn start_time_ticks(&self) -> u64 {
         self.start_time_ticks
     }
+
+    /// Deterministic abstract unix name used for Host control reattach.
+    ///
+    /// Knowledge of PID + start-time (from recovery v4) is required to locate
+    /// the endpoint. A replacement Host must still call [`authenticate_live`]
+    /// before claiming the session.
+    pub(crate) fn reattach_endpoint_name(&self) -> String {
+        format!(
+            "{REATTACH_ENDPOINT_PREFIX}{}.{:016x}",
+            self.pid, self.start_time_ticks
+        )
+    }
 }
 
 /// Whether Native create should attach workloads to a host-surviving supervisor.
@@ -211,7 +232,9 @@ impl HostSessionSupervisor {
             let _ = child.wait();
             supervisor_error(
                 ErrorCode::ResourceExhausted,
-                format!("session supervisor PID {raw_pid} does not fit the identity model: {error}"),
+                format!(
+                    "session supervisor PID {raw_pid} does not fit the identity model: {error}"
+                ),
             )
         })?;
         // Track by pidfd; forgetting Child avoids a second local reaper race.
@@ -376,6 +399,83 @@ impl HostSessionSupervisor {
             )),
         }
     }
+
+    /// Reattach a replacement Host to a live supervisor after the original
+    /// control channel closed.
+    ///
+    /// Re-executing a new supervisor is wrong: PDEATHSIG parentage and exact
+    /// wait status belong to the recorded supervisor incarnation. This opens a
+    /// fresh control socket on the published abstract endpoint and proves the
+    /// PID + start-time identity still matches. It does not restore
+    /// `PreparedProcess` or Host I/O sessions by itself.
+    pub(crate) fn reattach(expected: &SessionSupervisorIdentity) -> Result<Self> {
+        expected.authenticate_live()?;
+        let address = SocketAddr::from_abstract_name(expected.reattach_endpoint_name().as_bytes())
+            .map_err(|error| {
+                supervisor_error(
+                    ErrorCode::Internal,
+                    format!("failed to construct session-supervisor reattach address: {error}"),
+                )
+            })?;
+        let deadline = Instant::now() + REATTACH_CONNECT_TIMEOUT;
+        let mut control = loop {
+            match UnixStream::connect_addr(&address) {
+                Ok(stream) => break stream,
+                Err(error)
+                    if Instant::now() < deadline
+                        && matches!(
+                            error.kind(),
+                            io::ErrorKind::ConnectionRefused
+                                | io::ErrorKind::NotFound
+                                | io::ErrorKind::WouldBlock
+                        ) =>
+                {
+                    std::thread::sleep(REATTACH_POLL_INTERVAL);
+                }
+                Err(error) => {
+                    return Err(supervisor_error(
+                        ErrorCode::Unavailable,
+                        format!(
+                            "failed to connect session-supervisor reattach endpoint for PID {}: {error}",
+                            expected.pid()
+                        ),
+                    )
+                    .retryable(true));
+                }
+            }
+        };
+        control
+            .set_read_timeout(Some(REATTACH_CONNECT_TIMEOUT))
+            .and_then(|()| control.set_write_timeout(Some(REATTACH_CONNECT_TIMEOUT)))
+            .map_err(|error| {
+                supervisor_error(
+                    ErrorCode::Internal,
+                    format!("failed to bound session-supervisor reattach channel: {error}"),
+                )
+            })?;
+        let identity = read_ready_identity(&mut control)?;
+        if identity.pid() != expected.pid()
+            || identity.start_time_ticks() != expected.start_time_ticks()
+        {
+            return Err(supervisor_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "session supervisor reattach identity drifted: expected PID {} start {}, observed PID {} start {}",
+                    expected.pid(),
+                    expected.start_time_ticks(),
+                    identity.pid(),
+                    identity.start_time_ticks()
+                ),
+            ));
+        }
+        identity.authenticate_live()?;
+        let pidfd = PidFd::open(identity.pid())?;
+        Ok(Self {
+            identity,
+            control,
+            pidfd,
+        })
+    }
 }
 
 impl Drop for HostSessionSupervisor {
@@ -443,16 +543,7 @@ fn run_session_supervise_service() -> Result<()> {
         return Err(last_os_error("enable session supervisor child subreaper"));
     }
     let identity = SessionSupervisorIdentity::current()?;
-    let mut ready = Vec::with_capacity(13);
-    ready.push(MSG_READY);
-    ready.extend_from_slice(&identity.pid().to_be_bytes());
-    ready.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
-    control.write_all(&ready).map_err(|error| {
-        supervisor_error(
-            ErrorCode::Internal,
-            format!("failed to publish session-supervisor readiness: {error}"),
-        )
-    })?;
+    write_ready_identity(&mut control, &identity)?;
 
     loop {
         let mut header = [0_u8; 1];
@@ -460,13 +551,12 @@ fn run_session_supervise_service() -> Result<()> {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
                 // Host Service died or closed its channel. Remain as the durable
-                // session authority until an authenticated replacement reconnects
-                // or an operator kills this process. Reap only after Host is gone
-                // so a live Host can wait the launcher through its pidfd.
-                loop {
-                    reap_children();
-                    std::thread::sleep(Duration::from_millis(50));
-                }
+                // session authority. Do not reap waitable children here: exact
+                // exit status must stay available for MSG_WAIT after an
+                // authenticated replacement Host reattaches the control channel.
+                // Re-exec / a new supervisor would break PDEATHSIG parentage.
+                control = accept_control_reattach(&identity)?;
+                continue;
             }
             Err(error) => {
                 return Err(supervisor_error(
@@ -521,6 +611,84 @@ fn run_session_supervise_service() -> Result<()> {
             }
         }
     }
+}
+
+fn write_ready_identity(
+    control: &mut UnixStream,
+    identity: &SessionSupervisorIdentity,
+) -> Result<()> {
+    let mut ready = Vec::with_capacity(13);
+    ready.push(MSG_READY);
+    ready.extend_from_slice(&identity.pid().to_be_bytes());
+    ready.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+    control.write_all(&ready).map_err(|error| {
+        supervisor_error(
+            ErrorCode::Internal,
+            format!("failed to publish session-supervisor readiness: {error}"),
+        )
+    })
+}
+
+fn accept_control_reattach(identity: &SessionSupervisorIdentity) -> Result<UnixStream> {
+    identity.authenticate_live()?;
+    let address = SocketAddr::from_abstract_name(identity.reattach_endpoint_name().as_bytes())
+        .map_err(|error| {
+            supervisor_error(
+                ErrorCode::Internal,
+                format!("failed to construct session-supervisor reattach listen address: {error}"),
+            )
+        })?;
+    let listener = UnixListener::bind_addr(&address).map_err(|error| {
+        supervisor_error(
+            ErrorCode::Internal,
+            format!("failed to bind session-supervisor reattach endpoint: {error}"),
+        )
+    })?;
+    listener.set_nonblocking(true).map_err(|error| {
+        supervisor_error(
+            ErrorCode::Internal,
+            format!("failed to make session-supervisor reattach endpoint nonblocking: {error}"),
+        )
+    })?;
+    let deadline = Instant::now() + REATTACH_ACCEPT_TIMEOUT;
+    let (mut stream, _) = loop {
+        match listener.accept() {
+            Ok(accepted) => break accepted,
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+            {
+                std::thread::sleep(REATTACH_POLL_INTERVAL);
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                return Err(supervisor_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "session supervisor PID {} timed out waiting for Host control reattach",
+                        identity.pid()
+                    ),
+                )
+                .retryable(true));
+            }
+            Err(error) => {
+                return Err(supervisor_error(
+                    ErrorCode::Internal,
+                    format!("failed to accept session-supervisor reattach: {error}"),
+                ));
+            }
+        }
+    };
+    drop(listener);
+    stream
+        .set_read_timeout(None)
+        .and_then(|()| stream.set_write_timeout(None))
+        .map_err(|error| {
+            supervisor_error(
+                ErrorCode::Internal,
+                format!("failed to clear session-supervisor reattach timeouts: {error}"),
+            )
+        })?;
+    write_ready_identity(&mut stream, identity)?;
+    Ok(stream)
 }
 
 fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result<i32> {
@@ -986,7 +1154,9 @@ fn receive_fds(socket: RawFd, expected: usize) -> Result<Vec<OwnedFd>> {
     message.msg_controllen = control.len() as _;
     let received = unsafe { libc::recvmsg(socket, &mut message, 0) };
     if received < 0 {
-        return Err(last_os_error("receive session-supervisor spawn descriptors"));
+        return Err(last_os_error(
+            "receive session-supervisor spawn descriptors",
+        ));
     }
     if received != 1 || payload[0] != 0xFD {
         return Err(supervisor_error(
@@ -1001,7 +1171,13 @@ fn receive_fds(socket: RawFd, expected: usize) -> Result<Vec<OwnedFd>> {
             "session supervisor spawn descriptor frame has no control header",
         ));
     }
-    let (level, kind, len) = unsafe { ((*header).cmsg_level, (*header).cmsg_type, (*header).cmsg_len) };
+    let (level, kind, len) = unsafe {
+        (
+            (*header).cmsg_level,
+            (*header).cmsg_type,
+            (*header).cmsg_len,
+        )
+    };
     let descriptor_bytes = expected * std::mem::size_of::<RawFd>();
     let expected_len = unsafe { libc::CMSG_LEN(descriptor_bytes as u32) } as usize;
     if level != libc::SOL_SOCKET || kind != libc::SCM_RIGHTS || len as usize != expected_len {
@@ -1121,8 +1297,7 @@ fn run_supervisor_child(ready: &mut UnixStream) -> Result<()> {
         let reaped = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
         if reaped < 0 {
             let err = io::Error::last_os_error();
-            if err.raw_os_error() != Some(libc::ECHILD) && err.raw_os_error() != Some(libc::EINTR)
-            {
+            if err.raw_os_error() != Some(libc::ECHILD) && err.raw_os_error() != Some(libc::EINTR) {
                 return Err(supervisor_error(
                     ErrorCode::Internal,
                     format!("session supervisor waitpid failed: {err}"),
@@ -1587,5 +1762,91 @@ mod tests {
             "stdio launcher must die when its supervisor dies"
         );
         let _ = wait_for_child(identity.pid());
+    }
+
+    #[test]
+    fn replacement_host_can_reattach_control_and_wait_without_inventing_status() {
+        let (mut parent_ready, mut child_ready) =
+            UnixStream::pair().expect("reattach ready channel");
+        // SAFETY: parent reaps the fake Host; child owns the production supervisor.
+        let host_pid = unsafe { libc::fork() };
+        assert!(host_pid >= 0, "fork fake host for reattach");
+        if host_pid == 0 {
+            drop(parent_ready);
+            let mut supervisor = match HostSessionSupervisor::start_via_fork() {
+                Ok(supervisor) => supervisor,
+                Err(_) => unsafe { libc::_exit(111) },
+            };
+            let launcher_pid = match supervisor.spawn_launcher(
+                Path::new("/bin/sleep"),
+                &["1".into()],
+                None,
+                None,
+                None,
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(112) },
+            };
+            let identity = supervisor.identity().clone();
+            let mut payload = Vec::with_capacity(16);
+            payload.extend_from_slice(&identity.pid().to_be_bytes());
+            payload.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+            payload.extend_from_slice(&launcher_pid.to_be_bytes());
+            if child_ready.write_all(&payload).is_err() {
+                unsafe { libc::_exit(113) }
+            }
+            // Leak so Drop does not SHUTDOWN/kill the supervisor on Host exit.
+            std::mem::forget(supervisor);
+            loop {
+                unsafe { libc::pause() };
+            }
+        }
+        drop(child_ready);
+        let mut payload = [0_u8; 16];
+        parent_ready
+            .read_exact(&mut payload)
+            .expect("read reattach supervisor evidence");
+        let identity = SessionSupervisorIdentity {
+            schema_version: IDENTITY_SCHEMA_VERSION.to_string(),
+            pid: i32::from_be_bytes(payload[0..4].try_into().expect("pid bytes")),
+            start_time_ticks: u64::from_be_bytes(payload[4..12].try_into().expect("start bytes")),
+        };
+        let launcher_pid = i32::from_be_bytes(payload[12..16].try_into().expect("launcher bytes"));
+        terminate_pid(host_pid);
+        let _ = wait_for_child(host_pid);
+        identity
+            .authenticate_live()
+            .expect("replacement must authenticate live supervisor before reattach");
+        let mut reattached = HostSessionSupervisor::reattach(&identity)
+            .expect("replacement Host must reopen the supervisor control channel");
+        assert_eq!(reattached.identity().pid(), identity.pid());
+        assert_eq!(
+            reattached.identity().start_time_ticks(),
+            identity.start_time_ticks()
+        );
+        let status = reattached
+            .wait_launcher(launcher_pid)
+            .expect("reattached Host must wait the exact supervised launcher");
+        assert_eq!(
+            status, 0,
+            "wait must return the real launcher exit status, not an invented value"
+        );
+        assert!(
+            !process_is_live(launcher_pid),
+            "launcher must be reaped after authentic wait"
+        );
+        // Drop reattached sends SHUTDOWN and terminates the supervisor.
+    }
+
+    #[test]
+    fn reattach_rejects_start_time_drift_without_opening_control() {
+        let identity = SessionSupervisorIdentity {
+            schema_version: IDENTITY_SCHEMA_VERSION.to_string(),
+            pid: i32::try_from(std::process::id()).expect("pid fits i32"),
+            start_time_ticks: 1,
+        };
+        let error = HostSessionSupervisor::reattach(&identity)
+            .expect_err("stale start-time must not authenticate for reattach");
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
     }
 }
