@@ -20,7 +20,6 @@ impl Task for Service {
         req: api::CreateTaskRequest,
     ) -> TtrpcResult<api::CreateTaskResponse> {
         let task_id = req.id().to_string();
-        let isolation = crate::options::decode(req.options.as_ref()).map_err(runtime_error)?;
         let bundle = tokio::fs::canonicalize(req.bundle())
             .await
             .map_err(|error| {
@@ -36,6 +35,8 @@ impl Task for Service {
                 self.bundle.display()
             )));
         }
+        let selection =
+            crate::options::resolve(req.options.as_ref(), &bundle).map_err(runtime_error)?;
         {
             let mut state = self.state.lock().await;
             if let Some(error) = &state.restore_error {
@@ -89,6 +90,32 @@ impl Task for Service {
             !req.stdout().is_empty(),
             !req.stderr().is_empty(),
         );
+        let base_adapter = match self.adapter().await {
+            Ok(adapter) => adapter,
+            Err(error) => {
+                if rootfs_mounted {
+                    let _ = Self::unmount_rootfs(Path::new(req.bundle()).join("rootfs")).await;
+                }
+                self.state.lock().await.creating.remove(&task_id);
+                return Err(runtime_error(error));
+            }
+        };
+        let isolation = match selection {
+            crate::options::CreateIsolationSelection::Requested(isolation) => isolation,
+            crate::options::CreateIsolationSelection::Unspecified => {
+                match crate::options::default_from_extensions(base_adapter.extensions()) {
+                    Ok(isolation) => isolation,
+                    Err(error) => {
+                        if rootfs_mounted {
+                            let _ =
+                                Self::unmount_rootfs(Path::new(req.bundle()).join("rootfs")).await;
+                        }
+                        self.state.lock().await.creating.remove(&task_id);
+                        return Err(runtime_error(error));
+                    }
+                }
+            }
+        };
         let create_intent = match ShimCreateIntent::new(NewShimCreateIntent {
             identity: identity.clone(),
             isolation: isolation.clone(),
@@ -118,24 +145,7 @@ impl Task for Service {
             self.state.lock().await.creating.remove(&task_id);
             return Err(runtime_error(error));
         }
-        let adapter = match self.adapter().await {
-            Ok(adapter) => adapter.with_isolation(isolation),
-            Err(error) => {
-                match ShimCreateIntent::remove(&bundle) {
-                    Ok(()) if rootfs_mounted => {
-                        let _ = Self::unmount_rootfs(Path::new(req.bundle()).join("rootfs")).await;
-                    }
-                    Ok(()) => {}
-                    Err(cleanup_error) => {
-                        log::error!(
-                            "failed to remove pre-dispatch create intent; retaining the mounted rootfs for DeleteShim recovery: {cleanup_error}"
-                        );
-                    }
-                }
-                self.state.lock().await.creating.remove(&task_id);
-                return Err(runtime_error(error));
-            }
-        };
+        let adapter = base_adapter.with_isolation(isolation);
         let create_result = match &restore {
             Some(package) => adapter
                 .restore(

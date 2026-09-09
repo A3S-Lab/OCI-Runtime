@@ -87,6 +87,7 @@ pub(crate) async fn qualify_manual_shim_rehydration(
             CreateTaskRequest {
                 container_id: id.clone(),
                 rootfs,
+                ..Default::default()
             },
             &config.namespace,
         )?)

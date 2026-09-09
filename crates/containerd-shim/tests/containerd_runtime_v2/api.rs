@@ -25,7 +25,23 @@ pub(crate) struct Mount {
 }
 
 #[derive(Clone, PartialEq, Message)]
+pub(crate) struct ContainerRuntime {
+    #[prost(string, tag = "1")]
+    pub(crate) name: String,
+    #[prost(message, optional, tag = "2")]
+    pub(crate) options: Option<Any>,
+}
+
+#[derive(Clone, PartialEq, Message)]
 pub(crate) struct Container {
+    #[prost(string, tag = "1")]
+    pub(crate) id: String,
+    #[prost(string, tag = "3")]
+    pub(crate) image: String,
+    #[prost(message, optional, tag = "4")]
+    pub(crate) runtime: Option<ContainerRuntime>,
+    #[prost(message, optional, tag = "5")]
+    pub(crate) spec: Option<Any>,
     #[prost(string, tag = "6")]
     pub(crate) snapshotter: String,
     #[prost(string, tag = "7")]
@@ -42,6 +58,24 @@ pub(crate) struct GetContainerRequest {
 pub(crate) struct GetContainerResponse {
     #[prost(message, optional, tag = "1")]
     pub(crate) container: Option<Container>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub(crate) struct CreateContainerRequest {
+    #[prost(message, optional, tag = "1")]
+    pub(crate) container: Option<Container>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub(crate) struct CreateContainerResponse {
+    #[prost(message, optional, tag = "1")]
+    pub(crate) container: Option<Container>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub(crate) struct DeleteContainerRequest {
+    #[prost(string, tag = "1")]
+    pub(crate) id: String,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -106,6 +140,18 @@ pub(crate) struct CreateTaskRequest {
     pub(crate) container_id: String,
     #[prost(message, repeated, tag = "3")]
     pub(crate) rootfs: Vec<Mount>,
+    #[prost(string, tag = "4")]
+    pub(crate) stdin: String,
+    #[prost(string, tag = "5")]
+    pub(crate) stdout: String,
+    #[prost(string, tag = "6")]
+    pub(crate) stderr: String,
+    #[prost(bool, tag = "7")]
+    pub(crate) terminal: bool,
+    // tag 8 = checkpoint (Descriptor) — omit unless restoring.
+    /// Forwarded to the shim as Create options (A3S CreateOptions JSON Any).
+    #[prost(message, optional, tag = "9")]
+    pub(crate) options: Option<Any>,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -345,6 +391,12 @@ impl ContainersClient {
         GetContainerRequest,
         GetContainerResponse,
         "/containerd.services.containers.v1.Containers/Get"
+    );
+    unary_method!(
+        create,
+        CreateContainerRequest,
+        CreateContainerResponse,
+        "/containerd.services.containers.v1.Containers/Create"
     );
 }
 

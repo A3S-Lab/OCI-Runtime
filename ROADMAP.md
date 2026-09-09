@@ -2271,6 +2271,12 @@ evidence.
 - [ ] Run real `containerd` and `ctr` integration suites for lifecycle, exec,
   I/O, signals, stats, restart, forced cleanup, stale identity, and parallel
   tasks against every advertised driver profile.
+  Observation retained: Linux KVM dedicated-vm create/start/kill/wait/delete
+  vertical slice through private containerd + `box-kvm-qualification-service`
+  (`.github/scripts/linux-kvm-containerd-lifecycle.sh`,
+  `a3s.oci.linux-kvm-containerd-lifecycle.v1`, `promotes_readiness=false`).
+  Does not close restart-boundary, packaged-shim, fresh-host, or AArch64
+  promotion.
 - [ ] Publish the shim with signed or checksummed runtime packages and retain
   the exact containerd, shim, SDK, runtime, and driver compatibility record.
 

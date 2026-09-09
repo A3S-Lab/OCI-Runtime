@@ -37,6 +37,7 @@ pub(in super::super) async fn qualify_close_stdin_effect_committed_shim_sigkill(
             CreateTaskRequest {
                 container_id: id.clone(),
                 rootfs,
+                ..Default::default()
             },
             &config.namespace,
         )?)

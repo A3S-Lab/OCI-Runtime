@@ -85,6 +85,7 @@ async fn create_and_start(
             CreateTaskRequest {
                 container_id: id.clone(),
                 rootfs,
+                ..Default::default()
             },
             &config.namespace,
         )?)

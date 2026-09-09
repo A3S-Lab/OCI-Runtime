@@ -10,6 +10,8 @@ mod checkpoint;
 #[cfg(unix)]
 mod contract;
 #[cfg(unix)]
+mod handoff;
+#[cfg(unix)]
 mod identity;
 #[cfg(unix)]
 mod io;

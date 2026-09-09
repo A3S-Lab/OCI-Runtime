@@ -124,6 +124,7 @@ pub(crate) async fn qualify_shim_sigkill(
             CreateTaskRequest {
                 container_id: id.clone(),
                 rootfs,
+                ..Default::default()
             },
             &config.namespace,
         )?)
@@ -170,6 +171,7 @@ pub(crate) async fn qualify_shim_sigkill(
             CreateTaskRequest {
                 container_id: id.clone(),
                 rootfs,
+                ..Default::default()
             },
             &config.namespace,
         )?)
@@ -263,6 +265,7 @@ async fn qualify_create_in_flight_shim_sigkill(
                     CreateTaskRequest {
                         container_id: create_id,
                         rootfs,
+                        ..Default::default()
                     },
                     &create_namespace,
                 )?)
@@ -334,6 +337,7 @@ async fn qualify_partial_shim_sigkill(
             CreateTaskRequest {
                 container_id: id.clone(),
                 rootfs,
+                ..Default::default()
             },
             &config.namespace,
         )?)

@@ -4,6 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[path = "containerd_runtime_v2/api.rs"]
 mod api;
+#[path = "containerd_runtime_v2/dedicated_vm.rs"]
+mod dedicated_vm;
 #[path = "containerd_runtime_v2/faults.rs"]
 mod faults;
 #[path = "containerd_runtime_v2/parallel.rs"]
@@ -61,6 +63,32 @@ async fn real_containerd_runtime_v2_qualification() -> TestResult<()> {
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires root, a live Linux KVM DedicatedVm Host Service, private containerd, and ctr"]
+async fn real_containerd_linux_kvm_dedicated_vm_lifecycle() -> TestResult<()> {
+    let config = QualificationConfig::from_environment()?;
+    require_root().await?;
+    require_command("ctr").await?;
+    connect_ready(&config).await?;
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| qualification_error(format!("system clock precedes Unix epoch: {error}")))?
+        .as_nanos();
+    let prefix = format!("a3s-kvm-ctrd-{}-{nonce:x}", std::process::id());
+    let result = dedicated_vm::qualify_dedicated_vm_lifecycle(&config, &prefix).await;
+    let cleanup = cleanup_exact(&config, &prefix).await;
+    match (result, cleanup) {
+        (Err(error), Err(cleanup_error)) => Err(qualification_error(format!(
+            "dedicated-vm qualification failed: {error}; cleanup also failed: {cleanup_error}"
+        ))
+        .into()),
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
 async fn qualify(config: &QualificationConfig, prefix: &str, lifecycle_id: &str) -> TestResult<()> {
     config
         .restart_boundaries
@@ -76,6 +104,7 @@ async fn qualify(config: &QualificationConfig, prefix: &str, lifecycle_id: &str)
             CreateTaskRequest {
                 container_id: lifecycle_id.to_string(),
                 rootfs,
+                ..Default::default()
             },
             &config.namespace,
         )?)
@@ -213,6 +242,7 @@ async fn qualify(config: &QualificationConfig, prefix: &str, lifecycle_id: &str)
             CreateTaskRequest {
                 container_id: lifecycle_id.to_string(),
                 rootfs,
+                ..Default::default()
             },
             &config.namespace,
         )?)

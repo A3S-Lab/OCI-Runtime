@@ -139,6 +139,7 @@ async fn create_running_task(config: &QualificationConfig, id: String) -> TestRe
             CreateTaskRequest {
                 container_id: id.clone(),
                 rootfs,
+                ..Default::default()
             },
             &config.namespace,
         )?)

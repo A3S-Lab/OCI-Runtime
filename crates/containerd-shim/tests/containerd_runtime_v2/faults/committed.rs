@@ -39,6 +39,7 @@ pub(super) async fn qualify_start_effect_committed_shim_sigkill(
             CreateTaskRequest {
                 container_id: id.clone(),
                 rootfs,
+                ..Default::default()
             },
             &config.namespace,
         )?)
@@ -98,6 +99,7 @@ pub(super) async fn qualify_delete_effect_committed_shim_sigkill(
             CreateTaskRequest {
                 container_id: id.clone(),
                 rootfs,
+                ..Default::default()
             },
             &config.namespace,
         )?)
@@ -187,6 +189,7 @@ pub(super) async fn qualify_kill_effect_committed_shim_sigkill(
             CreateTaskRequest {
                 container_id: id.clone(),
                 rootfs,
+                ..Default::default()
             },
             &config.namespace,
         )?)

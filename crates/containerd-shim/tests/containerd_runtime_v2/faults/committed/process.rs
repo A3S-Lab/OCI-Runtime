@@ -164,6 +164,7 @@ async fn create_started_task(
             CreateTaskRequest {
                 container_id: id.to_string(),
                 rootfs,
+                ..Default::default()
             },
             &config.namespace,
         )?)
