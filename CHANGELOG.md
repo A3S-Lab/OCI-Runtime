@@ -31,6 +31,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
   same rootless device-policy bootstrap as `native-linux-service` before Tokio
   starts. Sandbox creates through the durable multi-container host owner retain
   the parent-bound device helper instead of failing closed on device preparation.
+- Native Linux service and host-service bind paths now fail closed when an
+  explicit delegated cgroup root is configured without a rootless device-policy
+  bootstrap. The weaker cgroup-only constructor remains on
+  `NativeLinuxDriver::open_experimental_with_rootless_cgroup_delegation` so the
+  durable service layer cannot silently drop the parent-bound device helper.
 
 ### Added
 

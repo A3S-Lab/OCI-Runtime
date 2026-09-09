@@ -242,6 +242,38 @@ fn native_linux_host_service_requires_both_owner_paths() {
     assert!(!std::path::Path::new(&root).exists());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn native_linux_host_service_bootstraps_device_policy_for_delegated_root() {
+    let root = format!(
+        "/tmp/a3s-oci-cli-host-service-delegation-{}",
+        std::process::id()
+    );
+    let delegated = format!("{root}-cgroup");
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "native-linux-host-service",
+            "--root",
+            &root,
+            "--agent",
+            "/bin/true",
+            "--delegated-cgroup-root",
+            &delegated,
+        ])
+        .output()
+        .expect("native Linux host service command must start");
+
+    assert_ne!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "rootless device-policy bootstrap requires non-root real UID/GID with effective root"
+        ),
+        "host service must attempt device-policy bootstrap before bind; stderr={stderr}"
+    );
+    assert!(!std::path::Path::new(&root).exists());
+}
+
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[test]
 fn macos_hvf_host_service_requires_all_owner_paths_without_creating_root() {
