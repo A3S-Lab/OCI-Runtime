@@ -179,6 +179,11 @@ Completed:
   endpoint, bundle-handoff, runtime-share, recovery-report, and configured
   Guest `cgroupsPath` lifetime checks. CI records zero completed iterations and
   skips the Alpine fixture when KVM cannot be opened;
+- a distinct `box-product-lifecycle-only-v1` Host Service entry
+  (`a3s-oci box-kvm-qualification-service`) that keeps the public KVM candidate
+  `probe-only` while exposing an explicit Unix owner for A3S Box product
+  lifecycle qualification. It is separate from owner-death recovery and
+  bounded soak and is not a production promotion path;
 - one fail-closed `a3s.oci.linux-kvm-provenance.v1` contract shared by the
   authenticated entry, post-probe failure, compatibility-drift, lifecycle,
   owner-restart, and soak reports. It requires a clean exact checkout, rejects

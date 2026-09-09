@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use a3s_oci_runtime::{
-    LinuxKvmRecoveryHostService, LinuxKvmRecoveryHostServiceConfig, LinuxKvmSoakHostService,
-    LinuxKvmSoakHostServiceConfig,
+    LinuxKvmBoxHostService, LinuxKvmBoxHostServiceConfig, LinuxKvmRecoveryHostService,
+    LinuxKvmRecoveryHostServiceConfig, LinuxKvmSoakHostService, LinuxKvmSoakHostServiceConfig,
 };
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 use tokio::signal::unix::{signal, SignalKind};
@@ -39,6 +39,27 @@ pub(crate) async fn run_soak(
     )?;
     let config = LinuxKvmSoakHostServiceConfig::new(root, shim, system_image_manifest)?;
     let service = LinuxKvmSoakHostService::bind(config).await?;
+    service
+        .serve_until(async move {
+            tokio::select! {
+                _ = interrupt.recv() => {}
+                _ = terminate.recv() => {}
+            }
+        })
+        .await
+}
+
+pub(crate) async fn run_box(
+    root: PathBuf,
+    shim: PathBuf,
+    system_image_manifest: PathBuf,
+) -> Result<()> {
+    let (mut interrupt, mut terminate) = shutdown_signals(
+        "Linux KVM Box Host Service",
+        "start-linux-kvm-box-host-service",
+    )?;
+    let config = LinuxKvmBoxHostServiceConfig::new(root, shim, system_image_manifest)?;
+    let service = LinuxKvmBoxHostService::bind(config).await?;
     service
         .serve_until(async move {
             tokio::select! {

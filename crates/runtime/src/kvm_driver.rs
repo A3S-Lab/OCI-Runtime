@@ -20,6 +20,7 @@ use crate::utility_vm_driver::{
 pub(crate) const LINUX_KVM_RECOVERY_QUALIFICATION_SCOPE: &str =
     "linux-kvm-owner-death-restart-only-v1";
 pub(crate) const LINUX_KVM_SOAK_QUALIFICATION_SCOPE: &str = "linux-kvm-bounded-soak-only-v1";
+pub(crate) const LINUX_KVM_BOX_QUALIFICATION_SCOPE: &str = "box-product-lifecycle-only-v1";
 
 /// Runtime-owned host paths for the Linux KVM driver candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +112,20 @@ impl KvmRuntimeDriver {
         Self::open(
             config,
             KvmRegistration::Qualification(KvmQualification::BoundedSoak),
+        )
+        .await
+    }
+
+    /// Open the candidate only for the A3S Box product lifecycle qualification
+    /// owner.
+    ///
+    /// The public candidate remains `probe-only`. This crate-private scope is
+    /// distinct from owner-death recovery and bounded soak so a Box
+    /// qualification service cannot be mistaken for production promotion.
+    pub(crate) async fn open_box_qualification(config: KvmRuntimeDriverConfig) -> Result<Self> {
+        Self::open(
+            config,
+            KvmRegistration::Qualification(KvmQualification::BoxProductLifecycle),
         )
         .await
     }
@@ -235,6 +250,7 @@ enum KvmRegistration {
 enum KvmQualification {
     OwnerDeathRestart,
     BoundedSoak,
+    BoxProductLifecycle,
 }
 
 impl KvmQualification {
@@ -242,6 +258,7 @@ impl KvmQualification {
         match self {
             Self::OwnerDeathRestart => LINUX_KVM_RECOVERY_QUALIFICATION_SCOPE,
             Self::BoundedSoak => LINUX_KVM_SOAK_QUALIFICATION_SCOPE,
+            Self::BoxProductLifecycle => LINUX_KVM_BOX_QUALIFICATION_SCOPE,
         }
     }
 }
@@ -512,6 +529,32 @@ mod tests {
         assert_eq!(
             soak.evidence.get("qualification_scope").map(String::as_str),
             Some(LINUX_KVM_SOAK_QUALIFICATION_SCOPE)
+        );
+
+        let box_product = candidate_capability(
+            DriverCapability {
+                driver: DriverKind::LibkrunKvm,
+                status: CapabilityStatus::Available,
+                readiness: DriverReadiness::Supported,
+                isolation_classes: vec![IsolationClass::SharedHostKernel],
+                reason: None,
+                evidence: BTreeMap::new(),
+            },
+            "test-manifest-sha256",
+            KvmRegistration::Qualification(KvmQualification::BoxProductLifecycle),
+        );
+        assert_eq!(box_product.readiness, DriverReadiness::Experimental);
+        assert!(box_product.can_launch());
+        assert_eq!(
+            box_product
+                .evidence
+                .get("qualification_scope")
+                .map(String::as_str),
+            Some(LINUX_KVM_BOX_QUALIFICATION_SCOPE)
+        );
+        assert_eq!(
+            box_product.evidence.get("opt_in").map(String::as_str),
+            Some("qualification-only")
         );
     }
 

@@ -227,8 +227,8 @@ pub use linux_kvm_recovery_smoke::{
 ))]
 #[doc(hidden)]
 pub use linux_kvm_service::{
-    LinuxKvmRecoveryHostService, LinuxKvmRecoveryHostServiceConfig, LinuxKvmSoakHostService,
-    LinuxKvmSoakHostServiceConfig,
+    LinuxKvmBoxHostService, LinuxKvmBoxHostServiceConfig, LinuxKvmRecoveryHostService,
+    LinuxKvmRecoveryHostServiceConfig, LinuxKvmSoakHostService, LinuxKvmSoakHostServiceConfig,
 };
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub use macos_hvf_host_smoke::{

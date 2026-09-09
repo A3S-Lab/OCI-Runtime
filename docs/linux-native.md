@@ -352,6 +352,24 @@ return to their baselines. The nested runtime schema is
 `a3s.oci.linux-kvm-recovery-smoke.v1`; the retained aggregate is
 `a3s.oci.linux-kvm-recovery-matrix.v2`.
 
+A third qualification-only Host Service serves the A3S Box product-lifecycle
+scope `box-product-lifecycle-only-v1` without promoting the public KVM
+candidate. Box opt-in must point at this explicit Unix owner; the public
+probe remains non-registerable:
+
+```bash
+a3s-oci box-kvm-qualification-service \
+  --root /run/a3s/oci-kvm-box \
+  --shim /absolute/path/to/isolated-libkrun-shim \
+  --system-image-manifest /absolute/path/to/system-image.json
+```
+
+`--root`, `--shim`, and `--system-image-manifest` must be absolute normalized
+paths. The owner publishes same-UID `runtime.sock` under the private root and
+advertises only the Box product-lifecycle qualification scope. This is not a
+production promotion path and is distinct from owner-death recovery and
+bounded soak.
+
 
 The digest-bound release matrix aggregates the core KVM promotion gates
 (agent entry, compatibility drift, lifecycle, owner-death recovery, Create
