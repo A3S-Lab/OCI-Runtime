@@ -12,7 +12,7 @@ qualification remains open.
 | 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Three consecutive same-Host real lifecycle matrices with guest-journal reclamation, exec, deleted exec-ID reuse, exact `DeleteProcess` response replay, FIFO/PTY I/O, repeated controls and signals, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed init-Start, exec-Start, live init-Kill, terminal init-Kill and exec-SignalProcess exit adoption, Pause, Resume, Update, WriteStdin, CloseStdin, SignalProcess, and ResizePty rehydration, post-commit Create/Start/Kill/Delete/Exec/SignalProcess/control cleanup, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
 | 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | 2.2.1 and 2.2.3 observations retained; range qualification pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
-| Any | Utility-VM profile | `dedicated-vm` | Observation-only vertical slice + Created/Running/Stopped daemon restart (WSL2 x86_64 / containerd 2.2.1 + `box-kvm-qualification-service`) | `.github/scripts/linux-kvm-containerd-lifecycle.sh` (`a3s.oci.linux-kvm-containerd-lifecycle.v2`); does not promote readiness, close the Native Linux 23-boundary matrix, or extend Native Linux development claims |
+| Any | Utility-VM profile | `dedicated-vm` | Observation-only vertical slice + init/exec Created/Running/Stopped daemon restart (WSL2 x86_64 / containerd 2.2.1 + `box-kvm-qualification-service`) | `.github/scripts/linux-kvm-containerd-lifecycle.sh` (`a3s.oci.linux-kvm-containerd-lifecycle.v3`); does not promote readiness, close the Native Linux 23-boundary matrix, or extend Native Linux development claims |
 
 The implementation may interoperate with an unlisted release because the
 runtime-v2 contract is stable. That is not a support claim. Add a release to
@@ -452,9 +452,9 @@ annotates `dev.a3s.bundle-handoff=move-to-runtime-v1`, and projects containerd
 host Spec defaults onto the guest contract before Create. SharedHostKernel
 creates keep the caller-owned containerd bundle without handoff.
 
-A Linux KVM containerd vertical-slice gate exercises create/start/kill/wait/
-delete against `box-kvm-qualification-service` through a private
-`KillMode=process` containerd:
+A Linux KVM containerd vertical-slice gate exercises
+create/start/exec/kill/wait/delete against `box-kvm-qualification-service`
+through a private `KillMode=process` containerd:
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
@@ -462,8 +462,9 @@ A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-containerd-lifecycle.sh
 ```
 
-Existing-host passes emit `a3s.oci.linux-kvm-containerd-lifecycle.v2` with
-`promotes_readiness=false` and do not close packaged or fresh-host containerd
+Existing-host passes emit `a3s.oci.linux-kvm-containerd-lifecycle.v3` with
+init and exec Created/Running/Stopped restart boundary IDs,
+`promotes_readiness=false`, and do not close packaged or fresh-host containerd
 promotion.
 
 Pause, Resume, and Update share one monotonically increasing per-task control

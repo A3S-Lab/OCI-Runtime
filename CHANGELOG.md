@@ -27,6 +27,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Extended Linux KVM containerd dedicated-vm vertical slice with exec
+  Created/Running/Stopped daemon-restart boundaries after the existing init
+  slice. Report schema is now `a3s.oci.linux-kvm-containerd-lifecycle.v3` and
+  records six exact dedicated-vm restart boundary IDs (init and exec
+  Created/Running/Stopped). First-principles ledger tests reject Native Linux
+  `exec-*` names as a DedicatedVm pass. Existing-host WSL2 x86_64 / containerd
+  observation retained (report SHA-256
+  `a54e976ef7fbc8a5e07ab282c4d1e665c1805fd3e013614efc734e080c503f49`);
+  `promotes_readiness=false`. Does not close the full Native Linux
+  23-boundary matrix, PTY/FIFO rehydration, fresh-host promotion, or AArch64
+  promotion.
 - Extended Linux KVM containerd dedicated-vm vertical slice with Created,
   Running, and Stopped daemon-restart boundaries under private
   `KillMode=process` containerd. Report schema is now

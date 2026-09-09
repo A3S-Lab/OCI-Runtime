@@ -310,7 +310,7 @@ A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
 ```
 
 A separate observation-only vertical slice proves containerd runtime-v2
-Create/Start/Kill/Wait/Delete against the same pinned system image and
+Create/Start/Exec/Kill/Wait/Delete against the same pinned system image and
 `box-kvm-qualification-service` Host through a private containerd unit:
 
 ```bash
@@ -321,7 +321,8 @@ A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
 
 It installs `containerd-shim-a3s-oci-v2` only under the worktree `PATH` (never
 at `/`), sets `A3S_OCI_RUNTIME_ROOT` to `<host --root>/runtime` for bundle
-handoff, and records `a3s.oci.linux-kvm-containerd-lifecycle.v2` with
+handoff, and records `a3s.oci.linux-kvm-containerd-lifecycle.v3` with
+init and exec Created/Running/Stopped restart boundary IDs and
 `promotes_readiness=false`. Existing-host passes do not promote fresh-host or
 AArch64 readiness.
 

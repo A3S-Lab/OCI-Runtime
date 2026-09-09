@@ -33,15 +33,19 @@ pub(crate) const EXPECTED_RESTART_BOUNDARIES: &[&str] = &[
     "parallel-running",
 ];
 
-/// DedicatedVm containerd slice: daemon restart at Created/Running/Stopped only.
+/// DedicatedVm containerd slice: daemon restart at init and exec
+/// Created/Running/Stopped.
 ///
 /// This is intentionally narrower than [`EXPECTED_RESTART_BOUNDARIES`]. It
 /// proves the shim survives `KillMode=process` daemon replacement without
-/// inventing PID, driver, or isolation — not the full Native Linux exec/PTY
-/// rehydration matrix.
+/// inventing PID, driver, isolation, or exec identity — not the Native Linux
+/// PTY/FIFO rehydration matrix.
 pub(crate) const EXPECTED_DEDICATED_VM_RESTART_BOUNDARIES: &[&str] = &[
     "dedicated-vm-init-created",
     "dedicated-vm-init-running",
+    "dedicated-vm-exec-added",
+    "dedicated-vm-exec-running",
+    "dedicated-vm-exec-stopped",
     "dedicated-vm-init-stopped",
 ];
 
@@ -129,6 +133,51 @@ mod tests {
             .verify_dedicated_vm_complete()
             .expect("dedicated-vm restart inventory must verify");
         assert!(ledger.verify_complete().is_err());
+        assert!(
+            EXPECTED_DEDICATED_VM_RESTART_BOUNDARIES
+                .iter()
+                .all(|boundary| boundary.starts_with("dedicated-vm-")),
+            "DedicatedVm boundaries must not reuse Native Linux restart names"
+        );
+        assert_eq!(
+            EXPECTED_DEDICATED_VM_RESTART_BOUNDARIES
+                .iter()
+                .filter(|boundary| boundary.contains("exec"))
+                .count(),
+            3,
+            "DedicatedVm slice must cover exec Created/Running/Stopped once"
+        );
+        assert!(
+            !EXPECTED_DEDICATED_VM_RESTART_BOUNDARIES
+                .iter()
+                .any(|boundary| boundary.contains("pty")
+                    || boundary.contains("fifo")
+                    || boundary.contains("rehydration")
+                    || boundary.contains("resize")
+                    || *boundary == "exec-added"),
+            "DedicatedVm slice must not overfit Native Linux I/O rehydration names"
+        );
+    }
+
+    #[test]
+    fn dedicated_vm_inventory_rejects_native_linux_exec_names() {
+        let ledger = RestartBoundaryLedger::default();
+        for boundary in [
+            "dedicated-vm-init-created",
+            "dedicated-vm-init-running",
+            "exec-added",
+            "exec-running",
+            "exec-stopped",
+            "dedicated-vm-init-stopped",
+        ] {
+            ledger
+                .record(boundary)
+                .expect("ledger records observations before final validation");
+        }
+        assert!(
+            ledger.verify_dedicated_vm_complete().is_err(),
+            "Native Linux exec boundary names must not satisfy the DedicatedVm ledger"
+        );
     }
 
     #[test]

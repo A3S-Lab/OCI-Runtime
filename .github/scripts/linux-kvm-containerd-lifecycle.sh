@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Linux KVM + containerd dedicated-vm vertical slice with Created/Running/Stopped
-# daemon restart under KillMode=process.
+# Linux KVM + containerd dedicated-vm vertical slice with init and exec
+# Created/Running/Stopped daemon restart under KillMode=process.
 # Observation-only: does not promote readiness or close fresh-host/AArch64 /
 # the full Native Linux restart-boundary matrix.
 
@@ -231,7 +231,7 @@ if [[ "$status" -eq 0 ]]; then
 fi
 
 jq -n \
-  --arg schema_version "a3s.oci.linux-kvm-containerd-lifecycle.v2" \
+  --arg schema_version "a3s.oci.linux-kvm-containerd-lifecycle.v3" \
   --arg result "$result" \
   --argjson exit_status "$status" \
   --arg started_at "$started_at" \
@@ -258,11 +258,14 @@ jq -n \
     restart_boundaries: [
       "dedicated-vm-init-created",
       "dedicated-vm-init-running",
+      "dedicated-vm-exec-added",
+      "dedicated-vm-exec-running",
+      "dedicated-vm-exec-stopped",
       "dedicated-vm-init-stopped"
     ],
     claim_effect: "observation-only",
     reason: (if $result == "passed"
-      then "existing-host containerd dedicated-vm lifecycle plus Created/Running/Stopped daemon restart passed; does not promote readiness or close the full Native Linux restart matrix"
+      then "existing-host containerd dedicated-vm lifecycle plus init/exec Created/Running/Stopped daemon restart passed; does not promote readiness or close the full Native Linux restart matrix"
       else "dedicated-vm containerd lifecycle failed; see test log"
       end)
   }' >"$report_path"
