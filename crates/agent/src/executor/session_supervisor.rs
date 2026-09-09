@@ -1,4 +1,4 @@
-//! Host-surviving session supervisor foundation for Native Linux live reattach.
+//! Host-surviving session supervisor for Native Linux live process reattach.
 //!
 //! Current Native Linux owner-death recovery installs `PR_SET_PDEATHSIG(SIGKILL)`
 //! against the Host Service owner, so a replacement process can only reconcile a
@@ -6,17 +6,22 @@
 //! different lifetime model:
 //!
 //! 1. a durable supervisor outlives Host Service death;
-//! 2. workload helpers arm parent-death against that supervisor;
+//! 2. workload helpers arm parent-death against that supervisor (real parent);
 //! 3. a replacement Host authenticates the supervisor by PID **and** start-time
 //!    ticks before claiming any live session.
 //!
-//! This module proves that identity and lifetime contract in isolation. It does
-//! not yet wire the supervisor into the production executor or claim Box cutover.
-#![allow(dead_code)] // Production executor wiring is the next R6 slice.
+//! Qualification may enable production wiring with
+//! `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. Default create keeps Host-bound
+//! PDEATHSIG so stopped-only recovery gates stay green.
 
+use std::ffi::OsStr;
 use std::io::{self, Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
@@ -25,11 +30,22 @@ use serde::{Deserialize, Serialize};
 use super::pid_supervisor::{
     terminate_pid, wait_for_child, verify_and_arm_parent_death_signal, ChildOutcome,
 };
+use super::pidfd::PidFd;
 
 const IDENTITY_SCHEMA_VERSION: &str = "a3s.oci.native-linux-session-supervisor-identity.v1";
 const MAX_STAT_BYTES: usize = 4096;
 const READY_BYTE: u8 = b'R';
 const WORKLOAD_BYTE: u8 = b'W';
+const SUPERVISE_CONTROL_FD: RawFd = 3;
+const MSG_READY: u8 = 1;
+const MSG_SPAWN: u8 = 2;
+const MSG_SPAWNED: u8 = 3;
+const MSG_ERROR: u8 = 4;
+const MSG_SHUTDOWN: u8 = 5;
+const MAX_SPAWN_ARGS: usize = 64;
+const MAX_ARG_BYTES: usize = 8 * 1024;
+#[allow(dead_code)] // Read by session_supervisor_opt_in for create wiring.
+const ENV_OPT_IN: &str = "A3S_OCI_NATIVE_SESSION_SUPERVISOR";
 
 /// Authenticated identity of a host-surviving session supervisor.
 ///
@@ -131,6 +147,704 @@ impl SessionSupervisorIdentity {
 
     pub(crate) const fn start_time_ticks(&self) -> u64 {
         self.start_time_ticks
+    }
+}
+
+/// Whether Native create should attach workloads to a host-surviving supervisor.
+#[allow(dead_code)] // Wired into create when launcher spawn moves under the supervisor.
+pub(crate) fn session_supervisor_opt_in() -> bool {
+    matches!(std::env::var_os(ENV_OPT_IN), Some(value) if value == "1")
+}
+
+/// Production host-surviving supervisor that can parent container launchers.
+#[derive(Debug)]
+pub(crate) struct HostSessionSupervisor {
+    identity: SessionSupervisorIdentity,
+    control: UnixStream,
+    pidfd: PidFd,
+}
+
+impl HostSessionSupervisor {
+    /// Start a durable supervisor process (same agent binary, `session-supervise`).
+    #[allow(dead_code)] // Create path adopts this once launcher spawn is supervised.
+    pub(crate) fn start(init_executable: &Path) -> Result<Self> {
+        let (parent_side, child_side) = UnixStream::pair().map_err(|error| {
+            supervisor_error(
+                ErrorCode::Internal,
+                format!("failed to create session-supervisor control channel: {error}"),
+            )
+        })?;
+        let child_fd = child_side.as_raw_fd();
+        clear_cloexec(child_fd)?;
+        let mut command = Command::new(init_executable);
+        command
+            .arg("session-supervise")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .env_clear();
+        // SAFETY: pre_exec runs in the child before exec and only duplicates the
+        // already-open control socket onto the fixed supervise FD.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::dup2(child_fd, SUPERVISE_CONTROL_FD) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().map_err(|error| {
+            supervisor_error(
+                ErrorCode::Internal,
+                format!("failed to spawn session-supervise: {error}"),
+            )
+        })?;
+        drop(child_side);
+        let raw_pid = child.id();
+        let pid = i32::try_from(raw_pid).map_err(|error| {
+            let _ = child.kill();
+            let _ = child.wait();
+            supervisor_error(
+                ErrorCode::ResourceExhausted,
+                format!("session supervisor PID {raw_pid} does not fit the identity model: {error}"),
+            )
+        })?;
+        // Track by pidfd; forgetting Child avoids a second local reaper race.
+        std::mem::forget(child);
+        finish_start(parent_side, pid)
+    }
+
+    /// Start the supervisor by fork for first-principles tests (no re-exec).
+    #[cfg(test)]
+    pub(crate) fn start_via_fork() -> Result<Self> {
+        let (parent_side, child_side) = UnixStream::pair().map_err(|error| {
+            supervisor_error(
+                ErrorCode::Internal,
+                format!("failed to create session-supervisor control channel: {error}"),
+            )
+        })?;
+        // SAFETY: tests run this before spawning concurrent work in the child.
+        let pid = unsafe { libc::fork() };
+        if pid < 0 {
+            return Err(last_os_error("fork session-supervise test supervisor"));
+        }
+        if pid == 0 {
+            drop(parent_side);
+            let raw = child_side.as_raw_fd();
+            // SAFETY: install the control socket on the fixed supervise FD.
+            if unsafe { libc::dup2(raw, SUPERVISE_CONTROL_FD) } < 0 {
+                unsafe { libc::_exit(94) }
+            }
+            drop(child_side);
+            let code = match run_session_supervise_service() {
+                Ok(()) => 0,
+                Err(_) => 95,
+            };
+            unsafe { libc::_exit(code) }
+        }
+        drop(child_side);
+        finish_start(parent_side, pid)
+    }
+
+    pub(crate) fn identity(&self) -> &SessionSupervisorIdentity {
+        &self.identity
+    }
+
+    /// Spawn `/bin/sleep` under the supervisor for first-principles lifetime tests.
+    pub(crate) fn spawn_sleep_workload(&mut self, seconds: u64) -> Result<i32> {
+        self.spawn_launcher(
+            Path::new("/bin/sleep"),
+            &[seconds.to_string().into()],
+            None,
+            None,
+        )
+    }
+
+    /// Spawn a process as a real child of the supervisor with PDEATHSIG armed.
+    pub(crate) fn spawn_launcher(
+        &mut self,
+        program: &Path,
+        args: &[std::ffi::OsString],
+        join_cgroup_procs: Option<RawFd>,
+        control_workload: Option<(RawFd, RawFd)>,
+    ) -> Result<i32> {
+        if args.len() > MAX_SPAWN_ARGS {
+            return Err(supervisor_error(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "session supervisor spawn has {} arguments; maximum is {MAX_SPAWN_ARGS}",
+                    args.len()
+                ),
+            ));
+        }
+        let mut payload = Vec::new();
+        let argc = u32::try_from(args.len() + 1).map_err(|_| {
+            supervisor_error(
+                ErrorCode::InvalidArgument,
+                "session supervisor spawn argument count does not fit u32",
+            )
+        })?;
+        payload.extend_from_slice(&argc.to_be_bytes());
+        write_os_string(&mut payload, program.as_os_str())?;
+        for arg in args {
+            write_os_string(&mut payload, arg)?;
+        }
+        let mut fds = Vec::new();
+        let mut flags = 0_u8;
+        if let Some(descriptor) = join_cgroup_procs {
+            flags |= 0b001;
+            fds.push(descriptor);
+        }
+        if let Some((control, workload)) = control_workload {
+            flags |= 0b010;
+            fds.push(control);
+            fds.push(workload);
+        }
+        payload.push(flags);
+        self.control.write_all(&[MSG_SPAWN]).map_err(|error| {
+            supervisor_error(
+                ErrorCode::Internal,
+                format!("failed to write session-supervisor spawn header: {error}"),
+            )
+        })?;
+        self.control.write_all(&payload).map_err(|error| {
+            supervisor_error(
+                ErrorCode::Internal,
+                format!("failed to write session-supervisor spawn payload: {error}"),
+            )
+        })?;
+        if !fds.is_empty() {
+            send_with_fds(self.control.as_raw_fd(), &[0xFD], &fds)?;
+        }
+        match read_supervisor_response(&mut self.control)? {
+            SupervisorResponse::Spawned(pid) => Ok(pid),
+            SupervisorResponse::Error(message) => Err(supervisor_error(
+                ErrorCode::Internal,
+                format!("session supervisor spawn failed: {message}"),
+            )),
+        }
+    }
+}
+
+impl Drop for HostSessionSupervisor {
+    fn drop(&mut self) {
+        let _ = self.control.write_all(&[MSG_SHUTDOWN]);
+        let _ = self.pidfd.send_signal(libc::SIGKILL);
+        terminate_pid(self.identity.pid());
+        let _ = wait_for_child(self.identity.pid());
+    }
+}
+
+fn finish_start(mut control: UnixStream, pid: i32) -> Result<HostSessionSupervisor> {
+    let pidfd = PidFd::open(pid).map_err(|error| {
+        terminate_pid(pid);
+        let _ = wait_for_child(pid);
+        error
+    })?;
+    let identity = match read_ready_identity(&mut control) {
+        Ok(identity) => identity,
+        Err(error) => {
+            terminate_pid(pid);
+            let _ = wait_for_child(pid);
+            return Err(error);
+        }
+    };
+    if identity.pid() != pid {
+        terminate_pid(pid);
+        let _ = wait_for_child(pid);
+        return Err(supervisor_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "session supervisor identity PID {} does not match spawned PID {pid}",
+                identity.pid()
+            ),
+        ));
+    }
+    identity.authenticate_live()?;
+    Ok(HostSessionSupervisor {
+        identity,
+        control,
+        pidfd,
+    })
+}
+
+/// Enter the durable session-supervise service when requested by argv.
+pub(crate) fn run_session_supervise_if_requested() -> Option<Result<()>> {
+    let mut arguments = std::env::args_os().skip(1);
+    if arguments.next().as_deref() != Some(OsStr::new("session-supervise")) {
+        return None;
+    }
+    if arguments.next().is_some() {
+        return Some(Err(supervisor_error(
+            ErrorCode::InvalidArgument,
+            "session-supervise accepts no additional arguments",
+        )));
+    }
+    Some(run_session_supervise_service())
+}
+
+fn run_session_supervise_service() -> Result<()> {
+    // SAFETY: the fixed supervise FD is installed by the Host pre_exec before exec.
+    let mut control = unsafe { UnixStream::from_raw_fd(SUPERVISE_CONTROL_FD) };
+    // SAFETY: PR_SET_CHILD_SUBREAPER takes only integer arguments.
+    if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) } != 0 {
+        return Err(last_os_error("enable session supervisor child subreaper"));
+    }
+    let identity = SessionSupervisorIdentity::current()?;
+    let mut ready = Vec::with_capacity(13);
+    ready.push(MSG_READY);
+    ready.extend_from_slice(&identity.pid().to_be_bytes());
+    ready.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+    control.write_all(&ready).map_err(|error| {
+        supervisor_error(
+            ErrorCode::Internal,
+            format!("failed to publish session-supervisor readiness: {error}"),
+        )
+    })?;
+
+    loop {
+        reap_children();
+        let mut header = [0_u8; 1];
+        match control.read_exact(&mut header) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
+                // Host Service died or closed its channel. Remain as the durable
+                // session authority until an authenticated replacement reconnects
+                // or an operator kills this process.
+                loop {
+                    reap_children();
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+            Err(error) => {
+                return Err(supervisor_error(
+                    ErrorCode::Internal,
+                    format!("failed to read session-supervisor request: {error}"),
+                ));
+            }
+        }
+        match header[0] {
+            MSG_SHUTDOWN => return Ok(()),
+            MSG_SPAWN => match handle_spawn_request(&mut control, identity.pid()) {
+                Ok(pid) => {
+                    let mut response = Vec::with_capacity(5);
+                    response.push(MSG_SPAWNED);
+                    response.extend_from_slice(&pid.to_be_bytes());
+                    control.write_all(&response).map_err(|error| {
+                        terminate_pid(pid);
+                        supervisor_error(
+                            ErrorCode::Internal,
+                            format!("failed to publish session-supervisor spawn result: {error}"),
+                        )
+                    })?;
+                }
+                Err(error) => {
+                    write_error_response(&mut control, &error.message)?;
+                }
+            },
+            other => {
+                return Err(supervisor_error(
+                    ErrorCode::InvalidArgument,
+                    format!("session supervisor received unknown request {other}"),
+                ));
+            }
+        }
+    }
+}
+
+fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result<i32> {
+    let arg_count = read_u32(control)? as usize;
+    if arg_count == 0 || arg_count > MAX_SPAWN_ARGS + 1 {
+        return Err(supervisor_error(
+            ErrorCode::InvalidArgument,
+            format!("session supervisor spawn argument count {arg_count} is invalid"),
+        ));
+    }
+    let mut argv = Vec::with_capacity(arg_count);
+    for _ in 0..arg_count {
+        argv.push(read_os_string(control)?);
+    }
+    let flags = read_u8(control)?;
+    let expected_fds = usize::from(flags & 0b001) + (2 * usize::from((flags & 0b010) != 0));
+    let fds = if expected_fds == 0 {
+        Vec::new()
+    } else {
+        receive_fds(control.as_raw_fd(), expected_fds)?
+    };
+    let mut fd_iter = fds.into_iter();
+    let join_cgroup = if flags & 0b001 != 0 {
+        Some(fd_iter.next().ok_or_else(|| {
+            supervisor_error(
+                ErrorCode::Internal,
+                "session supervisor spawn missing cgroup.procs descriptor",
+            )
+        })?)
+    } else {
+        None
+    };
+    let control_workload = if flags & 0b010 != 0 {
+        let control_fd = fd_iter.next().ok_or_else(|| {
+            supervisor_error(
+                ErrorCode::Internal,
+                "session supervisor spawn missing control cgroup descriptor",
+            )
+        })?;
+        let workload_fd = fd_iter.next().ok_or_else(|| {
+            supervisor_error(
+                ErrorCode::Internal,
+                "session supervisor spawn missing workload cgroup descriptor",
+            )
+        })?;
+        Some((control_fd, workload_fd))
+    } else {
+        None
+    };
+
+    let program = argv.first().ok_or_else(|| {
+        supervisor_error(
+            ErrorCode::InvalidArgument,
+            "session supervisor spawn requires a program path",
+        )
+    })?;
+    let mut command = Command::new(program);
+    command
+        .args(&argv[1..])
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let join_raw = join_cgroup.as_ref().map(AsRawFd::as_raw_fd);
+    let control_raw = control_workload
+        .as_ref()
+        .map(|(control_fd, workload_fd)| (control_fd.as_raw_fd(), workload_fd.as_raw_fd()));
+    // SAFETY: pre_exec only installs already-open descriptors and arms PDEATHSIG.
+    unsafe {
+        command.pre_exec(move || {
+            verify_and_arm_parent_death_signal(supervisor_pid, "supervised container launcher")
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            if let Some(descriptor) = join_raw {
+                super::cgroup::join_current_process(descriptor)?;
+            }
+            if let Some((control_fd, workload_fd)) = control_raw {
+                super::cgroup::install_control_workload_descriptors_from_pre_exec(
+                    control_fd,
+                    workload_fd,
+                )?;
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().map_err(|error| {
+        supervisor_error(
+            ErrorCode::Internal,
+            format!("session supervisor failed to spawn launcher: {error}"),
+        )
+    })?;
+    drop(join_cgroup);
+    drop(control_workload);
+    let pid = match i32::try_from(child.id()) {
+        Ok(pid) => pid,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(supervisor_error(
+                ErrorCode::ResourceExhausted,
+                format!("supervised launcher PID does not fit the process model: {error}"),
+            ));
+        }
+    };
+    // Leak Child so the Host can wait via pidfd; the supervise loop reaps.
+    std::mem::forget(child);
+    Ok(pid)
+}
+
+enum SupervisorResponse {
+    Spawned(i32),
+    Error(String),
+}
+
+fn read_ready_identity(control: &mut UnixStream) -> Result<SessionSupervisorIdentity> {
+    let mut header = [0_u8; 1];
+    control.read_exact(&mut header).map_err(|error| {
+        supervisor_error(
+            ErrorCode::Unavailable,
+            format!("failed to read session-supervisor ready header: {error}"),
+        )
+    })?;
+    if header[0] != MSG_READY {
+        return Err(supervisor_error(
+            ErrorCode::Internal,
+            format!("session supervisor ready header mismatch: {}", header[0]),
+        ));
+    }
+    let mut pid_bytes = [0_u8; 4];
+    let mut start_bytes = [0_u8; 8];
+    control.read_exact(&mut pid_bytes).map_err(|error| {
+        supervisor_error(
+            ErrorCode::Unavailable,
+            format!("failed to read session-supervisor ready pid: {error}"),
+        )
+    })?;
+    control.read_exact(&mut start_bytes).map_err(|error| {
+        supervisor_error(
+            ErrorCode::Unavailable,
+            format!("failed to read session-supervisor ready start-time: {error}"),
+        )
+    })?;
+    Ok(SessionSupervisorIdentity {
+        schema_version: IDENTITY_SCHEMA_VERSION.to_string(),
+        pid: i32::from_be_bytes(pid_bytes),
+        start_time_ticks: u64::from_be_bytes(start_bytes),
+    })
+}
+
+fn read_supervisor_response(control: &mut UnixStream) -> Result<SupervisorResponse> {
+    let mut header = [0_u8; 1];
+    control.read_exact(&mut header).map_err(|error| {
+        supervisor_error(
+            ErrorCode::Unavailable,
+            format!("failed to read session-supervisor response: {error}"),
+        )
+    })?;
+    match header[0] {
+        MSG_SPAWNED => {
+            let mut pid_bytes = [0_u8; 4];
+            control.read_exact(&mut pid_bytes).map_err(|error| {
+                supervisor_error(
+                    ErrorCode::Unavailable,
+                    format!("failed to read session-supervisor spawned pid: {error}"),
+                )
+            })?;
+            Ok(SupervisorResponse::Spawned(i32::from_be_bytes(pid_bytes)))
+        }
+        MSG_ERROR => {
+            let len = read_u32(control)? as usize;
+            if len > MAX_ARG_BYTES {
+                return Err(supervisor_error(
+                    ErrorCode::ResourceExhausted,
+                    format!("session supervisor error message exceeds {MAX_ARG_BYTES} bytes"),
+                ));
+            }
+            let mut bytes = vec![0_u8; len];
+            control.read_exact(&mut bytes).map_err(|error| {
+                supervisor_error(
+                    ErrorCode::Unavailable,
+                    format!("failed to read session-supervisor error message: {error}"),
+                )
+            })?;
+            Ok(SupervisorResponse::Error(
+                String::from_utf8_lossy(&bytes).into_owned(),
+            ))
+        }
+        other => Err(supervisor_error(
+            ErrorCode::Internal,
+            format!("session supervisor returned unknown response {other}"),
+        )),
+    }
+}
+
+fn write_error_response(control: &mut UnixStream, message: &str) -> Result<()> {
+    let bytes = message.as_bytes();
+    if bytes.len() > MAX_ARG_BYTES {
+        return Err(supervisor_error(
+            ErrorCode::ResourceExhausted,
+            format!("session supervisor error message exceeds {MAX_ARG_BYTES} bytes"),
+        ));
+    }
+    let mut payload = Vec::with_capacity(5 + bytes.len());
+    payload.push(MSG_ERROR);
+    payload.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    payload.extend_from_slice(bytes);
+    control.write_all(&payload).map_err(|error| {
+        supervisor_error(
+            ErrorCode::Internal,
+            format!("failed to publish session-supervisor error: {error}"),
+        )
+    })
+}
+
+fn write_os_string(payload: &mut Vec<u8>, value: &OsStr) -> Result<()> {
+    let bytes = value.as_bytes();
+    if bytes.len() > MAX_ARG_BYTES {
+        return Err(supervisor_error(
+            ErrorCode::InvalidArgument,
+            format!("session supervisor argument exceeds {MAX_ARG_BYTES} bytes"),
+        ));
+    }
+    payload.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    payload.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn read_os_string(control: &mut UnixStream) -> Result<std::ffi::OsString> {
+    let len = read_u32(control)? as usize;
+    if len > MAX_ARG_BYTES {
+        return Err(supervisor_error(
+            ErrorCode::ResourceExhausted,
+            format!("session supervisor argument exceeds {MAX_ARG_BYTES} bytes"),
+        ));
+    }
+    let mut bytes = vec![0_u8; len];
+    control.read_exact(&mut bytes).map_err(|error| {
+        supervisor_error(
+            ErrorCode::Unavailable,
+            format!("failed to read session-supervisor argument: {error}"),
+        )
+    })?;
+    Ok(OsStr::from_bytes(&bytes).to_os_string())
+}
+
+fn read_u32(control: &mut UnixStream) -> Result<u32> {
+    let mut bytes = [0_u8; 4];
+    control.read_exact(&mut bytes).map_err(|error| {
+        supervisor_error(
+            ErrorCode::Unavailable,
+            format!("failed to read session-supervisor u32: {error}"),
+        )
+    })?;
+    Ok(u32::from_be_bytes(bytes))
+}
+
+fn read_u8(control: &mut UnixStream) -> Result<u8> {
+    let mut bytes = [0_u8; 1];
+    control.read_exact(&mut bytes).map_err(|error| {
+        supervisor_error(
+            ErrorCode::Unavailable,
+            format!("failed to read session-supervisor u8: {error}"),
+        )
+    })?;
+    Ok(bytes[0])
+}
+
+fn clear_cloexec(fd: RawFd) -> Result<()> {
+    // SAFETY: fcntl F_GETFD/F_SETFD operate on an open descriptor owned by us.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(last_os_error("read session-supervisor channel FD flags"));
+    }
+    let flags = flags & !libc::FD_CLOEXEC;
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags) } < 0 {
+        return Err(last_os_error("clear session-supervisor channel CLOEXEC"));
+    }
+    Ok(())
+}
+
+fn send_with_fds(socket: RawFd, payload: &[u8], fds: &[RawFd]) -> Result<()> {
+    if fds.len() > 3 {
+        return Err(supervisor_error(
+            ErrorCode::InvalidArgument,
+            format!("session supervisor spawn supports at most 3 FDs; received {}", fds.len()),
+        ));
+    }
+    let mut iov = libc::iovec {
+        iov_base: payload.as_ptr() as *mut _,
+        iov_len: payload.len(),
+    };
+    let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+    message.msg_iov = &mut iov;
+    message.msg_iovlen = 1;
+    let mut control = [0_u8; 256];
+    if !fds.is_empty() {
+        let descriptor_bytes = std::mem::size_of_val(fds);
+        message.msg_control = control.as_mut_ptr().cast();
+        message.msg_controllen = unsafe { libc::CMSG_SPACE(descriptor_bytes as u32) } as _;
+        unsafe {
+            let header = libc::CMSG_FIRSTHDR(&message);
+            if header.is_null() {
+                return Err(supervisor_error(
+                    ErrorCode::Internal,
+                    "session supervisor SCM_RIGHTS control buffer has no header",
+                ));
+            }
+            (*header).cmsg_level = libc::SOL_SOCKET;
+            (*header).cmsg_type = libc::SCM_RIGHTS;
+            (*header).cmsg_len = libc::CMSG_LEN(descriptor_bytes as u32) as _;
+            std::ptr::copy_nonoverlapping(
+                fds.as_ptr().cast::<u8>(),
+                libc::CMSG_DATA(header),
+                descriptor_bytes,
+            );
+        }
+    }
+    let sent = unsafe { libc::sendmsg(socket, &message, libc::MSG_NOSIGNAL) };
+    if sent != payload.len() as isize {
+        return Err(last_os_error("send session-supervisor spawn request"));
+    }
+    Ok(())
+}
+
+fn receive_fds(socket: RawFd, expected: usize) -> Result<Vec<OwnedFd>> {
+    if expected == 0 {
+        return Ok(Vec::new());
+    }
+    if expected > 3 {
+        return Err(supervisor_error(
+            ErrorCode::InvalidArgument,
+            format!("session supervisor spawn supports at most 3 FDs; expected {expected}"),
+        ));
+    }
+    let mut payload = [0_u8; 1];
+    let mut iov = libc::iovec {
+        iov_base: payload.as_mut_ptr().cast(),
+        iov_len: payload.len(),
+    };
+    let mut control = [0_u8; 256];
+    let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+    message.msg_iov = &mut iov;
+    message.msg_iovlen = 1;
+    message.msg_control = control.as_mut_ptr().cast();
+    message.msg_controllen = control.len() as _;
+    let received = unsafe { libc::recvmsg(socket, &mut message, 0) };
+    if received < 0 {
+        return Err(last_os_error("receive session-supervisor spawn descriptors"));
+    }
+    if received != 1 || payload[0] != 0xFD {
+        return Err(supervisor_error(
+            ErrorCode::Internal,
+            "session supervisor spawn descriptor frame marker mismatch",
+        ));
+    }
+    let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
+    if header.is_null() {
+        return Err(supervisor_error(
+            ErrorCode::Internal,
+            "session supervisor spawn descriptor frame has no control header",
+        ));
+    }
+    let (level, kind, len) = unsafe { ((*header).cmsg_level, (*header).cmsg_type, (*header).cmsg_len) };
+    let descriptor_bytes = expected * std::mem::size_of::<RawFd>();
+    let expected_len = unsafe { libc::CMSG_LEN(descriptor_bytes as u32) } as usize;
+    if level != libc::SOL_SOCKET || kind != libc::SCM_RIGHTS || len as usize != expected_len {
+        return Err(supervisor_error(
+            ErrorCode::Internal,
+            "session supervisor spawn descriptor frame is not SCM_RIGHTS",
+        ));
+    }
+    let mut raw = vec![0 as RawFd; expected];
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            libc::CMSG_DATA(header).cast::<RawFd>(),
+            raw.as_mut_ptr(),
+            expected,
+        );
+    }
+    Ok(raw
+        .into_iter()
+        .map(|fd| {
+            // SAFETY: recvmsg transferred ownership of each descriptor.
+            unsafe { OwnedFd::from_raw_fd(fd) }
+        })
+        .collect())
+}
+
+fn reap_children() {
+    loop {
+        let mut status = 0;
+        // SAFETY: non-blocking wait for any child.
+        let reaped = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+        if reaped <= 0 {
+            break;
+        }
     }
 }
 
@@ -523,5 +1237,68 @@ mod tests {
             wait_until_dead(workload_pid, Duration::from_secs(2)),
             "current Host-bound PDEATHSIG model must still terminate workload on owner death"
         );
+    }
+
+    #[test]
+    fn production_supervisor_can_parent_workload_that_survives_host_death() {
+        let (mut parent_ready, mut child_ready) =
+            UnixStream::pair().expect("production supervisor ready channel");
+        // SAFETY: parent reaps the fake Host; child starts the production supervisor.
+        let host_pid = unsafe { libc::fork() };
+        assert!(host_pid >= 0, "fork fake host");
+        if host_pid == 0 {
+            drop(parent_ready);
+            let mut supervisor = match HostSessionSupervisor::start_via_fork() {
+                Ok(supervisor) => supervisor,
+                Err(_) => unsafe { libc::_exit(91) },
+            };
+            let workload_pid = match supervisor.spawn_sleep_workload(30) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(92) },
+            };
+            let identity = supervisor.identity().clone();
+            let mut payload = Vec::with_capacity(16);
+            payload.extend_from_slice(&identity.pid().to_be_bytes());
+            payload.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+            payload.extend_from_slice(&workload_pid.to_be_bytes());
+            if child_ready.write_all(&payload).is_err() {
+                unsafe { libc::_exit(93) }
+            }
+            // Leak supervisor so Drop does not kill it when this fake Host exits.
+            std::mem::forget(supervisor);
+            loop {
+                unsafe { libc::pause() };
+            }
+        }
+        drop(child_ready);
+        let mut payload = [0_u8; 16];
+        parent_ready
+            .read_exact(&mut payload)
+            .expect("read production supervisor evidence");
+        let identity = SessionSupervisorIdentity {
+            schema_version: IDENTITY_SCHEMA_VERSION.to_string(),
+            pid: i32::from_be_bytes(payload[0..4].try_into().expect("pid bytes")),
+            start_time_ticks: u64::from_be_bytes(payload[4..12].try_into().expect("start bytes")),
+        };
+        let workload_pid = i32::from_be_bytes(payload[12..16].try_into().expect("workload bytes"));
+        terminate_pid(host_pid);
+        let _ = wait_for_child(host_pid);
+        identity
+            .authenticate_live()
+            .expect("replacement must authenticate production supervisor after Host death");
+        assert!(
+            process_is_live(identity.pid()),
+            "production supervisor must survive Host death"
+        );
+        assert!(
+            process_is_live(workload_pid),
+            "workload parented by production supervisor must survive Host death"
+        );
+        terminate_pid(identity.pid());
+        assert!(
+            wait_until_dead(workload_pid, Duration::from_secs(2)),
+            "workload must die when production supervisor dies"
+        );
+        let _ = wait_for_child(identity.pid());
     }
 }

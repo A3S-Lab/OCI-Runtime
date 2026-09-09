@@ -1875,8 +1875,15 @@ The first-principles foundation for that supervisor now lives in
 start-time ticks), rejects PID-only authentication, and proves the lifetime
 split: a workload that arms parent-death against the supervisor survives Host
 owner `SIGKILL`, while the current Host-bound PDEATHSIG model still terminates.
-Production executor wiring, durable recovery-record extension, and the Box
-real-host live-session gate remain open.
+
+The production `HostSessionSupervisor` service (`session-supervise` on the
+agent binary) can parent workloads, omit Host-bound PDEATHSIG on itself, and
+keep running after the Host control channel closes. Native recovery schema
+`a3s.oci.native-linux-recovery.v4` can record an optional `sessionSupervisor`
+identity and fail-closes stale reopen while that supervisor is still live.
+Default create still arms launcher PDEATHSIG against the Host owner; moving
+launcher spawn under the supervisor (and persisting its identity on create)
+remains the next R6 slice before the Box real-host live-session gate.
 
 ### Hook owner-death crash boundary
 
