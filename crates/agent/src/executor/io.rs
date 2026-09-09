@@ -11,6 +11,7 @@ use tokio::sync::{watch, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout_at, Instant};
 
+use super::session_supervisor::SharedSessionSupervisor;
 use super::terminal::{TerminalHandle, TerminalSetup};
 
 const OUTPUT_BUFFER_BYTES: usize = 8 * 1024 * 1024;
@@ -30,6 +31,11 @@ pub(super) struct ProcessIoHandle {
 struct ProcessIoInner {
     stdin_mode: IoMode,
     stdin: Mutex<Option<ProcessStdin>>,
+    /// Supervised Host stdin write-end duplicate retained by the session supervisor.
+    ///
+    /// Closed together with the local write end so intentional `close_stdin`
+    /// still delivers EOF after the Host-local FD is dropped.
+    stdin_deposit: Mutex<Option<(SharedSessionSupervisor, i32)>>,
     next_stdin_operation: AtomicU64,
     serving_stdin_operation: watch::Sender<u64>,
     output: Option<Arc<OutputBuffer>>,
@@ -66,6 +72,7 @@ impl ProcessIoHandle {
             inner: Arc::new(ProcessIoInner {
                 stdin_mode: IoMode::Null,
                 stdin: Mutex::new(None),
+                stdin_deposit: Mutex::new(None),
                 next_stdin_operation: AtomicU64::new(0),
                 serving_stdin_operation,
                 output: None,
@@ -134,6 +141,7 @@ impl ProcessIoHandle {
                 inner: Arc::new(ProcessIoInner {
                     stdin_mode: IoMode::Terminal,
                     stdin: Mutex::new(Some(ProcessStdin::Terminal(terminal.clone()))),
+                    stdin_deposit: Mutex::new(None),
                     next_stdin_operation: AtomicU64::new(0),
                     serving_stdin_operation,
                     output: Some(output),
@@ -187,6 +195,7 @@ impl ProcessIoHandle {
             inner: Arc::new(ProcessIoInner {
                 stdin_mode: io.stdin,
                 stdin: Mutex::new(stdin),
+                stdin_deposit: Mutex::new(None),
                 next_stdin_operation: AtomicU64::new(0),
                 serving_stdin_operation,
                 output,
@@ -294,12 +303,38 @@ impl ProcessIoHandle {
             inner: Arc::new(ProcessIoInner {
                 stdin_mode: io.stdin,
                 stdin: Mutex::new(stdin),
+                stdin_deposit: Mutex::new(None),
                 next_stdin_operation: AtomicU64::new(0),
                 serving_stdin_operation,
                 output,
                 terminal: None,
             }),
         })
+    }
+
+    /// Record that the session supervisor holds a duplicate stdin write end.
+    ///
+    /// [`Self::spawn_close_stdin`] closes that deposit with the local write end
+    /// so intentional EOF still reaches the child.
+    pub(super) fn bind_stdin_deposit(
+        &self,
+        supervisor: SharedSessionSupervisor,
+        launcher_pid: i32,
+    ) -> Result<()> {
+        let mut deposit = self.inner.stdin_deposit.try_lock().map_err(|_| {
+            io_error(
+                ErrorCode::Internal,
+                "process stdin deposit lock is busy during bind",
+            )
+        })?;
+        if deposit.is_some() {
+            return Err(io_error(
+                ErrorCode::Internal,
+                "process stdin deposit was bound more than once",
+            ));
+        }
+        *deposit = Some((supervisor, launcher_pid));
+        Ok(())
     }
 
     pub(super) async fn read_output(
@@ -395,6 +430,20 @@ impl ProcessIoHandle {
             terminal.close_input().await.map_err(stdin_write_error)?;
         }
         stdin.take();
+        drop(stdin);
+        let deposit = {
+            let mut guard = self.inner.stdin_deposit.lock().await;
+            guard.take()
+        };
+        if let Some((supervisor, launcher_pid)) = deposit {
+            let mut guard = supervisor.lock().map_err(|_| {
+                io_error(
+                    ErrorCode::Internal,
+                    "session supervisor lock is poisoned during stdin deposit close",
+                )
+            })?;
+            guard.close_deposited_stdin(launcher_pid)?;
+        }
         Ok(())
     }
 

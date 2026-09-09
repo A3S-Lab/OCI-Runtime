@@ -334,10 +334,14 @@ impl NativeLinuxDriver {
         Ok(Some(Arc::clone(session)))
     }
 
-    async fn require_live(&self, target: &ContainerTarget, operation: &'static str) -> Result<()> {
+    async fn require_live_process_session(
+        &self,
+        target: &ContainerTarget,
+        operation: &'static str,
+    ) -> Result<()> {
         if self.live_for(target, operation).await?.is_some() {
             return Err(Error::new(
-                ErrorCode::FailedPrecondition,
+                ErrorCode::Unavailable,
                 format!(
                     "container {} generation {:?} is retained through a reattached session supervisor without a restored PreparedProcess; {operation} requires full process-session restore",
                     target.id, target.generation
@@ -350,6 +354,10 @@ impl NativeLinuxDriver {
         } else {
             Ok(())
         }
+    }
+
+    async fn require_live(&self, target: &ContainerTarget, operation: &'static str) -> Result<()> {
+        self.require_live_process_session(target, operation).await
     }
 }
 
@@ -694,20 +702,70 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn read_output(&self, request: DriverReadOutputRequest) -> Result<Vec<OutputChunk>> {
-        self.require_live(&request.target.container, "native-linux-read-output")
-            .await?;
+        if let Some(live) = self
+            .live_for(&request.target.container, "native-linux-read-output")
+            .await?
+        {
+            return live
+                .read_output()
+                .map_err(|error| error.for_operation("native-linux-read-output"));
+        }
+        if self
+            .recovered_for(&request.target.container, "native-linux-read-output")
+            .await?
+            .is_some()
+        {
+            return Err(recovered_stopped_error(
+                &request.target.container,
+                "native-linux-read-output",
+            ));
+        }
         self.client.read_output(request).await
     }
 
     async fn write_stdin(&self, request: DriverWriteStdinRequest) -> Result<()> {
-        self.require_live(&request.target.container, "native-linux-write-stdin")
-            .await?;
+        if let Some(live) = self
+            .live_for(&request.target.container, "native-linux-write-stdin")
+            .await?
+        {
+            return live
+                .write_stdin(&request.data)
+                .await
+                .map_err(|error| error.for_operation("native-linux-write-stdin"));
+        }
+        if self
+            .recovered_for(&request.target.container, "native-linux-write-stdin")
+            .await?
+            .is_some()
+        {
+            return Err(recovered_stopped_error(
+                &request.target.container,
+                "native-linux-write-stdin",
+            ));
+        }
         self.client.write_stdin(request).await
     }
 
     async fn close_stdin(&self, request: DriverCloseStdinRequest) -> Result<()> {
-        self.require_live(&request.target.container, "native-linux-close-stdin")
-            .await?;
+        if let Some(live) = self
+            .live_for(&request.target.container, "native-linux-close-stdin")
+            .await?
+        {
+            return live
+                .close_stdin()
+                .await
+                .map_err(|error| error.for_operation("native-linux-close-stdin"));
+        }
+        if self
+            .recovered_for(&request.target.container, "native-linux-close-stdin")
+            .await?
+            .is_some()
+        {
+            return Err(recovered_stopped_error(
+                &request.target.container,
+                "native-linux-close-stdin",
+            ));
+        }
         self.client.close_stdin(request).await
     }
 

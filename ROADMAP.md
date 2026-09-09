@@ -2244,9 +2244,13 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   control connection via `SessionSupervisorReattachCache` (one supervisor
   identity → one control Arc across generations). Partial Host-reopen process
   inventory now exposes the authenticated live init only (empty after init
-  exit; no invented exec entries or exit status). Full `PreparedProcess` /
-  stdio session restore, durable exec inventory, the real-host Box live-session
-  gate, and default create Host-bound policy remain open.
+  exit; no invented exec entries or exit status). Host-reopen stdin restore is
+  retained: supervised create deposits a duplicate stdin write end via
+  SCM_RIGHTS; reopen takes it for authentic write/close; `read_output`
+  fail-closes with `Unavailable` (stdout/stderr restore still open — two
+  readers would split the stream). Full `PreparedProcess` restore, durable
+  exec inventory, the real-host Box live-session gate, and default create
+  Host-bound policy remain open.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,
