@@ -1587,7 +1587,11 @@ release-promotion gates above.
   and AArch64 CI lanes require real authenticated entry whenever their KVM
   probe is available and otherwise retain explicit post-configuration KVM
   failure evidence. This parent remains open until both advertised
-  architectures retain successful real-entry reports.
+  architectures retain successful real-entry reports. Clean x86_64 WSL2
+  revision `39b7e56` retained available
+  `a3s.oci.linux-kvm-agent-entry.v1` and
+  `a3s.oci.linux-kvm-post-probe-failure.v1` reports after rebuilding the
+  pinned system image; AArch64 and fresh-host promotion evidence remain open.
 - [x] Implement the launch-capable KVM `RuntimeDriver` candidate through the
   shared twenty-operation adapter with exact-generation routing, bounded
   shutdown, and complete process, endpoint, share, and runtime-root ownership.

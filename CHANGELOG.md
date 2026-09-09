@@ -37,6 +37,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
   `NativeLinuxDriver::open_experimental_with_rootless_cgroup_delegation` so the
   durable service layer cannot silently drop the parent-bound device helper.
 
+### Changed
+
+- Retained clean-main x86_64 WSL2 Linux KVM authenticated-entry and injected
+  post-probe fail-closed evidence for revision `39b7e56` after rebuilding the
+  pinned Alpine system image with the exact musl Guest Agent. The public KVM
+  candidate remains `probe-only` until fresh-host and AArch64 promotion
+  artifacts exist.
+
 ### Added
 
 - Added a Windows WHPX operation-reopen qualification runner covering all 20
