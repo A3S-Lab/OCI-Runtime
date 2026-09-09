@@ -1357,6 +1357,11 @@ real-driver coverage remains open for the other utility-VM backends.
     - [x] On the existing Windows 10 Pro 23H2 x86_64 host, run all 20 workload
       operations through all 9 operation-reopen stages (180 / 180 cases),
       retaining immutable asset, owner/fault, and cleanup evidence.
+    - [x] On the existing Windows 11 Pro 23H2 x86_64 host with
+      HypervisorPlatform enabled, clean revision `5404704` retained available
+      direct-driver, owner-death/service-recovery, and full soak (56/56)
+      reports against the pinned system image. This does not satisfy the
+      fresh-host parent gate.
 
   The August 15, 2026 implementation builds the Alpine 3.22.5 x86_64 ext4
   image twice and requires byte-for-byte equality, binds Linux 6.12.91 and the
