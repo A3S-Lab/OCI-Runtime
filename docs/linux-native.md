@@ -1894,11 +1894,16 @@ Recovery v4 does not record exec processes, so reopen never invents exec
 entries. Host-reopen stdin restore is implemented: supervised create deposits a
 duplicate Host stdin write end with the supervisor (`MSG_DEPOSIT_STDIN` /
 SCM_RIGHTS) so Host death does not EOF the child; reopen takes that deposit
-(`MSG_TAKE_STDIN`) for authentic `write_stdin` / `close_stdin`. Capture
-stdout/stderr are **not** restored here (two readers would split the stream),
-so `read_output` fail-closes with `Unavailable` instead of inventing empty
-output. Full `PreparedProcess` restore remains open. Default create stays
-Host-bound.
+(`MSG_TAKE_STDIN`) for authentic `write_stdin` / `close_stdin`. Host-reopen
+capture stdout/stderr restore is implemented as an exclusive IPC relay:
+supervised create moves the capture **read** ends to the supervisor
+(`MSG_DEPOSIT_OUTPUT`, SCM_RIGHTS move — not `F_DUPFD`), the supervisor is the
+sole drain into a bounded per-launcher buffer mirroring Host `OutputBuffer`
+semantics, and Hosts consume sequence-bearing chunks via `MSG_READ_OUTPUT`.
+Missing deposit or lost cursor fail-closes with `Unavailable` /
+`ResourceExhausted` instead of inventing an empty stream. Terminal/inherit I/O
+remain Unsupported on supervised create. Full `PreparedProcess` restore remains
+open. Default create stays Host-bound.
 
 Qualification may enable supervised create with
 `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. When set, Native create starts one
@@ -1916,18 +1921,20 @@ does **not** reap waitable children and does **not** start a replacement
 supervisor. Re-exec would break PDEATHSIG parentage and invent wait status.
 Instead it publishes a deterministic abstract unix endpoint named
 `a3s.oci.session-supervise.<pid>.<start_time_ticks>` and accepts one
-replacement control connection. Deposited stdin write ends survive that control
-gap. `HostSessionSupervisor::reattach` authenticates the live PID + start-time,
-reconnects, and resumes `MSG_WAIT` / `MSG_SPAWN` / stdin deposit take-close
-without inventing exit status. Host reopen uses that reattach inside
+replacement control connection. Deposited stdin write ends and exclusive
+capture drains survive that control gap. `HostSessionSupervisor::reattach`
+authenticates the live PID + start-time, reconnects, and resumes `MSG_WAIT` /
+`MSG_SPAWN` / stdin deposit take-close / capture `MSG_READ_OUTPUT` without
+inventing exit status. Host reopen uses that reattach inside
 `recover_stale_generation` and exposes `StaleGenerationRecovery::Live` for
-wait/kill/delete of the recorded launcher, plus restored stdin when a deposit
-exists. When several containers share one supervisor,
+wait/kill/delete of the recorded launcher, restored stdin when a deposit
+exists, and authentic capture relay when stdout/stderr were moved at create.
+When several containers share one supervisor,
 `SessionSupervisorReattachCache` ensures only one control reconnect happens
 for that PID + start-time identity. Partial init process inventory is restored
 from the authenticated recovery identity without inventing exit status or exec
-entries. Restoring full `PreparedProcess` and capture stdout/stderr onto the
-replacement Host remains a later slice.
+entries. Restoring full `PreparedProcess` onto the replacement Host remains a
+later slice.
 
 ### Hook owner-death crash boundary
 

@@ -27,18 +27,28 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Native Linux Host-reopen **exclusive stdout/stderr restore** through
+  session-supervisor IPC relay. Supervised create (opt-in) moves capture read
+  ends to the supervisor via SCM_RIGHTS (`MSG_DEPOSIT_OUTPUT`, not `F_DUPFD`);
+  the supervisor is the sole drain into a bounded per-launcher buffer mirroring
+  Host `OutputBuffer` semantics (sequences, EOF, eviction → fail-closed stale
+  cursors). Live Host and `LinuxLiveSupervisedSession::read_output` consume
+  authentic chunks via `MSG_READ_OUTPUT`. Missing deposit fail-closes with
+  `Unavailable` (never invents an empty stream). Second competing deposit for
+  the same launcher fails closed. Terminal/inherit I/O stay Unsupported on
+  supervised create. First-principles coverage: exclusive drain survives Host
+  death with authentic relay bytes/EOF; live reopen restores deposited output.
+  Default create stays Host-bound. Full `PreparedProcess` restore and the
+  real-host Box live-session gate remain open.
 - Native Linux Host-reopen **stdin restore** through session-supervisor
   SCM_RIGHTS deposit/take/close. Supervised create (opt-in) deposits a duplicate
   stdin write end keyed by launcher PID so Host death does not EOF the child;
   `LinuxLiveSupervisedSession` takes that deposit on reopen and supports
-  authentic `write_stdin` / `close_stdin`. Capture stdout/stderr are not
-  restored (two readers would split the stream), so `read_output` fail-closes
-  with `Unavailable` instead of inventing an empty chunk list. Driver
-  `require_live` for unrestored `PreparedProcess` ops also uses `Unavailable`.
-  First-principles coverage: deposit survives Host death and reattach take is
-  authentic; live reopen restores deposited stdin and fail-closes read-output.
-  Default create stays Host-bound. Full `PreparedProcess` / stdout/stderr
-  restore and the real-host Box live-session gate remain open.
+  authentic `write_stdin` / `close_stdin`. Driver `require_live` for unrestored
+  `PreparedProcess` ops also uses `Unavailable`. First-principles coverage:
+  deposit survives Host death and reattach take is authentic; live reopen
+  restores deposited stdin and fail-closes read-output without capture deposit.
+  Default create stays Host-bound.
 - Partial Native Linux Host-reopen **process inventory** for live supervised
   sessions. `LinuxLiveSupervisedSession::process_inventory` returns exactly the
   authenticated init `ProcessRecord` while that PID + start-time identity is
