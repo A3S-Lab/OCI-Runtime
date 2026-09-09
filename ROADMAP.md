@@ -2274,9 +2274,10 @@ evidence.
   Observation retained: Linux KVM dedicated-vm create/start/kill/wait/delete
   vertical slice through private containerd + `box-kvm-qualification-service`
   (`.github/scripts/linux-kvm-containerd-lifecycle.sh`,
-  `a3s.oci.linux-kvm-containerd-lifecycle.v1`, `promotes_readiness=false`).
-  Does not close restart-boundary, packaged-shim, fresh-host, or AArch64
-  promotion.
+  `a3s.oci.linux-kvm-containerd-lifecycle.v2`) including Created/Running/Stopped
+  daemon restart under `KillMode=process` with preserved PID/driver/isolation.
+  Does not close the full Native Linux restart-boundary matrix, packaged-shim,
+  fresh-host, or AArch64 promotion.
 - [ ] Publish the shim with signed or checksummed runtime packages and retain
   the exact containerd, shim, SDK, runtime, and driver compatibility record.
 

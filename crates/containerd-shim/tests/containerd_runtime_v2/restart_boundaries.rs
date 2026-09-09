@@ -33,6 +33,18 @@ pub(crate) const EXPECTED_RESTART_BOUNDARIES: &[&str] = &[
     "parallel-running",
 ];
 
+/// DedicatedVm containerd slice: daemon restart at Created/Running/Stopped only.
+///
+/// This is intentionally narrower than [`EXPECTED_RESTART_BOUNDARIES`]. It
+/// proves the shim survives `KillMode=process` daemon replacement without
+/// inventing PID, driver, or isolation — not the full Native Linux exec/PTY
+/// rehydration matrix.
+pub(crate) const EXPECTED_DEDICATED_VM_RESTART_BOUNDARIES: &[&str] = &[
+    "dedicated-vm-init-created",
+    "dedicated-vm-init-running",
+    "dedicated-vm-init-stopped",
+];
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RestartBoundaryLedger {
     entries: Arc<Mutex<Vec<String>>>,
@@ -56,20 +68,27 @@ impl RestartBoundaryLedger {
     }
 
     pub(crate) fn verify_complete(&self) -> io::Result<()> {
+        self.verify_exact(EXPECTED_RESTART_BOUNDARIES)
+    }
+
+    pub(crate) fn verify_dedicated_vm_complete(&self) -> io::Result<()> {
+        self.verify_exact(EXPECTED_DEDICATED_VM_RESTART_BOUNDARIES)
+    }
+
+    pub(crate) fn verify_exact(&self, expected: &[&str]) -> io::Result<()> {
         let entries = self.entries.lock().map_err(lock_error)?;
         let observed = entries.iter().map(String::as_str).collect::<Vec<_>>();
-        if observed == EXPECTED_RESTART_BOUNDARIES {
+        if observed == expected {
             return Ok(());
         }
         Err(io::Error::other(format!(
-            "restart boundary ledger did not match the qualification contract: observed {} entries {observed:?}, expected {} entries {EXPECTED_RESTART_BOUNDARIES:?}",
+            "restart boundary ledger did not match the qualification contract: observed {} entries {observed:?}, expected {} entries {expected:?}",
             observed.len(),
-            EXPECTED_RESTART_BOUNDARIES.len(),
+            expected.len(),
         )))
     }
 
-    #[cfg(test)]
-    fn snapshot(&self) -> io::Result<Vec<String>> {
+    pub(crate) fn snapshot(&self) -> io::Result<Vec<String>> {
         Ok(self.entries.lock().map_err(lock_error)?.clone())
     }
 }
@@ -80,7 +99,10 @@ fn lock_error(_: std::sync::PoisonError<std::sync::MutexGuard<'_, Vec<String>>>)
 
 #[cfg(test)]
 mod tests {
-    use super::{RestartBoundaryLedger, EXPECTED_RESTART_BOUNDARIES};
+    use super::{
+        RestartBoundaryLedger, EXPECTED_DEDICATED_VM_RESTART_BOUNDARIES,
+        EXPECTED_RESTART_BOUNDARIES,
+    };
 
     #[test]
     fn accepts_the_complete_ordered_inventory() {
@@ -93,6 +115,20 @@ mod tests {
         ledger
             .verify_complete()
             .expect("the complete contract inventory must verify");
+    }
+
+    #[test]
+    fn accepts_the_dedicated_vm_restart_inventory() {
+        let ledger = RestartBoundaryLedger::default();
+        for boundary in EXPECTED_DEDICATED_VM_RESTART_BOUNDARIES {
+            ledger
+                .record(boundary)
+                .expect("dedicated-vm inventory contains unique boundaries");
+        }
+        ledger
+            .verify_dedicated_vm_complete()
+            .expect("dedicated-vm restart inventory must verify");
+        assert!(ledger.verify_complete().is_err());
     }
 
     #[test]

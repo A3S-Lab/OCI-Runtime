@@ -321,7 +321,7 @@ A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
 
 It installs `containerd-shim-a3s-oci-v2` only under the worktree `PATH` (never
 at `/`), sets `A3S_OCI_RUNTIME_ROOT` to `<host --root>/runtime` for bundle
-handoff, and records `a3s.oci.linux-kvm-containerd-lifecycle.v1` with
+handoff, and records `a3s.oci.linux-kvm-containerd-lifecycle.v2` with
 `promotes_readiness=false`. Existing-host passes do not promote fresh-host or
 AArch64 readiness.
 
