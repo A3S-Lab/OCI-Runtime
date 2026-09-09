@@ -370,6 +370,15 @@ advertises only the Box product-lifecycle qualification scope. This is not a
 production promotion path and is distinct from owner-death recovery and
 bounded soak.
 
+On 2026-09-09, current-main OCI Runtime `0ddc81b` (Guest Agent portable
+rootfs root-via-directory-FD fix) plus Box `758895e0` (Linux same-uid virtio-fs
+skips portable metadata ownership replay) passed an existing-host WSL2 Box
+product smoke: `a3s-box run --rm --cpus 1 --memory 512m --network none
+alpine:3.20 -- /bin/true` against `box-kvm-qualification-service` with
+`A3S_BOX_OCI_MIGRATION=microvm`, `A3S_BOX_OCI_HOST_ROOT=<owner>/runtime`, and
+`A3S_BOX_OCI_KVM_ENDPOINT=<owner>/runtime.sock`. That observation does not
+promote readiness or close the fresh-host KVM gate.
+
 
 The digest-bound release matrix aggregates the core KVM promotion gates
 (agent entry, compatibility drift, lifecycle, owner-death recovery, Create
