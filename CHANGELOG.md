@@ -35,6 +35,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Rootless durable owners that already dropped host effective root no longer
+  plan detached `open_tree` clones for read-only binds. Those clones need host
+  `CAP_SYS_ADMIN` over the source mount and fail with `EPERM` after device-policy
+  drop; ordinary `MS_BIND` still works for sources owned by the mapped durable
+  identity (Box R17 mounts profile).
 - Portable rootfs metadata replay now inspects and restores the root entry
   through an open directory descriptor. Utility-VM guests that expose rootfs
   via `/proc/self/fd/<n>` no longer report a type mismatch when the `.`
