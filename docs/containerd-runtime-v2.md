@@ -465,7 +465,9 @@ A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
 Existing-host passes emit `a3s.oci.linux-kvm-containerd-lifecycle.v3` with
 init and exec Created/Running/Stopped restart boundary IDs,
 `promotes_readiness=false`, and do not close packaged or fresh-host containerd
-promotion.
+promotion. Clean main tip
+`f14c9401f92a5fa97be62c54f58925f5fc1a2a51` retained report SHA-256
+`6993c4d846d7a6f458c9b103d06cc752659dd11f6adac215274395c91e191e76`.
 
 Pause, Resume, and Update share one monotonically increasing per-task control
 sequence. Their SDK operation identities include that sequence, so a later
