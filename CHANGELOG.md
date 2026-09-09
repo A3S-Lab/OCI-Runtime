@@ -51,6 +51,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Changed
 
+- Retained clean-main x86_64 WSL2 Linux KVM lifecycle (17/17) evidence for
+  revision `0123b95` against a rebuilt system image that embeds Guest Agent
+  `cd762f74` (portable rootfs root-via-directory-FD fix). Observation-only;
+  fresh-host and AArch64 promotion remain open.
 - Retained clean-main x86_64 WSL2 Linux KVM authenticated-entry and injected
   post-probe fail-closed evidence for revision `39b7e56` after rebuilding the
   pinned Alpine system image with the exact musl Guest Agent. The public KVM
