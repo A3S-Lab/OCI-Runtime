@@ -44,6 +44,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
   pinned Alpine system image with the exact musl Guest Agent. The public KVM
   candidate remains `probe-only` until fresh-host and AArch64 promotion
   artifacts exist.
+- Retained clean-main x86_64 WSL2 Linux KVM lifecycle (17/17), owner-death
+  recovery (1/1), and bounded soak (25/25) evidence for revision `2d89f67`
+  against that same pinned system image. Observation-only; promotion gates
+  remain open.
 
 ### Added
 
