@@ -649,12 +649,56 @@ impl MountPlan {
         let requests_readonly = flags & libc::MS_RDONLY != 0
             || recursive_attributes
                 .is_some_and(|attributes| attributes.attr_set & attributes::MOUNT_ATTR_RDONLY != 0);
-        let detached_bind =
-            namespaces.new_user() && bind && requests_readonly && detached_bind_compatible;
+        // Detached open_tree clones require host CAP_SYS_ADMIN over the source
+        // mount. After rootless device-policy drop the durable owner is a
+        // non-root host UID; open_tree then fails with EPERM even once the
+        // create path becomes userns root. Fall back to ordinary MS_BIND when
+        // the planner is not host effective root — mapped userns root can still
+        // bind sources owned by the durable host identity.
+        let host_effective_root = unsafe { libc::geteuid() } == 0;
+        let detached_bind = namespaces.new_user()
+            && bind
+            && requests_readonly
+            && detached_bind_compatible
+            && host_effective_root;
         // An explicit bind remount applies the requested attributes in the
         // first mount(2) call. Only ordinary bind creation needs the follow-up
-        // remount used to apply VFS attributes.
-        let remount_bind = remount_bind && flags & libc::MS_REMOUNT == 0;
+        // remount used to apply VFS attributes. Without host privilege that
+        // remount fails with EPERM for host-path binds, so translate the same
+        // flags into mount_setattr instead.
+        let remount_bind = host_effective_root && remount_bind && flags & libc::MS_REMOUNT == 0;
+        let recursive_attributes = if host_effective_root || !bind || detached_bind {
+            recursive_attributes
+        } else {
+            let mut attributes =
+                recursive_attributes.unwrap_or_else(attributes::RecursiveMountAttributes::default);
+            if flags & libc::MS_RDONLY != 0 {
+                attributes.attr_set |= attributes::MOUNT_ATTR_RDONLY;
+            }
+            if flags & libc::MS_NOSUID != 0 {
+                attributes.attr_set |= attributes::MOUNT_ATTR_NOSUID;
+            }
+            if flags & libc::MS_NODEV != 0 {
+                attributes.attr_set |= attributes::MOUNT_ATTR_NODEV;
+            }
+            if flags & libc::MS_NOEXEC != 0 {
+                attributes.attr_set |= attributes::MOUNT_ATTR_NOEXEC;
+            }
+            if flags & libc::MS_NOATIME != 0 {
+                attributes.attr_set |= attributes::MOUNT_ATTR_NOATIME;
+            }
+            if flags & libc::MS_NODIRATIME != 0 {
+                attributes.attr_set |= attributes::MOUNT_ATTR_NODIRATIME;
+            }
+            if flags & libc::MS_NOSYMFOLLOW != 0 {
+                attributes.attr_set |= attributes::MOUNT_ATTR_NOSYMFOLLOW;
+            }
+            if attributes.attr_set == 0 && attributes.attr_clr == 0 {
+                None
+            } else {
+                Some(attributes)
+            }
+        };
         Ok(Self {
             index,
             destination,
