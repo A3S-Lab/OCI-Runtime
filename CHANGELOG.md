@@ -55,6 +55,9 @@ All notable changes to A3S OCI Runtime are documented in this file.
   revision `0123b95` against a rebuilt system image that embeds Guest Agent
   `cd762f74` (portable rootfs root-via-directory-FD fix). Observation-only;
   fresh-host and AArch64 promotion remain open.
+- Retained clean-main x86_64 WSL2 Linux KVM owner-death recovery (1/1) and
+  bounded soak (25/25) evidence for revision `8b580fb` against that same
+  rebuilt system image. Observation-only; promotion gates remain open.
 - Retained clean-main x86_64 WSL2 Linux KVM authenticated-entry and injected
   post-probe fail-closed evidence for revision `39b7e56` after rebuilding the
   pinned Alpine system image with the exact musl Guest Agent. The public KVM
