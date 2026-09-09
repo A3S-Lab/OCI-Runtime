@@ -27,6 +27,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Added Native Linux session-supervisor **control reattach** after Host
+  channel EOF. On unexpected EOF the supervisor publishes a deterministic
+  abstract unix endpoint (`a3s.oci.session-supervise.<pid>.<start_time_ticks>`),
+  does not reap waitable children, and accepts a replacement Host.
+  `HostSessionSupervisor::reattach` authenticates PID + start-time and resumes
+  wait/spawn without inventing exit status. Re-exec of a new supervisor remains
+  rejected as incorrect (PDEATHSIG parent must stay the recorded supervisor).
+  Default create stays Host-bound; `recover_stale_generation` still fail-closes
+  on a live recorded supervisor until full `PreparedProcess` / I/O reopen is
+  wired through reattach.
 - Added a Native Linux session-supervisor foundation for Box B2 / OCI R6 live
   process-session recovery. `session_supervisor` proves that workload
   `PR_SET_PDEATHSIG` can bind to an authenticated host-surviving supervisor
@@ -37,9 +47,9 @@ All notable changes to A3S OCI Runtime are documented in this file.
   close default Sandbox/MicroVM cutover.
 - Extended Native Linux recovery to
   `a3s.oci.native-linux-recovery.v4` with an optional `sessionSupervisor`
-  identity. Older v1–v3 records still normalize. Stale recovery fail-closes when
-  a recorded session supervisor is still live (live reattach not yet
-  implemented for Host reopen).
+  identity. Older v1–v3 records still normalize. Stale recovery still
+  fail-closes when a recorded session supervisor is live until Host reopen
+  restores `PreparedProcess` through control reattach.
 - Added the production `HostSessionSupervisor` service (`session-supervise`)
   that can parent workloads with PDEATHSIG, survives Host channel EOF, and
   authenticates by PID + start-time. First-principles tests cover the
