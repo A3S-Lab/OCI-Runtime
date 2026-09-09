@@ -2240,11 +2240,13 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   parentage). Host reopen now reattaches a live recorded supervisor in
   `recover_stale_generation` and returns `StaleGenerationRecovery::Live` with
   wait/kill of the supervised launcher; stopped-only delete proceeds only after
-  launcher/init exit. Multi-container Host reopen reuses one reattached
+  launcher/init exit.   Multi-container Host reopen reuses one reattached
   control connection via `SessionSupervisorReattachCache` (one supervisor
-  identity → one control Arc across generations). Full `PreparedProcess` / I/O
-  session restore, the real-host Box live-session gate, and default create
-  Host-bound policy remain open.
+  identity → one control Arc across generations). Partial Host-reopen process
+  inventory now exposes the authenticated live init only (empty after init
+  exit; no invented exec entries or exit status). Full `PreparedProcess` /
+  stdio session restore, durable exec inventory, the real-host Box live-session
+  gate, and default create Host-bound policy remain open.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,

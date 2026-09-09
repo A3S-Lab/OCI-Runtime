@@ -1110,10 +1110,11 @@ impl LinuxExecutor {
     /// Stopped outcomes prove that the exact recorded launcher and init
     /// identities have disappeared and retain only paths for stopped-only
     /// delete. Live outcomes reattach an authenticated session supervisor so
-    /// wait/kill can use exact supervised status without inventing exit
-    /// evidence or restoring full `PreparedProcess` / I/O sessions yet.
-    /// Generations that share one `sessionSupervisor` identity reuse one
-    /// control connection through [`SessionSupervisorReattachCache`].
+    /// wait/kill and a partial authenticated init process inventory can use
+    /// exact supervised status without inventing exit evidence. Full
+    /// `PreparedProcess`, stdio sessions, and durable exec inventory restore
+    /// remain open. Generations that share one `sessionSupervisor` identity
+    /// reuse one control connection through [`SessionSupervisorReattachCache`].
     pub async fn recover_stale_generation(
         &self,
         target: &a3s_oci_sdk::ContainerTarget,

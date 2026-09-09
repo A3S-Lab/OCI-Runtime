@@ -20,10 +20,9 @@ pub(crate) async fn qualify_dedicated_vm_lifecycle(
     config: &QualificationConfig,
     prefix: &str,
 ) -> TestResult<()> {
-    config
-        .restart_boundaries
-        .reset()
-        .map_err(|error| qualification_error(format!("reset dedicated-vm restart ledger: {error}")))?;
+    config.restart_boundaries.reset().map_err(|error| {
+        qualification_error(format!("reset dedicated-vm restart ledger: {error}"))
+    })?;
 
     let lifecycle_id = format!("{prefix}-dedicated-vm");
     let mut channel = connect_ready(config).await?;
@@ -44,9 +43,7 @@ pub(crate) async fn qualify_dedicated_vm_lifecycle(
         .map_err(|error| rpc_error("create dedicated-vm task", error))?
         .into_inner();
     if created.pid == 0 {
-        return Err(
-            qualification_error("dedicated-vm task Create returned PID zero").into(),
-        );
+        return Err(qualification_error("dedicated-vm task Create returned PID zero").into());
     }
     expect_process(
         &task_process(config, &channel, &lifecycle_id, "").await?,

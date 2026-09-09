@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT;
 use a3s_oci_sdk::{
-    ContainerTarget, Error, ErrorCode, Result, CONTROL_CGROUP_NAME, WORKLOAD_CGROUP_NAME,
+    ContainerTarget, Error, ErrorCode, ProcessId, ProcessRecord, ProcessTarget, Result,
+    CONTROL_CGROUP_NAME, WORKLOAD_CGROUP_NAME,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -286,9 +287,9 @@ impl SessionSupervisorReattachCache {
 
 /// Host-reopen handle for one generation whose session supervisor survived.
 ///
-/// This does not restore `PreparedProcess` or I/O sessions. It restores enough
-/// supervisor control that wait/kill of the recorded launcher can use the
-/// exact supervised wait status.
+/// This restores supervisor control for wait/kill of the recorded launcher and
+/// a partial process inventory (authenticated live init only). It does not
+/// restore full `PreparedProcess`, stdio sessions, or durable exec inventory.
 #[derive(Debug)]
 pub struct LinuxLiveSupervisedSession {
     target: ContainerTarget,
@@ -340,6 +341,41 @@ impl LinuxLiveSupervisedSession {
     /// Whether the recorded init identity is still live.
     pub fn init_is_live(&self) -> Result<bool> {
         self.record.init.is_live()
+    }
+
+    /// Partial process inventory for Host reopen.
+    ///
+    /// When the authenticated init identity is still live, returns exactly one
+    /// init [`ProcessRecord`]. Returns an empty inventory when init has exited.
+    /// Does not invent exec entries (recovery v4 does not record them) and does
+    /// not invent exit status.
+    pub fn process_inventory(&self) -> Result<Vec<ProcessRecord>> {
+        if !self.init_is_live()? {
+            return Ok(Vec::new());
+        }
+        let pid = u32::try_from(self.init_pid()).map_err(|error| {
+            recovery_error(
+                ErrorCode::Internal,
+                format!(
+                    "live supervised init PID {} does not fit the SDK process model: {error}",
+                    self.init_pid()
+                ),
+            )
+        })?;
+        if pid == 0 {
+            return Err(recovery_error(
+                ErrorCode::Internal,
+                "live supervised process inventory contained PID zero",
+            ));
+        }
+        Ok(vec![ProcessRecord {
+            target: ProcessTarget {
+                container: self.target.clone(),
+                process_id: ProcessId::init(),
+            },
+            pid: Some(pid),
+            terminal: false,
+        }])
     }
 
     /// Authenticated session-supervisor identity that parents the launcher.
@@ -2307,6 +2343,26 @@ mod tests {
         assert_eq!(live.launcher_pid(), launcher_pid);
         assert_eq!(live.supervisor_pid(), supervisor_pid);
         assert!(live.launcher_is_live().expect("launcher liveness"));
+        assert!(live.init_is_live().expect("init liveness"));
+
+        let inventory = live
+            .process_inventory()
+            .expect("live inventory must not invent failure");
+        assert_eq!(
+            inventory.len(),
+            1,
+            "live reopen must expose exactly the authenticated init"
+        );
+        assert_eq!(inventory[0].target.container, target);
+        assert!(inventory[0].target.process_id.is_init());
+        assert_eq!(
+            inventory[0].pid,
+            Some(u32::try_from(launcher_pid).expect("launcher pid fits u32"))
+        );
+        assert!(
+            !inventory[0].terminal,
+            "partial inventory must not invent terminal mode"
+        );
 
         live.kill_launcher().expect("kill supervised launcher");
         let status = live
@@ -2320,6 +2376,12 @@ mod tests {
         assert!(
             !live.launcher_is_live().expect("launcher should be dead"),
             "launcher must be reaped after authentic wait"
+        );
+        assert!(
+            live.process_inventory()
+                .expect("dead init inventory")
+                .is_empty(),
+            "inventory must be empty after init exits; never invent entries"
         );
 
         let tombstone = live

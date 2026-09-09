@@ -27,6 +27,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Partial Native Linux Host-reopen **process inventory** for live supervised
+  sessions. `LinuxLiveSupervisedSession::process_inventory` returns exactly the
+  authenticated init `ProcessRecord` while that PID + start-time identity is
+  live, and an empty inventory after init exit. `NativeLinuxDriver::processes`
+  uses that path instead of always returning `[]`. Recovery v4 still records no
+  exec inventory, so reopen never invents exec entries or exit status. First-
+  principles live reattach coverage asserts the single init record and empty
+  inventory after authentic SIGKILL wait. Default create stays Host-bound. Full
+  `PreparedProcess` / stdio restore and the real-host Box live-session gate
+  remain open.
 - Added a Native Linux `SessionSupervisorReattachCache` so multi-container Host
   reopen reuses one authenticated session-supervisor control connection. After
   Host EOF the supervisor accepts exactly one replacement control socket;

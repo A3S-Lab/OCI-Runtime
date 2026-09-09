@@ -1887,8 +1887,11 @@ wait/kill of the supervised launcher use authentic supervised status.
 Multi-container Hosts share one supervisor; reopen caches the reattached
 control connection in `SessionSupervisorReattachCache` so every generation
 that records the same `sessionSupervisor` identity reuses one control Arc
-instead of attempting a second accept. Full `PreparedProcess` / I/O session
-restore remains open.
+instead of attempting a second accept. Partial process inventory restore is
+implemented: while the authenticated init identity is live, `processes`
+returns exactly that init record; after init exit the inventory is empty.
+Recovery v4 does not record exec processes, so reopen never invents exec
+entries. Full `PreparedProcess` / stdio session restore remains open.
 
 Qualification may enable supervised create with
 `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. When set, Native create starts one
@@ -1913,8 +1916,10 @@ inside `recover_stale_generation` and exposes
 `StaleGenerationRecovery::Live` for wait/kill/delete of the recorded launcher
 without inventing exit status. When several containers share one supervisor,
 `SessionSupervisorReattachCache` ensures only one control reconnect happens
-for that PID + start-time identity. Restoring full `PreparedProcess` / I/O
-sessions onto the replacement Host remains a later slice.
+for that PID + start-time identity. Partial init process inventory is restored
+from the authenticated recovery identity without inventing exit status or exec
+entries. Restoring full `PreparedProcess` / stdio sessions onto the
+replacement Host remains a later slice.
 
 ### Hook owner-death crash boundary
 
