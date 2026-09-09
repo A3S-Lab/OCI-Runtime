@@ -1055,6 +1055,20 @@ are `35af7882554e4076f860893b32f633b91819fd3d33b9f74e4b2845ce5328408c`
 (Filesystem). These are x86_64 observation artifacts only; fresh AArch64
 operation-stage evidence and promotion gates remain open.
 
+Later on September 9, 2026, clean current-main revision
+`95d624f9831b79abf86bc8e369df849054c63eaf` reran the digest-bound Linux KVM
+release matrix on the same class of x86_64 WSL2 host (`/dev/kvm` API version
+12) against system-image manifest
+`329247b41ee23918fbc7dd2ed08843e359b52d31cc2a3613405d895718e3294f`. All six
+core gates returned `available` under `a3s.oci.linux-kvm-release-matrix.v1`:
+agent-entry, compatibility-drift, lifecycle, owner-death recovery, Create
+reopen, and soak. The aggregate report SHA-256 is
+`5c701cb6116170483b666df966c9304e224640e37f07966079b2f0d7e923cd8b` with
+`host_class=existing` and `promotes_readiness=false`. This reconfirms the
+core KVM promotion bundle after the DedicatedVm containerd restart slice; it
+does not close fresh-host attestation, AArch64 promotion, or the full Native
+Linux 23-boundary containerd matrix.
+
 The September 3 follow-up at clean Runtime revision `fa4c59347346b677ab3b0a5c2efa7562d52bef17`
 added the Linux KVM File and Filesystem gates. Each passed all nine Host/Guest
 transport boundaries on the same real x86_64 KVM host, with immutable manifest

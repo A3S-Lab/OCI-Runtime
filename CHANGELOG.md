@@ -40,6 +40,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
   (`scripts/build-linux-kvm-system-image.sh --architecture aarch64`) is
   retained as a build artifact path; real AArch64 KVM gate evidence remains
   blocked without AArch64 hardware.
+- Retained an existing-host WSL2 x86_64 Linux KVM release-matrix observation
+  on clean current-main revision
+  `95d624f9831b79abf86bc8e369df849054c63eaf` (DedicatedVm containerd restart
+  slice merge). All six core gates returned `available` under
+  `a3s.oci.linux-kvm-release-matrix.v1` (agent-entry, compatibility-drift,
+  lifecycle, owner-death recovery, Create reopen, soak). Aggregate report
+  SHA-256
+  `5c701cb6116170483b666df966c9304e224640e37f07966079b2f0d7e923cd8b`;
+  `promotes_readiness=false`. Fresh-host attestation and AArch64 promotion
+  remain open; the public KVM candidate stays `probe-only`.
 - Added Linux KVM containerd dedicated-vm vertical-slice qualification
   (`.github/scripts/linux-kvm-containerd-lifecycle.sh`). A private
   `KillMode=process` containerd plus `box-kvm-qualification-service` Host
