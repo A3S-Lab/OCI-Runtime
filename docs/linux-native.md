@@ -1013,6 +1013,16 @@ system-image manifest
 ran from a clean Linux-native worktree to satisfy provenance. Observation-only;
 fresh-host and AArch64 promotion remain open.
 
+On the same rebuilt system image, clean revision
+`8b580fb1a65f06da43cdcc3dbf7bfcd5e82c0726` retained available owner-death
+recovery (1/1) and bounded soak (25/25) reports:
+`a3s.oci.linux-kvm-recovery-matrix.v2`
+(`1efdcbef11d54d8ae8a9e568a2f97568dbc86498ae82f91758123201e972329c`) and
+`a3s.oci.linux-kvm-soak-matrix.v2`
+(`304b1a875206a291fc06a66e713b4632fd350d403314228ebdb05ae5b02c8b89`). Each ran
+from a clean Linux-native worktree. Observation-only; fresh-host and AArch64
+promotion remain open.
+
 The same current-main source then reran the File and Filesystem operation-stage
 owner-replacement gates. Both matrices passed all 9/9 Host/Guest transport
 boundaries with immutable asset provenance and complete endpoint, process,
