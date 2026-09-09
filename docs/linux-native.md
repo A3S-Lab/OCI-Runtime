@@ -1002,6 +1002,17 @@ and handoff inventories under `a3s.oci.linux-kvm-provenance.v1`. This remains
 observation-only WSL2 evidence; fresh-host x86_64 and AArch64 promotion
 artifacts and the public `probe-only` posture are unchanged.
 
+Later on September 9, 2026, clean current-main revision
+`0123b9529a1ed19f11d742b302b5f000db1bd5f6` rebuilt the system image with Guest
+Agent `cd762f74f654e848915377fc0ff8679060741b8a6e763dbd351670a19111bb18`
+(portable rootfs root-via-directory-FD fix) and retained an available 17/17
+`a3s.oci.linux-kvm-lifecycle-matrix.v2` report
+(`a9ea15c0f9397583fcf9dde5ed0a224cab50d1559826bac74fd3de6f0d837755`) on the same class of x86_64 WSL2 host against
+system-image manifest
+`bea412c0c3dd7a17d872aeefc18a9a28ed5f98072862a543e51e61c6c5043bf6`. The gate
+ran from a clean Linux-native worktree to satisfy provenance. Observation-only;
+fresh-host and AArch64 promotion remain open.
+
 The same current-main source then reran the File and Filesystem operation-stage
 owner-replacement gates. Both matrices passed all 9/9 Host/Guest transport
 boundaries with immutable asset provenance and complete endpoint, process,
