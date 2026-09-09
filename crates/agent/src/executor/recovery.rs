@@ -22,7 +22,8 @@ const OWNER_RECORD_NAME: &str = "owner.json";
 const CONTAINER_RECORD_NAME: &str = "recovery.json";
 const CONFIG_SNAPSHOT_NAME: &str = "config.json";
 const OWNER_SCHEMA_VERSION: &str = "a3s.oci.native-linux-executor-owner.v1";
-const CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.native-linux-recovery.v3";
+const CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.native-linux-recovery.v4";
+const CONTAINER_SCHEMA_VERSION_V3: &str = "a3s.oci.native-linux-recovery.v3";
 const CONTAINER_SCHEMA_VERSION_V2: &str = "a3s.oci.native-linux-recovery.v2";
 const CONTAINER_SCHEMA_VERSION_V1: &str = "a3s.oci.native-linux-recovery.v1";
 const MAX_RECORD_BYTES: u64 = 64 * 1024;
@@ -49,6 +50,14 @@ impl ProcessIdentity {
             )
         })?;
         Self::capture(pid, "executor owner")
+    }
+
+    /// Persist an already-authenticated PID + start-time identity.
+    pub(super) const fn from_authenticated(pid: i32, start_time_ticks: u64) -> Self {
+        Self {
+            pid,
+            start_time_ticks,
+        }
     }
 
     fn capture(pid: i32, role: &str) -> Result<Self> {
@@ -139,6 +148,21 @@ struct ContainerRecoveryRecord {
     owner: ProcessIdentity,
     launcher: ProcessIdentity,
     init: ProcessIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_supervisor: Option<ProcessIdentity>,
+    cgroup: Option<RecoveryCgroupRecord>,
+    intel_rdt: Option<RecoveryIntelRdtRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct V3ContainerRecoveryRecord {
+    schema_version: String,
+    target: ContainerTarget,
+    config_digest: String,
+    owner: ProcessIdentity,
+    launcher: ProcessIdentity,
+    init: ProcessIdentity,
     cgroup: Option<RecoveryCgroupRecord>,
     intel_rdt: Option<RecoveryIntelRdtRecord>,
 }
@@ -218,6 +242,7 @@ pub(super) async fn write_container_record(
     owner: ProcessIdentity,
     process: &PreparedProcess,
     cgroup_manager: Option<&CgroupManager>,
+    session_supervisor: Option<ProcessIdentity>,
 ) -> Result<()> {
     let snapshot = read_bounded_plain_file(config_snapshot, MAX_RECORD_BYTES)?;
     let observed_digest = config_digest_for(&snapshot);
@@ -256,6 +281,18 @@ pub(super) async fn write_container_record(
     if let Some(intel_rdt) = &intel_rdt {
         validate_intel_rdt_record(intel_rdt, target.id.as_str())?;
     }
+    if let Some(supervisor) = session_supervisor {
+        if !supervisor.is_live()? {
+            return Err(recovery_error(
+                ErrorCode::Unavailable,
+                format!(
+                    "session supervisor PID {} exited before recovery evidence was persisted",
+                    supervisor.pid
+                ),
+            )
+            .retryable(true));
+        }
+    }
     let record = ContainerRecoveryRecord {
         schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
         target: target.clone(),
@@ -263,6 +300,7 @@ pub(super) async fn write_container_record(
         owner,
         launcher,
         init,
+        session_supervisor,
         cgroup,
         intel_rdt,
     };
@@ -371,6 +409,18 @@ pub(super) async fn recover_stale_generation(
     };
 
     let deadline = Instant::now() + TERMINATION_TIMEOUT;
+    if let Some(supervisor) = tombstone.record.session_supervisor {
+        if supervisor.is_live()? {
+            return Err(recovery_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "container {} generation {:?} retains live session supervisor PID {}; live process-session reattach is not yet implemented for Host reopen",
+                    target.id, target.generation, supervisor.pid
+                ),
+            ));
+        }
+        wait_for_identity_exit(supervisor, "session supervisor", deadline).await?;
+    }
     wait_for_identity_exit(tombstone.record.launcher, "container launcher", deadline).await?;
     wait_for_identity_exit(tombstone.record.init, "container init", deadline).await?;
     Ok(Some(tombstone))
@@ -398,6 +448,17 @@ pub(super) async fn delete_stale_generation(tombstone: &LinuxExecutorTombstone) 
                 tombstone.target.id, tombstone.target.generation
             ),
         ));
+    }
+    if let Some(supervisor) = record.session_supervisor {
+        if supervisor.is_live()? {
+            return Err(recovery_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "refusing to delete live native recovery resources for container {} generation {:?}",
+                    tombstone.target.id, tombstone.target.generation
+                ),
+            ));
+        }
     }
     if let Some(intel_rdt) = &record.intel_rdt {
         cleanup_intel_rdt(intel_rdt, record.target.id.as_str())?;
@@ -517,6 +578,19 @@ fn read_container_record(path: &Path) -> Result<ContainerRecoveryRecord> {
                 ),
             )
         }),
+        CONTAINER_SCHEMA_VERSION_V3 => {
+            let previous: V3ContainerRecoveryRecord =
+                serde_json::from_value(value).map_err(|error| {
+                    recovery_error(
+                        ErrorCode::FailedPrecondition,
+                        format!(
+                            "v3 native container recovery record {} is invalid: {error}",
+                            path.display()
+                        ),
+                    )
+                })?;
+            Ok(normalize_v3_container_record(previous))
+        }
         CONTAINER_SCHEMA_VERSION_V2 => {
             let previous: PreviousContainerRecoveryRecord =
                 serde_json::from_value(value).map_err(|error| {
@@ -591,9 +665,24 @@ fn normalize_legacy_container_record(
         owner: legacy.owner,
         launcher: legacy.launcher,
         init: legacy.init,
+        session_supervisor: None,
         cgroup,
         intel_rdt: None,
     })
+}
+
+fn normalize_v3_container_record(previous: V3ContainerRecoveryRecord) -> ContainerRecoveryRecord {
+    ContainerRecoveryRecord {
+        schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
+        target: previous.target,
+        config_digest: previous.config_digest,
+        owner: previous.owner,
+        launcher: previous.launcher,
+        init: previous.init,
+        session_supervisor: None,
+        cgroup: previous.cgroup,
+        intel_rdt: previous.intel_rdt,
+    }
 }
 
 fn normalize_v2_container_record(
@@ -606,6 +695,7 @@ fn normalize_v2_container_record(
         owner: previous.owner,
         launcher: previous.launcher,
         init: previous.init,
+        session_supervisor: None,
         cgroup: previous.cgroup,
         intel_rdt: None,
     }
@@ -1663,6 +1753,38 @@ mod tests {
         let normalized = normalize_v2_container_record(previous);
         assert_eq!(normalized.schema_version, CONTAINER_SCHEMA_VERSION);
         assert!(normalized.intel_rdt.is_none());
+        assert!(normalized.session_supervisor.is_none());
+    }
+
+    #[test]
+    fn v3_recovery_record_normalizes_without_inventing_session_supervisor() {
+        let previous = V3ContainerRecoveryRecord {
+            schema_version: CONTAINER_SCHEMA_VERSION_V3.to_string(),
+            target: ContainerTarget::exact(
+                a3s_oci_sdk::ContainerId::new("v3-record").expect("container ID"),
+                a3s_oci_sdk::Generation(1),
+            ),
+            config_digest: "sha256:test".to_string(),
+            owner: ProcessIdentity {
+                pid: 100,
+                start_time_ticks: 1,
+            },
+            launcher: ProcessIdentity {
+                pid: 101,
+                start_time_ticks: 2,
+            },
+            init: ProcessIdentity {
+                pid: 102,
+                start_time_ticks: 3,
+            },
+            cgroup: None,
+            intel_rdt: None,
+        };
+
+        let normalized = normalize_v3_container_record(previous);
+        assert_eq!(normalized.schema_version, CONTAINER_SCHEMA_VERSION);
+        assert!(normalized.session_supervisor.is_none());
+        assert!(normalized.intel_rdt.is_none());
     }
 
     #[test]
@@ -1880,6 +2002,7 @@ mod tests {
                         start_time_ticks: 0xcde,
                     },
                     init,
+                    session_supervisor: None,
                     cgroup: None,
                     intel_rdt: None,
                 },

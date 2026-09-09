@@ -187,7 +187,8 @@ impl RootfsScope {
 }
 
 pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
-    init::run_container_init_if_requested()
+    session_supervisor::run_session_supervise_if_requested()
+        .or_else(init::run_container_init_if_requested)
         .or_else(exec_process::run_container_exec_if_requested)
         .or_else(filesystem::run_container_filesystem_if_requested)
         .or_else(restore_cgroup_namespace::run_if_requested)
@@ -999,6 +1000,7 @@ impl LinuxExecutor {
                 owner,
                 &process,
                 state.cgroup_manager.as_ref(),
+                None,
             )
             .await
             {

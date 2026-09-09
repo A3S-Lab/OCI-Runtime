@@ -35,6 +35,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
   Authentication rejects start-time drift, absent PIDs, and unknown identity
   schemas. This does not wire the supervisor into the production executor or
   close default Sandbox/MicroVM cutover.
+- Extended Native Linux recovery to
+  `a3s.oci.native-linux-recovery.v4` with an optional `sessionSupervisor`
+  identity. Older v1–v3 records still normalize. Stale recovery fail-closes when
+  a recorded session supervisor is still live (live reattach not yet
+  implemented for Host reopen).
+- Added the production `HostSessionSupervisor` service (`session-supervise`)
+  that can parent workloads with PDEATHSIG, survives Host channel EOF, and
+  authenticates by PID + start-time. First-principles tests cover the
+  production spawn path; default create still uses Host-bound PDEATHSIG until
+  launcher spawn is moved under the supervisor.
 - Extended Linux KVM containerd dedicated-vm vertical slice with exec
   Created/Running/Stopped daemon-restart boundaries after the existing init
   slice. Report schema is now `a3s.oci.linux-kvm-containerd-lifecycle.v3` and
