@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -240,6 +241,49 @@ pub enum StaleGenerationRecovery {
     Live(LinuxLiveSupervisedSession),
 }
 
+/// Cache of reattached session supervisors keyed by authenticated identity.
+///
+/// A multi-container Host shares one `HostSessionSupervisor`. After Host EOF
+/// that supervisor accepts exactly one replacement control connection, so
+/// recovering several generations must reuse one reattached handle instead of
+/// calling [`HostSessionSupervisor::reattach`] per container.
+#[derive(Debug, Default)]
+pub(crate) struct SessionSupervisorReattachCache {
+    entries: Mutex<BTreeMap<(i32, u64), SharedSessionSupervisor>>,
+}
+
+impl SessionSupervisorReattachCache {
+    /// Return the shared supervisor for `expected`, reattaching at most once.
+    pub(crate) fn get_or_reattach(
+        &self,
+        expected: &SessionSupervisorIdentity,
+    ) -> Result<SharedSessionSupervisor> {
+        let key = (expected.pid(), expected.start_time_ticks());
+        let mut entries = self.entries.lock().map_err(|_| {
+            recovery_error(
+                ErrorCode::Internal,
+                "session supervisor reattach cache lock is poisoned",
+            )
+        })?;
+        if let Some(existing) = entries.get(&key) {
+            return Ok(Arc::clone(existing));
+        }
+        let reattached = HostSessionSupervisor::reattach(expected)?;
+        let shared = Arc::new(Mutex::new(reattached));
+        entries.insert(key, Arc::clone(&shared));
+        Ok(shared)
+    }
+
+    /// Number of distinct supervisor identities retained by this Host reopen.
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries
+            .lock()
+            .map(|entries| entries.len())
+            .unwrap_or(0)
+    }
+}
+
 /// Host-reopen handle for one generation whose session supervisor survived.
 ///
 /// This does not restore `PreparedProcess` or I/O sessions. It restores enough
@@ -261,6 +305,13 @@ impl LinuxLiveSupervisedSession {
     #[must_use]
     pub fn target(&self) -> &ContainerTarget {
         &self.target
+    }
+
+    /// Shared reattached supervisor handle for this generation.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn shared_supervisor(&self) -> &SharedSessionSupervisor {
+        &self.supervisor
     }
 
     /// Immutable OCI configuration digest bound to the recovered generation.
@@ -388,7 +439,7 @@ impl LinuxLiveSupervisedSession {
 
     fn from_tombstone_and_supervisor(
         tombstone: LinuxExecutorTombstone,
-        supervisor: HostSessionSupervisor,
+        supervisor: SharedSessionSupervisor,
     ) -> Self {
         Self {
             target: tombstone.target,
@@ -396,7 +447,7 @@ impl LinuxLiveSupervisedSession {
             runtime_root: tombstone.runtime_root,
             runtime_directory: tombstone.runtime_directory,
             record: tombstone.record,
-            supervisor: Arc::new(Mutex::new(supervisor)),
+            supervisor,
             launcher_wait_status: Mutex::new(None),
         }
     }
@@ -500,6 +551,7 @@ pub(super) async fn recover_stale_generation(
     target: &ContainerTarget,
     config_digest: &str,
     durable_pid: Option<i32>,
+    supervisors: &SessionSupervisorReattachCache,
 ) -> Result<Option<StaleGenerationRecovery>> {
     if target.generation.is_none() {
         return Err(recovery_error(
@@ -612,7 +664,7 @@ pub(super) async fn recover_stale_generation(
                 )
                 .retryable(error.retryable)
             })?;
-            let reattached = HostSessionSupervisor::reattach(&expected).map_err(|error| {
+            let reattached = supervisors.get_or_reattach(&expected).map_err(|error| {
                 recovery_error(
                     error.code,
                     format!(
@@ -2099,6 +2151,7 @@ mod tests {
             &fixture.target,
             &fixture.digest,
             Some(fixture.init.pid),
+            &SessionSupervisorReattachCache::default(),
         )
         .await
         .expect("search exact stale generation")
@@ -2236,11 +2289,18 @@ mod tests {
         terminate_pid(host_pid);
         let _ = wait_for_child(host_pid);
 
-        let recovery =
-            recover_stale_generation(&parent, &current_root, &target, &digest, Some(launcher_pid))
-                .await
-                .expect("live supervisor must reattach instead of fail-closed")
-                .expect("recovery match");
+        let supervisors = SessionSupervisorReattachCache::default();
+        let recovery = recover_stale_generation(
+            &parent,
+            &current_root,
+            &target,
+            &digest,
+            Some(launcher_pid),
+            &supervisors,
+        )
+        .await
+        .expect("live supervisor must reattach instead of fail-closed")
+        .expect("recovery match");
         let StaleGenerationRecovery::Live(live) = recovery else {
             panic!("live session supervisor must recover as Live");
         };
@@ -2285,11 +2345,233 @@ mod tests {
             &fixture.target,
             &fixture.digest,
             Some(fixture.init.pid),
+            &SessionSupervisorReattachCache::default(),
         )
         .await
         .expect_err("changed snapshot must fail closed");
         assert_eq!(error.code, ErrorCode::Conflict);
         assert!(fixture.stale_root.exists());
+    }
+
+    #[tokio::test]
+    async fn multi_container_host_reuses_one_reattached_session_supervisor() {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixStream;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        use super::super::pid_supervisor::{terminate_pid, wait_for_child};
+        use super::super::session_supervisor::HostSessionSupervisor;
+
+        let temporary = tempfile::tempdir().expect("temporary recovery parent");
+        let parent = temporary.path().join("executor");
+        std::fs::create_dir(&parent).expect("executor parent");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
+            .expect("protect executor parent");
+        let current_root = parent.join("current");
+        std::fs::create_dir(&current_root).expect("current root");
+        std::fs::set_permissions(&current_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect current root");
+
+        let (mut parent_ready, mut child_ready) =
+            UnixStream::pair().expect("shared supervisor ready channel");
+        // SAFETY: parent reaps the fake Host; child owns one shared supervisor.
+        let host_pid = unsafe { libc::fork() };
+        assert!(host_pid >= 0, "fork fake multi-container Host");
+        if host_pid == 0 {
+            drop(parent_ready);
+            let mut supervisor = match HostSessionSupervisor::start_via_fork() {
+                Ok(supervisor) => supervisor,
+                Err(_) => unsafe { libc::_exit(131) },
+            };
+            let launcher_a = match supervisor.spawn_launcher(
+                Path::new("/bin/sleep"),
+                &["30".into()],
+                None,
+                None,
+                None,
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(132) },
+            };
+            let launcher_b = match supervisor.spawn_launcher(
+                Path::new("/bin/sleep"),
+                &["30".into()],
+                None,
+                None,
+                None,
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(133) },
+            };
+            let identity = supervisor.identity().clone();
+            let mut payload = Vec::with_capacity(20);
+            payload.extend_from_slice(&identity.pid().to_be_bytes());
+            payload.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+            payload.extend_from_slice(&launcher_a.to_be_bytes());
+            payload.extend_from_slice(&launcher_b.to_be_bytes());
+            if child_ready.write_all(&payload).is_err() {
+                unsafe { libc::_exit(134) }
+            }
+            std::mem::forget(supervisor);
+            loop {
+                unsafe { libc::pause() };
+            }
+        }
+        drop(child_ready);
+        let mut payload = [0_u8; 20];
+        parent_ready
+            .read_exact(&mut payload)
+            .expect("read shared supervisor evidence");
+        let supervisor_pid = i32::from_be_bytes(payload[0..4].try_into().expect("pid bytes"));
+        let supervisor_start = u64::from_be_bytes(payload[4..12].try_into().expect("start bytes"));
+        let launcher_a = i32::from_be_bytes(payload[12..16].try_into().expect("launcher a"));
+        let launcher_b = i32::from_be_bytes(payload[16..20].try_into().expect("launcher b"));
+
+        let owner = ProcessIdentity {
+            pid: 2_200_000,
+            start_time_ticks: 0x222,
+        };
+        let stale_root = parent.join(runtime_root_name(owner));
+        std::fs::create_dir(&stale_root).expect("stale root");
+        std::fs::set_permissions(&stale_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect stale root");
+        write_atomic_record(
+            &stale_root.join(OWNER_RECORD_NAME),
+            &ExecutorOwnerRecord {
+                schema_version: OWNER_SCHEMA_VERSION.to_string(),
+                owner,
+            },
+        )
+        .expect("owner record");
+
+        let write_slot = |slot_name: &str, container_id: &str, generation: u64, launcher: i32| {
+            let slot = stale_root.join(slot_name);
+            std::fs::create_dir(&slot).expect("container slot");
+            std::fs::set_permissions(&slot, std::fs::Permissions::from_mode(0o700))
+                .expect("protect container slot");
+            let config = br#"{"ociVersion":"1.3.0"}"#;
+            let digest = config_digest_for(config);
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true).mode(0o600);
+            options
+                .open(slot.join(CONFIG_SNAPSHOT_NAME))
+                .and_then(|mut file| file.write_all(config))
+                .expect("configuration snapshot");
+            let target = ContainerTarget::exact(
+                a3s_oci_sdk::ContainerId::new(container_id).expect("container ID"),
+                a3s_oci_sdk::Generation(generation),
+            );
+            let init = ProcessIdentity {
+                pid: launcher,
+                start_time_ticks: process_observation(launcher)
+                    .expect("observe launcher")
+                    .expect("launcher live")
+                    .start_time_ticks,
+            };
+            write_atomic_record(
+                &slot.join(CONTAINER_RECORD_NAME),
+                &ContainerRecoveryRecord {
+                    schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
+                    target: target.clone(),
+                    config_digest: digest.clone(),
+                    owner,
+                    launcher: init,
+                    init,
+                    session_supervisor: Some(ProcessIdentity::from_authenticated(
+                        supervisor_pid,
+                        supervisor_start,
+                    )),
+                    cgroup: None,
+                    intel_rdt: None,
+                },
+            )
+            .expect("container recovery record");
+            (target, digest)
+        };
+
+        let (target_a, digest_a) =
+            write_slot("c-0000000000000001", "shared-supervisor-a", 1, launcher_a);
+        let (target_b, digest_b) =
+            write_slot("c-0000000000000002", "shared-supervisor-b", 1, launcher_b);
+
+        terminate_pid(host_pid);
+        let _ = wait_for_child(host_pid);
+
+        let supervisors = SessionSupervisorReattachCache::default();
+        let recovery_a = recover_stale_generation(
+            &parent,
+            &current_root,
+            &target_a,
+            &digest_a,
+            Some(launcher_a),
+            &supervisors,
+        )
+        .await
+        .expect("first generation reattach")
+        .expect("first recovery match");
+        let StaleGenerationRecovery::Live(live_a) = recovery_a else {
+            panic!("first generation must recover as Live");
+        };
+
+        // Without the cache, a second reattach would fail: the supervisor
+        // accepts only one replacement control connection after Host EOF.
+        let recovery_b = recover_stale_generation(
+            &parent,
+            &current_root,
+            &target_b,
+            &digest_b,
+            Some(launcher_b),
+            &supervisors,
+        )
+        .await
+        .expect("second generation must reuse the cached control connection")
+        .expect("second recovery match");
+        let StaleGenerationRecovery::Live(live_b) = recovery_b else {
+            panic!("second generation must recover as Live");
+        };
+
+        assert_eq!(supervisors.len(), 1, "one supervisor identity, one control");
+        assert!(
+            Arc::ptr_eq(live_a.shared_supervisor(), live_b.shared_supervisor()),
+            "both live sessions must share the same reattached supervisor Arc"
+        );
+
+        live_a.kill_launcher().expect("kill launcher a");
+        let status_a = live_a
+            .wait_launcher()
+            .expect("wait launcher a through shared control");
+        assert_eq!(status_a, libc::SIGKILL);
+
+        live_b.kill_launcher().expect("kill launcher b");
+        let status_b = live_b
+            .wait_launcher()
+            .expect("wait launcher b through shared control");
+        assert_eq!(status_b, libc::SIGKILL);
+
+        // Deleting the first generation must not shut down the shared supervisor.
+        let tombstone_a = live_a
+            .into_tombstone()
+            .expect("launcher a can become a stopped tombstone");
+        delete_stale_generation(&tombstone_a)
+            .await
+            .expect("delete first generation while supervisor still shared");
+
+        assert!(
+            live_b.launcher_is_live().is_ok_and(|live| !live),
+            "launcher b already waited"
+        );
+        let tombstone_b = live_b
+            .into_tombstone()
+            .expect("launcher b can become a stopped tombstone");
+        // Keep the cache alive so Drop does not SHUTDOWN before second delete.
+        delete_stale_generation(&tombstone_b)
+            .await
+            .expect("delete second generation");
+        drop(supervisors);
+        terminate_pid(supervisor_pid);
+        let _ = wait_for_child(supervisor_pid);
+        assert!(!stale_root.exists());
     }
 
     struct RecoveryFixture {
