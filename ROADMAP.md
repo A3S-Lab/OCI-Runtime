@@ -2231,9 +2231,10 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   versus Host-bound PDEATHSIG. Production `HostSessionSupervisor` /
   `session-supervise` can parent workloads and survive Host death; recovery
   schema `a3s.oci.native-linux-recovery.v4` can record the supervisor identity.
-  Moving Native create launcher spawn under that supervisor, persisting the
-  identity on the create path, and the real-host Box live-session gate remain
-  open.
+  Opt-in Native create (`A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`) now spawns the
+  launcher under that supervisor and persists `sessionSupervisor` on create.
+  Live Host reopen reattach (control-channel / PreparedProcess restore) and the
+  real-host Box live-session gate remain open; default create stays Host-bound.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,
