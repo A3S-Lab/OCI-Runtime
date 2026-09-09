@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use a3s_oci_agent::{
-    InheritedDescriptorPlan, LinuxExecutor, LinuxExecutorTombstone, RootlessDevicePolicyBootstrap,
+    InheritedDescriptorPlan, LinuxExecutor, LinuxExecutorTombstone, LinuxLiveSupervisedSession,
+    RootlessDevicePolicyBootstrap, StaleGenerationRecovery,
 };
 use a3s_oci_agent_protocol::{AgentBundle, AgentCreateRequest, GuestAgentService, GuestPath};
 use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, IsolationClass};
@@ -42,6 +43,7 @@ pub struct NativeLinuxDriver {
     client: AgentDriverClient,
     checkpoint: Option<Arc<NativeCriuCheckpoint>>,
     recovered: Mutex<BTreeMap<ContainerId, LinuxExecutorTombstone>>,
+    live: Mutex<BTreeMap<ContainerId, Arc<LinuxLiveSupervisedSession>>>,
 }
 
 impl NativeLinuxDriver {
@@ -92,6 +94,7 @@ impl NativeLinuxDriver {
             client: AgentDriverClient::new(service, "native Linux executor", "native-linux"),
             checkpoint: None,
             recovered: Mutex::new(BTreeMap::new()),
+            live: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -205,6 +208,7 @@ impl NativeLinuxDriver {
             client: AgentDriverClient::new(service, "native Linux executor", "native-linux"),
             checkpoint: None,
             recovered: Mutex::new(BTreeMap::new()),
+            live: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -267,6 +271,7 @@ impl NativeLinuxDriver {
             client: AgentDriverClient::new(service, "native Linux executor", "native-linux"),
             checkpoint: None,
             recovered: Mutex::new(BTreeMap::new()),
+            live: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -305,7 +310,41 @@ impl NativeLinuxDriver {
         Ok(Some(tombstone.clone()))
     }
 
+    async fn live_for(
+        &self,
+        target: &ContainerTarget,
+        operation: &'static str,
+    ) -> Result<Option<Arc<LinuxLiveSupervisedSession>>> {
+        let live = self.live.lock().await;
+        let Some(session) = live.get(&target.id) else {
+            return Ok(None);
+        };
+        if session.target() != target {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                format!(
+                    "container {} has live supervised recovery for generation {:?}, not requested generation {:?}",
+                    target.id,
+                    session.target().generation,
+                    target.generation
+                ),
+            )
+            .for_operation(operation));
+        }
+        Ok(Some(Arc::clone(session)))
+    }
+
     async fn require_live(&self, target: &ContainerTarget, operation: &'static str) -> Result<()> {
+        if self.live_for(target, operation).await?.is_some() {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "container {} generation {:?} is retained through a reattached session supervisor without a restored PreparedProcess; {operation} requires full process-session restore",
+                    target.id, target.generation
+                ),
+            )
+            .for_operation(operation));
+        }
         if self.recovered_for(target, operation).await?.is_some() {
             Err(recovered_stopped_error(target, operation))
         } else {
@@ -388,17 +427,24 @@ impl RuntimeDriver for NativeLinuxDriver {
         }
 
         let durable_pid = *record.state.pid();
-        let tombstone = self
+        let recovery = self
             .executor
             .recover_stale_generation(&target, &record.config_digest, durable_pid)
             .await?;
         if !can_commit_stopped {
-            if let Some(tombstone) = tombstone {
-                self.executor.delete_stale_generation(&tombstone).await?;
+            match recovery {
+                Some(StaleGenerationRecovery::Stopped(tombstone)) => {
+                    self.executor.delete_stale_generation(&tombstone).await?;
+                }
+                Some(StaleGenerationRecovery::Live(live)) => {
+                    let mut sessions = self.live.lock().await;
+                    sessions.insert(target.id.clone(), Arc::new(live));
+                }
+                None => {}
             }
             return Ok(crate::DriverRecovery::none());
         }
-        let tombstone = tombstone.ok_or_else(|| {
+        let recovery = recovery.ok_or_else(|| {
             Error::new(
                 ErrorCode::FailedPrecondition,
                 format!(
@@ -409,25 +455,51 @@ impl RuntimeDriver for NativeLinuxDriver {
             .for_operation("native-linux-recover")
         })?;
 
-        let mut recovered = self.recovered.lock().await;
-        match recovered.get(&target.id) {
-            Some(existing) if existing.target() == &target => {}
-            Some(existing) => {
-                return Err(Error::new(
-                    ErrorCode::Conflict,
-                    format!(
-                        "container {} already has native recovery evidence for generation {:?}",
-                        target.id,
-                        existing.target().generation
-                    ),
-                )
-                .for_operation("native-linux-recover"));
+        match recovery {
+            StaleGenerationRecovery::Stopped(tombstone) => {
+                let mut recovered = self.recovered.lock().await;
+                match recovered.get(&target.id) {
+                    Some(existing) if existing.target() == &target => {}
+                    Some(existing) => {
+                        return Err(Error::new(
+                            ErrorCode::Conflict,
+                            format!(
+                                "container {} already has native recovery evidence for generation {:?}",
+                                target.id,
+                                existing.target().generation
+                            ),
+                        )
+                        .for_operation("native-linux-recover"));
+                    }
+                    None => {
+                        recovered.insert(target.id.clone(), tombstone);
+                    }
+                }
+                Ok(crate::DriverRecovery::observed(DriverState::stopped()))
             }
-            None => {
-                recovered.insert(target.id.clone(), tombstone);
+            StaleGenerationRecovery::Live(live) => {
+                let observation = observe_live_supervised_state(record, &live)?;
+                let mut sessions = self.live.lock().await;
+                match sessions.get(&target.id) {
+                    Some(existing) if existing.target() == &target => {}
+                    Some(existing) => {
+                        return Err(Error::new(
+                            ErrorCode::Conflict,
+                            format!(
+                                "container {} already has live supervised recovery for generation {:?}",
+                                target.id,
+                                existing.target().generation
+                            ),
+                        )
+                        .for_operation("native-linux-recover"));
+                    }
+                    None => {
+                        sessions.insert(target.id.clone(), Arc::new(live));
+                    }
+                }
+                Ok(observation)
             }
         }
-        Ok(crate::DriverRecovery::observed(DriverState::stopped()))
     }
 
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {
@@ -443,6 +515,17 @@ impl RuntimeDriver for NativeLinuxDriver {
                 tombstone.target(),
                 "native-linux-create",
             ));
+        }
+        if let Some(live) = self.live.lock().await.get(&request.target.id) {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "container {} generation {:?} is retained through a reattached session supervisor; create requires a fresh generation",
+                    live.target().id,
+                    live.target().generation
+                ),
+            )
+            .for_operation("native-linux-create"));
         }
         let inherited_descriptors = match &request.attachments {
             DriverCreateAttachments::None => InheritedDescriptorPlan::empty(),
@@ -468,6 +551,9 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn state(&self, target: ContainerTarget) -> Result<DriverState> {
+        if let Some(live) = self.live_for(&target, "native-linux-state").await? {
+            return observe_live_supervised_driver_state(&live);
+        }
         if self
             .recovered_for(&target, "native-linux-state")
             .await?
@@ -485,6 +571,11 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn kill(&self, request: DriverKillRequest) -> Result<DriverState> {
+        if let Some(live) = self.live_for(&request.target, "native-linux-kill").await? {
+            live.kill_init()?;
+            live.kill_launcher()?;
+            return observe_live_supervised_driver_state(&live);
+        }
         if self
             .recovered_for(&request.target, "native-linux-kill")
             .await?
@@ -496,6 +587,20 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn delete(&self, request: DriverDeleteRequest) -> Result<()> {
+        if let Some(live) = self
+            .live_for(&request.target, "native-linux-delete")
+            .await?
+        {
+            let tombstone = live
+                .stopped_tombstone()
+                .map_err(|error| error.for_operation("native-linux-delete"))?;
+            {
+                let mut sessions = self.live.lock().await;
+                sessions.remove(&request.target.id);
+            }
+            self.executor.delete_stale_generation(&tombstone).await?;
+            return Ok(());
+        }
         if let Some(tombstone) = self
             .recovered_for(&request.target, "native-linux-delete")
             .await?
@@ -514,6 +619,10 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn wait(&self, request: DriverWaitRequest) -> Result<ExitStatus> {
+        if let Some(live) = self.live_for(&request.target, "native-linux-wait").await? {
+            let raw = live.wait_launcher()?;
+            return supervised_wait_status(raw);
+        }
         if self
             .recovered_for(&request.target, "native-linux-wait")
             .await?
@@ -558,6 +667,15 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn processes(&self, target: ContainerTarget) -> Result<Vec<ProcessRecord>> {
+        if self
+            .live_for(&target, "native-linux-processes")
+            .await?
+            .is_some()
+        {
+            // Process inventory restore is not part of this control-reattach
+            // slice; do not invent entries.
+            return Ok(Vec::new());
+        }
         if self
             .recovered_for(&target, "native-linux-processes")
             .await?
@@ -657,6 +775,17 @@ impl RuntimeDriver for NativeLinuxDriver {
                 "native-linux-restore",
             ));
         }
+        if let Some(live) = self.live.lock().await.get(&request.target.id) {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "container {} generation {:?} is retained through a reattached session supervisor; restore requires a fresh generation",
+                    live.target().id,
+                    live.target().generation
+                ),
+            )
+            .for_operation("native-linux-restore"));
+        }
         let guest_directory = guest_path(request.bundle.directory()).await?;
         let expected_target = request.target.clone();
         let expected_digest = request.bundle.config_digest().to_string();
@@ -685,6 +814,60 @@ fn native_attachment_capabilities(
     } else {
         Ok(AttachmentCapabilities::base_v2())
     }
+}
+
+fn observe_live_supervised_state(
+    record: &ContainerRecord,
+    live: &LinuxLiveSupervisedSession,
+) -> Result<crate::DriverRecovery> {
+    Ok(crate::DriverRecovery::observed(
+        observe_live_supervised_driver_state_for_status(*record.state.status(), live)?,
+    ))
+}
+
+fn observe_live_supervised_driver_state(live: &LinuxLiveSupervisedSession) -> Result<DriverState> {
+    observe_live_supervised_driver_state_for_status(
+        a3s_oci_sdk::oci_spec::runtime::ContainerState::Running,
+        live,
+    )
+}
+
+fn observe_live_supervised_driver_state_for_status(
+    durable_status: a3s_oci_sdk::oci_spec::runtime::ContainerState,
+    live: &LinuxLiveSupervisedSession,
+) -> Result<DriverState> {
+    use a3s_oci_sdk::oci_spec::runtime::ContainerState;
+    // Prefer authenticated /proc liveness. Never invent exit status here.
+    if live.init_is_live()? {
+        return match durable_status {
+            ContainerState::Created | ContainerState::Creating => {
+                DriverState::created(live.init_pid())
+            }
+            _ => DriverState::running(live.init_pid()),
+        };
+    }
+    if live.launcher_is_live()? {
+        return DriverState::created(live.launcher_pid());
+    }
+    Ok(DriverState::stopped())
+}
+
+fn supervised_wait_status(raw: i32) -> Result<ExitStatus> {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus as ProcessExitStatus;
+
+    let status = ProcessExitStatus::from_raw(raw);
+    if let Some(code) = status.code() {
+        return ExitStatus::exited(code);
+    }
+    if let Some(signal) = status.signal() {
+        return ExitStatus::signaled(signal, false);
+    }
+    Err(Error::new(
+        ErrorCode::Internal,
+        format!("supervised launcher returned unsupported wait status {raw}"),
+    )
+    .for_operation("native-linux-wait"))
 }
 
 fn recovered_stopped_error(target: &ContainerTarget, operation: &'static str) -> Error {

@@ -108,7 +108,7 @@ use trusted_executable::PinnedExecutable;
 pub use checkpoint::LinuxExecutorCheckpointSource;
 pub use inherited_descriptor::InheritedDescriptorPlan;
 pub(crate) use pidfd::verify_support as verify_pidfd_support;
-pub use recovery::LinuxExecutorTombstone;
+pub use recovery::{LinuxExecutorTombstone, LinuxLiveSupervisedSession, StaleGenerationRecovery};
 pub use restore::{LinuxRestoreSpawnRequest, LinuxRestoreSpawner};
 
 /// One-shot rootless device bootstrap completed before Tokio starts.
@@ -1104,15 +1104,17 @@ impl LinuxExecutor {
 
     /// Reconcile one durable generation left by a terminated executor owner.
     ///
-    /// The returned tombstone proves that the exact recorded launcher and init
-    /// identities have disappeared. It retains only the paths required for a
-    /// later stopped-only delete; no live process handle is reconstructed.
+    /// Stopped outcomes prove that the exact recorded launcher and init
+    /// identities have disappeared and retain only paths for stopped-only
+    /// delete. Live outcomes reattach an authenticated session supervisor so
+    /// wait/kill can use exact supervised status without inventing exit
+    /// evidence or restoring full `PreparedProcess` / I/O sessions yet.
     pub async fn recover_stale_generation(
         &self,
         target: &a3s_oci_sdk::ContainerTarget,
         config_digest: &str,
         durable_pid: Option<i32>,
-    ) -> Result<Option<LinuxExecutorTombstone>> {
+    ) -> Result<Option<StaleGenerationRecovery>> {
         if self.owner_identity.is_none() {
             return Err(executor_error(
                 ErrorCode::Unsupported,

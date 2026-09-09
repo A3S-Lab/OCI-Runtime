@@ -456,11 +456,11 @@ fn apply_modes(entries: &[DecodedEntry]) -> Result<()> {
             } else {
                 std::fs::set_permissions(&entry.target, std::fs::Permissions::from_mode(desired))
                     .map_err(|error| {
-                        precondition(format!(
-                            "failed to restore portable rootfs mode at {} to {desired:o}: {error}",
-                            entry.target.display()
-                        ))
-                    })?;
+                    precondition(format!(
+                        "failed to restore portable rootfs mode at {} to {desired:o}: {error}",
+                        entry.target.display()
+                    ))
+                })?;
             }
         }
     }
