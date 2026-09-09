@@ -42,6 +42,8 @@ const MSG_SPAWN: u8 = 2;
 const MSG_SPAWNED: u8 = 3;
 const MSG_ERROR: u8 = 4;
 const MSG_SHUTDOWN: u8 = 5;
+const MSG_WAIT: u8 = 6;
+const MSG_WAITED: u8 = 7;
 const MAX_SPAWN_ARGS: usize = 64;
 const MAX_ARG_BYTES: usize = 8 * 1024;
 #[allow(dead_code)] // Read by session_supervisor_opt_in for create wiring.
@@ -322,6 +324,35 @@ impl HostSessionSupervisor {
                 ErrorCode::Internal,
                 format!("session supervisor spawn failed: {message}"),
             )),
+            SupervisorResponse::Waited(_) => Err(supervisor_error(
+                ErrorCode::Internal,
+                "session supervisor returned a wait result for a spawn request",
+            )),
+        }
+    }
+
+    /// Block until a supervised child exits and return its raw wait status.
+    #[allow(dead_code)] // Used when create launcher spawn moves under the supervisor.
+    pub(crate) fn wait_launcher(&mut self, pid: i32) -> Result<i32> {
+        let mut payload = Vec::with_capacity(5);
+        payload.push(MSG_WAIT);
+        payload.extend_from_slice(&pid.to_be_bytes());
+        self.control.write_all(&payload).map_err(|error| {
+            supervisor_error(
+                ErrorCode::Internal,
+                format!("failed to write session-supervisor wait request: {error}"),
+            )
+        })?;
+        match read_supervisor_response(&mut self.control)? {
+            SupervisorResponse::Waited(status) => Ok(status),
+            SupervisorResponse::Error(message) => Err(supervisor_error(
+                ErrorCode::Internal,
+                format!("session supervisor wait failed: {message}"),
+            )),
+            SupervisorResponse::Spawned(_) => Err(supervisor_error(
+                ErrorCode::Internal,
+                "session supervisor returned a spawn result for a wait request",
+            )),
         }
     }
 }
@@ -403,14 +434,14 @@ fn run_session_supervise_service() -> Result<()> {
     })?;
 
     loop {
-        reap_children();
         let mut header = [0_u8; 1];
         match control.read_exact(&mut header) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
                 // Host Service died or closed its channel. Remain as the durable
                 // session authority until an authenticated replacement reconnects
-                // or an operator kills this process.
+                // or an operator kills this process. Reap only after Host is gone
+                // so a live Host can wait the launcher through its pidfd.
                 loop {
                     reap_children();
                     std::thread::sleep(Duration::from_millis(50));
@@ -424,7 +455,10 @@ fn run_session_supervise_service() -> Result<()> {
             }
         }
         match header[0] {
-            MSG_SHUTDOWN => return Ok(()),
+            MSG_SHUTDOWN => {
+                reap_children();
+                return Ok(());
+            }
             MSG_SPAWN => match handle_spawn_request(&mut control, identity.pid()) {
                 Ok(pid) => {
                     let mut response = Vec::with_capacity(5);
@@ -435,6 +469,22 @@ fn run_session_supervise_service() -> Result<()> {
                         supervisor_error(
                             ErrorCode::Internal,
                             format!("failed to publish session-supervisor spawn result: {error}"),
+                        )
+                    })?;
+                }
+                Err(error) => {
+                    write_error_response(&mut control, &error.message)?;
+                }
+            },
+            MSG_WAIT => match handle_wait_request(&mut control) {
+                Ok(status) => {
+                    let mut response = Vec::with_capacity(5);
+                    response.push(MSG_WAITED);
+                    response.extend_from_slice(&status.to_be_bytes());
+                    control.write_all(&response).map_err(|error| {
+                        supervisor_error(
+                            ErrorCode::Internal,
+                            format!("failed to publish session-supervisor wait result: {error}"),
                         )
                     })?;
                 }
@@ -553,13 +603,37 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
             ));
         }
     };
-    // Leak Child so the Host can wait via pidfd; the supervise loop reaps.
+    // Retain Child so MSG_WAIT can reap the exact launcher without racing an
+    // opportunistic reap loop while the Host still owns the generation.
     std::mem::forget(child);
     Ok(pid)
 }
 
+fn handle_wait_request(control: &mut UnixStream) -> Result<i32> {
+    let mut pid_bytes = [0_u8; 4];
+    control.read_exact(&mut pid_bytes).map_err(|error| {
+        supervisor_error(
+            ErrorCode::Unavailable,
+            format!("failed to read session-supervisor wait pid: {error}"),
+        )
+    })?;
+    let pid = i32::from_be_bytes(pid_bytes);
+    if pid <= 0 {
+        return Err(supervisor_error(
+            ErrorCode::InvalidArgument,
+            format!("session supervisor wait requires a positive PID; received {pid}"),
+        ));
+    }
+    let outcome = wait_for_child(pid)?;
+    Ok(match outcome {
+        ChildOutcome::Exited(code) => code << 8,
+        ChildOutcome::Signaled(signal) => signal,
+    })
+}
+
 enum SupervisorResponse {
     Spawned(i32),
+    Waited(i32),
     Error(String),
 }
 
@@ -616,6 +690,16 @@ fn read_supervisor_response(control: &mut UnixStream) -> Result<SupervisorRespon
                 )
             })?;
             Ok(SupervisorResponse::Spawned(i32::from_be_bytes(pid_bytes)))
+        }
+        MSG_WAITED => {
+            let mut status_bytes = [0_u8; 4];
+            control.read_exact(&mut status_bytes).map_err(|error| {
+                supervisor_error(
+                    ErrorCode::Unavailable,
+                    format!("failed to read session-supervisor wait status: {error}"),
+                )
+            })?;
+            Ok(SupervisorResponse::Waited(i32::from_be_bytes(status_bytes)))
         }
         MSG_ERROR => {
             let len = read_u32(control)? as usize;

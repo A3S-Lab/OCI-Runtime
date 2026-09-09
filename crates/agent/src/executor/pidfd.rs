@@ -83,6 +83,36 @@ impl PidFd {
     pub(super) const fn pid(&self) -> i32 {
         self.pid
     }
+
+    /// Non-blocking reap through `waitid(P_PIDFD)`.
+    pub(super) fn try_wait_raw(&self) -> Result<Option<i32>> {
+        // linux/wait.h: P_PIDFD = 3
+        const P_PIDFD: libc::idtype_t = 3;
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // SAFETY: waitid with P_PIDFD uses the owned pidfd; WNOHANG is non-blocking.
+        let result = unsafe {
+            libc::waitid(
+                P_PIDFD,
+                self.descriptor.as_raw_fd() as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG,
+            )
+        };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ECHILD) {
+                return Ok(None);
+            }
+            return Err(map_pidfd_error("wait", Some(self.pid), None, error));
+        }
+        // SAFETY: successful waitid initializes si_pid when a child was reaped.
+        let reaped = unsafe { info.si_pid() };
+        if reaped == 0 {
+            return Ok(None);
+        }
+        // SAFETY: si_status is valid after WEXITED waitid.
+        Ok(Some(unsafe { info.si_status() }))
+    }
 }
 
 pub(crate) fn verify_support() -> Result<()> {
