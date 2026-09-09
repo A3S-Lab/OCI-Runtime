@@ -35,6 +35,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Portable rootfs metadata replay now inspects and restores the root entry
+  through an open directory descriptor. Utility-VM guests that expose rootfs
+  via `/proc/self/fd/<n>` no longer report a type mismatch when the `.`
+  metadata entry is a directory.
 - `native-linux-host-service` with `--delegated-cgroup-root` now completes the
   same rootless device-policy bootstrap as `native-linux-service` before Tokio
   starts. Sandbox creates through the durable multi-container host owner retain
