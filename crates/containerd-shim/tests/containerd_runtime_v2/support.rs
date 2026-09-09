@@ -108,9 +108,7 @@ pub(crate) async fn create_dedicated_vm_container(
     .await?;
     let container = ContainersClient::new(channel.clone())
         .get(namespaced(
-            GetContainerRequest {
-                id: id.to_string(),
-            },
+            GetContainerRequest { id: id.to_string() },
             &config.namespace,
         )?)
         .await
@@ -121,9 +119,8 @@ pub(crate) async fn create_dedicated_vm_container(
     let spec = container
         .spec
         .ok_or_else(|| qualification_error("dedicated-vm container omitted OCI spec"))?;
-    let document: Value = serde_json::from_slice(&spec.value).map_err(|error| {
-        qualification_error(format!("decode dedicated-vm OCI spec: {error}"))
-    })?;
+    let document: Value = serde_json::from_slice(&spec.value)
+        .map_err(|error| qualification_error(format!("decode dedicated-vm OCI spec: {error}")))?;
     let annotation = document
         .pointer("/annotations/dev.a3s.oci.runtime.v1.CreateOptions")
         .and_then(Value::as_str)

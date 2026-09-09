@@ -667,14 +667,10 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn processes(&self, target: ContainerTarget) -> Result<Vec<ProcessRecord>> {
-        if self
-            .live_for(&target, "native-linux-processes")
-            .await?
-            .is_some()
-        {
-            // Process inventory restore is not part of this control-reattach
-            // slice; do not invent entries.
-            return Ok(Vec::new());
+        if let Some(live) = self.live_for(&target, "native-linux-processes").await? {
+            return live
+                .process_inventory()
+                .map_err(|error| error.for_operation("native-linux-processes"));
         }
         if self
             .recovered_for(&target, "native-linux-processes")

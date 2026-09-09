@@ -38,18 +38,15 @@ pub(crate) async fn materialize_for_create(
     }
 
     let runtime_root = runtime_root_from_environment()?;
-    let handoff = runtime_bundle_handoff_directory(
-        &runtime_root,
-        container_id,
-        &context.operation_id,
-    )?;
+    let handoff =
+        runtime_bundle_handoff_directory(&runtime_root, container_id, &context.operation_id)?;
     prepare_private_handoff_tree(&runtime_root, &handoff).await?;
     copy_portable_bundle(source_bundle, &handoff).await?;
     write_handoff_config(source_bundle, &handoff).await?;
 
     let bundle = OciBundle::load(&handoff).await?;
-    let attachments = CreateAttachments::from_bundle(&bundle, io)?
-        .with_runtime_bundle_handoff(&bundle)?;
+    let attachments =
+        CreateAttachments::from_bundle(&bundle, io)?.with_runtime_bundle_handoff(&bundle)?;
     Ok((bundle, attachments))
 }
 
@@ -66,7 +63,10 @@ fn runtime_root_from_environment() -> Result<PathBuf> {
     if !path.is_absolute() {
         return Err(handoff_error(
             ErrorCode::InvalidArgument,
-            format!("{RUNTIME_ROOT_ENV} must be an absolute path: {}", path.display()),
+            format!(
+                "{RUNTIME_ROOT_ENV} must be an absolute path: {}",
+                path.display()
+            ),
         ));
     }
     // Host stores the exact --root string; handoff validation rejects aliases.
@@ -304,7 +304,10 @@ fn project_containerd_spec_for_dedicated_vm(document: &mut serde_json::Value) ->
             "OCI config must be a JSON object",
         )
     })?;
-    if let Some(mounts) = root.get_mut("mounts").and_then(|value| value.as_array_mut()) {
+    if let Some(mounts) = root
+        .get_mut("mounts")
+        .and_then(|value| value.as_array_mut())
+    {
         mounts.retain(|mount| {
             !matches!(
                 mount.get("type").and_then(|value| value.as_str()),
@@ -312,7 +315,10 @@ fn project_containerd_spec_for_dedicated_vm(document: &mut serde_json::Value) ->
             )
         });
     }
-    if let Some(linux) = root.get_mut("linux").and_then(|value| value.as_object_mut()) {
+    if let Some(linux) = root
+        .get_mut("linux")
+        .and_then(|value| value.as_object_mut())
+    {
         if let Some(path) = linux.get("cgroupsPath").and_then(|value| value.as_str()) {
             let relative = path.trim_start_matches('/');
             if relative.is_empty() {
@@ -334,9 +340,7 @@ fn handoff_error(code: ErrorCode, message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        materialize_for_create, requires_bundle_handoff, RUNTIME_ROOT_ENV,
-    };
+    use super::{materialize_for_create, requires_bundle_handoff, RUNTIME_ROOT_ENV};
     use a3s_oci_sdk::{
         ContainerId, IsolationRequest, OperationContext, OperationId, ProcessIo,
         RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
