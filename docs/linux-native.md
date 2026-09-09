@@ -1023,6 +1023,13 @@ recovery (1/1) and bounded soak (25/25) reports:
 from a clean Linux-native worktree. Observation-only; fresh-host and AArch64
 promotion remain open.
 
+Clean revision `01786abf4812890ca6f274f1cadf80ebd99ad44f` also retained an
+available 11/11 `a3s.oci.linux-kvm-create-reopen-matrix.v2` report
+(`1e4ffc3de44391e95b7e7dd1036c478ec052aafe0cefb630211d59b652195ffe`) covering
+all Create durable-reopen stages including Host-shutdown points, from a clean
+Linux-native worktree against the same rebuilt system image. Observation-only;
+promotion remains open.
+
 The same current-main source then reran the File and Filesystem operation-stage
 owner-replacement gates. Both matrices passed all 9/9 Host/Guest transport
 boundaries with immutable asset provenance and complete endpoint, process,
