@@ -18,6 +18,8 @@
 //! `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. Default create keeps Host-bound
 //! PDEATHSIG so stopped-only recovery gates stay green.
 
+mod output_buffer;
+
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io::{self, Read, Write};
@@ -31,13 +33,14 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use a3s_oci_sdk::{Error, ErrorCode, Result};
+use a3s_oci_sdk::{Error, ErrorCode, OutputChunk, OutputStream, Result};
 use serde::{Deserialize, Serialize};
 
 use super::pid_supervisor::{
     terminate_pid, verify_and_arm_parent_death_signal, wait_for_child, ChildOutcome,
 };
 use super::pidfd::PidFd;
+use output_buffer::{SyncOutputBuffer, OUTPUT_READER_CHUNK_BYTES};
 
 const IDENTITY_SCHEMA_VERSION: &str = "a3s.oci.native-linux-session-supervisor-identity.v1";
 const MAX_STAT_BYTES: usize = 4096;
@@ -60,6 +63,14 @@ const MSG_STDIN_TAKEN: u8 = 11;
 /// Close the deposited duplicate so intentional close_stdin can deliver EOF.
 const MSG_CLOSE_DEPOSITED_STDIN: u8 = 12;
 const MSG_DEPOSIT_CLOSED: u8 = 13;
+/// Host moves exclusive stdout/stderr read ends to the supervisor (not F_DUPFD).
+const MSG_DEPOSIT_OUTPUT: u8 = 14;
+const MSG_OUTPUT_DEPOSITED: u8 = 15;
+/// Host polls sequence-bearing chunks from the supervisor-owned drain buffer.
+const MSG_READ_OUTPUT: u8 = 16;
+const MSG_OUTPUT_CHUNKS: u8 = 17;
+const FLAG_OUTPUT_STDOUT: u8 = 0b0000_0001;
+const FLAG_OUTPUT_STDERR: u8 = 0b0000_0010;
 const MAX_SPAWN_ARGS: usize = 64;
 const MAX_ARG_BYTES: usize = 8 * 1024;
 const MAX_SPAWN_FDS: usize = 6;
@@ -395,7 +406,8 @@ impl HostSessionSupervisor {
             )),
             SupervisorResponse::Waited(_)
             | SupervisorResponse::Ack(_)
-            | SupervisorResponse::StdinFd(_) => Err(supervisor_error(
+            | SupervisorResponse::StdinFd(_)
+            | SupervisorResponse::OutputChunks(_) => Err(supervisor_error(
                 ErrorCode::Internal,
                 "session supervisor returned a non-spawn result for a spawn request",
             )),
@@ -421,7 +433,8 @@ impl HostSessionSupervisor {
             )),
             SupervisorResponse::Spawned(_)
             | SupervisorResponse::Ack(_)
-            | SupervisorResponse::StdinFd(_) => Err(supervisor_error(
+            | SupervisorResponse::StdinFd(_)
+            | SupervisorResponse::OutputChunks(_) => Err(supervisor_error(
                 ErrorCode::Internal,
                 "session supervisor returned a non-wait result for a wait request",
             )),
@@ -433,8 +446,8 @@ impl HostSessionSupervisor {
     /// Multiple writers on a pipe are safe. Host keeps its original write end for
     /// live I/O; the supervisor retains the duplicate so Host death does not
     /// deliver EOF. Intentional [`Self::close_deposited_stdin`] (paired with Host
-    /// close) delivers EOF. Capture stdout/stderr cannot use this pattern: two
-    /// readers would split the stream.
+    /// close) delivers EOF. Capture stdout/stderr use [`Self::deposit_output`]
+    /// instead: those read ends must move exclusively (not `F_DUPFD`).
     pub(crate) fn deposit_stdin(&mut self, launcher_pid: i32, stdin: RawFd) -> Result<()> {
         let mut payload = Vec::with_capacity(5);
         payload.push(MSG_DEPOSIT_STDIN);
@@ -455,7 +468,8 @@ impl HostSessionSupervisor {
             SupervisorResponse::Spawned(_)
             | SupervisorResponse::Waited(_)
             | SupervisorResponse::Ack(_)
-            | SupervisorResponse::StdinFd(_) => Err(supervisor_error(
+            | SupervisorResponse::StdinFd(_)
+            | SupervisorResponse::OutputChunks(_) => Err(supervisor_error(
                 ErrorCode::Internal,
                 "session supervisor returned a non-deposit result for a stdin deposit",
             )),
@@ -485,7 +499,8 @@ impl HostSessionSupervisor {
             )),
             SupervisorResponse::Spawned(_)
             | SupervisorResponse::Waited(_)
-            | SupervisorResponse::Ack(_) => Err(supervisor_error(
+            | SupervisorResponse::Ack(_)
+            | SupervisorResponse::OutputChunks(_) => Err(supervisor_error(
                 ErrorCode::Internal,
                 "session supervisor returned a non-take result for a stdin take",
             )),
@@ -514,9 +529,122 @@ impl HostSessionSupervisor {
             SupervisorResponse::Spawned(_)
             | SupervisorResponse::Waited(_)
             | SupervisorResponse::Ack(_)
-            | SupervisorResponse::StdinFd(_) => Err(supervisor_error(
+            | SupervisorResponse::StdinFd(_)
+            | SupervisorResponse::OutputChunks(_) => Err(supervisor_error(
                 ErrorCode::Internal,
                 "session supervisor returned a non-close result for a stdin close",
+            )),
+        }
+    }
+
+    /// Move exclusive capture stdout/stderr read ends to the supervisor.
+    ///
+    /// Passes ownership via SCM_RIGHTS, then drops the Host-local `OwnedFd`
+    /// copies immediately so the supervisor is the sole reader before drain
+    /// threads start. Unlike stdin, this is not `F_DUPFD`: two readers would
+    /// race and split the stream. Hosts consume chunks only through
+    /// [`Self::read_output`].
+    pub(crate) fn deposit_output(
+        &mut self,
+        launcher_pid: i32,
+        stdout: Option<OwnedFd>,
+        stderr: Option<OwnedFd>,
+    ) -> Result<()> {
+        let mut flags = 0_u8;
+        let mut fds = Vec::with_capacity(2);
+        if let Some(descriptor) = stdout.as_ref() {
+            flags |= FLAG_OUTPUT_STDOUT;
+            fds.push(descriptor.as_raw_fd());
+        }
+        if let Some(descriptor) = stderr.as_ref() {
+            flags |= FLAG_OUTPUT_STDERR;
+            fds.push(descriptor.as_raw_fd());
+        }
+        if flags == 0 {
+            return Err(supervisor_error(
+                ErrorCode::InvalidArgument,
+                "session supervisor output deposit requires at least one capture read end",
+            ));
+        }
+        let mut payload = Vec::with_capacity(6);
+        payload.push(MSG_DEPOSIT_OUTPUT);
+        payload.extend_from_slice(&launcher_pid.to_be_bytes());
+        payload.push(flags);
+        self.control.write_all(&payload).map_err(|error| {
+            supervisor_error(
+                ErrorCode::Internal,
+                format!("failed to write session-supervisor output deposit header: {error}"),
+            )
+        })?;
+        send_with_fds(self.control.as_raw_fd(), &[0xFD], &fds)?;
+        // Move, not dup: drop Host copies before the supervisor ack returns so
+        // drain threads never share the pipe with a competing Host reader.
+        drop(stdout);
+        drop(stderr);
+        match read_supervisor_response(&mut self.control)? {
+            SupervisorResponse::Ack(MSG_OUTPUT_DEPOSITED) => Ok(()),
+            SupervisorResponse::Error(message) => Err(supervisor_error(
+                ErrorCode::Internal,
+                format!("session supervisor output deposit failed: {message}"),
+            )),
+            SupervisorResponse::Spawned(_)
+            | SupervisorResponse::Waited(_)
+            | SupervisorResponse::Ack(_)
+            | SupervisorResponse::StdinFd(_)
+            | SupervisorResponse::OutputChunks(_) => Err(supervisor_error(
+                ErrorCode::Internal,
+                "session supervisor returned a non-deposit result for an output deposit",
+            )),
+        }
+    }
+
+    /// Poll authentic captured chunks drained exclusively by the supervisor.
+    ///
+    /// Returns [`ErrorCode::Unavailable`] when no output deposit exists for
+    /// `launcher_pid` (never invent an empty successful stream). Stale cursors
+    /// after eviction fail closed with [`ErrorCode::ResourceExhausted`].
+    pub(crate) fn read_output(
+        &mut self,
+        launcher_pid: i32,
+        after_sequence: u64,
+        max_bytes: u32,
+        wait_timeout_ms: Option<u64>,
+    ) -> Result<Vec<OutputChunk>> {
+        let wait_ms = wait_timeout_ms.unwrap_or(0);
+        let wait_ms = u32::try_from(wait_ms).unwrap_or(u32::MAX);
+        let mut payload = Vec::with_capacity(21);
+        payload.push(MSG_READ_OUTPUT);
+        payload.extend_from_slice(&launcher_pid.to_be_bytes());
+        payload.extend_from_slice(&after_sequence.to_be_bytes());
+        payload.extend_from_slice(&max_bytes.to_be_bytes());
+        payload.extend_from_slice(&wait_ms.to_be_bytes());
+        self.control.write_all(&payload).map_err(|error| {
+            supervisor_error(
+                ErrorCode::Internal,
+                format!("failed to write session-supervisor read-output request: {error}"),
+            )
+        })?;
+        match read_supervisor_response(&mut self.control)? {
+            SupervisorResponse::OutputChunks(chunks) => Ok(chunks),
+            SupervisorResponse::Error(message) => {
+                let code = if message.contains("fell behind retained cursor") {
+                    ErrorCode::ResourceExhausted
+                } else if message.contains("ahead of latest cursor") {
+                    ErrorCode::InvalidArgument
+                } else {
+                    ErrorCode::Unavailable
+                };
+                Err(supervisor_error(
+                    code,
+                    format!("session supervisor read-output unavailable: {message}"),
+                ))
+            }
+            SupervisorResponse::Spawned(_)
+            | SupervisorResponse::Waited(_)
+            | SupervisorResponse::Ack(_)
+            | SupervisorResponse::StdinFd(_) => Err(supervisor_error(
+                ErrorCode::Internal,
+                "session supervisor returned a non-read-output result for a read-output request",
             )),
         }
     }
@@ -528,8 +656,8 @@ impl HostSessionSupervisor {
     /// wait status belong to the recorded supervisor incarnation. This opens a
     /// fresh control socket on the published abstract endpoint and proves the
     /// PID + start-time identity still matches. It does not restore
-    /// `PreparedProcess` or Host I/O sessions by itself; call [`Self::take_stdin`]
-    /// for deposited stdin after reattach.
+    /// `PreparedProcess` by itself; call [`Self::take_stdin`] for deposited
+    /// stdin and [`Self::read_output`] for exclusive capture relay after reattach.
     pub(crate) fn reattach(expected: &SessionSupervisorIdentity) -> Result<Self> {
         expected.authenticate_live()?;
         let address = SocketAddr::from_abstract_name(expected.reattach_endpoint_name().as_bytes())
@@ -667,6 +795,7 @@ fn run_session_supervise_service() -> Result<()> {
     let identity = SessionSupervisorIdentity::current()?;
     write_ready_identity(&mut control, &identity)?;
     let mut deposited_stdin: BTreeMap<i32, OwnedFd> = BTreeMap::new();
+    let mut deposited_output: BTreeMap<i32, Arc<SyncOutputBuffer>> = BTreeMap::new();
 
     loop {
         let mut header = [0_u8; 1];
@@ -678,8 +807,9 @@ fn run_session_supervise_service() -> Result<()> {
                 // exit status must stay available for MSG_WAIT after an
                 // authenticated replacement Host reattaches the control channel.
                 // Re-exec / a new supervisor would break PDEATHSIG parentage.
-                // Deposited stdin write ends stay open across the control gap so
-                // a live child does not observe EOF solely because Host died.
+                // Deposited stdin write ends and exclusive capture drains stay
+                // open across the control gap so Host death alone neither EOFs
+                // stdin nor loses buffered stdout/stderr.
                 control = accept_control_reattach(&identity)?;
                 continue;
             }
@@ -693,6 +823,7 @@ fn run_session_supervise_service() -> Result<()> {
         match header[0] {
             MSG_SHUTDOWN => {
                 deposited_stdin.clear();
+                deposited_output.clear();
                 reap_children();
                 return Ok(());
             }
@@ -716,6 +847,8 @@ fn run_session_supervise_service() -> Result<()> {
             MSG_WAIT => match handle_wait_request(&mut control) {
                 Ok((pid, status)) => {
                     deposited_stdin.remove(&pid);
+                    // Keep output buffers after wait so Hosts can drain residual
+                    // authentic chunks / EOF after the launcher exits.
                     let mut response = Vec::with_capacity(5);
                     response.push(MSG_WAITED);
                     response.extend_from_slice(&status.to_be_bytes());
@@ -730,36 +863,40 @@ fn run_session_supervise_service() -> Result<()> {
                     write_error_response(&mut control, &error.message)?;
                 }
             },
-            MSG_DEPOSIT_STDIN => match handle_deposit_stdin(&mut control, &mut deposited_stdin) {
-                Ok(()) => {
-                    control.write_all(&[MSG_DEPOSITED]).map_err(|error| {
+            MSG_DEPOSIT_STDIN => {
+                match handle_deposit_stdin(&mut control, &mut deposited_stdin) {
+                    Ok(()) => {
+                        control.write_all(&[MSG_DEPOSITED]).map_err(|error| {
                         supervisor_error(
                             ErrorCode::Internal,
                             format!("failed to publish session-supervisor stdin deposit ack: {error}"),
                         )
                     })?;
+                    }
+                    Err(error) => {
+                        write_error_response(&mut control, &error.message)?;
+                    }
                 }
-                Err(error) => {
-                    write_error_response(&mut control, &error.message)?;
-                }
-            },
-            MSG_TAKE_STDIN => match handle_take_stdin(&mut control, &mut deposited_stdin) {
-                Ok(fd) => {
-                    control.write_all(&[MSG_STDIN_TAKEN]).map_err(|error| {
+            }
+            MSG_TAKE_STDIN => {
+                match handle_take_stdin(&mut control, &mut deposited_stdin) {
+                    Ok(fd) => {
+                        control.write_all(&[MSG_STDIN_TAKEN]).map_err(|error| {
                         supervisor_error(
                             ErrorCode::Internal,
                             format!("failed to publish session-supervisor stdin take header: {error}"),
                         )
                     })?;
-                    send_with_fds(control.as_raw_fd(), &[0xFD], &[fd.as_raw_fd()])?;
-                    // SCM_RIGHTS duplicated into the replacement Host; drop the
-                    // supervisor copy so intentional Host close can deliver EOF.
-                    drop(fd);
+                        send_with_fds(control.as_raw_fd(), &[0xFD], &[fd.as_raw_fd()])?;
+                        // SCM_RIGHTS duplicated into the replacement Host; drop the
+                        // supervisor copy so intentional Host close can deliver EOF.
+                        drop(fd);
+                    }
+                    Err(error) => {
+                        write_error_response(&mut control, &error.message)?;
+                    }
                 }
-                Err(error) => {
-                    write_error_response(&mut control, &error.message)?;
-                }
-            },
+            }
             MSG_CLOSE_DEPOSITED_STDIN => {
                 match handle_close_deposited_stdin(&mut control, &mut deposited_stdin) {
                     Ok(()) => {
@@ -777,6 +914,31 @@ fn run_session_supervise_service() -> Result<()> {
                     }
                 }
             }
+            MSG_DEPOSIT_OUTPUT => {
+                match handle_deposit_output(&mut control, &mut deposited_output) {
+                    Ok(()) => {
+                        control.write_all(&[MSG_OUTPUT_DEPOSITED]).map_err(|error| {
+                            supervisor_error(
+                                ErrorCode::Internal,
+                                format!(
+                                    "failed to publish session-supervisor output deposit ack: {error}"
+                                ),
+                            )
+                        })?;
+                    }
+                    Err(error) => {
+                        write_error_response(&mut control, &error.message)?;
+                    }
+                }
+            }
+            MSG_READ_OUTPUT => match handle_read_output(&mut control, &deposited_output) {
+                Ok(chunks) => {
+                    write_output_chunks_response(&mut control, &chunks)?;
+                }
+                Err(error) => {
+                    write_error_response(&mut control, &error.message)?;
+                }
+            },
             other => {
                 return Err(supervisor_error(
                     ErrorCode::InvalidArgument,
@@ -1138,11 +1300,203 @@ fn handle_close_deposited_stdin(
     Ok(())
 }
 
+fn handle_deposit_output(
+    control: &mut UnixStream,
+    deposited_output: &mut BTreeMap<i32, Arc<SyncOutputBuffer>>,
+) -> Result<()> {
+    let pid = read_launcher_pid(control, "output deposit")?;
+    let flags = read_u8(control)?;
+    if flags & !(FLAG_OUTPUT_STDOUT | FLAG_OUTPUT_STDERR) != 0 {
+        return Err(supervisor_error(
+            ErrorCode::InvalidArgument,
+            format!("session supervisor output deposit flags {flags:#x} are invalid"),
+        ));
+    }
+    let expected =
+        usize::from(flags & FLAG_OUTPUT_STDOUT != 0) + usize::from(flags & FLAG_OUTPUT_STDERR != 0);
+    if expected == 0 {
+        return Err(supervisor_error(
+            ErrorCode::InvalidArgument,
+            "session supervisor output deposit requires stdout and/or stderr flags",
+        ));
+    }
+    let mut fds = receive_fds(control.as_raw_fd(), expected)?;
+    if fds.len() != expected {
+        return Err(supervisor_error(
+            ErrorCode::Internal,
+            format!(
+                "session supervisor output deposit expected {expected} descriptors; received {}",
+                fds.len()
+            ),
+        ));
+    }
+    if deposited_output.contains_key(&pid) {
+        return Err(supervisor_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "session supervisor already holds exclusive capture drains for launcher PID {pid}"
+            ),
+        ));
+    }
+    let buffer = SyncOutputBuffer::new(expected as u8);
+    if flags & FLAG_OUTPUT_STDOUT != 0 {
+        let stdout = fds.remove(0);
+        spawn_exclusive_output_reader(stdout, OutputStream::Stdout, Arc::clone(&buffer))?;
+    }
+    if flags & FLAG_OUTPUT_STDERR != 0 {
+        let stderr = fds.remove(0);
+        spawn_exclusive_output_reader(stderr, OutputStream::Stderr, Arc::clone(&buffer))?;
+    }
+    deposited_output.insert(pid, buffer);
+    Ok(())
+}
+
+fn handle_read_output(
+    control: &mut UnixStream,
+    deposited_output: &BTreeMap<i32, Arc<SyncOutputBuffer>>,
+) -> Result<Vec<OutputChunk>> {
+    let pid = read_launcher_pid(control, "read-output")?;
+    let after_sequence = read_u64(control)?;
+    let max_bytes = read_u32(control)?;
+    let wait_ms = read_u32(control)?;
+    let buffer = deposited_output.get(&pid).ok_or_else(|| {
+        supervisor_error(
+            ErrorCode::Unavailable,
+            format!("session supervisor has no deposited capture output for launcher PID {pid}"),
+        )
+    })?;
+    let wait_timeout_ms = (wait_ms > 0).then_some(u64::from(wait_ms));
+    buffer.read(after_sequence, max_bytes, wait_timeout_ms)
+}
+
+fn spawn_exclusive_output_reader(
+    fd: OwnedFd,
+    stream: OutputStream,
+    buffer: Arc<SyncOutputBuffer>,
+) -> Result<()> {
+    std::thread::Builder::new()
+        .name(format!("a3s-oci-output-{stream:?}"))
+        .spawn(move || {
+            let mut reader = std::fs::File::from(fd);
+            let mut bytes = vec![0_u8; OUTPUT_READER_CHUNK_BYTES];
+            loop {
+                match reader.read(&mut bytes) {
+                    Ok(0) => {
+                        buffer.finish(stream, None);
+                        return;
+                    }
+                    Ok(length) => buffer.append(stream, bytes[..length].to_vec()),
+                    Err(error) => {
+                        buffer.finish(stream, Some(error));
+                        return;
+                    }
+                }
+            }
+        })
+        .map_err(|error| {
+            supervisor_error(
+                ErrorCode::ResourceExhausted,
+                format!("failed to spawn session-supervisor {stream:?} drain thread: {error}"),
+            )
+        })?;
+    Ok(())
+}
+
+fn write_output_chunks_response(control: &mut UnixStream, chunks: &[OutputChunk]) -> Result<()> {
+    let count = u32::try_from(chunks.len()).map_err(|_| {
+        supervisor_error(
+            ErrorCode::ResourceExhausted,
+            "session supervisor output chunk count does not fit the wire format",
+        )
+    })?;
+    let mut payload = Vec::new();
+    payload.push(MSG_OUTPUT_CHUNKS);
+    payload.extend_from_slice(&count.to_be_bytes());
+    for chunk in chunks {
+        payload.extend_from_slice(&chunk.sequence.to_be_bytes());
+        payload.push(match chunk.stream {
+            OutputStream::Stdout => 0,
+            OutputStream::Stderr => 1,
+        });
+        payload.push(u8::from(chunk.eof));
+        let len = u32::try_from(chunk.data.len()).map_err(|_| {
+            supervisor_error(
+                ErrorCode::ResourceExhausted,
+                "session supervisor output chunk exceeds u32 length",
+            )
+        })?;
+        payload.extend_from_slice(&len.to_be_bytes());
+        payload.extend_from_slice(&chunk.data);
+    }
+    control.write_all(&payload).map_err(|error| {
+        supervisor_error(
+            ErrorCode::Internal,
+            format!("failed to publish session-supervisor output chunks: {error}"),
+        )
+    })
+}
+
+fn read_output_chunks_response(control: &mut UnixStream) -> Result<Vec<OutputChunk>> {
+    let count = read_u32(control)? as usize;
+    if count > 10_000 {
+        return Err(supervisor_error(
+            ErrorCode::ResourceExhausted,
+            format!("session supervisor output chunk count {count} exceeds bound"),
+        ));
+    }
+    let mut chunks = Vec::with_capacity(count);
+    for _ in 0..count {
+        let sequence = read_u64(control)?;
+        let stream = match read_u8(control)? {
+            0 => OutputStream::Stdout,
+            1 => OutputStream::Stderr,
+            other => {
+                return Err(supervisor_error(
+                    ErrorCode::Internal,
+                    format!("session supervisor output stream tag {other} is invalid"),
+                ));
+            }
+        };
+        let eof = match read_u8(control)? {
+            0 => false,
+            1 => true,
+            other => {
+                return Err(supervisor_error(
+                    ErrorCode::Internal,
+                    format!("session supervisor output eof tag {other} is invalid"),
+                ));
+            }
+        };
+        let len = read_u32(control)? as usize;
+        if len > MAX_ARG_BYTES * 64 {
+            return Err(supervisor_error(
+                ErrorCode::ResourceExhausted,
+                format!("session supervisor output chunk length {len} exceeds bound"),
+            ));
+        }
+        let mut data = vec![0_u8; len];
+        control.read_exact(&mut data).map_err(|error| {
+            supervisor_error(
+                ErrorCode::Unavailable,
+                format!("failed to read session-supervisor output chunk: {error}"),
+            )
+        })?;
+        chunks.push(OutputChunk {
+            sequence,
+            stream,
+            data,
+            eof,
+        });
+    }
+    Ok(chunks)
+}
+
 enum SupervisorResponse {
     Spawned(i32),
     Waited(i32),
     Ack(u8),
     StdinFd(OwnedFd),
+    OutputChunks(Vec<OutputChunk>),
     Error(String),
 }
 
@@ -1210,7 +1564,9 @@ fn read_supervisor_response(control: &mut UnixStream) -> Result<SupervisorRespon
             })?;
             Ok(SupervisorResponse::Waited(i32::from_be_bytes(status_bytes)))
         }
-        MSG_DEPOSITED | MSG_DEPOSIT_CLOSED => Ok(SupervisorResponse::Ack(header[0])),
+        MSG_DEPOSITED | MSG_DEPOSIT_CLOSED | MSG_OUTPUT_DEPOSITED => {
+            Ok(SupervisorResponse::Ack(header[0]))
+        }
         MSG_STDIN_TAKEN => {
             let mut fds = receive_fds(control.as_raw_fd(), 1)?;
             let fd = fds.pop().ok_or_else(|| {
@@ -1221,6 +1577,9 @@ fn read_supervisor_response(control: &mut UnixStream) -> Result<SupervisorRespon
             })?;
             Ok(SupervisorResponse::StdinFd(fd))
         }
+        MSG_OUTPUT_CHUNKS => Ok(SupervisorResponse::OutputChunks(
+            read_output_chunks_response(control)?,
+        )),
         MSG_ERROR => {
             let len = read_u32(control)? as usize;
             if len > MAX_ARG_BYTES {
@@ -1307,6 +1666,17 @@ fn read_u32(control: &mut UnixStream) -> Result<u32> {
         )
     })?;
     Ok(u32::from_be_bytes(bytes))
+}
+
+fn read_u64(control: &mut UnixStream) -> Result<u64> {
+    let mut bytes = [0_u8; 8];
+    control.read_exact(&mut bytes).map_err(|error| {
+        supervisor_error(
+            ErrorCode::Unavailable,
+            format!("failed to read session-supervisor u64: {error}"),
+        )
+    })?;
+    Ok(u64::from_be_bytes(bytes))
 }
 
 fn read_u8(control: &mut UnixStream) -> Result<u8> {
@@ -2126,10 +2496,7 @@ mod tests {
                 Err(_) => unsafe { libc::_exit(134) },
             };
             drop(child_stdin);
-            if supervisor
-                .deposit_stdin(launcher_pid, deposit)
-                .is_err()
-            {
+            if supervisor.deposit_stdin(launcher_pid, deposit).is_err() {
                 unsafe { libc::_exit(135) }
             }
             // SAFETY: SCM_RIGHTS duplicated into the supervisor; close the local copy.
@@ -2190,7 +2557,129 @@ mod tests {
         let status = reattached
             .wait_launcher(launcher_pid)
             .expect("wait must return authentic cat exit after stdin EOF");
-        assert_eq!(status, 0, "cat must exit 0 after authentic EOF, not invented status");
+        assert_eq!(
+            status, 0,
+            "cat must exit 0 after authentic EOF, not invented status"
+        );
+    }
+
+    #[test]
+    fn exclusive_stdout_survives_host_death_and_relay_is_authentic() {
+        let (mut parent_ready, mut child_ready) =
+            UnixStream::pair().expect("output deposit ready channel");
+        // SAFETY: parent reaps the fake Host; child owns the production supervisor.
+        let host_pid = unsafe { libc::fork() };
+        assert!(host_pid >= 0, "fork fake host for output deposit");
+        if host_pid == 0 {
+            drop(parent_ready);
+            let mut supervisor = match HostSessionSupervisor::start_via_fork() {
+                Ok(supervisor) => supervisor,
+                Err(_) => unsafe { libc::_exit(151) },
+            };
+            let mut fds = [0, 0];
+            if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+                unsafe { libc::_exit(152) }
+            }
+            let host_stdout = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+            let child_stdout = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+            let launcher_pid = match supervisor.spawn_launcher(
+                Path::new("/bin/echo"),
+                &["relay-bytes".into()],
+                None,
+                None,
+                Some((None, Some(child_stdout.as_raw_fd()), None)),
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(153) },
+            };
+            drop(child_stdout);
+            if supervisor
+                .deposit_output(launcher_pid, Some(host_stdout), None)
+                .is_err()
+            {
+                unsafe { libc::_exit(154) }
+            }
+            // Second deposit of the same launcher must fail closed (exclusive).
+            let mut again = [0, 0];
+            if unsafe { libc::pipe(again.as_mut_ptr()) } != 0 {
+                unsafe { libc::_exit(155) }
+            }
+            let competing = unsafe { OwnedFd::from_raw_fd(again[0]) };
+            unsafe {
+                libc::close(again[1]);
+            }
+            if supervisor
+                .deposit_output(launcher_pid, Some(competing), None)
+                .is_ok()
+            {
+                unsafe { libc::_exit(156) }
+            }
+            let identity = supervisor.identity().clone();
+            let mut payload = Vec::with_capacity(16);
+            payload.extend_from_slice(&identity.pid().to_be_bytes());
+            payload.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+            payload.extend_from_slice(&launcher_pid.to_be_bytes());
+            if child_ready.write_all(&payload).is_err() {
+                unsafe { libc::_exit(157) }
+            }
+            std::mem::forget(supervisor);
+            loop {
+                unsafe { libc::pause() };
+            }
+        }
+        drop(child_ready);
+        let mut payload = [0_u8; 16];
+        parent_ready
+            .read_exact(&mut payload)
+            .expect("read output-deposit supervisor evidence");
+        let identity = SessionSupervisorIdentity {
+            schema_version: IDENTITY_SCHEMA_VERSION.to_string(),
+            pid: i32::from_be_bytes(payload[0..4].try_into().expect("pid bytes")),
+            start_time_ticks: u64::from_be_bytes(payload[4..12].try_into().expect("start bytes")),
+        };
+        let launcher_pid = i32::from_be_bytes(payload[12..16].try_into().expect("launcher bytes"));
+        terminate_pid(host_pid);
+        let _ = wait_for_child(host_pid);
+        let mut reattached = HostSessionSupervisor::reattach(&identity)
+            .expect("replacement Host must reattach after exclusive output deposit");
+        let mut chunks = Vec::new();
+        let mut after = 0_u64;
+        let mut saw_eof = false;
+        for _ in 0..100 {
+            let more = reattached
+                .read_output(launcher_pid, after, 4096, Some(100))
+                .expect("relay must return authentic chunks without inventing status");
+            if more.is_empty() {
+                if saw_eof {
+                    break;
+                }
+                continue;
+            }
+            if let Some(seq) = more.iter().map(|chunk| chunk.sequence).max() {
+                after = seq;
+            }
+            saw_eof |= more.iter().any(|chunk| chunk.eof);
+            chunks.extend(more);
+            if saw_eof {
+                break;
+            }
+        }
+        let joined: Vec<u8> = chunks
+            .iter()
+            .filter(|chunk| !chunk.eof)
+            .flat_map(|chunk| chunk.data.iter().copied())
+            .collect();
+        assert!(
+            joined
+                .windows(b"relay-bytes".len())
+                .any(|w| w == b"relay-bytes"),
+            "relay must surface authentic echo bytes, got {joined:?}"
+        );
+        assert!(saw_eof, "exclusive drain must publish authentic EOF");
+        let status = reattached
+            .wait_launcher(launcher_pid)
+            .expect("wait must return authentic echo status");
+        assert_eq!(status, 0, "echo must exit 0, not invented status");
     }
 
     #[test]

@@ -232,7 +232,7 @@ impl PreparedProcess {
                 vm_storage_sources_json.clone().into(),
                 process_io_json.clone().into(),
             ];
-            let (host_pipes, child_stdio) = match prepare_supervised_stdio(io) {
+            let (mut host_pipes, child_stdio) = match prepare_supervised_stdio(io) {
                 Ok(pipes) => pipes,
                 Err(error) => return Err(cleanup_unstarted_cgroup(&mut cgroup, error)),
             };
@@ -285,11 +285,9 @@ impl PreparedProcess {
             };
             if let Some(stdin) = host_pipes.stdin.as_ref() {
                 // Duplicate the Host write end into the supervisor so Host death
-                // does not EOF the child. Capture stdout/stderr cannot use the
-                // same pattern (two readers would split the stream).
-                let deposit = unsafe {
-                    libc::fcntl(stdin.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0)
-                };
+                // does not EOF the child. Capture stdout/stderr use exclusive
+                // move deposit instead (two readers would split the stream).
+                let deposit = unsafe { libc::fcntl(stdin.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
                 if deposit < 0 {
                     let error = process_error(
                         ErrorCode::Internal,
@@ -336,14 +334,28 @@ impl PreparedProcess {
                     return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
                 }
             }
-            let process_io = match ProcessIoHandle::attach_from_owned_fds(
-                io,
-                host_pipes.stdin,
-                host_pipes.stdout,
-                host_pipes.stderr,
-            ) {
-                Ok(process_io) => process_io,
-                Err(error) => {
+            let capture_stdout = host_pipes.stdout.is_some();
+            let capture_stderr = host_pipes.stderr.is_some();
+            if capture_stdout || capture_stderr {
+                let stdout = host_pipes.stdout.take();
+                let stderr = host_pipes.stderr.take();
+                let deposit_result = match supervisor.lock() {
+                    Ok(mut guard) => {
+                        let result = guard.deposit_output(pid, stdout, stderr);
+                        drop(guard);
+                        Some(result)
+                    }
+                    Err(_) => None,
+                };
+                let deposit_error = match deposit_result {
+                    Some(Ok(())) => None,
+                    Some(Err(error)) => Some(error),
+                    None => Some(process_error(
+                        ErrorCode::Internal,
+                        "session supervisor lock is poisoned during output deposit",
+                    )),
+                };
+                if let Some(error) = deposit_error {
                     let mut child = LauncherChild::Supervised {
                         pid: raw_pid,
                         supervisor: Arc::clone(&supervisor),
@@ -351,11 +363,25 @@ impl PreparedProcess {
                     };
                     return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
                 }
-            };
+            }
+            let output_relay =
+                (capture_stdout || capture_stderr).then(|| (Arc::clone(&supervisor), pid));
+            let process_io =
+                match ProcessIoHandle::attach_supervised(io, host_pipes.stdin, output_relay) {
+                    Ok(process_io) => process_io,
+                    Err(error) => {
+                        let mut child = LauncherChild::Supervised {
+                            pid: raw_pid,
+                            supervisor: Arc::clone(&supervisor),
+                            status: None,
+                        };
+                        return Err(
+                            cleanup_uncommitted_create(&mut child, &mut cgroup, error).await
+                        );
+                    }
+                };
             if matches!(io.stdin, IoMode::Pipe) {
-                if let Err(error) =
-                    process_io.bind_stdin_deposit(Arc::clone(&supervisor), pid)
-                {
+                if let Err(error) = process_io.bind_stdin_deposit(Arc::clone(&supervisor), pid) {
                     let mut child = LauncherChild::Supervised {
                         pid: raw_pid,
                         supervisor: Arc::clone(&supervisor),

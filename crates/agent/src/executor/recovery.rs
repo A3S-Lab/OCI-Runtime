@@ -291,11 +291,12 @@ impl SessionSupervisorReattachCache {
 /// Host-reopen handle for one generation whose session supervisor survived.
 ///
 /// This restores supervisor control for wait/kill of the recorded launcher, a
-/// partial process inventory (authenticated live init only), and an authentic
-/// stdin write end when the original Host deposited one. Capture stdout/stderr
-/// are not restored here: two readers would split the stream, so
-/// [`Self::read_output`] fails closed with [`ErrorCode::Unavailable`] instead of
-/// inventing empty output. Durable exec inventory remains unrestored.
+/// partial process inventory (authenticated live init only), an authentic
+/// stdin write end when the original Host deposited one, and exclusive
+/// capture stdout/stderr through the supervisor IPC relay when those read ends
+/// were moved at create. Missing output deposit fail-closes
+/// [`Self::read_output`] with [`ErrorCode::Unavailable`] instead of inventing
+/// empty output. Durable exec inventory remains unrestored.
 #[derive(Debug)]
 pub struct LinuxLiveSupervisedSession {
     target: ContainerTarget,
@@ -404,17 +405,36 @@ impl LinuxLiveSupervisedSession {
             .pid()
     }
 
-    /// Fail closed: capture stdout/stderr were never deposited with the supervisor.
+    /// Poll authentic captured chunks from the supervisor-owned exclusive drain.
     ///
-    /// Returning an empty chunk list would invent a successful empty stream.
-    pub fn read_output(&self) -> Result<Vec<a3s_oci_sdk::OutputChunk>> {
-        Err(recovery_error(
-            ErrorCode::Unavailable,
-            format!(
-                "container {} generation {:?} is retained through a reattached session supervisor without restored capture stdio; read-output requires authentic stdout/stderr reconnect",
-                self.target.id, self.target.generation
-            ),
-        ))
+    /// When create moved capture read ends to the supervisor, this returns the
+    /// same sequence-bearing chunks as the live Host path. When no output
+    /// deposit exists, returns [`ErrorCode::Unavailable`] instead of inventing
+    /// an empty successful stream.
+    pub fn read_output(
+        &self,
+        after_sequence: u64,
+        max_bytes: u32,
+        wait_timeout_ms: Option<u64>,
+    ) -> Result<Vec<a3s_oci_sdk::OutputChunk>> {
+        let mut guard = self.supervisor.lock().map_err(|_| {
+            recovery_error(
+                ErrorCode::Internal,
+                "live supervised session supervisor lock is poisoned during read-output",
+            )
+        })?;
+        guard
+            .read_output(
+                self.launcher_pid(),
+                after_sequence,
+                max_bytes,
+                wait_timeout_ms,
+            )
+            .map_err(|error| {
+                // Preserve fail-closed codes from the relay (Unavailable for
+                // missing deposit, ResourceExhausted for stale cursors).
+                recovery_error(error.code, error.message)
+            })
     }
 
     /// Write to the authentic restored stdin pipe end.
@@ -2466,7 +2486,7 @@ mod tests {
         );
 
         let read_error = live
-            .read_output()
+            .read_output(0, 4096, None)
             .expect_err("read-output must fail closed without restored capture stdio");
         assert_eq!(
             read_error.code,
@@ -2677,7 +2697,7 @@ mod tests {
             "Host reopen must restore the deposited stdin write end"
         );
         let read_error = live
-            .read_output()
+            .read_output(0, 4096, None)
             .expect_err("capture stdio must stay Unavailable");
         assert_eq!(read_error.code, ErrorCode::Unavailable);
 
@@ -2695,6 +2715,209 @@ mod tests {
         let tombstone = live
             .into_tombstone()
             .expect("dead cat becomes stopped tombstone");
+        delete_stale_generation(&tombstone)
+            .await
+            .expect("stopped-only delete");
+        terminate_pid(supervisor_pid);
+        let _ = wait_for_child(supervisor_pid);
+    }
+
+    #[tokio::test]
+    async fn live_session_restores_deposited_output_relay() {
+        use std::io::Write;
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        use std::os::unix::net::UnixStream;
+        use std::path::Path;
+
+        use super::super::pid_supervisor::{terminate_pid, wait_for_child};
+        use super::super::session_supervisor::HostSessionSupervisor;
+
+        let temporary = tempfile::tempdir().expect("temporary recovery parent");
+        let parent = temporary.path().join("executor");
+        std::fs::create_dir(&parent).expect("executor parent");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
+            .expect("protect executor parent");
+        let current_root = parent.join("current");
+        std::fs::create_dir(&current_root).expect("current root");
+        std::fs::set_permissions(&current_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect current root");
+
+        let (mut parent_ready, mut child_ready) =
+            UnixStream::pair().expect("output restore ready channel");
+        // SAFETY: parent reaps the fake Host; child owns the production supervisor.
+        let host_pid = unsafe { libc::fork() };
+        assert!(host_pid >= 0, "fork fake host for output restore");
+        if host_pid == 0 {
+            drop(parent_ready);
+            let mut supervisor = match HostSessionSupervisor::start_via_fork() {
+                Ok(supervisor) => supervisor,
+                Err(_) => unsafe { libc::_exit(161) },
+            };
+            let mut fds = [0, 0];
+            if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+                unsafe { libc::_exit(162) }
+            }
+            let host_stdout = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+            let child_stdout = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+            let launcher_pid = match supervisor.spawn_launcher(
+                Path::new("/bin/echo"),
+                &["reopen-out".into()],
+                None,
+                None,
+                Some((None, Some(child_stdout.as_raw_fd()), None)),
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(163) },
+            };
+            drop(child_stdout);
+            if supervisor
+                .deposit_output(launcher_pid, Some(host_stdout), None)
+                .is_err()
+            {
+                unsafe { libc::_exit(164) }
+            }
+            let identity = supervisor.identity().clone();
+            let mut payload = Vec::with_capacity(16);
+            payload.extend_from_slice(&identity.pid().to_be_bytes());
+            payload.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+            payload.extend_from_slice(&launcher_pid.to_be_bytes());
+            if child_ready.write_all(&payload).is_err() {
+                unsafe { libc::_exit(165) }
+            }
+            std::mem::forget(supervisor);
+            loop {
+                unsafe { libc::pause() };
+            }
+        }
+        drop(child_ready);
+        let mut payload = [0_u8; 16];
+        parent_ready
+            .read_exact(&mut payload)
+            .expect("read output-restore supervisor evidence");
+        let supervisor_pid = i32::from_be_bytes(payload[0..4].try_into().expect("pid bytes"));
+        let supervisor_start = u64::from_be_bytes(payload[4..12].try_into().expect("start bytes"));
+        let launcher_pid = i32::from_be_bytes(payload[12..16].try_into().expect("launcher bytes"));
+
+        let owner = ProcessIdentity {
+            pid: 2_400_000,
+            start_time_ticks: 0x444,
+        };
+        let stale_root = parent.join(runtime_root_name(owner));
+        std::fs::create_dir(&stale_root).expect("stale root");
+        std::fs::set_permissions(&stale_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect stale root");
+        write_atomic_record(
+            &stale_root.join(OWNER_RECORD_NAME),
+            &ExecutorOwnerRecord {
+                schema_version: OWNER_SCHEMA_VERSION.to_string(),
+                owner,
+            },
+        )
+        .expect("owner record");
+        let slot = stale_root.join("c-0000000000000001");
+        std::fs::create_dir(&slot).expect("container slot");
+        std::fs::set_permissions(&slot, std::fs::Permissions::from_mode(0o700))
+            .expect("protect container slot");
+        let config = br#"{"ociVersion":"1.3.0"}"#;
+        let digest = config_digest_for(config);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        options
+            .open(slot.join(CONFIG_SNAPSHOT_NAME))
+            .and_then(|mut file| file.write_all(config))
+            .expect("configuration snapshot");
+        let target = ContainerTarget::exact(
+            a3s_oci_sdk::ContainerId::new("live-output-restore").expect("container ID"),
+            a3s_oci_sdk::Generation(1),
+        );
+        let init = ProcessIdentity {
+            pid: launcher_pid,
+            start_time_ticks: process_observation(launcher_pid)
+                .expect("observe launcher")
+                .expect("launcher live")
+                .start_time_ticks,
+        };
+        write_atomic_record(
+            &slot.join(CONTAINER_RECORD_NAME),
+            &ContainerRecoveryRecord {
+                schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
+                target: target.clone(),
+                config_digest: digest.clone(),
+                owner,
+                launcher: init,
+                init,
+                session_supervisor: Some(ProcessIdentity::from_authenticated(
+                    supervisor_pid,
+                    supervisor_start,
+                )),
+                cgroup: None,
+                intel_rdt: None,
+            },
+        )
+        .expect("container recovery record");
+
+        terminate_pid(host_pid);
+        let _ = wait_for_child(host_pid);
+
+        let supervisors = SessionSupervisorReattachCache::default();
+        let recovery = recover_stale_generation(
+            &parent,
+            &current_root,
+            &target,
+            &digest,
+            Some(launcher_pid),
+            &supervisors,
+        )
+        .await
+        .expect("live supervisor with output deposit must reattach")
+        .expect("recovery match");
+        let StaleGenerationRecovery::Live(live) = recovery else {
+            panic!("output deposit recovery must be Live");
+        };
+
+        let mut after = 0_u64;
+        let mut joined = Vec::new();
+        let mut saw_eof = false;
+        for _ in 0..100 {
+            let chunks = live
+                .read_output(after, 4096, Some(100))
+                .expect("Host reopen must relay authentic capture chunks");
+            if chunks.is_empty() {
+                if saw_eof {
+                    break;
+                }
+                continue;
+            }
+            if let Some(seq) = chunks.iter().map(|chunk| chunk.sequence).max() {
+                after = seq;
+            }
+            for chunk in &chunks {
+                if chunk.eof {
+                    saw_eof = true;
+                } else {
+                    joined.extend_from_slice(&chunk.data);
+                }
+            }
+            if saw_eof {
+                break;
+            }
+        }
+        assert!(
+            joined
+                .windows(b"reopen-out".len())
+                .any(|w| w == b"reopen-out"),
+            "reopen relay must surface authentic bytes, got {joined:?}"
+        );
+        assert!(saw_eof, "reopen relay must surface authentic EOF");
+
+        let status = live
+            .wait_launcher()
+            .expect("wait must return authentic echo status");
+        assert_eq!(status, 0, "echo must exit 0 after authentic drain");
+
+        let tombstone = live
+            .into_tombstone()
+            .expect("dead echo becomes stopped tombstone");
         delete_stale_generation(&tombstone)
             .await
             .expect("stopped-only delete");

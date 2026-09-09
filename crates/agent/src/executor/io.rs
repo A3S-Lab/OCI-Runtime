@@ -38,8 +38,20 @@ struct ProcessIoInner {
     stdin_deposit: Mutex<Option<(SharedSessionSupervisor, i32)>>,
     next_stdin_operation: AtomicU64,
     serving_stdin_operation: watch::Sender<u64>,
-    output: Option<Arc<OutputBuffer>>,
+    output: Option<ProcessOutput>,
     terminal: Option<TerminalHandle>,
+}
+
+/// Where captured process output is drained and read.
+#[derive(Debug)]
+enum ProcessOutput {
+    /// Host-local exclusive readers (default create / non-supervised).
+    Local(Arc<OutputBuffer>),
+    /// Session supervisor owns the read ends; Host polls via control IPC.
+    SupervisedRelay {
+        supervisor: SharedSessionSupervisor,
+        launcher_pid: i32,
+    },
 }
 
 #[derive(Debug)]
@@ -144,7 +156,7 @@ impl ProcessIoHandle {
                     stdin_deposit: Mutex::new(None),
                     next_stdin_operation: AtomicU64::new(0),
                     serving_stdin_operation,
-                    output: Some(output),
+                    output: Some(ProcessOutput::Local(output)),
                     terminal: Some(terminal),
                 }),
             });
@@ -198,7 +210,7 @@ impl ProcessIoHandle {
                 stdin_deposit: Mutex::new(None),
                 next_stdin_operation: AtomicU64::new(0),
                 serving_stdin_operation,
-                output,
+                output: output.map(ProcessOutput::Local),
                 terminal: None,
             }),
         })
@@ -206,13 +218,14 @@ impl ProcessIoHandle {
 
     /// Attach Host-retained pipe ends prepared for a supervised launcher spawn.
     ///
-    /// Terminal and inherit modes are rejected by `prepare_supervised_stdio`
-    /// before this path runs.
-    pub(super) fn attach_from_owned_fds(
+    /// Capture stdout/stderr read ends must already have been moved to the
+    /// session supervisor via `HostSessionSupervisor::deposit_output`. This
+    /// path never starts Host-local competing readers. Terminal and inherit
+    /// modes are rejected by `prepare_supervised_stdio` before this runs.
+    pub(super) fn attach_supervised(
         io: &ProcessIo,
         stdin: Option<OwnedFd>,
-        stdout: Option<OwnedFd>,
-        stderr: Option<OwnedFd>,
+        output_relay: Option<(SharedSessionSupervisor, i32)>,
     ) -> Result<Self> {
         if matches!(io.stdin, IoMode::Terminal)
             || matches!(io.stdout, IoMode::Terminal)
@@ -253,50 +266,28 @@ impl ProcessIoHandle {
             }
             (mode, _) => return Err(unsupported_mode("stdin", mode)),
         };
-        let stdout = match (io.stdout, stdout) {
-            (IoMode::Capture, Some(fd)) => Some(owned_fd_to_async_reader(fd, "stdout")?),
-            (IoMode::Null, None) => None,
-            (IoMode::Capture, None) => {
-                return Err(io_error(
-                    ErrorCode::Internal,
-                    "supervised spawn did not retain the configured stdout pipe",
-                ));
-            }
-            (IoMode::Null, Some(_)) => {
-                return Err(io_error(
-                    ErrorCode::Internal,
-                    "supervised spawn retained an unexpected stdout pipe",
-                ));
-            }
-            (mode, _) => return Err(unsupported_mode("stdout", mode)),
-        };
-        let stderr = match (io.stderr, stderr) {
-            (IoMode::Capture, Some(fd)) => Some(owned_fd_to_async_reader(fd, "stderr")?),
-            (IoMode::Null, None) => None,
-            (IoMode::Capture, None) => {
-                return Err(io_error(
-                    ErrorCode::Internal,
-                    "supervised spawn did not retain the configured stderr pipe",
-                ));
-            }
-            (IoMode::Null, Some(_)) => {
-                return Err(io_error(
-                    ErrorCode::Internal,
-                    "supervised spawn retained an unexpected stderr pipe",
-                ));
-            }
-            (mode, _) => return Err(unsupported_mode("stderr", mode)),
-        };
 
-        let captured_streams = usize::from(stdout.is_some()) + usize::from(stderr.is_some());
-        let output =
-            (captured_streams > 0).then(|| Arc::new(OutputBuffer::new(captured_streams as u8)));
-        if let (Some(reader), Some(buffer)) = (stdout, output.as_ref()) {
-            spawn_output_reader(reader, OutputStream::Stdout, Arc::clone(buffer));
-        }
-        if let (Some(reader), Some(buffer)) = (stderr, output.as_ref()) {
-            spawn_output_reader(reader, OutputStream::Stderr, Arc::clone(buffer));
-        }
+        let capture_configured =
+            matches!(io.stdout, IoMode::Capture) || matches!(io.stderr, IoMode::Capture);
+        let output = match (capture_configured, output_relay) {
+            (true, Some((supervisor, launcher_pid))) => Some(ProcessOutput::SupervisedRelay {
+                supervisor,
+                launcher_pid,
+            }),
+            (false, None) => None,
+            (true, None) => {
+                return Err(io_error(
+                    ErrorCode::Internal,
+                    "supervised capture I/O requires an exclusive session-supervisor output relay",
+                ));
+            }
+            (false, Some(_)) => {
+                return Err(io_error(
+                    ErrorCode::Internal,
+                    "supervised spawn installed an output relay without capture I/O",
+                ));
+            }
+        };
 
         let (serving_stdin_operation, _) = watch::channel(0);
         Ok(Self {
@@ -343,15 +334,40 @@ impl ProcessIoHandle {
         max_bytes: u32,
         wait_timeout_ms: Option<u64>,
     ) -> Result<Vec<OutputChunk>> {
-        let output = self.inner.output.as_ref().ok_or_else(|| {
-            io_error(
+        match self.inner.output.as_ref() {
+            Some(ProcessOutput::Local(output)) => {
+                output
+                    .read(after_sequence, max_bytes, wait_timeout_ms)
+                    .await
+            }
+            Some(ProcessOutput::SupervisedRelay {
+                supervisor,
+                launcher_pid,
+            }) => {
+                let supervisor = Arc::clone(supervisor);
+                let launcher_pid = *launcher_pid;
+                tokio::task::spawn_blocking(move || {
+                    let mut guard = supervisor.lock().map_err(|_| {
+                        io_error(
+                            ErrorCode::Internal,
+                            "session supervisor lock is poisoned during read-output relay",
+                        )
+                    })?;
+                    guard.read_output(launcher_pid, after_sequence, max_bytes, wait_timeout_ms)
+                })
+                .await
+                .map_err(|error| {
+                    io_error(
+                        ErrorCode::Internal,
+                        format!("session supervisor read-output relay task failed: {error}"),
+                    )
+                })?
+            }
+            None => Err(io_error(
                 ErrorCode::FailedPrecondition,
                 "process stdout and stderr were not configured for capture",
-            )
-        })?;
-        output
-            .read(after_sequence, max_bytes, wait_timeout_ms)
-            .await
+            )),
+        }
     }
 
     #[cfg(test)]

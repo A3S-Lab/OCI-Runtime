@@ -707,7 +707,11 @@ impl RuntimeDriver for NativeLinuxDriver {
             .await?
         {
             return live
-                .read_output()
+                .read_output(
+                    request.after_sequence,
+                    request.max_bytes,
+                    request.wait_timeout_ms,
+                )
                 .map_err(|error| error.for_operation("native-linux-read-output"));
         }
         if self
