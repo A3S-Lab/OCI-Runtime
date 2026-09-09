@@ -283,6 +283,59 @@ impl PreparedProcess {
                     return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
                 }
             };
+            if let Some(stdin) = host_pipes.stdin.as_ref() {
+                // Duplicate the Host write end into the supervisor so Host death
+                // does not EOF the child. Capture stdout/stderr cannot use the
+                // same pattern (two readers would split the stream).
+                let deposit = unsafe {
+                    libc::fcntl(stdin.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0)
+                };
+                if deposit < 0 {
+                    let error = process_error(
+                        ErrorCode::Internal,
+                        format!(
+                            "failed to duplicate supervised stdin for session-supervisor deposit: {}",
+                            io::Error::last_os_error()
+                        ),
+                    );
+                    let mut child = LauncherChild::Supervised {
+                        pid: raw_pid,
+                        supervisor: Arc::clone(&supervisor),
+                        status: None,
+                    };
+                    return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
+                }
+                // Drop the supervisor MutexGuard before any .await (Send).
+                let deposit_result = match supervisor.lock() {
+                    Ok(mut guard) => {
+                        let result = guard.deposit_stdin(pid, deposit);
+                        drop(guard);
+                        Some(result)
+                    }
+                    Err(_) => None,
+                };
+                // SAFETY: SCM_RIGHTS transferred a copy (or deposit failed); close
+                // the local duplicate either way.
+                unsafe {
+                    libc::close(deposit);
+                }
+                let deposit_error = match deposit_result {
+                    Some(Ok(())) => None,
+                    Some(Err(error)) => Some(error),
+                    None => Some(process_error(
+                        ErrorCode::Internal,
+                        "session supervisor lock is poisoned during stdin deposit",
+                    )),
+                };
+                if let Some(error) = deposit_error {
+                    let mut child = LauncherChild::Supervised {
+                        pid: raw_pid,
+                        supervisor: Arc::clone(&supervisor),
+                        status: None,
+                    };
+                    return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
+                }
+            }
             let process_io = match ProcessIoHandle::attach_from_owned_fds(
                 io,
                 host_pipes.stdin,
@@ -299,6 +352,18 @@ impl PreparedProcess {
                     return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
                 }
             };
+            if matches!(io.stdin, IoMode::Pipe) {
+                if let Err(error) =
+                    process_io.bind_stdin_deposit(Arc::clone(&supervisor), pid)
+                {
+                    let mut child = LauncherChild::Supervised {
+                        pid: raw_pid,
+                        supervisor: Arc::clone(&supervisor),
+                        status: None,
+                    };
+                    return Err(cleanup_uncommitted_create(&mut child, &mut cgroup, error).await);
+                }
+            }
             (
                 LauncherChild::Supervised {
                     pid: raw_pid,

@@ -18,6 +18,7 @@
 //! `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. Default create keeps Host-bound
 //! PDEATHSIG so stopped-only recovery gates stay green.
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -27,6 +28,7 @@ use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
@@ -49,6 +51,15 @@ const MSG_ERROR: u8 = 4;
 const MSG_SHUTDOWN: u8 = 5;
 const MSG_WAIT: u8 = 6;
 const MSG_WAITED: u8 = 7;
+/// Host deposits a duplicate stdin write end so Host death does not EOF the child.
+const MSG_DEPOSIT_STDIN: u8 = 8;
+const MSG_DEPOSITED: u8 = 9;
+/// Replacement Host retrieves the deposited stdin write end after control reattach.
+const MSG_TAKE_STDIN: u8 = 10;
+const MSG_STDIN_TAKEN: u8 = 11;
+/// Close the deposited duplicate so intentional close_stdin can deliver EOF.
+const MSG_CLOSE_DEPOSITED_STDIN: u8 = 12;
+const MSG_DEPOSIT_CLOSED: u8 = 13;
 const MAX_SPAWN_ARGS: usize = 64;
 const MAX_ARG_BYTES: usize = 8 * 1024;
 const MAX_SPAWN_FDS: usize = 6;
@@ -62,6 +73,9 @@ const REATTACH_ENDPOINT_PREFIX: &str = "a3s.oci.session-supervise.";
 const REATTACH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REATTACH_ACCEPT_TIMEOUT: Duration = Duration::from_secs(30);
 const REATTACH_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// Shared Host handle for one authenticated session supervisor.
+pub(crate) type SharedSessionSupervisor = Arc<Mutex<HostSessionSupervisor>>;
 
 /// Authenticated identity of a host-surviving session supervisor.
 ///
@@ -379,9 +393,11 @@ impl HostSessionSupervisor {
                 ErrorCode::Internal,
                 format!("session supervisor spawn failed: {message}"),
             )),
-            SupervisorResponse::Waited(_) => Err(supervisor_error(
+            SupervisorResponse::Waited(_)
+            | SupervisorResponse::Ack(_)
+            | SupervisorResponse::StdinFd(_) => Err(supervisor_error(
                 ErrorCode::Internal,
-                "session supervisor returned a wait result for a spawn request",
+                "session supervisor returned a non-spawn result for a spawn request",
             )),
         }
     }
@@ -403,9 +419,104 @@ impl HostSessionSupervisor {
                 ErrorCode::Internal,
                 format!("session supervisor wait failed: {message}"),
             )),
-            SupervisorResponse::Spawned(_) => Err(supervisor_error(
+            SupervisorResponse::Spawned(_)
+            | SupervisorResponse::Ack(_)
+            | SupervisorResponse::StdinFd(_) => Err(supervisor_error(
                 ErrorCode::Internal,
-                "session supervisor returned a spawn result for a wait request",
+                "session supervisor returned a non-wait result for a wait request",
+            )),
+        }
+    }
+
+    /// Deposit a Host stdin write-end duplicate keyed by supervised launcher PID.
+    ///
+    /// Multiple writers on a pipe are safe. Host keeps its original write end for
+    /// live I/O; the supervisor retains the duplicate so Host death does not
+    /// deliver EOF. Intentional [`Self::close_deposited_stdin`] (paired with Host
+    /// close) delivers EOF. Capture stdout/stderr cannot use this pattern: two
+    /// readers would split the stream.
+    pub(crate) fn deposit_stdin(&mut self, launcher_pid: i32, stdin: RawFd) -> Result<()> {
+        let mut payload = Vec::with_capacity(5);
+        payload.push(MSG_DEPOSIT_STDIN);
+        payload.extend_from_slice(&launcher_pid.to_be_bytes());
+        self.control.write_all(&payload).map_err(|error| {
+            supervisor_error(
+                ErrorCode::Internal,
+                format!("failed to write session-supervisor stdin deposit header: {error}"),
+            )
+        })?;
+        send_with_fds(self.control.as_raw_fd(), &[0xFD], &[stdin])?;
+        match read_supervisor_response(&mut self.control)? {
+            SupervisorResponse::Ack(MSG_DEPOSITED) => Ok(()),
+            SupervisorResponse::Error(message) => Err(supervisor_error(
+                ErrorCode::Internal,
+                format!("session supervisor stdin deposit failed: {message}"),
+            )),
+            SupervisorResponse::Spawned(_)
+            | SupervisorResponse::Waited(_)
+            | SupervisorResponse::Ack(_)
+            | SupervisorResponse::StdinFd(_) => Err(supervisor_error(
+                ErrorCode::Internal,
+                "session supervisor returned a non-deposit result for a stdin deposit",
+            )),
+        }
+    }
+
+    /// Retrieve the deposited stdin write end after control reattach.
+    ///
+    /// Returns [`ErrorCode::Unavailable`] when no deposit remains (never
+    /// deposited, already taken, or intentionally closed). Does not invent an
+    /// empty writable stream.
+    pub(crate) fn take_stdin(&mut self, launcher_pid: i32) -> Result<OwnedFd> {
+        let mut payload = Vec::with_capacity(5);
+        payload.push(MSG_TAKE_STDIN);
+        payload.extend_from_slice(&launcher_pid.to_be_bytes());
+        self.control.write_all(&payload).map_err(|error| {
+            supervisor_error(
+                ErrorCode::Internal,
+                format!("failed to write session-supervisor stdin take request: {error}"),
+            )
+        })?;
+        match read_supervisor_response(&mut self.control)? {
+            SupervisorResponse::StdinFd(fd) => Ok(fd),
+            SupervisorResponse::Error(message) => Err(supervisor_error(
+                ErrorCode::Unavailable,
+                format!("session supervisor stdin take unavailable: {message}"),
+            )),
+            SupervisorResponse::Spawned(_)
+            | SupervisorResponse::Waited(_)
+            | SupervisorResponse::Ack(_) => Err(supervisor_error(
+                ErrorCode::Internal,
+                "session supervisor returned a non-take result for a stdin take",
+            )),
+        }
+    }
+
+    /// Drop the deposited stdin duplicate so an intentional Host close can EOF.
+    ///
+    /// Idempotent when no deposit remains for `launcher_pid`.
+    pub(crate) fn close_deposited_stdin(&mut self, launcher_pid: i32) -> Result<()> {
+        let mut payload = Vec::with_capacity(5);
+        payload.push(MSG_CLOSE_DEPOSITED_STDIN);
+        payload.extend_from_slice(&launcher_pid.to_be_bytes());
+        self.control.write_all(&payload).map_err(|error| {
+            supervisor_error(
+                ErrorCode::Internal,
+                format!("failed to write session-supervisor stdin close request: {error}"),
+            )
+        })?;
+        match read_supervisor_response(&mut self.control)? {
+            SupervisorResponse::Ack(MSG_DEPOSIT_CLOSED) => Ok(()),
+            SupervisorResponse::Error(message) => Err(supervisor_error(
+                ErrorCode::Internal,
+                format!("session supervisor stdin close failed: {message}"),
+            )),
+            SupervisorResponse::Spawned(_)
+            | SupervisorResponse::Waited(_)
+            | SupervisorResponse::Ack(_)
+            | SupervisorResponse::StdinFd(_) => Err(supervisor_error(
+                ErrorCode::Internal,
+                "session supervisor returned a non-close result for a stdin close",
             )),
         }
     }
@@ -417,7 +528,8 @@ impl HostSessionSupervisor {
     /// wait status belong to the recorded supervisor incarnation. This opens a
     /// fresh control socket on the published abstract endpoint and proves the
     /// PID + start-time identity still matches. It does not restore
-    /// `PreparedProcess` or Host I/O sessions by itself.
+    /// `PreparedProcess` or Host I/O sessions by itself; call [`Self::take_stdin`]
+    /// for deposited stdin after reattach.
     pub(crate) fn reattach(expected: &SessionSupervisorIdentity) -> Result<Self> {
         expected.authenticate_live()?;
         let address = SocketAddr::from_abstract_name(expected.reattach_endpoint_name().as_bytes())
@@ -554,6 +666,7 @@ fn run_session_supervise_service() -> Result<()> {
     }
     let identity = SessionSupervisorIdentity::current()?;
     write_ready_identity(&mut control, &identity)?;
+    let mut deposited_stdin: BTreeMap<i32, OwnedFd> = BTreeMap::new();
 
     loop {
         let mut header = [0_u8; 1];
@@ -565,6 +678,8 @@ fn run_session_supervise_service() -> Result<()> {
                 // exit status must stay available for MSG_WAIT after an
                 // authenticated replacement Host reattaches the control channel.
                 // Re-exec / a new supervisor would break PDEATHSIG parentage.
+                // Deposited stdin write ends stay open across the control gap so
+                // a live child does not observe EOF solely because Host died.
                 control = accept_control_reattach(&identity)?;
                 continue;
             }
@@ -577,6 +692,7 @@ fn run_session_supervise_service() -> Result<()> {
         }
         match header[0] {
             MSG_SHUTDOWN => {
+                deposited_stdin.clear();
                 reap_children();
                 return Ok(());
             }
@@ -598,7 +714,8 @@ fn run_session_supervise_service() -> Result<()> {
                 }
             },
             MSG_WAIT => match handle_wait_request(&mut control) {
-                Ok(status) => {
+                Ok((pid, status)) => {
+                    deposited_stdin.remove(&pid);
                     let mut response = Vec::with_capacity(5);
                     response.push(MSG_WAITED);
                     response.extend_from_slice(&status.to_be_bytes());
@@ -613,6 +730,53 @@ fn run_session_supervise_service() -> Result<()> {
                     write_error_response(&mut control, &error.message)?;
                 }
             },
+            MSG_DEPOSIT_STDIN => match handle_deposit_stdin(&mut control, &mut deposited_stdin) {
+                Ok(()) => {
+                    control.write_all(&[MSG_DEPOSITED]).map_err(|error| {
+                        supervisor_error(
+                            ErrorCode::Internal,
+                            format!("failed to publish session-supervisor stdin deposit ack: {error}"),
+                        )
+                    })?;
+                }
+                Err(error) => {
+                    write_error_response(&mut control, &error.message)?;
+                }
+            },
+            MSG_TAKE_STDIN => match handle_take_stdin(&mut control, &mut deposited_stdin) {
+                Ok(fd) => {
+                    control.write_all(&[MSG_STDIN_TAKEN]).map_err(|error| {
+                        supervisor_error(
+                            ErrorCode::Internal,
+                            format!("failed to publish session-supervisor stdin take header: {error}"),
+                        )
+                    })?;
+                    send_with_fds(control.as_raw_fd(), &[0xFD], &[fd.as_raw_fd()])?;
+                    // SCM_RIGHTS duplicated into the replacement Host; drop the
+                    // supervisor copy so intentional Host close can deliver EOF.
+                    drop(fd);
+                }
+                Err(error) => {
+                    write_error_response(&mut control, &error.message)?;
+                }
+            },
+            MSG_CLOSE_DEPOSITED_STDIN => {
+                match handle_close_deposited_stdin(&mut control, &mut deposited_stdin) {
+                    Ok(()) => {
+                        control.write_all(&[MSG_DEPOSIT_CLOSED]).map_err(|error| {
+                            supervisor_error(
+                                ErrorCode::Internal,
+                                format!(
+                                    "failed to publish session-supervisor stdin close ack: {error}"
+                                ),
+                            )
+                        })?;
+                    }
+                    Err(error) => {
+                        write_error_response(&mut control, &error.message)?;
+                    }
+                }
+            }
             other => {
                 return Err(supervisor_error(
                     ErrorCode::InvalidArgument,
@@ -888,7 +1052,7 @@ fn clear_cloexec_raw(fd: RawFd) -> io::Result<()> {
     Ok(())
 }
 
-fn handle_wait_request(control: &mut UnixStream) -> Result<i32> {
+fn handle_wait_request(control: &mut UnixStream) -> Result<(i32, i32)> {
     let mut pid_bytes = [0_u8; 4];
     control.read_exact(&mut pid_bytes).map_err(|error| {
         supervisor_error(
@@ -904,15 +1068,81 @@ fn handle_wait_request(control: &mut UnixStream) -> Result<i32> {
         ));
     }
     let outcome = wait_for_child(pid)?;
-    Ok(match outcome {
+    let status = match outcome {
         ChildOutcome::Exited(code) => code << 8,
         ChildOutcome::Signaled(signal) => signal,
+    };
+    Ok((pid, status))
+}
+
+fn read_launcher_pid(control: &mut UnixStream, operation: &str) -> Result<i32> {
+    let mut pid_bytes = [0_u8; 4];
+    control.read_exact(&mut pid_bytes).map_err(|error| {
+        supervisor_error(
+            ErrorCode::Unavailable,
+            format!("failed to read session-supervisor {operation} pid: {error}"),
+        )
+    })?;
+    let pid = i32::from_be_bytes(pid_bytes);
+    if pid <= 0 {
+        return Err(supervisor_error(
+            ErrorCode::InvalidArgument,
+            format!("session supervisor {operation} requires a positive PID; received {pid}"),
+        ));
+    }
+    Ok(pid)
+}
+
+fn handle_deposit_stdin(
+    control: &mut UnixStream,
+    deposited_stdin: &mut BTreeMap<i32, OwnedFd>,
+) -> Result<()> {
+    let pid = read_launcher_pid(control, "stdin deposit")?;
+    let mut fds = receive_fds(control.as_raw_fd(), 1)?;
+    let stdin = fds.pop().ok_or_else(|| {
+        supervisor_error(
+            ErrorCode::Internal,
+            "session supervisor stdin deposit received no descriptor",
+        )
+    })?;
+    if deposited_stdin.contains_key(&pid) {
+        return Err(supervisor_error(
+            ErrorCode::Conflict,
+            format!("session supervisor already holds a stdin deposit for launcher PID {pid}"),
+        ));
+    }
+    deposited_stdin.insert(pid, stdin);
+    Ok(())
+}
+
+fn handle_take_stdin(
+    control: &mut UnixStream,
+    deposited_stdin: &mut BTreeMap<i32, OwnedFd>,
+) -> Result<OwnedFd> {
+    let pid = read_launcher_pid(control, "stdin take")?;
+    deposited_stdin.remove(&pid).ok_or_else(|| {
+        supervisor_error(
+            ErrorCode::Unavailable,
+            format!("session supervisor has no deposited stdin for launcher PID {pid}"),
+        )
     })
+}
+
+fn handle_close_deposited_stdin(
+    control: &mut UnixStream,
+    deposited_stdin: &mut BTreeMap<i32, OwnedFd>,
+) -> Result<()> {
+    let pid = read_launcher_pid(control, "stdin close")?;
+    // Idempotent: intentional Host close_stdin may race with take/wait cleanup.
+    let _ = deposited_stdin.remove(&pid);
+    Ok(())
 }
 
 enum SupervisorResponse {
     Spawned(i32),
     Waited(i32),
+    Ack(u8),
+    StdinFd(OwnedFd),
     Error(String),
 }
 
@@ -979,6 +1209,17 @@ fn read_supervisor_response(control: &mut UnixStream) -> Result<SupervisorRespon
                 )
             })?;
             Ok(SupervisorResponse::Waited(i32::from_be_bytes(status_bytes)))
+        }
+        MSG_DEPOSITED | MSG_DEPOSIT_CLOSED => Ok(SupervisorResponse::Ack(header[0])),
+        MSG_STDIN_TAKEN => {
+            let mut fds = receive_fds(control.as_raw_fd(), 1)?;
+            let fd = fds.pop().ok_or_else(|| {
+                supervisor_error(
+                    ErrorCode::Internal,
+                    "session supervisor stdin take response contained no descriptor",
+                )
+            })?;
+            Ok(SupervisorResponse::StdinFd(fd))
         }
         MSG_ERROR => {
             let len = read_u32(control)? as usize;
@@ -1846,6 +2087,110 @@ mod tests {
             "launcher must be reaped after authentic wait"
         );
         // Drop reattached sends SHUTDOWN and terminates the supervisor.
+    }
+
+    #[test]
+    fn deposited_stdin_survives_host_death_and_reattach_take_is_authentic() {
+        use std::io::Write as _;
+        use std::os::fd::IntoRawFd;
+
+        let (mut parent_ready, mut child_ready) =
+            UnixStream::pair().expect("stdin deposit ready channel");
+        // SAFETY: parent reaps the fake Host; child owns the production supervisor.
+        let host_pid = unsafe { libc::fork() };
+        assert!(host_pid >= 0, "fork fake host for stdin deposit");
+        if host_pid == 0 {
+            drop(parent_ready);
+            let mut supervisor = match HostSessionSupervisor::start_via_fork() {
+                Ok(supervisor) => supervisor,
+                Err(_) => unsafe { libc::_exit(131) },
+            };
+            let mut fds = [0, 0];
+            if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+                unsafe { libc::_exit(132) }
+            }
+            let child_stdin = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+            let host_stdin = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+            let deposit = unsafe { libc::fcntl(host_stdin.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+            if deposit < 0 {
+                unsafe { libc::_exit(133) }
+            }
+            let launcher_pid = match supervisor.spawn_launcher(
+                Path::new("/bin/cat"),
+                &[],
+                None,
+                None,
+                Some((Some(child_stdin.as_raw_fd()), None, None)),
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(134) },
+            };
+            drop(child_stdin);
+            if supervisor
+                .deposit_stdin(launcher_pid, deposit)
+                .is_err()
+            {
+                unsafe { libc::_exit(135) }
+            }
+            // SAFETY: SCM_RIGHTS duplicated into the supervisor; close the local copy.
+            unsafe {
+                libc::close(deposit);
+            }
+            // Host keeps its write end until death; deposit must keep stdin open.
+            let identity = supervisor.identity().clone();
+            let mut payload = Vec::with_capacity(16);
+            payload.extend_from_slice(&identity.pid().to_be_bytes());
+            payload.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+            payload.extend_from_slice(&launcher_pid.to_be_bytes());
+            if child_ready.write_all(&payload).is_err() {
+                unsafe { libc::_exit(136) }
+            }
+            // Close the Host-local write end explicitly before dying so only the
+            // deposited duplicate remains (simulates Host process FD teardown).
+            drop(host_stdin);
+            std::mem::forget(supervisor);
+            loop {
+                unsafe { libc::pause() };
+            }
+        }
+        drop(child_ready);
+        let mut payload = [0_u8; 16];
+        parent_ready
+            .read_exact(&mut payload)
+            .expect("read stdin-deposit supervisor evidence");
+        let identity = SessionSupervisorIdentity {
+            schema_version: IDENTITY_SCHEMA_VERSION.to_string(),
+            pid: i32::from_be_bytes(payload[0..4].try_into().expect("pid bytes")),
+            start_time_ticks: u64::from_be_bytes(payload[4..12].try_into().expect("start bytes")),
+        };
+        let launcher_pid = i32::from_be_bytes(payload[12..16].try_into().expect("launcher bytes"));
+        terminate_pid(host_pid);
+        let _ = wait_for_child(host_pid);
+        assert!(
+            process_is_live(launcher_pid),
+            "cat must stay live: deposited stdin must prevent EOF after Host death"
+        );
+        let mut reattached = HostSessionSupervisor::reattach(&identity)
+            .expect("replacement Host must reattach after stdin deposit");
+        let taken = reattached
+            .take_stdin(launcher_pid)
+            .expect("reattach must restore the authentic deposited stdin write end");
+        let missing = reattached
+            .take_stdin(launcher_pid)
+            .expect_err("second take must fail closed, not invent another stream");
+        assert_eq!(missing.code, ErrorCode::Unavailable);
+        let mut writer = unsafe { std::fs::File::from_raw_fd(taken.into_raw_fd()) };
+        writer
+            .write_all(b"reattached-stdin\n")
+            .expect("write through restored stdin");
+        drop(writer);
+        reattached
+            .close_deposited_stdin(launcher_pid)
+            .expect("idempotent close after take");
+        let status = reattached
+            .wait_launcher(launcher_pid)
+            .expect("wait must return authentic cat exit after stdin EOF");
+        assert_eq!(status, 0, "cat must exit 0 after authentic EOF, not invented status");
     }
 
     #[test]

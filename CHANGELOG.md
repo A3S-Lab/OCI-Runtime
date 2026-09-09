@@ -27,6 +27,18 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Native Linux Host-reopen **stdin restore** through session-supervisor
+  SCM_RIGHTS deposit/take/close. Supervised create (opt-in) deposits a duplicate
+  stdin write end keyed by launcher PID so Host death does not EOF the child;
+  `LinuxLiveSupervisedSession` takes that deposit on reopen and supports
+  authentic `write_stdin` / `close_stdin`. Capture stdout/stderr are not
+  restored (two readers would split the stream), so `read_output` fail-closes
+  with `Unavailable` instead of inventing an empty chunk list. Driver
+  `require_live` for unrestored `PreparedProcess` ops also uses `Unavailable`.
+  First-principles coverage: deposit survives Host death and reattach take is
+  authentic; live reopen restores deposited stdin and fail-closes read-output.
+  Default create stays Host-bound. Full `PreparedProcess` / stdout/stderr
+  restore and the real-host Box live-session gate remain open.
 - Partial Native Linux Host-reopen **process inventory** for live supervised
   sessions. `LinuxLiveSupervisedSession::process_inventory` returns exactly the
   authenticated init `ProcessRecord` while that PID + start-time identity is

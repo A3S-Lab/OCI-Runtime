@@ -4,7 +4,7 @@ use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr as StdSocketAddr, UnixListener as StdUnixListener};
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus as ProcessExitStatus;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use a3s_oci_agent_protocol::AgentVsockEndpoint;
 use a3s_oci_sdk::{Error, ErrorCode, IoMode, ProcessIo, Result};
@@ -14,11 +14,9 @@ use tokio::process::Child;
 use super::super::bundle_scope::{PinnedBundleDirectory, PinnedRootfsDirectory};
 use super::super::cgroup::CgroupHandle;
 use super::super::plan::InitPlan;
-use super::super::session_supervisor::HostSessionSupervisor;
 use super::{append_cleanup_error, process_error};
 
-/// Shared production session supervisor used by supervised launcher spawns.
-pub(crate) type SharedSessionSupervisor = Arc<Mutex<HostSessionSupervisor>>;
+pub(crate) use super::super::session_supervisor::SharedSessionSupervisor;
 
 /// Local Host-parented child or supervisor-parented launcher.
 #[derive(Debug)]

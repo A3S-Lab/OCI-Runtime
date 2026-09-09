@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
+use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -13,6 +14,8 @@ use a3s_oci_sdk::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::{sleep, Instant};
 
 use super::cgroup::CgroupManager;
@@ -287,9 +290,12 @@ impl SessionSupervisorReattachCache {
 
 /// Host-reopen handle for one generation whose session supervisor survived.
 ///
-/// This restores supervisor control for wait/kill of the recorded launcher and
-/// a partial process inventory (authenticated live init only). It does not
-/// restore full `PreparedProcess`, stdio sessions, or durable exec inventory.
+/// This restores supervisor control for wait/kill of the recorded launcher, a
+/// partial process inventory (authenticated live init only), and an authentic
+/// stdin write end when the original Host deposited one. Capture stdout/stderr
+/// are not restored here: two readers would split the stream, so
+/// [`Self::read_output`] fails closed with [`ErrorCode::Unavailable`] instead of
+/// inventing empty output. Durable exec inventory remains unrestored.
 #[derive(Debug)]
 pub struct LinuxLiveSupervisedSession {
     target: ContainerTarget,
@@ -299,6 +305,8 @@ pub struct LinuxLiveSupervisedSession {
     record: ContainerRecoveryRecord,
     supervisor: SharedSessionSupervisor,
     launcher_wait_status: Mutex<Option<i32>>,
+    /// Restored Host stdin write end taken from the supervisor deposit.
+    stdin: AsyncMutex<Option<tokio::fs::File>>,
 }
 
 impl LinuxLiveSupervisedSession {
@@ -313,6 +321,15 @@ impl LinuxLiveSupervisedSession {
     #[must_use]
     pub(crate) fn shared_supervisor(&self) -> &SharedSessionSupervisor {
         &self.supervisor
+    }
+
+    /// Whether an authentic stdin write end was restored from the supervisor.
+    #[must_use]
+    pub fn has_restored_stdin(&self) -> bool {
+        self.stdin
+            .try_lock()
+            .map(|stdin| stdin.is_some())
+            .unwrap_or(true)
     }
 
     /// Immutable OCI configuration digest bound to the recovered generation.
@@ -385,6 +402,67 @@ impl LinuxLiveSupervisedSession {
             .session_supervisor
             .expect("live supervised session always records a supervisor")
             .pid()
+    }
+
+    /// Fail closed: capture stdout/stderr were never deposited with the supervisor.
+    ///
+    /// Returning an empty chunk list would invent a successful empty stream.
+    pub fn read_output(&self) -> Result<Vec<a3s_oci_sdk::OutputChunk>> {
+        Err(recovery_error(
+            ErrorCode::Unavailable,
+            format!(
+                "container {} generation {:?} is retained through a reattached session supervisor without restored capture stdio; read-output requires authentic stdout/stderr reconnect",
+                self.target.id, self.target.generation
+            ),
+        ))
+    }
+
+    /// Write to the authentic restored stdin pipe end.
+    pub async fn write_stdin(&self, data: &[u8]) -> Result<()> {
+        let mut guard = self.stdin.lock().await;
+        let stdin = guard.as_mut().ok_or_else(|| {
+            recovery_error(
+                ErrorCode::Unavailable,
+                format!(
+                    "container {} generation {:?} has no restored stdin write end after Host reopen",
+                    self.target.id, self.target.generation
+                ),
+            )
+        })?;
+        stdin.write_all(data).await.map_err(|error| {
+            recovery_error(
+                ErrorCode::Unavailable,
+                format!(
+                    "failed to write restored stdin for container {} generation {:?}: {error}",
+                    self.target.id, self.target.generation
+                ),
+            )
+        })?;
+        stdin.flush().await.map_err(|error| {
+            recovery_error(
+                ErrorCode::Unavailable,
+                format!(
+                    "failed to flush restored stdin for container {} generation {:?}: {error}",
+                    self.target.id, self.target.generation
+                ),
+            )
+        })
+    }
+
+    /// Close the restored stdin write end and drop any remaining supervisor deposit.
+    pub async fn close_stdin(&self) -> Result<()> {
+        {
+            let mut guard = self.stdin.lock().await;
+            guard.take();
+        }
+        let mut supervisor = self.supervisor.lock().map_err(|_| {
+            recovery_error(
+                ErrorCode::Internal,
+                "live supervised session supervisor lock is poisoned during stdin close",
+            )
+        })?;
+        supervisor.close_deposited_stdin(self.launcher_pid())?;
+        Ok(())
     }
 
     /// Block until the supervised launcher exits and return its raw wait status.
@@ -477,6 +555,8 @@ impl LinuxLiveSupervisedSession {
         tombstone: LinuxExecutorTombstone,
         supervisor: SharedSessionSupervisor,
     ) -> Self {
+        // Take before moving `supervisor` into Self; drop the lock first.
+        let stdin = take_deposited_stdin(&supervisor, tombstone.record.launcher.pid());
         Self {
             target: tombstone.target,
             config_digest: tombstone.config_digest,
@@ -485,8 +565,29 @@ impl LinuxLiveSupervisedSession {
             record: tombstone.record,
             supervisor,
             launcher_wait_status: Mutex::new(None),
+            stdin: AsyncMutex::new(stdin),
         }
     }
+}
+
+fn take_deposited_stdin(
+    supervisor: &SharedSessionSupervisor,
+    launcher_pid: i32,
+) -> Option<tokio::fs::File> {
+    let mut guard = supervisor.lock().ok()?;
+    let fd = match guard.take_stdin(launcher_pid) {
+        Ok(fd) => fd,
+        Err(_) => return None,
+    };
+    drop(guard);
+    Some(owned_fd_to_tokio_file(fd))
+}
+
+fn owned_fd_to_tokio_file(fd: OwnedFd) -> tokio::fs::File {
+    let raw = fd.into_raw_fd();
+    // SAFETY: take_stdin transferred ownership of an open write end.
+    let std_file = unsafe { std::fs::File::from_raw_fd(raw) };
+    tokio::fs::File::from_std(std_file)
 }
 
 pub(super) fn runtime_root_name(owner: ProcessIdentity) -> String {
@@ -2364,6 +2465,24 @@ mod tests {
             "partial inventory must not invent terminal mode"
         );
 
+        let read_error = live
+            .read_output()
+            .expect_err("read-output must fail closed without restored capture stdio");
+        assert_eq!(
+            read_error.code,
+            ErrorCode::Unavailable,
+            "read-output must be Unavailable, not an invented empty stream"
+        );
+        assert!(
+            !live.has_restored_stdin(),
+            "fixture without stdin deposit must not invent a restored write end"
+        );
+        let write_error = live
+            .write_stdin(b"nope")
+            .await
+            .expect_err("write-stdin without deposit must fail closed");
+        assert_eq!(write_error.code, ErrorCode::Unavailable);
+
         live.kill_launcher().expect("kill supervised launcher");
         let status = live
             .wait_launcher()
@@ -2392,6 +2511,193 @@ mod tests {
             .expect("stopped-only delete after live wait");
         assert!(!stale_root.exists());
         // Ensure the forgotten supervisor is cleaned up for the test process.
+        terminate_pid(supervisor_pid);
+        let _ = wait_for_child(supervisor_pid);
+    }
+
+    #[tokio::test]
+    async fn live_session_restores_deposited_stdin_and_fail_closes_read_output() {
+        use std::io::{Read, Write};
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        use std::os::unix::net::UnixStream;
+        use std::path::Path;
+
+        use super::super::pid_supervisor::{terminate_pid, wait_for_child};
+        use super::super::session_supervisor::HostSessionSupervisor;
+
+        let temporary = tempfile::tempdir().expect("temporary recovery parent");
+        let parent = temporary.path().join("executor");
+        std::fs::create_dir(&parent).expect("executor parent");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
+            .expect("protect executor parent");
+        let current_root = parent.join("current");
+        std::fs::create_dir(&current_root).expect("current root");
+        std::fs::set_permissions(&current_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect current root");
+
+        let (mut parent_ready, mut child_ready) =
+            UnixStream::pair().expect("stdin restore ready channel");
+        // SAFETY: parent reaps the fake Host; child owns the production supervisor.
+        let host_pid = unsafe { libc::fork() };
+        assert!(host_pid >= 0, "fork fake host for stdin restore");
+        if host_pid == 0 {
+            drop(parent_ready);
+            let mut supervisor = match HostSessionSupervisor::start_via_fork() {
+                Ok(supervisor) => supervisor,
+                Err(_) => unsafe { libc::_exit(141) },
+            };
+            let mut fds = [0, 0];
+            if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+                unsafe { libc::_exit(142) }
+            }
+            let child_stdin = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+            let host_stdin = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+            let deposit = unsafe { libc::fcntl(host_stdin.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+            if deposit < 0 {
+                unsafe { libc::_exit(143) }
+            }
+            let launcher_pid = match supervisor.spawn_launcher(
+                Path::new("/bin/cat"),
+                &[],
+                None,
+                None,
+                Some((Some(child_stdin.as_raw_fd()), None, None)),
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(144) },
+            };
+            drop(child_stdin);
+            if supervisor.deposit_stdin(launcher_pid, deposit).is_err() {
+                unsafe { libc::_exit(145) }
+            }
+            unsafe {
+                libc::close(deposit);
+            }
+            let identity = supervisor.identity().clone();
+            let mut payload = Vec::with_capacity(16);
+            payload.extend_from_slice(&identity.pid().to_be_bytes());
+            payload.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+            payload.extend_from_slice(&launcher_pid.to_be_bytes());
+            if child_ready.write_all(&payload).is_err() {
+                unsafe { libc::_exit(146) }
+            }
+            drop(host_stdin);
+            std::mem::forget(supervisor);
+            loop {
+                unsafe { libc::pause() };
+            }
+        }
+        drop(child_ready);
+        let mut payload = [0_u8; 16];
+        parent_ready
+            .read_exact(&mut payload)
+            .expect("read stdin-restore supervisor evidence");
+        let supervisor_pid = i32::from_be_bytes(payload[0..4].try_into().expect("pid bytes"));
+        let supervisor_start = u64::from_be_bytes(payload[4..12].try_into().expect("start bytes"));
+        let launcher_pid = i32::from_be_bytes(payload[12..16].try_into().expect("launcher bytes"));
+
+        let owner = ProcessIdentity {
+            pid: 2_300_000,
+            start_time_ticks: 0x333,
+        };
+        let stale_root = parent.join(runtime_root_name(owner));
+        std::fs::create_dir(&stale_root).expect("stale root");
+        std::fs::set_permissions(&stale_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect stale root");
+        write_atomic_record(
+            &stale_root.join(OWNER_RECORD_NAME),
+            &ExecutorOwnerRecord {
+                schema_version: OWNER_SCHEMA_VERSION.to_string(),
+                owner,
+            },
+        )
+        .expect("owner record");
+        let slot = stale_root.join("c-0000000000000001");
+        std::fs::create_dir(&slot).expect("container slot");
+        std::fs::set_permissions(&slot, std::fs::Permissions::from_mode(0o700))
+            .expect("protect container slot");
+        let config = br#"{"ociVersion":"1.3.0"}"#;
+        let digest = config_digest_for(config);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        options
+            .open(slot.join(CONFIG_SNAPSHOT_NAME))
+            .and_then(|mut file| file.write_all(config))
+            .expect("configuration snapshot");
+        let target = ContainerTarget::exact(
+            a3s_oci_sdk::ContainerId::new("live-stdin-restore").expect("container ID"),
+            a3s_oci_sdk::Generation(1),
+        );
+        let init = ProcessIdentity {
+            pid: launcher_pid,
+            start_time_ticks: process_observation(launcher_pid)
+                .expect("observe launcher")
+                .expect("launcher live")
+                .start_time_ticks,
+        };
+        write_atomic_record(
+            &slot.join(CONTAINER_RECORD_NAME),
+            &ContainerRecoveryRecord {
+                schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
+                target: target.clone(),
+                config_digest: digest.clone(),
+                owner,
+                launcher: init,
+                init,
+                session_supervisor: Some(ProcessIdentity::from_authenticated(
+                    supervisor_pid,
+                    supervisor_start,
+                )),
+                cgroup: None,
+                intel_rdt: None,
+            },
+        )
+        .expect("container recovery record");
+
+        terminate_pid(host_pid);
+        let _ = wait_for_child(host_pid);
+
+        let supervisors = SessionSupervisorReattachCache::default();
+        let recovery = recover_stale_generation(
+            &parent,
+            &current_root,
+            &target,
+            &digest,
+            Some(launcher_pid),
+            &supervisors,
+        )
+        .await
+        .expect("live supervisor with stdin deposit must reattach")
+        .expect("recovery match");
+        let StaleGenerationRecovery::Live(live) = recovery else {
+            panic!("stdin deposit recovery must be Live");
+        };
+        assert!(
+            live.has_restored_stdin(),
+            "Host reopen must restore the deposited stdin write end"
+        );
+        let read_error = live
+            .read_output()
+            .expect_err("capture stdio must stay Unavailable");
+        assert_eq!(read_error.code, ErrorCode::Unavailable);
+
+        live.write_stdin(b"hello-reopen\n")
+            .await
+            .expect("restored stdin must accept authentic writes");
+        live.close_stdin()
+            .await
+            .expect("close restored stdin must deliver EOF without inventing status");
+        let status = live
+            .wait_launcher()
+            .expect("wait must return authentic cat status");
+        assert_eq!(status, 0, "cat must exit after authentic stdin EOF");
+
+        let tombstone = live
+            .into_tombstone()
+            .expect("dead cat becomes stopped tombstone");
+        delete_stale_generation(&tombstone)
+            .await
+            .expect("stopped-only delete");
         terminate_pid(supervisor_pid);
         let _ = wait_for_child(supervisor_pid);
     }
