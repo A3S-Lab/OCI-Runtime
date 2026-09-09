@@ -1869,6 +1869,15 @@ helper replacement, and exact cleanup. They deliberately do not claim live
 process-I/O session reattachment; that requires a persistent authenticated
 supervisor and remains a promotion gate.
 
+The first-principles foundation for that supervisor now lives in
+`crates/agent/src/executor/session_supervisor.rs`. It captures a versioned
+`a3s.oci.native-linux-session-supervisor-identity.v1` identity (PID plus
+start-time ticks), rejects PID-only authentication, and proves the lifetime
+split: a workload that arms parent-death against the supervisor survives Host
+owner `SIGKILL`, while the current Host-bound PDEATHSIG model still terminates.
+Production executor wiring, durable recovery-record extension, and the Box
+real-host live-session gate remain open.
+
 ### Hook owner-death crash boundary
 
 The separate `hook-owner-death` focus creates a durable generation whose
