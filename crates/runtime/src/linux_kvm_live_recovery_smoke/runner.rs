@@ -630,26 +630,6 @@ fn walk_for_binding(root: &Path, found: &mut Vec<PathBuf>) -> Result<(), String>
     Ok(())
 }
 
-async fn wait_for_exactly_one_new_endpoint(
-    baseline: &std::collections::BTreeSet<PathBuf>,
-) -> Result<bool, String> {
-    let deadline = Instant::now() + LIVE_TIMEOUT;
-    loop {
-        let current = host::endpoint_inventory()?;
-        let added = current
-            .difference(baseline)
-            .cloned()
-            .collect::<Vec<_>>();
-        if added.len() == 1 {
-            return Ok(true);
-        }
-        if Instant::now() >= deadline {
-            return Ok(false);
-        }
-        sleep(POLL_INTERVAL).await;
-    }
-}
-
 async fn emergency_reap_survivors(evidence: &super::report::LinuxKvmLiveRecoveryEvidence) {
     for process in &evidence.live_vm_processes {
         let Ok(pid) = libc::pid_t::try_from(process.pid) else {
