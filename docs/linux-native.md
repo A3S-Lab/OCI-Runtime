@@ -1938,7 +1938,10 @@ Empty and nonempty frames share that path; mounts do not ride `spawn_launcher`
 FD lists. When Host pins the agent as `/proc/self/fd/<n>`, supervised
 `spawn_launcher` sends that executable via SCM_RIGHTS (`FLAG_PROGRAM_FD`) so
 the supervisor execs through its own descriptor table — the Host pathname is
-never opened in the supervisor process.
+never opened in the supervisor process. The create ready-race observes
+supervised launcher liveness via `/proc/<pid>` instead of `wait_launcher`, so
+a cancelled `select!` arm cannot leave the supervisor mutex held across
+`MSG_WAIT` and deadlock timeout cleanup.
 
 When the original Host control socketpair closes (owner death), the supervisor
 does **not** reap waitable children and does **not** start a replacement
