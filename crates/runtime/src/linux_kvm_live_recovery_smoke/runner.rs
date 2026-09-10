@@ -4,10 +4,11 @@ use std::time::Duration;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
     ContainerId, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, ErrorCode, ExecRequest,
-    IoMode, IsolationRequest, KillRequest, ListRequest, OutputStream, ProcessId, ProcessIo,
-    ProcessTarget, ProcessesRequest, ReadOutputRequest, Signal, StartRequest, StateRequest,
-    WaitRequest, WriteStdinRequest,
+    FileOp, FileRequest, IoMode, IsolationRequest, KillRequest, ListRequest, OutputStream,
+    ProcessId, ProcessIo, ProcessTarget, ProcessesRequest, ReadOutputRequest, Signal, StartRequest,
+    StateRequest, WaitRequest, WriteStdinRequest,
 };
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use tokio::time::{sleep, Instant};
 
 use crate::kvm_live_session_binding::{
@@ -258,6 +259,7 @@ async fn run_first_owner(
     }
     evidence.durable_pipe_name = Some(binding.pipe_name.clone());
     prove_retained_exec_io_before_kill(prepared, &client, &target, evidence).await?;
+    prove_retained_filesystem_before_kill(prepared, &client, &target, evidence).await?;
     let durable_endpoint = durable_endpoint_dir(&binding);
     drop(client);
     Ok(durable_endpoint)
@@ -353,6 +355,7 @@ async fn run_replacement(
     }
 
     prove_retained_exec_io_after_reattach(prepared, &client, &target, evidence).await?;
+    prove_retained_filesystem_after_reattach(prepared, &client, &target, evidence).await?;
 
     evidence.no_invented_exit_status =
         assert_no_invented_exit(&client, &target, runtime_root).await?;
@@ -511,6 +514,98 @@ async fn prove_retained_exec_io_after_reattach(
         return Err("Live retained exec I/O evidence failed its completeness audit".to_string());
     }
     Ok(())
+}
+
+async fn prove_retained_filesystem_before_kill(
+    prepared: &PreparedQualification,
+    client: &a3s_oci_sdk::RuntimeClient,
+    target: &ContainerTarget,
+    evidence: &mut super::report::LinuxKvmLiveRecoveryEvidence,
+) -> Result<(), String> {
+    let path = retained_filesystem_path(&prepared.nonce);
+    let expected_payload = retained_filesystem_payload(&prepared.nonce);
+    let encoded_payload = STANDARD.encode(&expected_payload);
+    let uploaded = call(
+        "Live retained file upload before Host SIGKILL",
+        client.file(FileRequest {
+            target: target.clone(),
+            op: FileOp::Upload,
+            path,
+            data: Some(encoded_payload),
+            user: None,
+            context: Some(operation("kvm-lr", &prepared.nonce, "file-upload")?),
+        }),
+    )
+    .await?;
+    if uploaded.size != expected_payload.len() as u64 {
+        return Err(format!(
+            "Live retained file upload size mismatch: got {} expected {}",
+            uploaded.size,
+            expected_payload.len()
+        ));
+    }
+    evidence.file_upload_before_kill = true;
+    Ok(())
+}
+
+async fn prove_retained_filesystem_after_reattach(
+    prepared: &PreparedQualification,
+    client: &a3s_oci_sdk::RuntimeClient,
+    target: &ContainerTarget,
+    evidence: &mut super::report::LinuxKvmLiveRecoveryEvidence,
+) -> Result<(), String> {
+    let path = retained_filesystem_path(&prepared.nonce);
+    let expected_payload = retained_filesystem_payload(&prepared.nonce);
+    let downloaded = call(
+        "Live retained file download after Host reattach",
+        client.file(FileRequest {
+            target: target.clone(),
+            op: FileOp::Download,
+            path,
+            data: None,
+            user: None,
+            context: None,
+        }),
+    )
+    .await?;
+    let decoded = downloaded
+        .data
+        .as_deref()
+        .map(|value| STANDARD.decode(value))
+        .transpose()
+        .map_err(|error| format!("Live retained file download was not base64: {error}"))?
+        .ok_or_else(|| "Live retained file download omitted payload data".to_string())?;
+    if decoded != expected_payload {
+        return Err(
+            "Live retained file download did not match the pre-SIGKILL upload payload".to_string(),
+        );
+    }
+    if downloaded.size != expected_payload.len() as u64 {
+        return Err(format!(
+            "Live retained file download size mismatch: got {} expected {}",
+            downloaded.size,
+            expected_payload.len()
+        ));
+    }
+    evidence.file_download_after_reattach = true;
+    evidence.retained_filesystem_proven = evidence.file_upload_before_kill
+        && evidence.file_download_after_reattach
+        && evidence.replacement_state_running
+        && evidence.init_identity_unchanged;
+    if !evidence.retained_filesystem_proven {
+        return Err(
+            "Live retained filesystem evidence failed its completeness audit".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn retained_filesystem_path(nonce: &str) -> String {
+    format!("/tmp/.a3s-oci-live-fs-{nonce}.bin")
+}
+
+fn retained_filesystem_payload(nonce: &str) -> Vec<u8> {
+    format!("a3s-oci-live-fs-{nonce}\0binary\n").into_bytes()
 }
 
 fn retained_echo_process() -> Result<Process, String> {
