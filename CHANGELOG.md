@@ -25,6 +25,18 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Retained existing-host WSL2 x86_64 `/dev/kvm` tip `a47b799` R1 operation-
+  stage/shutdown observation against rebuilt system-image manifest
+  `0c7348f4…` (agent `23336c3a…`): Create reopen 11/11 including
+  `host-before-shutdown` and `host-after-shutdown`
+  (`842f9b89273dff8e7b38ede39739cf6a79b8120d31ff07c800a7839a431e69bf`);
+  Exec 9/9 (`c3003943…`); SignalProcess 9/9 (`5a0bd68d…`); File 9/9
+  (`592cc7f6…`); Filesystem 9/9 (`36862d1d…`). Observation-only; does not
+  close fresh-host promotion, AArch64, B2 cutover, or a full 180/180
+  aggregate rerun.
+
 ### Fixed
 
 - Treat incomplete first-owner Exec/SignalProcess reopen markers as optional
