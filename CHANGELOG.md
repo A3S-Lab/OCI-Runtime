@@ -27,6 +27,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- `ProcessIdentity::capture` accepts zombie (`Z`) `/proc/<pid>/stat` entries:
+  start-time remains authentic while the task is unreaped. Refusing zombies made
+  short captured exec payloads (`printf`) fail closed with "exited before its
+  recovery identity was captured" on Live Host-reopen keyed exec (before-kill
+  often won the race). Fully reaped (`X`/`x` or missing `/proc`) still fails.
+  Host-reopen exec reuses identities returned by `record_exec_identity` instead
+  of capturing twice.
 - Supervised session-supervise remains durable when Host dies mid-response:
   control write failures that mean peer gone (`BrokenPipe` / reset / abort /
   EOF) enter the same abstract-unix reattach path as control-read EOF. Owner
