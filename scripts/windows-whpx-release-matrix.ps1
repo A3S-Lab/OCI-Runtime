@@ -87,6 +87,12 @@ function Assert-NoA3sOciProcesses {
 }
 
 . (Join-Path $PSScriptRoot 'lib\windows-whpx-fresh-host-attestation.ps1')
+. (Join-Path $PSScriptRoot 'lib\windows-whpx-release-matrix-promotion.ps1')
+
+Assert-WhpxFreshHostSkipPolicy `
+    -HostClass $HostClass `
+    -SkipSoak:$SkipSoak `
+    -SkipOperationReopen:$SkipOperationReopen
 
 function Invoke-GateScript {
     param(
@@ -262,11 +268,17 @@ if (-not $SkipOperationReopen) {
 }
 
 $completedAt = [DateTime]::UtcNow
+$promotesReadiness = Get-WhpxPromotesReadiness `
+    -HostClass $HostClass `
+    -HasFreshHostAttestation $hasFreshHostAttestation `
+    -SkipSoak:$SkipSoak `
+    -SkipOperationReopen:$SkipOperationReopen `
+    -GateCount $gates.Count
 $summary = [ordered]@{
     schema_version = 'a3s.oci.windows-whpx-release-matrix.v1'
     status = 'available'
     host_class = $HostClass
-    promotes_readiness = ($HostClass -eq 'fresh' -and $hasFreshHostAttestation)
+    promotes_readiness = $promotesReadiness
     fresh_host_attestation = $freshHostAttestation
     started_at_utc = $startedAt.ToString('o')
     completed_at_utc = $completedAt.ToString('o')

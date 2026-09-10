@@ -25,6 +25,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fail-closed Linux KVM and WHPX release matrices so `host_class=fresh` /
+  `-HostClass fresh` cannot set `promotes_readiness=true` when soak (or WHPX
+  operation-reopen) is skipped. Fresh promotion now requires the full bound
+  gate set; skip flags remain allowed only for `existing` observation runs.
+  Covered by `linux-kvm-release-matrix-promotion-test.sh` and
+  `windows-whpx-release-matrix-promotion-test.ps1`.
+
 ### Added
 
 - Symmetrized Linux KVM and WHPX fresh-host attestation fail-closed unit
