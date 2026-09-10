@@ -1254,9 +1254,22 @@ enforce it. No property is silently ignored.
   cleanup gate plus the complete 180-path operation-reopen matrix (summary
   SHA-256 `c0b0c3f91beea85118db6eb4c5a96d33ad4ead0199578c8d610887b336fed2fd`
   inside release-matrix
-  `4a89dc6b5ded75914ddacf27e9b1d56e3db7b20633a6ea1586bc404268235095`); the
-  parent stays open until matching KVM fresh-host evidence lands and WHPX
-  fresh-host promotion closes.
+  `4a89dc6b5ded75914ddacf27e9b1d56e3db7b20633a6ea1586bc404268235095`).
+  Existing-host WSL2 `/dev/kvm` tip `a47b799` evidence now retains Create
+  durable reopen including both Host-shutdown stages (11/11,
+  `842f9b89273dff8e7b38ede39739cf6a79b8120d31ff07c800a7839a431e69bf`) plus
+  tip-adjacent Exec, SignalProcess, File, and Filesystem operation-stage
+  reopen matrices (9/9 each;
+  `c3003943bd52d766c376a24d3f7edf2d5a4c0270330c34bafcec02f14407ad6e`,
+  `5a0bd68dfdd0e471a6b080796f06f16ca237490889bbaed30de10566e6909ab9`,
+  `592cc7f64bed7e8ddf879b563f26dec5eb069a3c3f8573c88dc4a5a5637c59c7`,
+  `36862d1deae603bc734ae449e053bb874fec59554e89ccdc7c1bac1c6241232d`) against
+  system-image manifest
+  `0c7348f4ef9a6b7259c60e598649b2ab914f7337c303e45b9441970184d92d54`
+  (agent `23336c3a…`). Observation-only (`promotes_readiness=false`); the
+  parent stays open until KVM and WHPX fresh-host promotion close. Prior
+  x86_64 observation still covers the remaining implemented operation-stage
+  paths; this tip slice does not claim a fresh 180/180 aggregate rerun.
 - [x] Implement all OCI hook phases with typed prestart, createRuntime,
   createContainer, startContainer, and poststart failure rollback, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
@@ -1264,8 +1277,9 @@ enforce it. No property is silently ignored.
 
 Exit gate: lifecycle tests pass under fault injection at every durable write
 and host/agent transition. The durable-write and `RuntimeDriver` portions pass;
-the real HVF host/agent operation-stage matrix passes, while equivalent
-real-driver coverage remains open for the other utility-VM backends.
+the real HVF host/agent operation-stage matrix passes. Existing-host WHPX and
+KVM observation now retain Host-shutdown Create reopen plus operation-stage
+evidence, while fresh-host promotion for those backends remains open.
 
 ### R2 — Windows WHPX Utility VM
 

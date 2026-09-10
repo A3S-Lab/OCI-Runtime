@@ -1004,8 +1004,9 @@ bootstrap, marker, and recovery baselines. The key report SHA-256 values are
 (soak). This is an observation-only WSL2 qualification: it does not replace
 the required fresh-host AArch64 and x86_64 promotion artifacts, so the KVM
 candidate remains `probe-only`.
-AArch64 hardware evidence and Host shutdown remain open; the candidate
-therefore remains `probe-only`.
+AArch64 hardware evidence remains open at that revision; Host shutdown
+was later retained on Create reopen (see tip `a47b799` evidence below). The
+candidate therefore remains `probe-only`.
 
 On September 6, 2026, a clean current-main checkout at revision
 `7e14370f02f4187ac0fc3ecb979ad14421bfab92` reran the Linux KVM gates on the
@@ -1122,8 +1123,30 @@ residue. The retained aggregate report digests are
 and `205e3b493e218a3fc3d8bc50f4d4b3af14ccf0156846352dfa00bd1d84d67c19`
 (Filesystem). These reports close the implementation and x86_64 observation
 for all 20 KVM workload operations (180/180 operation-stage paths); fresh
-AArch64 evidence, Host shutdown, and promotion-only negative-isolation and
-release gates remain open.
+AArch64 evidence and promotion-only negative-isolation and release gates
+remain open.
+
+On September 11, 2026, clean tip `a47b7993c076d3dcad55c8008e45189dd2f1f940`
+(after WHPX existing-host release-matrix greening) rebuilt the Alpine 3.22.5
+x86_64 system image with Guest Agent
+`23336c3a1999df8b7a3b12a94986260e18e8f19ea5ca41b370715e8dfb17d2dc` (manifest
+SHA-256 `0c7348f4ef9a6b7259c60e598649b2ab914f7337c303e45b9441970184d92d54`)
+and requalified the highest-leverage R1 Host-shutdown and tip-adjacent
+operation-stage reopen gates on the same class of WSL2 `/dev/kvm` host (API
+version 12). Available reports:
+
+| Gate | Cases | Report SHA-256 |
+| --- | ---: | --- |
+| Create reopen (incl. Host shutdown) | 11/11 | `842f9b89273dff8e7b38ede39739cf6a79b8120d31ff07c800a7839a431e69bf` |
+| Exec reopen | 9/9 | `c3003943bd52d766c376a24d3f7edf2d5a4c0270330c34bafcec02f14407ad6e` |
+| SignalProcess reopen | 9/9 | `5a0bd68dfdd0e471a6b080796f06f16ca237490889bbaed30de10566e6909ab9` |
+| File reopen | 9/9 | `592cc7f64bed7e8ddf879b563f26dec5eb069a3c3f8573c88dc4a5a5637c59c7` |
+| Filesystem reopen | 9/9 | `36862d1deae603bc734ae449e053bb874fec59554e89ccdc7c1bac1c6241232d` |
+
+Create retained both `host-before-shutdown` and `host-after-shutdown`. This is
+existing-host observation only (`promotes_readiness=false`); it does not claim
+fresh-host promotion, AArch64, B2/default-registration cutover, or a fresh
+180/180 aggregate rerun of every operation-stage script.
 
 ## Experimental CRIU checkpoint and restore gate
 
