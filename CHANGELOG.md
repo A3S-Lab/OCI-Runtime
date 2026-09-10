@@ -28,6 +28,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 ### Fixed
 
 - Fail-closed Linux KVM and WHPX release matrices so `host_class=fresh` /
+  `-HostClass fresh` cannot set `promotes_readiness=true` with a reduced soak
+  depth (`A3S_OCI_LINUX_KVM_SOAK_ITERATIONS!=25` or soak
+  `requested_iterations`/`completed_iterations` != 25). Fresh runs pin the
+  full 25-iteration soak profile; existing hosts may still use shorter soaks
+  for observation. Covered by the promotion unit tests.
+- Fail-closed Linux KVM and WHPX release matrices so `host_class=fresh` /
   `-HostClass fresh` cannot set `promotes_readiness=true` when soak (or WHPX
   operation-reopen) is skipped. Fresh promotion now requires the full bound
   gate set; skip flags remain allowed only for `existing` observation runs.

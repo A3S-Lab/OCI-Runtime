@@ -251,12 +251,17 @@ $gates.Add((Invoke-GateScript `
     -ExpectedSummarySchema 'a3s.oci.whpx-transport-fault-cleanup-run.v1'))
 
 if (-not $SkipSoak) {
+    $soakExtra = @()
+    if ($HostClass -eq 'fresh') {
+        $soakExtra = @('-Iterations', "$script:WhpxPromotionSoakIterations")
+    }
     $gates.Add((Invoke-GateScript `
         -Name 'soak' `
         -ScriptPath (Join-Path $PSScriptRoot 'windows-whpx-soak.ps1') `
         -GateOutputDirectory (Join-Path $outputRoot 'gates\soak') `
         -ExpectedSummarySchema 'a3s.oci.windows-whpx-soak.v2' `
-        -SummaryRelativePath 'evidence\summary.json'))
+        -SummaryRelativePath 'evidence\summary.json' `
+        -ExtraArguments $soakExtra))
 }
 
 if (-not $SkipOperationReopen) {
@@ -267,13 +272,28 @@ if (-not $SkipOperationReopen) {
         -ExpectedSummarySchema 'a3s.oci.whpx-operation-reopen-run.v1'))
 }
 
+$soakRequestedIterations = 0
+$soakCompletedIterations = 0
+if (-not $SkipSoak) {
+    $soakSummaryPath = Join-Path $outputRoot 'gates\soak\evidence\summary.json'
+    Assert-RegularFile -Path $soakSummaryPath -Label 'WHPX soak summary' | Out-Null
+    $soakSummary = Get-Content -LiteralPath $soakSummaryPath -Raw | ConvertFrom-Json
+    $soakRequestedIterations = [int](Get-OptionalProperty -Object $soakSummary -Name 'requested_iterations')
+    $soakCompletedIterations = [int](Get-OptionalProperty -Object $soakSummary -Name 'completed_iterations')
+    Assert-WhpxFreshHostSoakProfile `
+        -HostClass $HostClass `
+        -RequestedIterations $soakRequestedIterations
+}
+
 $completedAt = [DateTime]::UtcNow
 $promotesReadiness = Get-WhpxPromotesReadiness `
     -HostClass $HostClass `
     -HasFreshHostAttestation $hasFreshHostAttestation `
     -SkipSoak:$SkipSoak `
     -SkipOperationReopen:$SkipOperationReopen `
-    -GateCount $gates.Count
+    -GateCount $gates.Count `
+    -SoakRequestedIterations $soakRequestedIterations `
+    -SoakCompletedIterations $soakCompletedIterations
 $summary = [ordered]@{
     schema_version = 'a3s.oci.windows-whpx-release-matrix.v1'
     status = 'available'
@@ -295,8 +315,22 @@ $summary = [ordered]@{
     firmware_dll_sha256 = $firmwareSha256
     included_operation_reopen = (-not $SkipOperationReopen)
     included_soak = (-not $SkipSoak)
+    soak_requested_iterations = $soakRequestedIterations
+    soak_completed_iterations = $soakCompletedIterations
     gate_count = $gates.Count
     gates = $gates
+}
+if ($HostClass -eq 'fresh') {
+    if (-not $promotesReadiness) {
+        throw 'HostClass=fresh completed without promotes_readiness=true; refusing dishonest promotion evidence.'
+    }
+    if ($summary.gate_count -ne 6 -or -not $summary.included_soak -or -not $summary.included_operation_reopen) {
+        throw 'HostClass=fresh requires the full six-gate bound set including soak and operation-reopen.'
+    }
+    if ($soakRequestedIterations -ne $script:WhpxPromotionSoakIterations -or
+        $soakCompletedIterations -ne $script:WhpxPromotionSoakIterations) {
+        throw 'HostClass=fresh requires full soak depth (requested_iterations=completed_iterations=25).'
+    }
 }
 Write-Utf8Text -Path (Join-Path $outputRoot 'summary.json') `
     -Text ($summary | ConvertTo-Json -Depth 16)

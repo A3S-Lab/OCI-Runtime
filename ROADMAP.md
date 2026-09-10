@@ -162,7 +162,8 @@ without attestation is rejected; `existing` never sets
 `promotes_readiness=true`. `existing` plus `-FreshHostAttestation` is also
 rejected (fail-closed; see
 `scripts/windows-whpx-fresh-host-attestation-test.ps1`). Fresh plus
-`-SkipSoak` / `-SkipOperationReopen` is rejected before promotion.
+`-SkipSoak` / `-SkipOperationReopen` is rejected before promotion, and soak
+depth must be the full 25 iterations.
 The matrix must keep all six bound gates available (handle-reclamation, driver smoke, recovery
 smoke, 11-stage transport-fault cleanup, soak, 180-path operation-reopen). See
 [`docs/windows-whpx.md`](docs/windows-whpx.md).
@@ -183,7 +184,7 @@ A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
 Attestation schema `a3s.oci.linux-kvm-fresh-host-attestation.v1` must set
 `operator_attests_fresh_provisioning=true` and `provisioned_at_utc`. Leave soak
 enabled for promotion (`A3S_OCI_LINUX_KVM_SKIP_SOAK=1` is refused for
-`host_class=fresh`). Both
+`host_class=fresh`, and `A3S_OCI_LINUX_KVM_SOAK_ITERATIONS` must be 25). Both
 architectures need `available` lifecycle (incl. Guest path-isolation),
 owner-death/restart, and 25-wave soak. See
 [`docs/linux-native.md`](docs/linux-native.md).
