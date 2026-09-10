@@ -27,9 +27,10 @@ pub struct LinuxKvmLiveRecoveryEvidence {
     pub session_owner_identity: Option<LinuxProcessIdentity>,
     pub shim_identity: Option<LinuxProcessIdentity>,
     pub live_binding_published: bool,
-    /// Durable Live keeps `/tmp/a3s-oci-agent-*/` for session-owner reattach
-    /// (opposite of stopped-only one-shot endpoint consumption).
+    /// Durable Live keeps `/tmp/<pipe>/` (agent + host-control) for reattach.
     pub durable_guest_endpoint_retained: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub durable_pipe_name: Option<String>,
     pub host_service_sigkill_delivered: bool,
     pub first_host_service_reaped: bool,
     pub stale_socket_retained: bool,
@@ -76,6 +77,10 @@ impl LinuxKvmLiveRecoveryEvidence {
             && self.shim_identity.is_some()
             && self.live_binding_published
             && self.durable_guest_endpoint_retained
+            && self
+                .durable_pipe_name
+                .as_deref()
+                .is_some_and(|name| name.starts_with("a3s-oci-agent-") && name.len() > 16)
             && self.host_service_sigkill_delivered
             && self.first_host_service_reaped
             && self.stale_socket_retained
@@ -211,6 +216,7 @@ mod tests {
                 shim_identity: Some(shim),
                 live_binding_published: true,
                 durable_guest_endpoint_retained: true,
+                durable_pipe_name: Some(format!("a3s-oci-agent-{}", "a".repeat(32))),
                 host_service_sigkill_delivered: true,
                 first_host_service_reaped: true,
                 stale_socket_retained: true,

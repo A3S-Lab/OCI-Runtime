@@ -111,7 +111,6 @@ async fn run_live_recovery(
     evidence: &mut super::report::LinuxKvmLiveRecoveryEvidence,
 ) -> Result<(), String> {
     let runtime_root = prepared.service_root.join("runtime");
-    let endpoint_baseline = host::endpoint_inventory()?;
     let mut first = HostServiceProcess::spawn_with_options(
         HostServiceKind::Recovery,
         &prepared.executable,
@@ -123,13 +122,15 @@ async fn run_live_recovery(
         DURABLE_SPAWN,
     )
     .await?;
-    let first_result =
-        run_first_owner(prepared, &runtime_root, &endpoint_baseline, &first, evidence).await;
-    if first_result.is_err() {
-        emergency_reap_survivors(evidence).await;
-        first.emergency_stop().await;
-    }
-    first_result?;
+    let first_result = run_first_owner(prepared, &runtime_root, &first, evidence).await;
+    let durable_endpoint = match first_result {
+        Ok(path) => path,
+        Err(reason) => {
+            emergency_reap_survivors(evidence).await;
+            first.emergency_stop().await;
+            return Err(reason);
+        }
+    };
 
     let first_socket = host::socket_identity(first.socket_path())?;
     first.sigkill().await?;
@@ -157,6 +158,12 @@ async fn run_live_recovery(
         .map_err(|error| format!("Live binding failed authentication after Host SIGKILL: {error}"))?;
     evidence.live_binding_authenticated_after_kill = true;
     retain_binding_identities(evidence, &binding)?;
+    if durable_endpoint_dir(&binding) != durable_endpoint {
+        return Err(
+            "Live binding pipe directory drifted from the retained durable guest endpoint"
+                .to_string(),
+        );
+    }
 
     let mut replacement = HostServiceProcess::spawn_with_options(
         HostServiceKind::Recovery,
@@ -170,7 +177,7 @@ async fn run_live_recovery(
     )
     .await?;
     let replacement_result =
-        run_replacement(prepared, &runtime_root, &endpoint_baseline, &mut replacement, evidence)
+        run_replacement(prepared, &runtime_root, &durable_endpoint, &mut replacement, evidence)
             .await;
     if replacement_result.is_err() {
         emergency_reap_survivors(evidence).await;
@@ -182,10 +189,9 @@ async fn run_live_recovery(
 async fn run_first_owner(
     prepared: &PreparedQualification,
     runtime_root: &Path,
-    endpoint_baseline: &std::collections::BTreeSet<PathBuf>,
     first: &HostServiceProcess,
     evidence: &mut super::report::LinuxKvmLiveRecoveryEvidence,
-) -> Result<(), String> {
+) -> Result<PathBuf, String> {
     let identity = first.identity()?;
     evidence.first_host_service = Some(identity);
     evidence.first_socket_peer = Some(first.socket_peer()?.clone());
@@ -242,21 +248,23 @@ async fn run_first_owner(
     let binding = wait_for_live_binding(runtime_root).await?;
     evidence.live_binding_published = true;
     retain_binding_identities(evidence, &binding)?;
-    evidence.durable_guest_endpoint_retained =
-        wait_for_exactly_one_new_endpoint(endpoint_baseline).await?;
+    evidence.durable_guest_endpoint_retained = durable_endpoint_live(&binding)?;
     if !evidence.durable_guest_endpoint_retained {
         return Err(
-            "Live durable guest endpoint was not retained under /tmp/a3s-oci-agent-*".to_string(),
+            "Live durable guest endpoint was not retained under /tmp/<pipe> from the binding"
+                .to_string(),
         );
     }
+    evidence.durable_pipe_name = Some(binding.pipe_name.clone());
+    let durable_endpoint = durable_endpoint_dir(&binding);
     drop(client);
-    Ok(())
+    Ok(durable_endpoint)
 }
 
 async fn run_replacement(
     prepared: &PreparedQualification,
     runtime_root: &Path,
-    endpoint_baseline: &std::collections::BTreeSet<PathBuf>,
+    durable_endpoint: &Path,
     replacement: &mut HostServiceProcess,
     evidence: &mut super::report::LinuxKvmLiveRecoveryEvidence,
 ) -> Result<(), String> {
@@ -382,7 +390,7 @@ async fn run_replacement(
     evidence.replacement_exit_success = replacement.terminate().await?;
     evidence.replacement_socket_removed = !prepared.service_root.join("runtime.sock").exists();
     evidence.durable_guest_endpoint_cleaned =
-        host::wait_for_endpoint_inventory(endpoint_baseline).await?;
+        wait_for_durable_endpoint_removed(durable_endpoint).await?;
     evidence.service_restart_recovered = evidence.replacement_exit_success
         && evidence.replacement_socket_removed
         && evidence.durable_guest_endpoint_cleaned
@@ -427,18 +435,35 @@ async fn assert_no_invented_exit(
     }
 }
 
-async fn wait_for_exactly_one_new_endpoint(
-    baseline: &std::collections::BTreeSet<PathBuf>,
-) -> Result<bool, String> {
+fn durable_endpoint_dir(binding: &KvmLiveSessionBinding) -> PathBuf {
+    PathBuf::from(crate::agent_socket::PRIVATE_TMP_ROOT).join(&binding.pipe_name)
+}
+
+fn durable_endpoint_live(binding: &KvmLiveSessionBinding) -> Result<bool, String> {
+    let directory = durable_endpoint_dir(binding);
+    let agent = directory.join("agent.sock");
+    let host_control = PathBuf::from(&binding.host_control_socket);
+    Ok(directory.is_dir()
+        && agent.exists()
+        && host_control.exists()
+        && host_control.parent() == Some(directory.as_path()))
+}
+
+/// True when the retained Live pipe directory (and its sockets) are gone.
+async fn wait_for_durable_endpoint_removed(endpoint: &Path) -> Result<bool, String> {
     let deadline = Instant::now() + LIVE_TIMEOUT;
     loop {
-        let current = host::endpoint_inventory()?;
-        let added = current
-            .difference(baseline)
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>();
-        if added.len() == 1 {
+        let agent = endpoint.join("agent.sock");
+        let host_control = endpoint.join(crate::kvm_live_session_binding::KVM_HOST_CONTROL_SOCKET_FILE);
+        if !endpoint.exists() && !agent.exists() && !host_control.exists() {
             return Ok(true);
+        }
+        // Session-owner may unlink sockets before the empty directory is removed.
+        if !agent.exists() && !host_control.exists() && endpoint.is_dir() {
+            let _ = std::fs::remove_dir(endpoint);
+            if !endpoint.exists() {
+                return Ok(true);
+            }
         }
         if Instant::now() >= deadline {
             return Ok(false);
