@@ -1935,7 +1935,10 @@ supervisor-parented launcher connects to the Host create-control socket, Host
 authenticates the peer PID and sends prepared mount descriptors via SCM_RIGHTS
 (`send_device_mounts`) — the same Host→init control path as default create.
 Empty and nonempty frames share that path; mounts do not ride `spawn_launcher`
-FD lists.
+FD lists. When Host pins the agent as `/proc/self/fd/<n>`, supervised
+`spawn_launcher` sends that executable via SCM_RIGHTS (`FLAG_PROGRAM_FD`) so
+the supervisor execs through its own descriptor table — the Host pathname is
+never opened in the supervisor process.
 
 When the original Host control socketpair closes (owner death), the supervisor
 does **not** reap waitable children and does **not** start a replacement

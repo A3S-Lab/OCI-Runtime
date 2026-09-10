@@ -25,6 +25,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Supervised `spawn_launcher` no longer asks the session supervisor to open the
+  Host-private `/proc/self/fd/<n>` pathname for the pinned agent executable
+  (that path is ENOENT in the supervisor FD table). When Host passes a
+  `/proc/self/fd/<n>` program, the executable descriptor is transferred with
+  SCM_RIGHTS (`FLAG_PROGRAM_FD`) and the supervisor execs through its own
+  `/proc/self/fd/<m>`. Absolute pathnames (tests, `/bin/sleep`) keep the prior
+  pathname spawn. First-principles coverage: supervisor spawn of a Host-pinned
+  `/proc/self/fd` `/bin/true` exits 0.
+
 ### Added
 
 - Opt-in supervised Native create now accepts **rootless device mounts**. Host
