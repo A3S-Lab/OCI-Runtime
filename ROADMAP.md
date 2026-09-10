@@ -2204,15 +2204,26 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   (system-image manifest
   `805d4afea01b1c3a9ed7343b2406edfc6c7e43912e35134ec72661c29fe56449`; continuous
   init PID 359; `retained_exec_io_proven` /
-  `guest_survived_host_sigkill` / `service_restart_recovered`). **v3 adds**
+  `guest_survived_host_sigkill` / `service_restart_recovered`).   **v3 adds**
   filesystem continuity on the same Running generation
   (`retained_filesystem_proven`: FileOp::Upload before Host SIGKILL,
-  FileOp::Download exact payload match after reattach). Greened process/I/O v2
-  evidence remains; **filesystem greening is pending** until `/dev/kvm` re-run.
-  That does **not** close W2/B2 alone: defer Box `retained_stream_handle_proven`
-  MicroVM sibling and `b2_process_session_recovery_closed` /
-  `kvm_microvm_live_claimed` until those criteria. Does not register KVM with
-  normal HostRuntimeService, flip default supervised create, or cut over MicroVM
+  FileOp::Download exact payload match after reattach). **Existing-host WSL2
+  `/dev/kvm` greened Live filesystem continuity** on revision
+  `2decde5832a713abf4d859b2c11881b50de15d3d` with matrix
+  `a3s.oci.linux-kvm-live-recovery-matrix.v1` report
+  `/var/tmp/a3s-oci-kvm-live-fs-v3-20260910214714.json` SHA-256
+  `74d60f3e472ae7380fb702ea416fc4cbad01f28ab95af268dedaa0d0533e316b`
+  (system-image manifest
+  `805d4afea01b1c3a9ed7343b2406edfc6c7e43912e35134ec72661c29fe56449`; continuous
+  init PID 361; `retained_filesystem_proven` / `file_upload_before_kill` /
+  `file_download_after_reattach` / `retained_exec_io_proven` /
+  `guest_survived_host_sigkill` / `service_restart_recovered`). That does
+  **not** close W2/B2 alone: Box process Live sibling
+  (`retained_stream_handle_proven` / `kvm_microvm_live_claimed`) is greened
+  separately on Box main, while Box filesystem Live sibling and
+  `b2_process_session_recovery_closed` remain open; Native Live filesystem
+  evidence is still required for full W2. Does not register KVM with normal
+  HostRuntimeService, flip default supervised create, or cut over MicroVM
   product routing.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
