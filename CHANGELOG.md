@@ -27,16 +27,29 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Native Linux Host-reopen **new `exec` spawn-context rebuild** on the Live
+  supervised path. Reloads the durable `config.json` snapshot for namespace
+  plan / capability ceiling / seccomp, captures authentic namespace and root
+  descriptors from the live init (`/proc/<init>/ns/*`, `/proc/<init>/root`),
+  reopens the recovery cgroup leaf `cgroup.procs` when present, and spawns a
+  supervisor-parented exec helper via `ExecProcess::spawn_with_context` —
+  without restoring a fake `PreparedProcess`. Only Null process I/O is accepted
+  in this slice; capture/pipe/terminal/inherit fail closed with `Unavailable`.
+  Successful Null spawns persist recovery v6 exec identities so inventory /
+  signal / wait keep working. `NativeLinuxDriver` routes Live reopen through
+  that path. First-principles coverage: capture I/O Unavailable after reopen;
+  Null I/O contract unit test; non-agent helper fails closed without inventing
+  success. Default create stays Host-bound. Capture/pipe stream restore for
+  post-reopen exec remains open.
 - Native Linux Host-reopen **authentic pause / resume / stats** on the Live
   supervised path from the durable recovery cgroup leaf. `LinuxLiveSupervisedSession`
   writes kernel `cgroup.freeze` and waits for `cgroup.events` confirmation, and
   reads normalized cgroup-v2 counters through the same leaf path
   `PreparedProcess` uses — without restoring a fake process session. Missing
   cgroup evidence fail-closes with `Unavailable`. Live driver state observes
-  the authentic freezer bit when present. New `exec` after reopen still
-  requires namespace/rootfs/`PreparedProcess` restore and remains Unavailable.
-  First-principles coverage: freeze/thaw and stats after Host reopen; pause and
-  stats without a recovery leaf fail closed. Default create stays Host-bound.
+  the authentic freezer bit when present. First-principles coverage: freeze/thaw
+  and stats after Host reopen; pause and stats without a recovery leaf fail
+  closed. Default create stays Host-bound.
 - Native Linux Host-reopen **authentic `wait_process`** for durable exec
   identities on the Live supervised path. Recovery schema advances to
   `a3s.oci.native-linux-recovery.v6` with optional `helper` (supervisor-child
@@ -57,11 +70,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
   start-time-drifted identities fail closed (`FailedPrecondition` /
   `Unavailable`) without inventing delivery success. `NativeLinuxDriver`
   routes live reopen through that path. Authentic `wait_process` for helper-
-  backed durable execs is unlocked in a later Unreleased entry (recovery v6).
-  New `exec` after reopen remains Unavailable. First-principles
-  coverage: durable exec accepts SIGKILL after Host reopen; unknown IDs and
-  dead identities fail closed; inventory omits the signaled-dead exec without
-  invented wait status. Default create stays Host-bound.
+  backed durable execs and Null-I/O new `exec` after reopen are unlocked in
+  later Unreleased entries. First-principles coverage: durable exec accepts
+  SIGKILL after Host reopen; unknown IDs and dead identities fail closed;
+  inventory omits the signaled-dead exec without invented wait status.
+  Default create stays Host-bound.
 - Native Linux Host-reopen **durable exec inventory** on the Live supervised
   path. Recovery schema advances to `a3s.oci.native-linux-recovery.v5` with
   authenticated exec entries (process ID, PID + start-time, terminal mode).
@@ -72,8 +85,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   plus still-live durable execs only; dead execs are omitted without inventing
   exit status. Host reopen keeps `DriverRecovery::observed` (not
   `recreated_running_with_processes`) because omitting dead execs is
-  incompatible with Host exact-match rebind. `wait_process` / new `exec`
-  remain Unavailable until wait ownership or full `PreparedProcess` restore.
+  incompatible with Host exact-match rebind. Authentic `wait_process` and
+  Null-I/O new `exec` after reopen are unlocked in later Unreleased entries.
   First-principles coverage: live exec appears after Host reopen; after exit,
   inventory omits it without invented status. Default create stays Host-bound.
 - Native Linux Host-reopen **exclusive stdout/stderr restore** through

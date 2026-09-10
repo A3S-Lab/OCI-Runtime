@@ -50,6 +50,18 @@ pub(super) struct ExecProcess {
     exit_status: Option<ExitStatus>,
 }
 
+/// Minimum authentic spawn inputs for container-exec (live Host or Host reopen).
+///
+/// Built from a live [`PreparedProcess`] or rebuilt after Host reopen from the
+/// durable recovery config snapshot plus the authenticated live init identity.
+/// Never invents namespace/rootfs evidence.
+pub(super) struct ExecSpawnContext<'a> {
+    pub(super) execution_context: &'a super::namespace::RetainedExecutionContext,
+    pub(super) init_pidfd: RawFd,
+    pub(super) workload_cgroup_procs: Option<RawFd>,
+    pub(super) init_signal: &'a PidFd,
+}
+
 impl ExecProcess {
     pub(super) async fn spawn(
         snapshot: &Path,
@@ -59,12 +71,38 @@ impl ExecProcess {
         io: &ProcessIo,
         session_supervisor: Option<SharedSessionSupervisor>,
     ) -> Result<Self> {
-        let context = init_process.execution_context();
+        let context = ExecSpawnContext {
+            execution_context: init_process.execution_context(),
+            init_pidfd: init_process.pidfd_descriptor(),
+            workload_cgroup_procs: init_process.workload_cgroup_procs_descriptor(),
+            init_signal: init_process.pidfd(),
+        };
+        Self::spawn_with_context(
+            snapshot,
+            init_executable,
+            &context,
+            terminal,
+            io,
+            session_supervisor,
+        )
+        .await
+    }
+
+    /// Spawn using an authentic retained context (live create or Host-reopen rebuild).
+    pub(super) async fn spawn_with_context(
+        snapshot: &Path,
+        init_executable: &Path,
+        context: &ExecSpawnContext<'_>,
+        terminal: bool,
+        io: &ProcessIo,
+        session_supervisor: Option<SharedSessionSupervisor>,
+    ) -> Result<Self> {
         let process_group = ProcessGroupLease::open_for_snapshot(snapshot).await?;
-        let init_pidfd = init_process.pidfd_descriptor();
-        let cgroup_procs = init_process.workload_cgroup_procs_descriptor();
-        let inherited = context.inherited_descriptors(init_pidfd, cgroup_procs)?;
-        let namespace_arguments = context.namespace_arguments();
+        let inherited = context.execution_context.inherited_descriptors(
+            context.init_pidfd,
+            context.workload_cgroup_procs,
+        )?;
+        let namespace_arguments = context.execution_context.namespace_arguments();
         let (listener, control_name) = bind_control_listener()?;
 
         let (mut child, process_io) = if let Some(supervisor) = session_supervisor {
@@ -72,10 +110,9 @@ impl ExecProcess {
                 init_executable,
                 snapshot,
                 &control_name,
-                init_process,
-                context,
-                init_pidfd,
-                cgroup_procs,
+                context.execution_context,
+                context.init_pidfd,
+                context.workload_cgroup_procs,
                 &inherited,
                 &namespace_arguments,
                 io,
@@ -87,10 +124,9 @@ impl ExecProcess {
                 init_executable,
                 snapshot,
                 &control_name,
-                init_process,
-                context,
-                init_pidfd,
-                cgroup_procs,
+                context.execution_context,
+                context.init_pidfd,
+                context.workload_cgroup_procs,
                 &inherited,
                 &namespace_arguments,
                 io,
@@ -99,7 +135,8 @@ impl ExecProcess {
         };
 
         let runtime_pid =
-            complete_exec_handshake(&mut child, &listener, init_process, context).await?;
+            complete_exec_handshake(&mut child, &listener, context.init_signal, context.execution_context)
+                .await?;
 
         let pidfd = PidFd::open(runtime_pid)?;
         let terminal = child_terminal(&child, terminal);
@@ -205,7 +242,6 @@ async fn spawn_host_exec(
     init_executable: &Path,
     snapshot: &Path,
     control_name: &str,
-    _init_process: &super::process::PreparedProcess,
     context: &super::namespace::RetainedExecutionContext,
     init_pidfd: RawFd,
     cgroup_procs: Option<RawFd>,
@@ -258,7 +294,6 @@ async fn spawn_supervised_exec(
     init_executable: &Path,
     snapshot: &Path,
     control_name: &str,
-    _init_process: &super::process::PreparedProcess,
     context: &super::namespace::RetainedExecutionContext,
     init_pidfd: RawFd,
     cgroup_procs: Option<RawFd>,
@@ -360,7 +395,7 @@ async fn spawn_supervised_exec(
 async fn complete_exec_handshake(
     child: &mut ExecChild,
     listener: &tokio::net::UnixListener,
-    init_process: &super::process::PreparedProcess,
+    init_signal: &PidFd,
     context: &super::namespace::RetainedExecutionContext,
 ) -> Result<i32> {
     let launcher_pid = helper_pid_for_handshake(child)?;
@@ -482,7 +517,7 @@ async fn complete_exec_handshake(
         terminate_exec_child(child).await;
         return Err(error);
     }
-    match init_process.signal(0) {
+    match init_signal.send_signal(0) {
         Ok(SignalOutcome::Delivered) => {}
         Ok(SignalOutcome::Exited) => {
             terminate_exec_child(child).await;

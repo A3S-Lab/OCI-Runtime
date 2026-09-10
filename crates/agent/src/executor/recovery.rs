@@ -9,21 +9,27 @@ use std::time::Duration;
 
 use a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT;
 use a3s_oci_sdk::{
-    ContainerStats, ContainerTarget, Error, ErrorCode, ProcessId, ProcessRecord, ProcessTarget,
-    Result, CONTROL_CGROUP_NAME, WORKLOAD_CGROUP_NAME,
+    ContainerStats, ContainerTarget, Error, ErrorCode, IoMode, OciBundle, ProcessId, ProcessIo,
+    ProcessRecord, ProcessTarget, Result, CONTROL_CGROUP_NAME, WORKLOAD_CGROUP_NAME,
 };
+use a3s_oci_sdk::oci_spec::runtime::Process;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::{sleep, Instant};
 
-use super::cgroup::{leaf_is_frozen, set_leaf_frozen, stats_from_leaf, CgroupManager};
+use super::cgroup::{leaf_is_frozen, open_cgroup_procs, set_leaf_frozen, stats_from_leaf, CgroupManager};
+use super::capability::CapabilityPlan;
 use super::device::{cleanup_device_target_manifest, load_device_target_manifest};
+use super::exec_process::{ExecProcess, ExecSpawnContext};
 use super::intel_rdt::{is_resctrl_mountpoint, IntelRdtRecovery};
+use super::namespace::{RetainedExecutionContext, NamespacePlan};
 use super::pid_supervisor::terminate_pid;
 use super::pidfd::{PidFd, SignalOutcome};
+use super::plan::ProcessPlan;
 use super::process::{PreparedProcess, SharedSessionSupervisor};
+use super::seccomp::SeccompPlan;
 use super::session_supervisor::{HostSessionSupervisor, SessionSupervisorIdentity};
 
 const RUNTIME_ROOT_PREFIX: &str = "a3s-oci-agent-";
@@ -414,8 +420,11 @@ impl SessionSupervisorReattachCache {
 /// [`Self::stats`] use the durable recovery cgroup leaf (kernel freezer and
 /// cgroup-v2 counters) without restoring a fake [`PreparedProcess`]. Missing
 /// cgroup evidence fail-closes with [`ErrorCode::Unavailable`]. New `exec`
-/// still requires namespace/rootfs/`PreparedProcess` restore and remains
-/// Unavailable.
+/// rebuilds the minimum authentic spawn context from the durable config
+/// snapshot plus live init namespace/root descriptors (and the recovery cgroup
+/// leaf when present), then supervisor-parents the helper. Capture/terminal I/O
+/// remain Unavailable; Null I/O is supported. Missing config or live init
+/// fail-closes without inventing exit status.
 #[derive(Debug)]
 pub struct LinuxLiveSupervisedSession {
     target: ContainerTarget,
@@ -426,6 +435,8 @@ pub struct LinuxLiveSupervisedSession {
     supervisor: SharedSessionSupervisor,
     launcher_wait_status: Mutex<Option<i32>>,
     exec_wait_status: Mutex<BTreeMap<ProcessId, i32>>,
+    /// Exec identities spawned after Host reopen (also persisted on disk).
+    post_reopen_execs: Mutex<Vec<RecoveryExecRecord>>,
     /// Restored Host stdin write end taken from the supervisor deposit.
     stdin: AsyncMutex<Option<tokio::fs::File>>,
 }
@@ -514,7 +525,7 @@ impl LinuxLiveSupervisedSession {
                 terminal: false,
             });
         }
-        for exec in &self.record.execs {
+        for exec in self.iter_exec_records()? {
             if exec.process_id.is_init() {
                 return Err(recovery_error(
                     ErrorCode::FailedPrecondition,
@@ -690,6 +701,148 @@ impl LinuxLiveSupervisedSession {
         stats_from_leaf(self.recovery_cgroup_leaf()?, self.target.clone()).await
     }
 
+    /// Spawn a new supervisor-parented exec after Host reopen.
+    ///
+    /// Rebuilds the minimum authentic spawn context from the durable
+    /// `config.json` snapshot (namespace plan, capability ceiling, seccomp) plus
+    /// live init namespace/root descriptors and the recovery cgroup leaf. Only
+    /// Null process I/O is accepted in this slice — capture/terminal/pipe fail
+    /// closed with [`ErrorCode::Unavailable`] rather than inventing streams.
+    /// Successful spawn persists a v6 exec identity (payload + helper) so
+    /// inventory / signal / wait continue to work without inventing exit status.
+    pub async fn exec(
+        &self,
+        process_id: &ProcessId,
+        process: &Process,
+        io: &ProcessIo,
+        init_executable: &Path,
+    ) -> Result<(i32, bool)> {
+        if process_id.is_init() {
+            return Err(recovery_error(
+                ErrorCode::InvalidArgument,
+                "exec process ID `init` is reserved for the configured process",
+            ));
+        }
+        if !self.init_is_live()? {
+            return Err(recovery_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "container {} generation {:?} cannot exec without a live init identity",
+                    self.target.id, self.target.generation
+                ),
+            ));
+        }
+        match self.is_paused() {
+            Ok(true) => {
+                return Err(recovery_error(
+                    ErrorCode::FailedPrecondition,
+                    "container exec is unavailable while the container is paused",
+                ));
+            }
+            Ok(false) => {}
+            Err(error) if error.code == ErrorCode::Unavailable => {}
+            Err(error) => return Err(error),
+        }
+        require_null_process_io(io)?;
+        if self.find_exec_record(process_id).is_ok() {
+            return Err(recovery_error(
+                ErrorCode::AlreadyExists,
+                format!(
+                    "process {} already exists in durable recovery for container {} generation {:?}",
+                    process_id, self.target.id, self.target.generation
+                ),
+            ));
+        }
+
+        let rebuilt = self.rebuild_exec_spawn_inputs().await?;
+        let process_io = io.resolve_for_process(process)?;
+        let mut plan = ProcessPlan::from_exec_process(process, &process_io)?;
+        plan.attach_seccomp(&rebuilt.seccomp);
+        plan.capabilities
+            .validate_exec_ceiling(rebuilt.capabilities)?;
+        rebuilt
+            .execution_context
+            .validate_process_ids(plan.uid, plan.gid, &plan.additional_gids)?;
+
+        let process_directory = allocate_process_directory(&self.runtime_directory)?;
+        super::create_private_directory(&process_directory).await?;
+        let snapshot = process_directory.join("process.json");
+        let encoded = serde_json::to_string(&plan).map_err(|error| {
+            recovery_error(
+                ErrorCode::Internal,
+                format!("failed to encode Host-reopen exec process plan: {error}"),
+            )
+        })?;
+        if let Err(error) = super::write_private_snapshot(&snapshot, &encoded).await {
+            let _ = super::remove_process_directory(&self.runtime_directory, &process_directory)
+                .await;
+            return Err(error);
+        }
+
+        let spawn_context = ExecSpawnContext {
+            execution_context: &rebuilt.execution_context,
+            init_pidfd: rebuilt.init_pidfd.raw_descriptor(),
+            workload_cgroup_procs: rebuilt
+                .workload_cgroup_procs
+                .as_ref()
+                .map(std::os::fd::AsRawFd::as_raw_fd),
+            init_signal: &rebuilt.init_pidfd,
+        };
+        let mut process = match ExecProcess::spawn_with_context(
+            &snapshot,
+            init_executable,
+            &spawn_context,
+            process.terminal().unwrap_or(false),
+            &process_io,
+            Some(Arc::clone(&self.supervisor)),
+        )
+        .await
+        {
+            Ok(process) => process,
+            Err(error) => {
+                let _ = super::remove_process_directory(&self.runtime_directory, &process_directory)
+                    .await;
+                return Err(error);
+            }
+        };
+
+        let payload_pid = process.pid();
+        let helper_pid = process.helper_pid();
+        let terminal = process.terminal();
+        if let Err(error) = record_exec_identity(
+            &self.runtime_directory,
+            process_id,
+            payload_pid,
+            helper_pid,
+            terminal,
+        ) {
+            let _ = process.force_stop().await;
+            let _ = super::remove_process_directory(&self.runtime_directory, &process_directory)
+                .await;
+            return Err(error);
+        }
+        let identity = ProcessIdentity::capture(payload_pid, "container exec payload")?;
+        let helper = ProcessIdentity::capture(helper_pid, "container exec helper")?;
+        self.post_reopen_execs
+            .lock()
+            .map_err(|_| {
+                recovery_error(
+                    ErrorCode::Internal,
+                    "live supervised session post-reopen exec lock is poisoned",
+                )
+            })?
+            .push(RecoveryExecRecord {
+                process_id: process_id.clone(),
+                identity,
+                helper: Some(helper),
+                terminal,
+            });
+        // Helper stays parented by the reattached supervisor; drop local wait
+        // ownership so Live wait_process uses durable MSG_WAIT.
+        drop(process);
+        Ok((payload_pid, terminal))
+    }
+
     fn recovery_cgroup_leaf(&self) -> Result<&Path> {
         self.record.cgroup.as_ref().map(|cgroup| cgroup.leaf.as_path()).ok_or_else(|| {
             recovery_error(
@@ -713,20 +866,7 @@ impl LinuxLiveSupervisedSession {
         if process_id.is_init() {
             return self.wait_launcher();
         }
-        let exec = self
-            .record
-            .execs
-            .iter()
-            .find(|exec| &exec.process_id == process_id)
-            .ok_or_else(|| {
-                recovery_error(
-                    ErrorCode::NotFound,
-                    format!(
-                        "process {} does not exist in durable recovery for container {} generation {:?}",
-                        process_id, self.target.id, self.target.generation
-                    ),
-                )
-            })?;
+        let exec = self.find_exec_record(process_id)?;
         let helper = exec.helper.ok_or_else(|| {
             recovery_error(
                 ErrorCode::Unavailable,
@@ -874,20 +1014,7 @@ impl LinuxLiveSupervisedSession {
         if process_id.is_init() {
             return Ok(self.record.init);
         }
-        self.record
-            .execs
-            .iter()
-            .find(|exec| &exec.process_id == process_id)
-            .map(|exec| exec.identity)
-            .ok_or_else(|| {
-                recovery_error(
-                    ErrorCode::NotFound,
-                    format!(
-                        "process {} does not exist in durable recovery for container {} generation {:?}",
-                        process_id, self.target.id, self.target.generation
-                    ),
-                )
-            })
+        Ok(self.find_exec_record(process_id)?.identity)
     }
 
     /// Build stopped-only cleanup evidence after launcher and init have exited.
@@ -904,12 +1031,25 @@ impl LinuxLiveSupervisedSession {
                 ),
             ));
         }
+        let mut record = self.record.clone();
+        record.execs.extend(
+            self.post_reopen_execs
+                .lock()
+                .map_err(|_| {
+                    recovery_error(
+                        ErrorCode::Internal,
+                        "live supervised session post-reopen exec lock is poisoned",
+                    )
+                })?
+                .iter()
+                .cloned(),
+        );
         Ok(LinuxExecutorTombstone {
             target: self.target.clone(),
             config_digest: self.config_digest.clone(),
             runtime_root: self.runtime_root.clone(),
             runtime_directory: self.runtime_directory.clone(),
-            record: self.record.clone(),
+            record,
         })
     }
 
@@ -943,9 +1083,263 @@ impl LinuxLiveSupervisedSession {
             supervisor,
             launcher_wait_status: Mutex::new(None),
             exec_wait_status: Mutex::new(BTreeMap::new()),
+            post_reopen_execs: Mutex::new(Vec::new()),
             stdin: AsyncMutex::new(stdin),
         }
     }
+
+    fn iter_exec_records(&self) -> Result<Vec<RecoveryExecRecord>> {
+        let mut execs = self.record.execs.clone();
+        execs.extend(
+            self.post_reopen_execs
+                .lock()
+                .map_err(|_| {
+                    recovery_error(
+                        ErrorCode::Internal,
+                        "live supervised session post-reopen exec lock is poisoned",
+                    )
+                })?
+                .iter()
+                .cloned(),
+        );
+        Ok(execs)
+    }
+
+    fn find_exec_record(&self, process_id: &ProcessId) -> Result<RecoveryExecRecord> {
+        self.iter_exec_records()?
+            .into_iter()
+            .find(|exec| &exec.process_id == process_id)
+            .ok_or_else(|| {
+                recovery_error(
+                    ErrorCode::NotFound,
+                    format!(
+                        "process {} does not exist in durable recovery for container {} generation {:?}",
+                        process_id, self.target.id, self.target.generation
+                    ),
+                )
+            })
+    }
+
+    async fn rebuild_exec_spawn_inputs(&self) -> Result<RebuiltExecSpawnInputs> {
+        let snapshot = read_bounded_plain_file(
+            &self.runtime_directory.join(CONFIG_SNAPSHOT_NAME),
+            MAX_RECORD_BYTES,
+        )?;
+        let observed = config_digest_for(&snapshot);
+        if observed != self.config_digest {
+            return Err(recovery_error(
+                ErrorCode::Conflict,
+                format!(
+                    "native recovery configuration changed under {}: record {}, snapshot {observed}",
+                    self.runtime_directory.display(),
+                    self.config_digest
+                ),
+            ));
+        }
+        let config_json = String::from_utf8(snapshot).map_err(|error| {
+            recovery_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "native recovery config snapshot is not UTF-8 under {}: {error}",
+                    self.runtime_directory.display()
+                ),
+            )
+        })?;
+        let bundle = OciBundle::from_json(self.runtime_directory.clone(), config_json)
+            .map_err(|error| {
+                recovery_error(
+                    error.code,
+                    format!(
+                        "failed to reload durable config for Host-reopen exec under {}: {}",
+                        self.runtime_directory.display(),
+                        error.message
+                    ),
+                )
+            })?;
+        if bundle.config_digest() != self.config_digest {
+            return Err(recovery_error(
+                ErrorCode::Conflict,
+                format!(
+                    "reloaded config digest {} does not match recovery {}",
+                    bundle.config_digest(),
+                    self.config_digest
+                ),
+            ));
+        }
+        let spec = bundle.spec();
+        let init_process = spec.process().as_ref().ok_or_else(|| {
+            recovery_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "container {} generation {:?} durable config has no init process for exec ceiling rebuild",
+                    self.target.id, self.target.generation
+                ),
+            )
+        })?;
+        let init_uid = init_process.user().uid();
+        let init_gid = init_process.user().gid();
+        let additional_gids = init_process
+            .user()
+            .additional_gids()
+            .as_ref()
+            .cloned()
+            .unwrap_or_default();
+        let namespace_plan = NamespacePlan::from_linux(
+            spec.linux().as_ref(),
+            init_uid,
+            init_gid,
+            &additional_gids,
+        )
+        .map_err(|error| {
+            recovery_error(
+                error.code,
+                format!(
+                    "failed to rebuild namespace plan for Host-reopen exec: {}",
+                    error.message
+                ),
+            )
+        })?;
+        let capabilities = CapabilityPlan::from_oci(init_process.capabilities().as_ref())
+            .map_err(|error| {
+                recovery_error(
+                    error.code,
+                    format!(
+                        "failed to rebuild capability ceiling for Host-reopen exec: {}",
+                        error.message
+                    ),
+                )
+            })?;
+        let seccomp = SeccompPlan::from_linux(spec.linux().as_ref()).map_err(|error| {
+            recovery_error(
+                error.code,
+                format!(
+                    "failed to rebuild seccomp plan for Host-reopen exec: {}",
+                    error.message
+                ),
+            )
+        })?;
+
+        let init_pid = self.init_pid();
+        let rootfs = tokio::fs::File::open(format!("/proc/{init_pid}/root"))
+            .await
+            .map_err(|error| {
+                recovery_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "failed to open live init root for Host-reopen exec PID {init_pid}: {error}"
+                    ),
+                )
+            })?
+            .into_std()
+            .await;
+        let execution_context =
+            RetainedExecutionContext::capture(&namespace_plan, init_pid, rootfs)
+                .await
+                .map_err(|error| {
+                    recovery_error(
+                        error.code,
+                        format!(
+                            "failed to rebuild retained execution context from live init PID {init_pid}: {}",
+                            error.message
+                        ),
+                    )
+                })?;
+        let init_pidfd = self.record.init.open_authenticated_pidfd("live supervised init")?;
+        let workload_cgroup_procs = match self.record.cgroup.as_ref() {
+            Some(cgroup) => Some(open_cgroup_procs(&cgroup.leaf).map_err(|error| {
+                recovery_error(
+                    error.code,
+                    format!(
+                        "failed to reopen durable workload cgroup.procs at {} for Host-reopen exec: {}",
+                        cgroup.leaf.display(),
+                        error.message
+                    ),
+                )
+            })?),
+            None => None,
+        };
+        Ok(RebuiltExecSpawnInputs {
+            execution_context,
+            init_pidfd,
+            workload_cgroup_procs,
+            capabilities,
+            seccomp,
+        })
+    }
+}
+
+struct RebuiltExecSpawnInputs {
+    execution_context: RetainedExecutionContext,
+    init_pidfd: PidFd,
+    workload_cgroup_procs: Option<std::fs::File>,
+    capabilities: CapabilityPlan,
+    seccomp: SeccompPlan,
+}
+
+fn require_null_process_io(io: &ProcessIo) -> Result<()> {
+    let non_null = [
+        ("stdin", &io.stdin),
+        ("stdout", &io.stdout),
+        ("stderr", &io.stderr),
+    ]
+    .into_iter()
+    .find(|(_, mode)| !matches!(mode, IoMode::Null));
+    if let Some((stream, _)) = non_null {
+        return Err(recovery_error(
+            ErrorCode::Unavailable,
+            format!(
+                "Host-reopen exec currently supports Null {stream} only; capture/pipe/terminal/inherit remain Unavailable until authentic stream restore lands"
+            ),
+        ));
+    }
+    if io.terminal_size.is_some() {
+        return Err(recovery_error(
+            ErrorCode::Unavailable,
+            "Host-reopen exec does not support terminal process I/O",
+        ));
+    }
+    Ok(())
+}
+
+fn allocate_process_directory(runtime_directory: &Path) -> Result<PathBuf> {
+    let mut max_slot = 0_u64;
+    let entries = std::fs::read_dir(runtime_directory).map_err(|error| {
+        recovery_error(
+            ErrorCode::Internal,
+            format!(
+                "failed to scan process directories under {}: {error}",
+                runtime_directory.display()
+            ),
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            recovery_error(
+                ErrorCode::Internal,
+                format!(
+                    "failed to read process directory entry under {}: {error}",
+                    runtime_directory.display()
+                ),
+            )
+        })?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(hex) = name.strip_prefix("p-") else {
+            continue;
+        };
+        if let Ok(slot) = u64::from_str_radix(hex, 16) {
+            max_slot = max_slot.max(slot);
+        }
+    }
+    let slot = max_slot.checked_add(1).ok_or_else(|| {
+        recovery_error(
+            ErrorCode::ResourceExhausted,
+            "guest process slot space is exhausted after Host reopen",
+        )
+    })?;
+    Ok(runtime_directory.join(format!("p-{slot:016x}")))
 }
 
 fn take_deposited_stdin(
@@ -4177,6 +4571,245 @@ mod tests {
             .expect("stopped-only delete after missing-cgroup fail-closed");
         terminate_pid(supervisor_pid);
         let _ = wait_for_child(supervisor_pid);
+    }
+
+    #[tokio::test]
+    async fn live_session_fail_closes_non_null_exec_io_after_host_reopen() {
+        use std::io::{Read, Write};
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::net::UnixStream;
+        use std::path::Path;
+
+        use a3s_oci_sdk::oci_spec::runtime::Process;
+        use a3s_oci_sdk::{IoMode, ProcessIo, ProcessId};
+
+        use super::super::pid_supervisor::{terminate_pid, wait_for_child};
+        use super::super::session_supervisor::HostSessionSupervisor;
+
+        let temporary = tempfile::tempdir().expect("temporary recovery parent");
+        let parent = temporary.path().join("executor");
+        std::fs::create_dir(&parent).expect("executor parent");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
+            .expect("protect executor parent");
+        let current_root = parent.join("current");
+        std::fs::create_dir(&current_root).expect("current root");
+        std::fs::set_permissions(&current_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect current root");
+
+        let (mut parent_ready, mut child_ready) =
+            UnixStream::pair().expect("exec-io ready channel");
+        let host_pid = unsafe { libc::fork() };
+        assert!(host_pid >= 0, "fork fake host for exec-io reopen");
+        if host_pid == 0 {
+            drop(parent_ready);
+            let mut supervisor = match HostSessionSupervisor::start_via_fork() {
+                Ok(supervisor) => supervisor,
+                Err(_) => unsafe { libc::_exit(201) },
+            };
+            let launcher_pid = match supervisor.spawn_launcher(
+                Path::new("/bin/sleep"),
+                &["30".into()],
+                None,
+                None,
+                None,
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(202) },
+            };
+            let identity = supervisor.identity().clone();
+            let mut payload = Vec::with_capacity(16);
+            payload.extend_from_slice(&identity.pid().to_be_bytes());
+            payload.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+            payload.extend_from_slice(&launcher_pid.to_be_bytes());
+            if child_ready.write_all(&payload).is_err() {
+                unsafe { libc::_exit(203) }
+            }
+            std::mem::forget(supervisor);
+            loop {
+                unsafe { libc::pause() };
+            }
+        }
+        drop(child_ready);
+        let mut payload = [0_u8; 16];
+        parent_ready
+            .read_exact(&mut payload)
+            .expect("read exec-io supervisor evidence");
+        let supervisor_pid = i32::from_be_bytes(payload[0..4].try_into().expect("pid bytes"));
+        let supervisor_start = u64::from_be_bytes(payload[4..12].try_into().expect("start bytes"));
+        let launcher_pid = i32::from_be_bytes(payload[12..16].try_into().expect("launcher bytes"));
+
+        let owner = ProcessIdentity {
+            pid: 2_100_802,
+            start_time_ticks: 0x81a,
+        };
+        let stale_root = parent.join(runtime_root_name(owner));
+        std::fs::create_dir(&stale_root).expect("stale root");
+        std::fs::set_permissions(&stale_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect stale root");
+        write_atomic_record(
+            &stale_root.join(OWNER_RECORD_NAME),
+            &ExecutorOwnerRecord {
+                schema_version: OWNER_SCHEMA_VERSION.to_string(),
+                owner,
+            },
+        )
+        .expect("owner record");
+        let slot = stale_root.join("c-0000000000000001");
+        std::fs::create_dir(&slot).expect("container slot");
+        std::fs::set_permissions(&slot, std::fs::Permissions::from_mode(0o700))
+            .expect("protect container slot");
+        let config = br#"{"ociVersion":"1.3.0","process":{"user":{"uid":0,"gid":0},"args":["/bin/true"]},"root":{"path":"rootfs"},"linux":{"namespaces":[{"type":"pid"},{"type":"mount"}]}}"#;
+        let digest = config_digest_for(config);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        options
+            .open(slot.join(CONFIG_SNAPSHOT_NAME))
+            .and_then(|mut file| file.write_all(config))
+            .expect("configuration snapshot");
+        let target = ContainerTarget::exact(
+            a3s_oci_sdk::ContainerId::new("live-exec-io").expect("container ID"),
+            a3s_oci_sdk::Generation(1),
+        );
+        let init = ProcessIdentity {
+            pid: launcher_pid,
+            start_time_ticks: process_observation(launcher_pid)
+                .expect("observe launcher")
+                .expect("launcher live")
+                .start_time_ticks,
+        };
+        write_atomic_record(
+            &slot.join(CONTAINER_RECORD_NAME),
+            &ContainerRecoveryRecord {
+                schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
+                target: target.clone(),
+                config_digest: digest.clone(),
+                owner,
+                launcher: init,
+                init,
+                session_supervisor: Some(ProcessIdentity {
+                    pid: supervisor_pid,
+                    start_time_ticks: supervisor_start,
+                }),
+                execs: Vec::new(),
+                cgroup: None,
+                intel_rdt: None,
+            },
+        )
+        .expect("container recovery record");
+
+        terminate_pid(host_pid);
+        let _ = wait_for_child(host_pid);
+
+        let supervisors = SessionSupervisorReattachCache::default();
+        let recovery = recover_stale_generation(
+            &parent,
+            &current_root,
+            &target,
+            &digest,
+            Some(launcher_pid),
+            &supervisors,
+        )
+        .await
+        .expect("live supervisor must reattach for exec-io gate")
+        .expect("recovery match");
+        let StaleGenerationRecovery::Live(live) = recovery else {
+            panic!("live session supervisor must recover as Live");
+        };
+
+        let process: Process = serde_json::from_value(serde_json::json!({
+            "user": {"uid": 0, "gid": 0},
+            "args": ["/bin/true"],
+            "cwd": "/"
+        }))
+        .expect("exec process");
+        let capture_io = ProcessIo {
+            stdin: IoMode::Null,
+            stdout: IoMode::Capture,
+            stderr: IoMode::Null,
+            terminal_size: None,
+        };
+        let capture_error = live
+            .exec(
+                &ProcessId::new("post-reopen-exec").expect("process id"),
+                &process,
+                &capture_io,
+                Path::new("/bin/true"),
+            )
+            .await
+            .expect_err("capture I/O must stay Unavailable after Host reopen");
+        assert_eq!(capture_error.code, ErrorCode::Unavailable);
+
+        let null_io = ProcessIo {
+            stdin: IoMode::Null,
+            stdout: IoMode::Null,
+            stderr: IoMode::Null,
+            terminal_size: None,
+        };
+        // Rebuild reaches authentic namespace capture; without a real agent
+        // container-exec helper the spawn fails closed — never invents success.
+        let spawn_error = live
+            .exec(
+                &ProcessId::new("post-reopen-null").expect("process id"),
+                &process,
+                &null_io,
+                Path::new("/bin/true"),
+            )
+            .await
+            .expect_err("non-agent helper must fail closed without inventing exec success");
+        assert!(
+            matches!(
+                spawn_error.code,
+                ErrorCode::FailedPrecondition
+                    | ErrorCode::Internal
+                    | ErrorCode::Unavailable
+                    | ErrorCode::PermissionDenied
+                    | ErrorCode::InvalidArgument
+            ),
+            "spawn must fail closed with a real error, got {:?}",
+            spawn_error.code
+        );
+
+        live.kill_launcher().expect("kill supervised launcher");
+        let _ = live.wait_launcher().expect("wait supervised launcher");
+        let tombstone = live
+            .into_tombstone()
+            .expect("dead supervised children can become a stopped tombstone");
+        delete_stale_generation(&tombstone)
+            .await
+            .expect("stopped-only delete after exec-io fail-closed");
+        terminate_pid(supervisor_pid);
+        let _ = wait_for_child(supervisor_pid);
+    }
+
+    #[test]
+    fn require_null_process_io_rejects_capture_and_pipe() {
+        use a3s_oci_sdk::{IoMode, ProcessIo};
+
+        let ok = ProcessIo {
+            stdin: IoMode::Null,
+            stdout: IoMode::Null,
+            stderr: IoMode::Null,
+            terminal_size: None,
+        };
+        require_null_process_io(&ok).expect("all-null I/O is accepted");
+
+        let capture = ProcessIo {
+            stdin: IoMode::Null,
+            stdout: IoMode::Capture,
+            stderr: IoMode::Null,
+            terminal_size: None,
+        };
+        let error = require_null_process_io(&capture).expect_err("capture must fail closed");
+        assert_eq!(error.code, ErrorCode::Unavailable);
+
+        let pipe = ProcessIo {
+            stdin: IoMode::Pipe,
+            stdout: IoMode::Null,
+            stderr: IoMode::Null,
+            terminal_size: None,
+        };
+        let error = require_null_process_io(&pipe).expect_err("pipe must fail closed");
+        assert_eq!(error.code, ErrorCode::Unavailable);
     }
 
     #[tokio::test]
