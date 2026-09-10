@@ -9,6 +9,7 @@ set -Eeuo pipefail
 : "${A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST:?set the exact Linux KVM system-image manifest}"
 
 source .github/scripts/lib/linux-kvm-fresh-host-attestation.sh
+source .github/scripts/lib/linux-kvm-release-matrix-promotion.sh
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   printf 'Linux KVM release matrix requires a Linux host\n' >&2
@@ -25,6 +26,8 @@ done
 
 host_class="${A3S_OCI_LINUX_KVM_HOST_CLASS:-existing}"
 attestation_path="${A3S_OCI_LINUX_KVM_FRESH_HOST_ATTESTATION:-}"
+skip_soak="${A3S_OCI_LINUX_KVM_SKIP_SOAK:-0}"
+linux_kvm_assert_fresh_host_skip_policy "$host_class" "$skip_soak"
 fresh_host_attestation="$(
   linux_kvm_resolve_fresh_host_attestation "$host_class" "$attestation_path"
 )"
@@ -156,18 +159,23 @@ run_gate create-reopen \
   A3S_OCI_LINUX_KVM_CREATE_REOPEN_REPORT \
   a3s.oci.linux-kvm-create-reopen-matrix.v2
 
-if [[ "${A3S_OCI_LINUX_KVM_SKIP_SOAK:-0}" != "1" ]]; then
+soak_ran=0
+if [[ "$skip_soak" != "1" ]]; then
   run_gate soak \
     .github/scripts/linux-kvm-soak.sh \
     A3S_OCI_LINUX_KVM_SOAK_REPORT \
     a3s.oci.linux-kvm-soak-matrix.v2
+  soak_ran=1
 fi
 
 completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-promotes="false"
-if [[ "$host_class" == "fresh" && "$fresh_host_attestation" != "null" ]]; then
-  promotes="true"
-fi
+promotes="$(
+  linux_kvm_compute_promotes_readiness \
+    "$host_class" \
+    "$fresh_host_attestation" \
+    "$skip_soak" \
+    "$soak_ran"
+)"
 
 gates_json="$(jq --slurp --compact-output '.' "$gates_ndjson")"
 
@@ -176,6 +184,7 @@ jq --null-input \
   --arg host_class "$host_class" \
   --argjson promotes_readiness "$promotes" \
   --argjson fresh_host_attestation "$fresh_host_attestation" \
+  --argjson included_soak "$([[ "$soak_ran" == "1" ]] && printf true || printf false)" \
   --arg started_at_utc "$started_at" \
   --arg completed_at_utc "$completed_at" \
   --arg commit "$(git rev-parse HEAD)" \
@@ -189,6 +198,7 @@ jq --null-input \
     host_class: $host_class,
     promotes_readiness: $promotes_readiness,
     fresh_host_attestation: $fresh_host_attestation,
+    included_soak: $included_soak,
     started_at_utc: $started_at_utc,
     completed_at_utc: $completed_at_utc,
     commit: $commit,
@@ -207,17 +217,21 @@ jq --exit-status \
   and .platform == "linux"
   and .status == "available"
   and .host_class == $host_class
-  and (.gate_count | type) == "number" and .gate_count >= 5
+  and (.gate_count | type) == "number"
   and (.gates | length) == .gate_count
   and all(.gates[]; .status == "available")
   and (
     if .host_class == "fresh" then
       .promotes_readiness
+      and .included_soak
+      and .gate_count == 6
+      and any(.gates[]; .name == "soak")
       and (.fresh_host_attestation.schema_version
            == "a3s.oci.linux-kvm-fresh-host-attestation.v1")
     else
       (.promotes_readiness | not)
       and .fresh_host_attestation == null
+      and .gate_count >= 5
     end
   )
   ' \
