@@ -133,7 +133,7 @@ impl ExecProcess {
             .await?
         };
 
-        let runtime_pid = complete_exec_handshake(
+        let (runtime_pid, pidfd) = complete_exec_handshake(
             &mut child,
             &listener,
             context.init_signal,
@@ -141,7 +141,6 @@ impl ExecProcess {
         )
         .await?;
 
-        let pidfd = PidFd::open(runtime_pid)?;
         let terminal = child_terminal(&child, terminal);
         Ok(Self {
             child,
@@ -520,7 +519,7 @@ async fn complete_exec_handshake(
     listener: &tokio::net::UnixListener,
     init_signal: &PidFd,
     context: &super::namespace::RetainedExecutionContext,
-) -> Result<i32> {
+) -> Result<(i32, PidFd)> {
     let launcher_pid = helper_pid_for_handshake(child)?;
 
     enum ReadyOutcome {
@@ -636,6 +635,16 @@ async fn complete_exec_handshake(
             ));
         }
     };
+    // Open pidfd while the payload is still blocked on the start barrier.
+    // Waiting until after START lets short commands (`printf`) exit and be
+    // reaped before Host can open a pidfd (ESRCH), especially on Live reopen.
+    let pidfd = match PidFd::open(runtime_pid) {
+        Ok(pidfd) => pidfd,
+        Err(error) => {
+            terminate_exec_child(child).await;
+            return Err(error);
+        }
+    };
     if let Err(error) = pid::validate_exec_runtime_pid(launcher_pid, runtime_pid, context).await {
         terminate_exec_child(child).await;
         return Err(error);
@@ -677,7 +686,7 @@ async fn complete_exec_handshake(
         }
     };
     report_capability_warnings(&warnings);
-    Ok(runtime_pid)
+    Ok((runtime_pid, pidfd))
 }
 
 fn helper_pid_for_handshake(child: &ExecChild) -> Result<i32> {
