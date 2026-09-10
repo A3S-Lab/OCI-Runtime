@@ -559,6 +559,11 @@ fn run_linux(
             .await;
             (result, Some(fault))
         } else if reconnect {
+            // Live Host reopen: `serve_agent_connection` returns Ok(()) on a
+            // clean frame-boundary EOF. That must reconnect, not shut down the
+            // Guest (shutting down kills the utility VM and defeats durable
+            // session-owner survival). Retryable transport Unavailable errors
+            // reconnect the same way. Only non-retryable failures end the loop.
             loop {
                 let stream = connect_guest_vsock_stream().await?;
                 let result = a3s_oci_agent_protocol::serve_agent_connection(
@@ -567,10 +572,10 @@ fn run_linux(
                     protocol_service.clone(),
                 )
                 .await;
-                match result {
-                    Err(error) if is_clean_host_disconnect(&error) => continue,
-                    other => break (other, None),
+                if should_reconnect_after_host_session(&result) {
+                    continue;
                 }
+                break (result, None);
             }
         } else {
             let stream = connect_guest_vsock_stream().await?;
@@ -633,6 +638,46 @@ fn is_clean_host_disconnect(error: &Error) -> bool {
                     | "flush-agent-frame"
             )
         )
+}
+
+/// Whether a finished Host session should reconnect under Live Host-reopen mode.
+///
+/// Clean frame-boundary EOF returns [`Ok`]. Abrupt Host death mid-frame returns
+/// a retryable transport [`ErrorCode::Unavailable`]. Both must reconnect; only
+/// non-retryable failures end the Guest.
+#[cfg(any(target_os = "linux", test))]
+fn should_reconnect_after_host_session(result: &Result<()>) -> bool {
+    match result {
+        Ok(()) => true,
+        Err(error) => is_clean_host_disconnect(error),
+    }
+}
+
+#[cfg(test)]
+mod guest_host_reconnect_tests {
+    use super::{is_clean_host_disconnect, should_reconnect_after_host_session};
+    use a3s_oci_sdk::{Error, ErrorCode};
+
+    #[test]
+    fn clean_eof_reconnects_under_live_host_reopen() {
+        assert!(should_reconnect_after_host_session(&Ok(())));
+    }
+
+    #[test]
+    fn retryable_frame_unavailable_reconnects() {
+        let error = Error::new(ErrorCode::Unavailable, "agent transport I/O failed")
+            .for_operation("read-agent-frame-header")
+            .retryable(true);
+        assert!(is_clean_host_disconnect(&error));
+        assert!(should_reconnect_after_host_session(&Err(error)));
+    }
+
+    #[test]
+    fn non_retryable_failure_does_not_reconnect() {
+        let error = Error::new(ErrorCode::InvalidArgument, "bad frame")
+            .for_operation("decode-agent-frame");
+        assert!(!should_reconnect_after_host_session(&Err(error)));
+    }
 }
 
 #[cfg(target_os = "linux")]

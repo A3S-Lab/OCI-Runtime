@@ -2180,20 +2180,25 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   durable `a3s-oci-krun-shim session-owner` helper + AgentVmSession
   `A3S_OCI_KVM_SESSION_OWNER=1` spawn path land parentage that outlives Host
   Service (default remains Host-PID owner-watchdog so stopped-only owner-death
-  gates stay green). **Landed in-tree (not W2/B2-closed):** Host-control bridge
-  proxy, guest Host-reconnect loop, authenticated Live binding publish/load,
-  `recover` reattach to `UtilityVmAttachment::Live` /
-  `DriverRecovery::observed` without inventing exit, and the dedicated Live
-  evidence harness (`a3s.oci.linux-kvm-live-recovery-smoke.v1` /
+  gates stay green). **Landed in-tree:** Host-control bridge proxy, guest
+  Host-reconnect loop (clean EOF reconnects), authenticated Live binding
+  publish/load, `recover` reattach to `UtilityVmAttachment::Live` /
+  `DriverRecovery::observed` without inventing exit, reattach shutdown reclaim
+  of the durable `/tmp/<pipe>` endpoint, and the dedicated Live evidence harness
+  (`a3s.oci.linux-kvm-live-recovery-smoke.v1` /
   `.github/scripts/linux-kvm-live-recovery.sh`; distinct from stopped-only
-  `linux-kvm-recovery`). **Still required:** existing-host WSL2 `/dev/kvm`
-  greened report proving replacement Host reattaches the **same** Guest
-  incarnation with continuous init identity; orphaned session roots stay
-  rejected without that greened evidence. Defer retained streaming handle
-  continuity and `b2_process_session_recovery_closed` /
-  `kvm_microvm_live_claimed` until that evidence. Does not register KVM with
-  normal HostRuntimeService, flip default supervised create, or cut over
-  MicroVM product routing.
+  `linux-kvm-recovery`). **Existing-host WSL2 `/dev/kvm` greened** on revision
+  `c3b5fc5416e2f0902b14308d2f79ff38557ef165` with matrix
+  `a3s.oci.linux-kvm-live-recovery-matrix.v1` SHA-256
+  `15d99d8e5b087112612859783ed76881bcc3e8be68b513032edb8673b1958db3`
+  (system-image manifest
+  `805d4afea01b1c3a9ed7343b2406edfc6c7e43912e35134ec72661c29fe56449`; continuous
+  init PID; `guest_survived_host_sigkill` /
+  `service_restart_recovered`). That does **not** close W2/B2 alone: defer
+  retained streaming handle continuity and
+  `b2_process_session_recovery_closed` / `kvm_microvm_live_claimed` until those
+  criteria. Does not register KVM with normal HostRuntimeService, flip default
+  supervised create, or cut over MicroVM product routing.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,
