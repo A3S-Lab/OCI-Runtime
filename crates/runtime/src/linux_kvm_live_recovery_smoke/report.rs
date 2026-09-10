@@ -14,8 +14,9 @@ pub const LINUX_KVM_LIVE_RECOVERY_SMOKE_SCHEMA_VERSION: &str =
 ///
 /// v3 keeps v2 retained exec I/O and also proves filesystem continuity
 /// (FileOp::Upload before Host SIGKILL, FileOp::Download after reattach on the
-/// same Running generation). Does **not** claim Box filesystem Live or flip
-/// `b2_process_session_recovery_closed`.
+/// same Running generation). Does **not** flip Box harness
+/// `b2_process_session_recovery_closed` (reports never self-certify B2/R6
+/// close).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinuxKvmLiveRecoveryEvidence {
     pub session_owner_mode_durable: bool,
