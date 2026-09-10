@@ -472,7 +472,7 @@ impl PreparedProcess {
         let ready = timeout(INIT_READY_TIMEOUT, async {
             tokio::select! {
                 accepted = listener.accept() => ReadyOutcome::Connected(accepted),
-                status = child.wait() => ReadyOutcome::Exited(status),
+                status = child.wait_for_ready_race_exit() => ReadyOutcome::Exited(status),
             }
         })
         .await;

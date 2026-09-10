@@ -40,7 +40,16 @@ impl LauncherChild {
     pub(super) fn try_wait(&mut self) -> std::io::Result<Option<ProcessExitStatus>> {
         match self {
             Self::Local(child) => child.try_wait(),
-            Self::Supervised { status, .. } => Ok(status.clone()),
+            Self::Supervised { pid, status, .. } => {
+                if let Some(status) = status.clone() {
+                    return Ok(Some(status));
+                }
+                if supervised_pid_is_alive(*pid) {
+                    return Ok(None);
+                }
+                // Process is gone; fall through to authentic wait_launcher on wait().
+                Ok(None)
+            }
         }
     }
 
@@ -77,6 +86,35 @@ impl LauncherChild {
             }
         }
     }
+
+    /// Observe launcher exit without holding the session-supervisor mutex.
+    ///
+    /// The create ready-race must not call [`Self::wait`] for supervised
+    /// children: `wait_launcher` holds the supervisor lock for the whole
+    /// MSG_WAIT round-trip, so a cancelled `select!` arm leaves cleanup unable
+    /// to kill/deposit and deadlocks create in `prepared`.
+    pub(super) async fn wait_for_ready_race_exit(&mut self) -> std::io::Result<ProcessExitStatus> {
+        match self {
+            Self::Local(_) => self.wait().await,
+            Self::Supervised { pid, status, .. } => {
+                if let Some(status) = status.clone() {
+                    return Ok(status);
+                }
+                let watched = *pid;
+                loop {
+                    if !supervised_pid_is_alive(watched) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                self.wait().await
+            }
+        }
+    }
+}
+
+fn supervised_pid_is_alive(pid: u32) -> bool {
+    std::path::Path::new("/proc").join(pid.to_string()).exists()
 }
 
 /// Host-retained stdio pipe ends for a supervised launcher.
