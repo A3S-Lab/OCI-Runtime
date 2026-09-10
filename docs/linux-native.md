@@ -1909,8 +1909,12 @@ remain Unsupported on supervised create. Authenticated Host-reopen
 PID + start-time, open a pidfd, deliver the signal — without restoring a fake
 `PreparedProcess`. Live `wait_process` for durable exec uses supervisor
 `MSG_WAIT` when a helper identity is recorded (recovery v6); v5 exec records
-without helper fail closed with `Unavailable`. New `exec` likewise remains
-Unavailable. Default create stays Host-bound.
+without helper fail closed with `Unavailable`. Authentic Host-reopen
+`pause` / `resume` / `stats` use the durable recovery cgroup leaf (kernel
+`cgroup.freeze` / `cgroup.events` and normalized cgroup-v2 counters) without
+restoring `PreparedProcess`; missing cgroup evidence fail-closes with
+`Unavailable`. New `exec` likewise remains Unavailable pending namespace /
+rootfs / process-session restore. Default create stays Host-bound.
 
 Qualification may enable supervised create with
 `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. When set, Native create starts one
@@ -1947,9 +1951,10 @@ because omitting dead execs is incompatible with Host exact-match exec rebind
 without inventing terminal evidence. Authenticated `signal_process` for those
 durable identities is restored via pidfd after PID + start-time re-auth.
 Live `wait_process` for durable exec uses supervisor `MSG_WAIT` on the recorded
-helper child when present; v5 exec records without helper fail closed. New
-`exec` still requires full `PreparedProcess` restore and remains Unavailable
-rather than inventing exit status.
+helper child when present; v5 exec records without helper fail closed.
+Authentic `pause` / `resume` / `stats` read and write the durable recovery
+cgroup leaf. New `exec` still requires namespace/rootfs/`PreparedProcess`
+restore and remains Unavailable rather than inventing exit status.
 
 ### Hook owner-death crash boundary
 

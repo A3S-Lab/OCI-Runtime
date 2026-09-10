@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::io;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use a3s_oci_sdk::{
@@ -16,109 +17,119 @@ impl CgroupHandle {
         &self,
         target: ContainerTarget,
     ) -> Result<ContainerStats> {
-        let cpu_values = parse_keyed_counters(
-            "cpu.stat",
-            &read_required(&self.leaf, "cpu.stat", STATS_OPERATION).await?,
-        )?;
-        let usage_ns = counter_microseconds_to_nanoseconds(&cpu_values, "usage_usec", true)?;
-        let user_ns = counter_microseconds_to_nanoseconds(&cpu_values, "user_usec", true)?;
-        let system_ns = counter_microseconds_to_nanoseconds(&cpu_values, "system_usec", true)?;
-        let throttled_ns =
-            counter_microseconds_to_nanoseconds(&cpu_values, "throttled_usec", false)?;
-
-        let memory_usage = parse_u64_value(
-            "memory.current",
-            &read_required(&self.leaf, "memory.current", STATS_OPERATION).await?,
-        )?;
-        let memory_limit = parse_max_value(
-            "memory.max",
-            &read_required(&self.leaf, "memory.max", STATS_OPERATION).await?,
-        )?;
-        let memory_peak = match tokio::fs::read_to_string(self.leaf.join("memory.peak")).await {
-            Ok(value) => Some(parse_u64_value("memory.peak", &value)?),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-            Err(error) => {
-                return Err(stats_error(format!(
-                    "failed to read {}: {error}",
-                    self.leaf.join("memory.peak").display()
-                )));
-            }
-        };
-        let process_count = parse_u64_value(
-            "pids.current",
-            &read_required(&self.leaf, "pids.current", STATS_OPERATION).await?,
-        )?;
-        let process_limit = parse_max_value(
-            "pids.max",
-            &read_required(&self.leaf, "pids.max", STATS_OPERATION).await?,
-        )?
-        .unwrap_or(u64::MAX);
-
-        let mut metrics = BTreeMap::new();
-        for (name, value) in cpu_values {
-            if !matches!(
-                name.as_str(),
-                "usage_usec" | "user_usec" | "system_usec" | "throttled_usec"
-            ) {
-                metrics.insert(format!("cpu.stat.{name}"), value);
-            }
-        }
-        append_event_metrics(
-            &mut metrics,
-            "memory.events",
-            &read_required(&self.leaf, "memory.events", STATS_OPERATION).await?,
-        )?;
-        append_event_metrics(
-            &mut metrics,
-            "pids.events",
-            &read_required(&self.leaf, "pids.events", STATS_OPERATION).await?,
-        )?;
-        metrics.insert(PIDS_LIMIT_METRIC.to_string(), process_limit);
-        match tokio::fs::read_to_string(self.leaf.join("io.stat")).await {
-            Ok(value) => {
-                if let Some((read_bytes, write_bytes)) = parse_io_stat_bytes(&value)? {
-                    metrics.insert(IO_READ_BYTES_METRIC.to_string(), read_bytes);
-                    metrics.insert(IO_WRITE_BYTES_METRIC.to_string(), write_bytes);
-                }
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(stats_error(format!(
-                    "failed to read {}: {error}",
-                    self.leaf.join("io.stat").display()
-                )));
-            }
-        }
-
-        let timestamp_unix_ns = u64::try_from(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|error| {
-                    stats_error(format!("system clock is before the Unix epoch: {error}"))
-                })?
-                .as_nanos(),
-        )
-        .map_err(|error| stats_error(format!("Unix nanosecond timestamp overflowed: {error}")))?;
-        let stats = ContainerStats {
-            target,
-            timestamp_unix_ns,
-            cpu: CpuStats {
-                usage_ns,
-                user_ns,
-                system_ns,
-                throttled_ns,
-            },
-            memory: MemoryStats {
-                usage_bytes: memory_usage,
-                limit_bytes: memory_limit,
-                peak_bytes: memory_peak,
-            },
-            process_count,
-            metrics,
-        };
-        stats.validate()?;
-        Ok(stats)
+        stats_from_leaf(&self.leaf, target).await
     }
+}
+
+/// Read normalized cgroup-v2 stats from one durable leaf path.
+///
+/// Used by live Host-reopen stats when recovery retained the authentic leaf
+/// without a full [`CgroupHandle`].
+pub(in crate::executor) async fn stats_from_leaf(
+    leaf: &Path,
+    target: ContainerTarget,
+) -> Result<ContainerStats> {
+    let cpu_values = parse_keyed_counters(
+        "cpu.stat",
+        &read_required(leaf, "cpu.stat", STATS_OPERATION).await?,
+    )?;
+    let usage_ns = counter_microseconds_to_nanoseconds(&cpu_values, "usage_usec", true)?;
+    let user_ns = counter_microseconds_to_nanoseconds(&cpu_values, "user_usec", true)?;
+    let system_ns = counter_microseconds_to_nanoseconds(&cpu_values, "system_usec", true)?;
+    let throttled_ns = counter_microseconds_to_nanoseconds(&cpu_values, "throttled_usec", false)?;
+
+    let memory_usage = parse_u64_value(
+        "memory.current",
+        &read_required(leaf, "memory.current", STATS_OPERATION).await?,
+    )?;
+    let memory_limit = parse_max_value(
+        "memory.max",
+        &read_required(leaf, "memory.max", STATS_OPERATION).await?,
+    )?;
+    let memory_peak = match tokio::fs::read_to_string(leaf.join("memory.peak")).await {
+        Ok(value) => Some(parse_u64_value("memory.peak", &value)?),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(stats_error(format!(
+                "failed to read {}: {error}",
+                leaf.join("memory.peak").display()
+            )));
+        }
+    };
+    let process_count = parse_u64_value(
+        "pids.current",
+        &read_required(leaf, "pids.current", STATS_OPERATION).await?,
+    )?;
+    let process_limit = parse_max_value(
+        "pids.max",
+        &read_required(leaf, "pids.max", STATS_OPERATION).await?,
+    )?
+    .unwrap_or(u64::MAX);
+
+    let mut metrics = BTreeMap::new();
+    for (name, value) in cpu_values {
+        if !matches!(
+            name.as_str(),
+            "usage_usec" | "user_usec" | "system_usec" | "throttled_usec"
+        ) {
+            metrics.insert(format!("cpu.stat.{name}"), value);
+        }
+    }
+    append_event_metrics(
+        &mut metrics,
+        "memory.events",
+        &read_required(leaf, "memory.events", STATS_OPERATION).await?,
+    )?;
+    append_event_metrics(
+        &mut metrics,
+        "pids.events",
+        &read_required(leaf, "pids.events", STATS_OPERATION).await?,
+    )?;
+    metrics.insert(PIDS_LIMIT_METRIC.to_string(), process_limit);
+    match tokio::fs::read_to_string(leaf.join("io.stat")).await {
+        Ok(value) => {
+            if let Some((read_bytes, write_bytes)) = parse_io_stat_bytes(&value)? {
+                metrics.insert(IO_READ_BYTES_METRIC.to_string(), read_bytes);
+                metrics.insert(IO_WRITE_BYTES_METRIC.to_string(), write_bytes);
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(stats_error(format!(
+                "failed to read {}: {error}",
+                leaf.join("io.stat").display()
+            )));
+        }
+    }
+
+    let timestamp_unix_ns = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| {
+                stats_error(format!("system clock is before the Unix epoch: {error}"))
+            })?
+            .as_nanos(),
+    )
+    .map_err(|error| stats_error(format!("Unix nanosecond timestamp overflowed: {error}")))?;
+    let stats = ContainerStats {
+        target,
+        timestamp_unix_ns,
+        cpu: CpuStats {
+            usage_ns,
+            user_ns,
+            system_ns,
+            throttled_ns,
+        },
+        memory: MemoryStats {
+            usage_bytes: memory_usage,
+            limit_bytes: memory_limit,
+            peak_bytes: memory_peak,
+        },
+        process_count,
+        metrics,
+    };
+    stats.validate()?;
+    Ok(stats)
 }
 
 fn parse_keyed_counters(field: &str, value: &str) -> Result<BTreeMap<String, u64>> {

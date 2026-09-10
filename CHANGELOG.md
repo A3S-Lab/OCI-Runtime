@@ -27,6 +27,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Native Linux Host-reopen **authentic pause / resume / stats** on the Live
+  supervised path from the durable recovery cgroup leaf. `LinuxLiveSupervisedSession`
+  writes kernel `cgroup.freeze` and waits for `cgroup.events` confirmation, and
+  reads normalized cgroup-v2 counters through the same leaf path
+  `PreparedProcess` uses — without restoring a fake process session. Missing
+  cgroup evidence fail-closes with `Unavailable`. Live driver state observes
+  the authentic freezer bit when present. New `exec` after reopen still
+  requires namespace/rootfs/`PreparedProcess` restore and remains Unavailable.
+  First-principles coverage: freeze/thaw and stats after Host reopen; pause and
+  stats without a recovery leaf fail closed. Default create stays Host-bound.
 - Native Linux Host-reopen **authentic `wait_process`** for durable exec
   identities on the Live supervised path. Recovery schema advances to
   `a3s.oci.native-linux-recovery.v6` with optional `helper` (supervisor-child
