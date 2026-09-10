@@ -27,6 +27,19 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Native Linux Host-reopen **authenticated `signal_process`** for durable init
+  and exec identities on the Live supervised path. After supervisor reattach,
+  `LinuxLiveSupervisedSession::signal_process` re-checks PID + start-time,
+  opens a pidfd, and delivers the signal without restoring a fake
+  `PreparedProcess`. Unknown process IDs fail with `NotFound`; dead or
+  start-time-drifted identities fail closed (`FailedPrecondition` /
+  `Unavailable`) without inventing delivery success. `NativeLinuxDriver`
+  routes live reopen through that path. `wait_process` stays `Unavailable`
+  because this Host does not hold wait ownership (parentage/pidfd wait) and
+  must not invent exit status; new `exec` remains Unavailable. First-principles
+  coverage: durable exec accepts SIGKILL after Host reopen; unknown IDs and
+  dead identities fail closed; inventory omits the signaled-dead exec without
+  invented wait status. Default create stays Host-bound.
 - Native Linux Host-reopen **durable exec inventory** on the Live supervised
   path. Recovery schema advances to `a3s.oci.native-linux-recovery.v5` with
   authenticated exec entries (process ID, PID + start-time, terminal mode).
@@ -37,9 +50,9 @@ All notable changes to A3S OCI Runtime are documented in this file.
   plus still-live durable execs only; dead execs are omitted without inventing
   exit status. Host reopen keeps `DriverRecovery::observed` (not
   `recreated_running_with_processes`) because omitting dead execs is
-  incompatible with Host exact-match rebind. `signal_process` / `wait_process` /
-  new `exec` remain Unavailable until `PreparedProcess` restore. First-
-  principles coverage: live exec appears after Host reopen; after exit,
+  incompatible with Host exact-match rebind. `wait_process` / new `exec`
+  remain Unavailable until wait ownership or full `PreparedProcess` restore.
+  First-principles coverage: live exec appears after Host reopen; after exit,
   inventory omits it without invented status. Default create stays Host-bound.
 - Native Linux Host-reopen **exclusive stdout/stderr restore** through
   session-supervisor IPC relay. Supervised create (opt-in) moves capture read

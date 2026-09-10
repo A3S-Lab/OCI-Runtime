@@ -22,6 +22,7 @@ use super::cgroup::CgroupManager;
 use super::device::{cleanup_device_target_manifest, load_device_target_manifest};
 use super::intel_rdt::{is_resctrl_mountpoint, IntelRdtRecovery};
 use super::pid_supervisor::terminate_pid;
+use super::pidfd::{PidFd, SignalOutcome};
 use super::process::{PreparedProcess, SharedSessionSupervisor};
 use super::session_supervisor::{HostSessionSupervisor, SessionSupervisorIdentity};
 
@@ -97,6 +98,52 @@ impl ProcessIdentity {
         Ok(process_observation(self.pid)?.is_some_and(|observation| {
             observation.start_time_ticks == self.start_time_ticks && !observation.is_terminated()
         }))
+    }
+
+    /// Open a pidfd only after re-authenticating PID + start-time.
+    ///
+    /// Refuses when the recorded identity is not live. After `pidfd_open`, a
+    /// start-time drift means PID reuse — fail closed without signaling the
+    /// wrong process. A disappeared `/proc` entry after open means the target
+    /// exited; the pidfd is retained so `pidfd_send_signal` can report
+    /// [`SignalOutcome::Exited`] without inventing success.
+    fn open_authenticated_pidfd(self, role: &str) -> Result<PidFd> {
+        if !self.is_live()? {
+            return Err(recovery_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "{role} PID {} is not live under its recorded start-time identity",
+                    self.pid
+                ),
+            ));
+        }
+        let pidfd = PidFd::open(self.pid).map_err(|error| {
+            recovery_error(
+                error.code,
+                format!(
+                    "failed to open authenticated pidfd for {role} PID {}: {}",
+                    self.pid, error.message
+                ),
+            )
+        })?;
+        match process_observation(self.pid)? {
+            Some(observation)
+                if observation.start_time_ticks == self.start_time_ticks
+                    && !observation.is_terminated() =>
+            {
+                Ok(pidfd)
+            }
+            Some(observation) if observation.start_time_ticks != self.start_time_ticks => {
+                Err(recovery_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "{role} PID {} start-time drifted after pidfd open (recorded {}, observed {}); refusing to signal a reused PID",
+                        self.pid, self.start_time_ticks, observation.start_time_ticks
+                    ),
+                ))
+            }
+            Some(_) | None => Ok(pidfd),
+        }
     }
 }
 
@@ -323,13 +370,16 @@ impl SessionSupervisorReattachCache {
 ///
 /// This restores supervisor control for wait/kill of the recorded launcher, a
 /// process inventory of the authenticated live init plus still-live durable
-/// exec identities, an authentic stdin write end when the original Host
-/// deposited one, and exclusive capture stdout/stderr through the supervisor
-/// IPC relay when those read ends were moved at create. Missing output deposit
-/// fail-closes [`Self::read_output`] with [`ErrorCode::Unavailable`] instead of
-/// inventing empty output. Dead exec identities are omitted from inventory
-/// without inventing exit status. Full `PreparedProcess` restore for signal /
-/// wait / new exec remains open.
+/// exec identities, authenticated [`Self::signal_process`] for those durable
+/// identities via pidfd after PID + start-time re-auth, an authentic stdin
+/// write end when the original Host deposited one, and exclusive capture
+/// stdout/stderr through the supervisor IPC relay when those read ends were
+/// moved at create. Missing output deposit fail-closes [`Self::read_output`]
+/// with [`ErrorCode::Unavailable`] instead of inventing empty output. Dead
+/// exec identities are omitted from inventory without inventing exit status.
+/// `wait_process` and new `exec` still require wait ownership / full
+/// `PreparedProcess` restore and remain Unavailable rather than inventing
+/// exit status.
 #[derive(Debug)]
 pub struct LinuxLiveSupervisedSession {
     target: ContainerTarget,
@@ -602,6 +652,64 @@ impl LinuxLiveSupervisedSession {
             terminate_pid(self.init_pid());
         }
         Ok(())
+    }
+
+    /// Signal a durable init or exec identity after Host reopen.
+    ///
+    /// Re-authenticates the recorded PID + start-time, opens a pidfd, and
+    /// delivers `signal` through that pidfd. Does not restore a fake
+    /// [`PreparedProcess`]. Unknown process IDs fail with [`ErrorCode::NotFound`].
+    /// Dead or start-time-mismatched identities fail closed without inventing
+    /// delivery success. Exit status is never synthesized here — callers that
+    /// need wait evidence must use a path that holds authentic wait ownership.
+    pub fn signal_process(&self, process_id: &ProcessId, signal: i32) -> Result<()> {
+        let identity = self.recorded_process_identity(process_id)?;
+        let role = if process_id.is_init() {
+            "live supervised init"
+        } else {
+            "live supervised exec"
+        };
+        let pidfd = identity.open_authenticated_pidfd(role)?;
+        match pidfd.send_signal(signal).map_err(|error| {
+            recovery_error(
+                error.code,
+                format!(
+                    "failed to signal {role} process {} (PID {}): {}",
+                    process_id,
+                    identity.pid(),
+                    error.message
+                ),
+            )
+        })? {
+            SignalOutcome::Delivered => Ok(()),
+            SignalOutcome::Exited => Err(recovery_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "process {} exited before signal delivery after Host reopen",
+                    process_id
+                ),
+            )),
+        }
+    }
+
+    fn recorded_process_identity(&self, process_id: &ProcessId) -> Result<ProcessIdentity> {
+        if process_id.is_init() {
+            return Ok(self.record.init);
+        }
+        self.record
+            .execs
+            .iter()
+            .find(|exec| &exec.process_id == process_id)
+            .map(|exec| exec.identity)
+            .ok_or_else(|| {
+                recovery_error(
+                    ErrorCode::NotFound,
+                    format!(
+                        "process {} does not exist in durable recovery for container {} generation {:?}",
+                        process_id, self.target.id, self.target.generation
+                    ),
+                )
+            })
     }
 
     /// Build stopped-only cleanup evidence after launcher and init have exited.
@@ -2966,6 +3074,224 @@ mod tests {
         delete_stale_generation(&tombstone)
             .await
             .expect("stopped-only delete after live wait");
+        terminate_pid(supervisor_pid);
+        let _ = wait_for_child(supervisor_pid);
+    }
+
+    #[tokio::test]
+    async fn live_session_signals_durable_exec_after_host_reopen_without_inventing_wait() {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixStream;
+        use std::path::Path;
+
+        use super::super::pid_supervisor::{terminate_pid, wait_for_child};
+        use super::super::session_supervisor::HostSessionSupervisor;
+
+        let temporary = tempfile::tempdir().expect("temporary recovery parent");
+        let parent = temporary.path().join("executor");
+        std::fs::create_dir(&parent).expect("executor parent");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
+            .expect("protect executor parent");
+        let current_root = parent.join("current");
+        std::fs::create_dir(&current_root).expect("current root");
+        std::fs::set_permissions(&current_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect current root");
+
+        let (mut parent_ready, mut child_ready) =
+            UnixStream::pair().expect("signal-process ready channel");
+        // SAFETY: parent reaps the fake Host; child owns the production supervisor.
+        let host_pid = unsafe { libc::fork() };
+        assert!(host_pid >= 0, "fork fake host for signal-process reopen");
+        if host_pid == 0 {
+            drop(parent_ready);
+            let mut supervisor = match HostSessionSupervisor::start_via_fork() {
+                Ok(supervisor) => supervisor,
+                Err(_) => unsafe { libc::_exit(161) },
+            };
+            let launcher_pid = match supervisor.spawn_launcher(
+                Path::new("/bin/sleep"),
+                &["30".into()],
+                None,
+                None,
+                None,
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(162) },
+            };
+            let exec_pid = match supervisor.spawn_launcher(
+                Path::new("/bin/sleep"),
+                &["30".into()],
+                None,
+                None,
+                None,
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(163) },
+            };
+            let identity = supervisor.identity().clone();
+            let mut payload = Vec::with_capacity(20);
+            payload.extend_from_slice(&identity.pid().to_be_bytes());
+            payload.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+            payload.extend_from_slice(&launcher_pid.to_be_bytes());
+            payload.extend_from_slice(&exec_pid.to_be_bytes());
+            if child_ready.write_all(&payload).is_err() {
+                unsafe { libc::_exit(164) }
+            }
+            std::mem::forget(supervisor);
+            loop {
+                unsafe { libc::pause() };
+            }
+        }
+        drop(child_ready);
+        let mut payload = [0_u8; 20];
+        parent_ready
+            .read_exact(&mut payload)
+            .expect("read signal-process supervisor evidence");
+        let supervisor_pid = i32::from_be_bytes(payload[0..4].try_into().expect("pid bytes"));
+        let supervisor_start = u64::from_be_bytes(payload[4..12].try_into().expect("start bytes"));
+        let launcher_pid = i32::from_be_bytes(payload[12..16].try_into().expect("launcher bytes"));
+        let exec_pid = i32::from_be_bytes(payload[16..20].try_into().expect("exec bytes"));
+
+        let owner = ProcessIdentity {
+            pid: 2_100_600,
+            start_time_ticks: 0x616,
+        };
+        let stale_root = parent.join(runtime_root_name(owner));
+        std::fs::create_dir(&stale_root).expect("stale root");
+        std::fs::set_permissions(&stale_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect stale root");
+        write_atomic_record(
+            &stale_root.join(OWNER_RECORD_NAME),
+            &ExecutorOwnerRecord {
+                schema_version: OWNER_SCHEMA_VERSION.to_string(),
+                owner,
+            },
+        )
+        .expect("owner record");
+        let slot = stale_root.join("c-0000000000000001");
+        std::fs::create_dir(&slot).expect("container slot");
+        std::fs::set_permissions(&slot, std::fs::Permissions::from_mode(0o700))
+            .expect("protect container slot");
+        let config = br#"{"ociVersion":"1.3.0"}"#;
+        let digest = config_digest_for(config);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        options
+            .open(slot.join(CONFIG_SNAPSHOT_NAME))
+            .and_then(|mut file| file.write_all(config))
+            .expect("configuration snapshot");
+        let target = ContainerTarget::exact(
+            a3s_oci_sdk::ContainerId::new("live-signal-exec").expect("container ID"),
+            a3s_oci_sdk::Generation(1),
+        );
+        let init = ProcessIdentity {
+            pid: launcher_pid,
+            start_time_ticks: process_observation(launcher_pid)
+                .expect("observe launcher")
+                .expect("launcher live")
+                .start_time_ticks,
+        };
+        let exec_id = a3s_oci_sdk::ProcessId::new("worker").expect("exec process ID");
+        let exec_identity = ProcessIdentity {
+            pid: exec_pid,
+            start_time_ticks: process_observation(exec_pid)
+                .expect("observe exec")
+                .expect("exec live")
+                .start_time_ticks,
+        };
+        write_atomic_record(
+            &slot.join(CONTAINER_RECORD_NAME),
+            &ContainerRecoveryRecord {
+                schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
+                target: target.clone(),
+                config_digest: digest.clone(),
+                owner,
+                launcher: init,
+                init,
+                session_supervisor: Some(ProcessIdentity::from_authenticated(
+                    supervisor_pid,
+                    supervisor_start,
+                )),
+                execs: vec![RecoveryExecRecord {
+                    process_id: exec_id.clone(),
+                    identity: exec_identity,
+                    terminal: false,
+                }],
+                cgroup: None,
+                intel_rdt: None,
+            },
+        )
+        .expect("container recovery record");
+
+        terminate_pid(host_pid);
+        let _ = wait_for_child(host_pid);
+
+        let supervisors = SessionSupervisorReattachCache::default();
+        let recovery = recover_stale_generation(
+            &parent,
+            &current_root,
+            &target,
+            &digest,
+            Some(launcher_pid),
+            &supervisors,
+        )
+        .await
+        .expect("live supervisor must reattach for signal-process")
+        .expect("recovery match");
+        let StaleGenerationRecovery::Live(live) = recovery else {
+            panic!("live session supervisor must recover as Live");
+        };
+
+        let missing = a3s_oci_sdk::ProcessId::new("missing-exec").expect("missing process ID");
+        let missing_error = live
+            .signal_process(&missing, libc::SIGTERM)
+            .expect_err("unknown durable process must fail closed");
+        assert_eq!(missing_error.code, ErrorCode::NotFound);
+
+        live.signal_process(&exec_id, libc::SIGKILL)
+            .expect("authenticated durable exec must accept signal after Host reopen");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let gone = process_observation(exec_pid)
+                .expect("observe signaled exec")
+                .is_none_or(|observation| {
+                    observation.is_terminated()
+                        || observation.start_time_ticks != exec_identity.start_time_ticks()
+                });
+            if gone {
+                break;
+            }
+            if Instant::now() >= deadline {
+                panic!("durable exec PID {exec_pid} did not exit after authenticated SIGKILL");
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+
+        let after_exit = live
+            .signal_process(&exec_id, libc::SIGTERM)
+            .expect_err("dead durable exec must not invent signal delivery");
+        assert_eq!(after_exit.code, ErrorCode::FailedPrecondition);
+
+        // Wait ownership was never restored: inventory may omit the dead exec,
+        // but nothing here synthesizes an ExitStatus for wait_process.
+        let inventory = live
+            .process_inventory()
+            .expect("inventory after signal must not invent failure");
+        assert!(
+            inventory
+                .iter()
+                .all(|record| record.target.process_id != exec_id),
+            "signaled-dead exec must be omitted without inventing wait status"
+        );
+
+        live.kill_launcher().expect("kill supervised launcher");
+        let _ = live.wait_launcher().expect("wait supervised launcher");
+        let tombstone = live
+            .into_tombstone()
+            .expect("dead supervised children can become a stopped tombstone");
+        delete_stale_generation(&tombstone)
+            .await
+            .expect("stopped-only delete after live signal");
         terminate_pid(supervisor_pid);
         let _ = wait_for_child(supervisor_pid);
     }

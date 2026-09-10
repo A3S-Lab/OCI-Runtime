@@ -2257,8 +2257,12 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   to the supervisor (SCM_RIGHTS move, not `F_DUPFD`); the supervisor sole-drains
   into a bounded buffer; Host/live reopen poll authentic chunks via control IPC;
   missing deposit fail-closes with `Unavailable` (never invents an empty
-  stream). Full `PreparedProcess` restore (signal/wait/new exec), the real-host
-  Box live-session gate, and default create Host-bound policy remain open.
+  stream). Authenticated Host-reopen `signal_process` for durable init/exec
+  identities is retained: PID + start-time re-auth, then pidfd delivery,
+  without restoring a fake `PreparedProcess`. `wait_process` and new `exec`
+  stay Unavailable (no wait ownership / full session restore yet — never
+  invent exit status). The real-host Box live-session gate and default create
+  Host-bound policy remain open.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,

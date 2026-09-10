@@ -1904,8 +1904,13 @@ sole drain into a bounded per-launcher buffer mirroring Host `OutputBuffer`
 semantics, and Hosts consume sequence-bearing chunks via `MSG_READ_OUTPUT`.
 Missing deposit or lost cursor fail-closes with `Unavailable` /
 `ResourceExhausted` instead of inventing an empty stream. Terminal/inherit I/O
-remain Unsupported on supervised create. Full `PreparedProcess` restore remains
-open. Default create stays Host-bound.
+remain Unsupported on supervised create. Authenticated Host-reopen
+`signal_process` for durable init/exec identities is implemented: re-check
+PID + start-time, open a pidfd, deliver the signal — without restoring a fake
+`PreparedProcess`. `wait_process` stays Unavailable because the replacement
+Host does not hold wait ownership (parentage/pidfd wait) and must not invent
+exit status; new `exec` likewise remains Unavailable. Default create stays
+Host-bound.
 
 Qualification may enable supervised create with
 `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. When set, Native create starts one
@@ -1938,8 +1943,11 @@ live init plus still-live durable exec identities from recovery v5 without
 inventing exit status for dead execs (omit them). Host reopen keeps
 `DriverRecovery::observed` rather than `recreated_running_with_processes`
 because omitting dead execs is incompatible with Host exact-match exec rebind
-without inventing terminal evidence. Restoring full `PreparedProcess` (signal /
-wait / new exec) onto the replacement Host remains a later slice.
+without inventing terminal evidence. Authenticated `signal_process` for those
+durable identities is restored via pidfd after PID + start-time re-auth.
+`wait_process` / new `exec` still require wait ownership or full
+`PreparedProcess` restore and remain Unavailable rather than inventing exit
+status.
 
 ### Hook owner-death crash boundary
 
