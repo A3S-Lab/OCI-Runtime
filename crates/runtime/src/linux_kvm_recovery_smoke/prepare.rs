@@ -10,28 +10,28 @@ use sha2::{Digest, Sha256};
 use super::report::{canonical_git_revision, LinuxKvmRecoveryArtifacts};
 use crate::unix_service::validate_unix_socket_path;
 
-pub(super) struct QualificationInputs {
-    pub(super) host_service_executable: PathBuf,
-    pub(super) shim: PathBuf,
-    pub(super) system_image_manifest: PathBuf,
-    pub(super) bundle: PathBuf,
-    pub(super) work_parent: PathBuf,
-    pub(super) source_revision: Option<String>,
+pub(crate) struct QualificationInputs {
+    pub(crate) host_service_executable: PathBuf,
+    pub(crate) shim: PathBuf,
+    pub(crate) system_image_manifest: PathBuf,
+    pub(crate) bundle: PathBuf,
+    pub(crate) work_parent: PathBuf,
+    pub(crate) source_revision: Option<String>,
 }
 
-pub(super) struct PreparedQualification {
-    pub(super) executable: PathBuf,
-    pub(super) shim: PathBuf,
-    pub(super) manifest: PathBuf,
-    pub(super) bundle: PathBuf,
-    pub(super) service_root: PathBuf,
-    pub(super) evidence_root: PathBuf,
-    pub(super) nonce: String,
-    pub(super) artifacts: LinuxKvmRecoveryArtifacts,
+pub(crate) struct PreparedQualification {
+    pub(crate) executable: PathBuf,
+    pub(crate) shim: PathBuf,
+    pub(crate) manifest: PathBuf,
+    pub(crate) bundle: PathBuf,
+    pub(crate) service_root: PathBuf,
+    pub(crate) evidence_root: PathBuf,
+    pub(crate) nonce: String,
+    pub(crate) artifacts: LinuxKvmRecoveryArtifacts,
 }
 
 impl PreparedQualification {
-    pub(super) async fn open(
+    pub(crate) async fn open(
         inputs: QualificationInputs,
         evidence_prefix: &str,
         endpoint_label: &str,
@@ -93,7 +93,7 @@ impl PreparedQualification {
     }
 }
 
-pub(super) fn persist_report<T: Serialize>(
+pub(crate) fn persist_report<T: Serialize>(
     evidence_root: &Path,
     report: &T,
     label: &str,

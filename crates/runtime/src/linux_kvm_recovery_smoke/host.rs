@@ -20,7 +20,7 @@ const REAP_TIMEOUT: Duration = Duration::from_secs(25);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum HostServiceKind {
+pub(crate) enum HostServiceKind {
     Recovery,
     Soak,
 }
@@ -41,7 +41,14 @@ impl HostServiceKind {
     }
 }
 
-pub(super) struct HostServiceProcess {
+/// Optional spawn overrides for Live session-owner Host Services.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct HostServiceSpawnOptions {
+    /// When true, sets `A3S_OCI_KVM_SESSION_OWNER=1` on the Host Service.
+    pub(crate) durable_session_owner: bool,
+}
+
+pub(crate) struct HostServiceProcess {
     child: Child,
     socket: PathBuf,
     socket_peer: Option<LinuxProcessIdentity>,
@@ -49,7 +56,7 @@ pub(super) struct HostServiceProcess {
 }
 
 impl HostServiceProcess {
-    pub(super) async fn spawn(
+    pub(crate) async fn spawn(
         kind: HostServiceKind,
         executable: &Path,
         root: &Path,
@@ -58,9 +65,33 @@ impl HostServiceProcess {
         stdout: &Path,
         stderr: &Path,
     ) -> Result<Self, String> {
+        Self::spawn_with_options(
+            kind,
+            executable,
+            root,
+            shim,
+            manifest,
+            stdout,
+            stderr,
+            HostServiceSpawnOptions::default(),
+        )
+        .await
+    }
+
+    pub(crate) async fn spawn_with_options(
+        kind: HostServiceKind,
+        executable: &Path,
+        root: &Path,
+        shim: &Path,
+        manifest: &Path,
+        stdout: &Path,
+        stderr: &Path,
+        options: HostServiceSpawnOptions,
+    ) -> Result<Self, String> {
         let stdout = create_private_log(stdout, "Host Service stdout")?;
         let stderr = create_private_log(stderr, "Host Service stderr")?;
-        let child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .arg(kind.command())
             .arg("--root")
             .arg(root)
@@ -72,7 +103,11 @@ impl HostServiceProcess {
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr))
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+        if options.durable_session_owner {
+            command.env(crate::kvm_durable_session_owner::KVM_SESSION_OWNER_ENV, "1");
+        }
+        let child = command
             .spawn()
             .map_err(|error| format!("failed to start {}: {error}", kind.label()))?;
         let mut process = Self {
@@ -90,30 +125,30 @@ impl HostServiceProcess {
         }
     }
 
-    pub(super) fn identity(&self) -> Result<LinuxProcessIdentity, String> {
+    pub(crate) fn identity(&self) -> Result<LinuxProcessIdentity, String> {
         let pid = self.pid()?;
         process_identity(pid)?.ok_or_else(|| {
             format!("failed to retain exact Host Service process identity for PID {pid}")
         })
     }
 
-    pub(super) fn pid(&self) -> Result<u32, String> {
+    pub(crate) fn pid(&self) -> Result<u32, String> {
         self.child
             .id()
             .ok_or_else(|| format!("{} has no live PID", self.kind.label()))
     }
 
-    pub(super) fn socket_path(&self) -> &Path {
+    pub(crate) fn socket_path(&self) -> &Path {
         &self.socket
     }
 
-    pub(super) fn socket_peer(&self) -> Result<&LinuxProcessIdentity, String> {
+    pub(crate) fn socket_peer(&self) -> Result<&LinuxProcessIdentity, String> {
         self.socket_peer
             .as_ref()
             .ok_or_else(|| "Host Service socket peer was not retained".to_string())
     }
 
-    pub(super) async fn connect(&self) -> Result<RuntimeClient, String> {
+    pub(crate) async fn connect(&self) -> Result<RuntimeClient, String> {
         let endpoint = LocalIpcEndpoint::unix_socket(&self.socket)
             .map_err(|error| format!("failed to configure Host Service endpoint: {error}"))?;
         timeout(START_TIMEOUT, RuntimeClient::connect(&endpoint))
@@ -122,7 +157,7 @@ impl HostServiceProcess {
             .map_err(|error| format!("failed to connect {}: {error}", self.kind.label()))
     }
 
-    pub(super) async fn terminate(&mut self) -> Result<bool, String> {
+    pub(crate) async fn terminate(&mut self) -> Result<bool, String> {
         let pid = libc::pid_t::try_from(self.pid()?)
             .map_err(|error| format!("Host Service PID is invalid: {error}"))?;
         // SAFETY: pid identifies the exact retained child and SIGTERM is handled
@@ -144,7 +179,7 @@ impl HostServiceProcess {
         }
     }
 
-    pub(super) async fn sigkill(&mut self) -> Result<(), String> {
+    pub(crate) async fn sigkill(&mut self) -> Result<(), String> {
         let pid = libc::pid_t::try_from(self.pid()?)
             .map_err(|error| format!("Host Service PID is invalid: {error}"))?;
         // SAFETY: pid identifies the exact retained child. This is the
@@ -167,7 +202,7 @@ impl HostServiceProcess {
         Ok(())
     }
 
-    pub(super) async fn emergency_stop(&mut self) {
+    pub(crate) async fn emergency_stop(&mut self) {
         if self.child.id().is_none() {
             return;
         }
@@ -290,7 +325,7 @@ fn create_private_log(path: &Path, label: &str) -> Result<std::fs::File, String>
         .map_err(|error| format!("failed to create {label} {}: {error}", path.display()))
 }
 
-pub(super) fn socket_identity(path: &Path) -> Result<(u64, u64), String> {
+pub(crate) fn socket_identity(path: &Path) -> Result<(u64, u64), String> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|error| format!("failed to inspect socket {}: {error}", path.display()))?;
     if !metadata.file_type().is_socket() {
@@ -302,7 +337,7 @@ pub(super) fn socket_identity(path: &Path) -> Result<(u64, u64), String> {
     Ok((metadata.dev(), metadata.ino()))
 }
 
-pub(super) fn process_descendants(root_pid: u32) -> Result<Vec<LinuxProcessIdentity>, String> {
+pub(crate) fn process_descendants(root_pid: u32) -> Result<Vec<LinuxProcessIdentity>, String> {
     let all = process_inventory()?;
     let mut retained = BTreeSet::from([root_pid]);
     loop {
@@ -322,7 +357,7 @@ pub(super) fn process_descendants(root_pid: u32) -> Result<Vec<LinuxProcessIdent
         .collect())
 }
 
-pub(super) async fn wait_for_processes_reaped(
+pub(crate) async fn wait_for_processes_reaped(
     processes: &[LinuxProcessIdentity],
 ) -> Result<bool, String> {
     let deadline = Instant::now() + REAP_TIMEOUT;
@@ -343,7 +378,22 @@ pub(super) async fn wait_for_processes_reaped(
     }
 }
 
-pub(super) fn endpoint_inventory() -> Result<BTreeSet<PathBuf>, String> {
+/// True when every retained process identity is still live with the same start-time.
+pub(crate) fn processes_still_live(
+    processes: &[LinuxProcessIdentity],
+) -> Result<bool, String> {
+    if processes.is_empty() {
+        return Ok(false);
+    }
+    let current = process_inventory()?;
+    Ok(processes.iter().all(|expected| {
+        current.iter().any(|process| {
+            process.pid == expected.pid && process.start_time_ticks == expected.start_time_ticks
+        })
+    }))
+}
+
+pub(crate) fn endpoint_inventory() -> Result<BTreeSet<PathBuf>, String> {
     let mut endpoints = BTreeSet::new();
     for entry in
         std::fs::read_dir("/tmp").map_err(|error| format!("failed to enumerate /tmp: {error}"))?
@@ -360,7 +410,7 @@ pub(super) fn endpoint_inventory() -> Result<BTreeSet<PathBuf>, String> {
     Ok(endpoints)
 }
 
-pub(super) async fn wait_for_endpoint_inventory(
+pub(crate) async fn wait_for_endpoint_inventory(
     expected: &BTreeSet<PathBuf>,
 ) -> Result<bool, String> {
     let deadline = Instant::now() + REAP_TIMEOUT;
@@ -375,7 +425,7 @@ pub(super) async fn wait_for_endpoint_inventory(
     }
 }
 
-pub(super) fn descriptor_inventory(pid: u32) -> Result<BTreeSet<(u32, String)>, String> {
+pub(crate) fn descriptor_inventory(pid: u32) -> Result<BTreeSet<(u32, String)>, String> {
     let root = PathBuf::from(format!("/proc/{pid}/fd"));
     let mut descriptors = BTreeSet::new();
     for entry in std::fs::read_dir(&root)
@@ -402,7 +452,7 @@ pub(super) fn descriptor_inventory(pid: u32) -> Result<BTreeSet<(u32, String)>, 
     Ok(descriptors)
 }
 
-pub(super) async fn wait_for_descriptor_inventory(
+pub(crate) async fn wait_for_descriptor_inventory(
     pid: u32,
     expected: &BTreeSet<(u32, String)>,
 ) -> Result<bool, String> {

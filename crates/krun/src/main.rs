@@ -1260,9 +1260,15 @@ fn run_session_owner(
             let _ = fs::remove_file(&ready_file);
             if let Some(path) = host_control.as_ref() {
                 let _ = fs::remove_file(path);
+                if let Some(parent) = path.parent() {
+                    let _ = fs::remove_dir(parent);
+                }
             }
             if let Some(path) = guest_socket.as_ref() {
                 let _ = fs::remove_file(path);
+                if let Some(parent) = path.parent() {
+                    let _ = fs::remove_dir(parent);
+                }
             }
             return if status.success() {
                 Ok(ExitCode::SUCCESS)

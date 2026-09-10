@@ -31,7 +31,7 @@ pub struct LinuxKvmRecoveryArtifacts {
 }
 
 impl LinuxKvmRecoveryArtifacts {
-    pub(super) fn is_complete(&self) -> bool {
+    pub(crate) fn is_complete(&self) -> bool {
         [
             &self.host_service_executable,
             &self.shim,
@@ -201,7 +201,7 @@ fn canonical_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-pub(super) fn canonical_sha256_digest(value: &str) -> bool {
+pub(crate) fn canonical_sha256_digest(value: &str) -> bool {
     value.strip_prefix("sha256:").is_some_and(canonical_sha256)
 }
 

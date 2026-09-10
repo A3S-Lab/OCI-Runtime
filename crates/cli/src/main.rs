@@ -337,6 +337,29 @@ enum Command {
         #[arg(long, value_name = "REVISION")]
         source_revision: String,
     },
+    /// Qualify opt-in KVM Live Host reopen after Host Service SIGKILL.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[command(hide = true)]
+    LinuxKvmLiveRecoverySmoke {
+        /// Absolute isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Absolute immutable Linux KVM utility-VM system-image manifest.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
+        /// OCI bundle copied into the private runtime-owned handoff.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// Existing private directory that retains Live recovery evidence.
+        #[arg(long, value_name = "DIR")]
+        work_parent: PathBuf,
+        /// Exact source revision embedded in the qualification report.
+        #[arg(long, value_name = "REVISION")]
+        source_revision: String,
+    },
     /// Qualify all Host/Guest Create interruption stages through real KVM owners.
     #[cfg(all(
         target_os = "linux",

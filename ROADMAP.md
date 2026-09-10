@@ -2182,12 +2182,15 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   Service (default remains Host-PID owner-watchdog so stopped-only owner-death
   gates stay green). **Landed in-tree (not W2/B2-closed):** Host-control bridge
   proxy, guest Host-reconnect loop, authenticated Live binding publish/load,
-  and `recover` reattach to `UtilityVmAttachment::Live` /
-  `DriverRecovery::observed` without inventing exit. **Still required:**
-  existing-host WSL2 `/dev/kvm` evidence that replacement Host reattaches the
-  **same** Guest incarnation with continuous init identity; orphaned session
-  roots stay rejected without that greened evidence. Defer retained streaming
-  handle continuity and `b2_process_session_recovery_closed` /
+  `recover` reattach to `UtilityVmAttachment::Live` /
+  `DriverRecovery::observed` without inventing exit, and the dedicated Live
+  evidence harness (`a3s.oci.linux-kvm-live-recovery-smoke.v1` /
+  `.github/scripts/linux-kvm-live-recovery.sh`; distinct from stopped-only
+  `linux-kvm-recovery`). **Still required:** existing-host WSL2 `/dev/kvm`
+  greened report proving replacement Host reattaches the **same** Guest
+  incarnation with continuous init identity; orphaned session roots stay
+  rejected without that greened evidence. Defer retained streaming handle
+  continuity and `b2_process_session_recovery_closed` /
   `kvm_microvm_live_claimed` until that evidence. Does not register KVM with
   normal HostRuntimeService, flip default supervised create, or cut over
   MicroVM product routing.

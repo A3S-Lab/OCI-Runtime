@@ -43,6 +43,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
   **not** flip cutover flags, register KVM with normal HostRuntimeService, or
   close W2/B2 until existing-host WSL2 `/dev/kvm` Live evidence is greened.
 
+- Opt-in Linux KVM Live Host reopen evidence gate (observation-only): schema
+  `a3s.oci.linux-kvm-live-recovery-smoke.v1`, CLI
+  `linux-kvm-live-recovery-smoke`, and
+  `.github/scripts/linux-kvm-live-recovery.sh` matrix wrapper
+  (`a3s.oci.linux-kvm-live-recovery-matrix.v1`). Proves
+  `A3S_OCI_KVM_SESSION_OWNER=1` create+start → Host SIGKILL → Guest /
+  session-owner survival → replacement Host Running reattach with continuous
+  init identity and no invented exit. Distinct from stopped-only
+  `linux-kvm-recovery` (`live_vm_processes_reaped` must be false). Does **not**
+  close W2/B2 until existing-host `/dev/kvm` evidence is greened.
+
 ### Changed
 
 - Document existing-host WSL2 Box live-session v3 retained-stream evidence on
@@ -56,6 +67,9 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Durable KVM Live host-control socket now binds under `/tmp/<pipe>/host-control.sock`
+  beside the guest agent socket instead of under the long runtime share path,
+  which exceeded Linux `SUN_LEN` and made session-owner exit before readiness.
 - Live Host-reopen restores stdin deposits per process identity: init uses the
   create launcher deposit; durable exec uses the helper deposit. The previous
   init-only slot made retained streaming `write_stdin`/`close_stdin` Unavailable

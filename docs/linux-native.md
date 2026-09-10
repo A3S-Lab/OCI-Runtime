@@ -374,6 +374,23 @@ return to their baselines. The nested runtime schema is
 `a3s.oci.linux-kvm-recovery-smoke.v1`; the retained aggregate is
 `a3s.oci.linux-kvm-recovery-matrix.v2`.
 
+The Live Host reopen gate is a separate opt-in evidence path. It does not
+overload the stopped-only recovery schema. With
+`A3S_OCI_KVM_SESSION_OWNER=1`, create+start a real KVM generation, SIGKILL the
+Host Service, require Guest/session-owner survival
+(`live_vm_processes_reaped` must stay false), then prove a replacement Host
+reattaches **Running** with continuous init identity and no invented exit:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_LIVE_RECOVERY_REPORT=/absolute/path/to/live-recovery.json \
+  bash .github/scripts/linux-kvm-live-recovery.sh
+```
+
+Nested runtime schema: `a3s.oci.linux-kvm-live-recovery-smoke.v1`. Aggregate:
+`a3s.oci.linux-kvm-live-recovery-matrix.v1`. This harness landing does **not**
+close W2/B2 until an existing-host `/dev/kvm` report is greened.
+
 A third qualification-only Host Service serves the A3S Box product-lifecycle
 scope `box-product-lifecycle-only-v1` without promoting the public KVM
 candidate. Box opt-in must point at this explicit Unix owner; the public

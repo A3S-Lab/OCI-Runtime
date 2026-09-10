@@ -88,6 +88,11 @@ mod linux_kvm_recovery_smoke;
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
+mod linux_kvm_live_recovery_smoke;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 mod linux_kvm_service;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_hvf_host_smoke;
@@ -225,11 +230,20 @@ pub use kvm_driver::{KvmRuntimeDriver, KvmRuntimeDriverConfig};
 ))]
 #[doc(hidden)]
 pub use linux_kvm_recovery_smoke::{
-    linux_kvm_recovery_smoke, linux_kvm_soak, LinuxKvmRecoveryEvidence,
+    linux_kvm_recovery_smoke, linux_kvm_soak, LinuxKvmRecoveryArtifacts, LinuxKvmRecoveryEvidence,
     LinuxKvmRecoverySmokeConfig, LinuxKvmRecoverySmokeReport, LinuxKvmSoakReport,
     LinuxKvmSoakSmokeConfig, LinuxKvmSoakWaveEvidence, LinuxProcessIdentity,
     DEFAULT_LINUX_KVM_SOAK_ITERATIONS, LINUX_KVM_RECOVERY_SMOKE_SCHEMA_VERSION,
     LINUX_KVM_SOAK_SCHEMA_VERSION, MAX_LINUX_KVM_SOAK_ITERATIONS,
+};
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[doc(hidden)]
+pub use linux_kvm_live_recovery_smoke::{
+    linux_kvm_live_recovery_smoke, LinuxKvmLiveRecoveryEvidence, LinuxKvmLiveRecoverySmokeConfig,
+    LinuxKvmLiveRecoverySmokeReport, LINUX_KVM_LIVE_RECOVERY_SMOKE_SCHEMA_VERSION,
 };
 #[cfg(all(
     target_os = "linux",

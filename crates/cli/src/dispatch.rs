@@ -337,6 +337,37 @@ fn dispatch(
             target_os = "linux",
             any(target_arch = "x86_64", target_arch = "aarch64")
         ))]
+        Command::LinuxKvmLiveRecoverySmoke {
+            shim,
+            system_image_manifest,
+            bundle,
+            work_parent,
+            source_revision,
+        } => command_future!({
+            let executable = std::env::current_exe().map_err(CliError::CurrentExecutable)?;
+            let report = a3s_oci_runtime::linux_kvm_live_recovery_smoke(
+                a3s_oci_runtime::LinuxKvmLiveRecoverySmokeConfig {
+                    host_service_executable: executable,
+                    shim,
+                    system_image_manifest,
+                    bundle,
+                    work_parent,
+                    source_revision: Some(source_revision),
+                },
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }),
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
         Command::LinuxKvmCreateReopen {
             shim,
             runtime_root,

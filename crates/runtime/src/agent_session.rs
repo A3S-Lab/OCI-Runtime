@@ -1075,8 +1075,8 @@ impl AgentVmSession {
                     Ok(socket_path) => {
                         report.endpoint_bound = true;
                         let host_control =
-                            crate::kvm_live_session_binding::KvmLiveSessionBinding::host_control_path(
-                                runtime_share_path,
+                            crate::kvm_live_session_binding::KvmLiveSessionBinding::host_control_path_for_pipe(
+                                endpoint.pipe_name(),
                             );
                         (None, Some(socket_path), Some(host_control))
                     }
