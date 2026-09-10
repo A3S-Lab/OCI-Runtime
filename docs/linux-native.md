@@ -59,13 +59,18 @@ before Tokio starts and passes that handle into bind. Library bind rejects a
 delegated root without that bootstrap so the durable owner cannot silently
 open the weaker cgroup-only constructor.
 
-This command accepts ordinary SDK create attachments and deliberately carries
+The command accepts ordinary SDK create attachments and deliberately carries
 no A3S Box FD 3/4/5 resources. It is also the explicitly opted-in x86_64 and
 aarch64 Box Sandbox production route: Box prepares the product bundle and
 resources, then reuses this identity-fenced owner across fresh Box processes.
 The separate `native-linux-service` command remains a single-container
-compatibility and focused-qualification path. Default routing, transparent
-live-session reattachment, and cross-platform cutover remain open.
+compatibility and focused-qualification path. Existing-host WSL2 Box evidence
+on OCI `7001ce5a4c32cd6e2bbb9a833fc45fd05d2318c9` greened Native live-session
+v3 retained-stream continuity (report SHA-256
+`bc36ff5b895b6320b57322328f78910be82eddfb2203b97bd2c86455b1929d02`,
+`retained_stream_handle_proven=true`). Default create remains Host-bound
+(supervised create stays opt-in). Utility-VM Live, fresh-host promotion, and
+cross-platform cutover remain open.
 
 ## Native prerequisite probe
 
