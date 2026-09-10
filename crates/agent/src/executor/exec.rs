@@ -25,6 +25,11 @@ impl LinuxExecutor {
     pub(super) async fn exec_recorded(&self, request: AgentExecRequest) -> Result<AgentProcess> {
         let operation = RecordedRequest::new(MutationKind::Exec, &request)?;
         let operation_id = request.context.operation_id.clone();
+        // Resolve the session supervisor before claiming `lock_owned` on
+        // executor state. Claiming first and then locking state again inside
+        // `supervised_exec_session_supervisor` self-deadlocks the non-reentrant
+        // tokio mutex (Live keyed exec stays `prepared` forever).
+        let session_supervisor = self.supervised_exec_session_supervisor(&request).await?;
         let (completion, owner) = {
             let mut state = std::sync::Arc::clone(&self.state).lock_owned().await;
             match state.prepare_process_operation(&operation_id, &operation)? {
@@ -40,7 +45,6 @@ impl LinuxExecutor {
         // state.  Retries either observe the pending claim during handoff or
         // serialize behind the owner guard, then replay the exact recorded
         // result once the owner task finishes.
-        let session_supervisor = self.supervised_exec_session_supervisor(&request).await?;
         if let Some(mut state) = owner {
             match self.init_executable.duplicate_command_path() {
                 Ok((init_executable, pinned_executable)) => {

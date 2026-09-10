@@ -1916,9 +1916,10 @@ restoring `PreparedProcess`; missing cgroup evidence fail-closes with
 `Unavailable`. New `exec` after Host reopen rebuilds the minimum authentic
 spawn context from the durable `config.json` snapshot (namespace plan,
 capability ceiling, seccomp) plus live init namespace/root descriptors and the
-recovery cgroup leaf, then supervisor-parents the helper. Only Null process I/O
-is accepted in this slice; capture/pipe/terminal/inherit fail closed with
-`Unavailable`. Default create stays Host-bound.
+recovery cgroup leaf, then supervisor-parents the helper. Live Host and
+Host-reopen supervised exec deposit capture/pipe I/O the same way create does
+(exclusive `MSG_DEPOSIT_OUTPUT` / stdin dup deposit + relay). Terminal/inherit
+remain Unavailable. Default create stays Host-bound.
 
 Qualification may enable supervised create with
 `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. When set, Native create starts one
@@ -1926,7 +1927,10 @@ durable supervisor, spawns the container launcher as its real child
 (`Host → Supervisor → Launcher`), passes `expected_owner_pid` as the
 supervisor PID so `container-init` re-arms PDEATHSIG correctly, and writes the
 authenticated supervisor identity into the recovery record (v6; v5 exec records
-normalize without helper). Default create
+normalize without helper). Supervised exec resolves the shared supervisor Arc
+before claiming the executor-state `lock_owned` journal guard so the
+non-reentrant tokio mutex cannot self-deadlock (keyed capture would otherwise
+stay `prepared` with no helper). Default create
 (no env) keeps Host-bound PDEATHSIG and omits `sessionSupervisor` so existing
 stopped-only recovery gates stay green. Supervised create currently rejects
 terminal/inherit I/O, pinned utility-VM bundles, and inherited Box control
