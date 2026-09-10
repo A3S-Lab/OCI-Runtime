@@ -27,6 +27,21 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Re-greened existing-host WSL2 x86_64 `/dev/kvm` containerd DedicatedVm
+  lifecycle qualification on clean tip
+  `97e830343ff2915f7d5e4630d6c2045af9660937` (after #295) against tip-source
+  system-image manifest
+  `684f54f61bfad188223bf410a45547259fba1ec4cbb580fe996371420b2ff504`
+  (agent `23336c3a1999df8b7a3b12a94986260e18e8f19ea5ca41b370715e8dfb17d2dc`)
+  and containerd 2.2.1. Report schema remains
+  `a3s.oci.linux-kvm-containerd-lifecycle.v3` with the six dedicated-vm
+  init/exec Created/Running/Stopped restart boundaries; report SHA-256
+  `c85ca1490be83b77b03cd0d7b1654c7c56a24e9f7d4509dd3abdce7ee02ade7d`.
+  Prior tip `f14c9401f92a5fa97be62c54f58925f5fc1a2a51` report
+  `6993c4d846d7a6f458c9b103d06cc752659dd11f6adac215274395c91e191e76`
+  remains historical. `host_class=existing`, `promotes_readiness=false`.
+  Observation-only; does not promote readiness, close the Native Linux
+  23-boundary matrix, fresh-host/B2 cutover, or AArch64.
 - Retained existing-host WSL2 x86_64 `/dev/kvm` tip `05a3b2b` complete
   20-operation R1 reopen aggregate against system-image manifest
   `0c7348f4…` (agent `23336c3a…`): Create 11/11 including Host-shutdown
@@ -427,10 +442,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
   records six exact dedicated-vm restart boundary IDs (init and exec
   Created/Running/Stopped). First-principles ledger tests reject Native Linux
   `exec-*` names as a DedicatedVm pass. Existing-host WSL2 x86_64 / containerd
-  observation retained on clean main tip
-  `f14c9401f92a5fa97be62c54f58925f5fc1a2a51` (report SHA-256
-  `6993c4d846d7a6f458c9b103d06cc752659dd11f6adac215274395c91e191e76`; prior
-  `a54e976ef7fbc8a5e07ab282c4d1e665c1805fd3e013614efc734e080c503f49` remains
+  observation retained on clean tip
+  `97e830343ff2915f7d5e4630d6c2045af9660937` (report SHA-256
+  `c85ca1490be83b77b03cd0d7b1654c7c56a24e9f7d4509dd3abdce7ee02ade7d`; prior
+  tips `f14c9401f92a5fa97be62c54f58925f5fc1a2a51` /
+  `6993c4d846d7a6f458c9b103d06cc752659dd11f6adac215274395c91e191e76` and
+  `a54e976ef7fbc8a5e07ab282c4d1e665c1805fd3e013614efc734e080c503f49` remain
   historical). `promotes_readiness=false`. Does not close the full Native Linux
   23-boundary matrix, PTY/FIFO rehydration, fresh-host promotion, or AArch64
   promotion.

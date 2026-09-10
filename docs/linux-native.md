@@ -329,7 +329,12 @@ at `/`), sets `A3S_OCI_RUNTIME_ROOT` to `<host --root>/runtime` for bundle
 handoff, and records `a3s.oci.linux-kvm-containerd-lifecycle.v3` with
 init and exec Created/Running/Stopped restart boundary IDs and
 `promotes_readiness=false`. Existing-host passes do not promote fresh-host or
-AArch64 readiness.
+AArch64 readiness. Clean tip
+`97e830343ff2915f7d5e4630d6c2045af9660937` retained report SHA-256
+`c85ca1490be83b77b03cd0d7b1654c7c56a24e9f7d4509dd3abdce7ee02ade7d` against
+tip-source system-image manifest
+`684f54f61bfad188223bf410a45547259fba1ec4cbb580fe996371420b2ff504` (agent
+`23336c3a…`) on WSL2 x86_64 `/dev/kvm` / containerd 2.2.1.
 
 It creates a separate empty bootstrap root and UID-owned mode-`0700` runtime
 share, downloads the architecture-specific pinned Alpine archive, and prepares
