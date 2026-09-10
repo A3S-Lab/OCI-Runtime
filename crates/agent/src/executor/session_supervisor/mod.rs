@@ -86,6 +86,9 @@ const FLAG_STDOUT: u8 = 0b0000_1000;
 const FLAG_STDERR: u8 = 0b0001_0000;
 /// Additional descriptors installed at explicit target FD numbers before exec.
 const FLAG_INHERITED: u8 = 0b0010_0000;
+/// Host-private `/proc/self/fd/<n>` executable, sent via SCM_RIGHTS so the
+/// supervisor can exec the same inode without resolving the Host FD table.
+const FLAG_PROGRAM_FD: u8 = 0b0100_0000;
 const REATTACH_ENDPOINT_PREFIX: &str = "a3s.oci.session-supervise.";
 const REATTACH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REATTACH_ACCEPT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -399,6 +402,12 @@ impl HostSessionSupervisor {
         }
         let mut fds = Vec::new();
         let mut flags = 0_u8;
+        // `/proc/self/fd/<n>` is private to the Host. Passing that pathname to
+        // the supervisor yields ENOENT; send the pinned executable FD instead.
+        if let Some(descriptor) = proc_self_fd_number(program) {
+            flags |= FLAG_PROGRAM_FD;
+            fds.push(descriptor);
+        }
         if let Some(descriptor) = join_cgroup_procs {
             flags |= FLAG_JOIN_CGROUP;
             fds.push(descriptor);
@@ -1113,7 +1122,8 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
             | FLAG_STDIN
             | FLAG_STDOUT
             | FLAG_STDERR
-            | FLAG_INHERITED);
+            | FLAG_INHERITED
+            | FLAG_PROGRAM_FD);
     if unknown != 0 {
         return Err(supervisor_error(
             ErrorCode::InvalidArgument,
@@ -1152,7 +1162,8 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
     } else {
         Vec::new()
     };
-    let expected_fds = usize::from((flags & FLAG_JOIN_CGROUP) != 0)
+    let expected_fds = usize::from((flags & FLAG_PROGRAM_FD) != 0)
+        + usize::from((flags & FLAG_JOIN_CGROUP) != 0)
         + (2 * usize::from((flags & FLAG_CONTROL_WORKLOAD) != 0))
         + usize::from((flags & FLAG_STDIN) != 0)
         + usize::from((flags & FLAG_STDOUT) != 0)
@@ -1164,6 +1175,16 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
         receive_fds(control.as_raw_fd(), expected_fds)?
     };
     let mut fd_iter = fds.into_iter();
+    let program_fd = if flags & FLAG_PROGRAM_FD != 0 {
+        Some(fd_iter.next().ok_or_else(|| {
+            supervisor_error(
+                ErrorCode::Internal,
+                "session supervisor spawn missing program descriptor",
+            )
+        })?)
+    } else {
+        None
+    };
     let join_cgroup = if flags & FLAG_JOIN_CGROUP != 0 {
         Some(fd_iter.next().ok_or_else(|| {
             supervisor_error(
@@ -1238,7 +1259,16 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
             "session supervisor spawn requires a program path",
         )
     })?;
-    let mut command = Command::new(program);
+    // Keep the received program FD alive until after spawn so `/proc/self/fd`
+    // resolves in *this* process, not the Host that originated the pin.
+    let program_path = program_fd
+        .as_ref()
+        .map(|descriptor| PathBuf::from(format!("/proc/self/fd/{}", descriptor.as_raw_fd())));
+    let exec_program: &Path = match program_path.as_ref() {
+        Some(path) => path.as_path(),
+        None => Path::new(program),
+    };
+    let mut command = Command::new(exec_program);
     command
         .args(&argv[1..])
         .env_clear()
@@ -1287,6 +1317,8 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
     drop(stdout);
     drop(stderr);
     drop(inherited);
+    drop(program_fd);
+    drop(program_path);
     let pid = match i32::try_from(child.id()) {
         Ok(pid) => pid,
         Err(error) => {
@@ -1840,6 +1872,17 @@ fn clear_cloexec(fd: RawFd) -> Result<()> {
         return Err(last_os_error("clear session-supervisor channel CLOEXEC"));
     }
     Ok(())
+}
+
+/// Parse Host-private `/proc/self/fd/<n>` paths used by pinned executables.
+fn proc_self_fd_number(path: &Path) -> Option<RawFd> {
+    let text = path.to_str()?;
+    let number = text.strip_prefix("/proc/self/fd/")?;
+    if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let descriptor = number.parse::<RawFd>().ok()?;
+    (descriptor >= 0).then_some(descriptor)
 }
 
 fn send_with_fds(socket: RawFd, payload: &[u8], fds: &[RawFd]) -> Result<()> {
@@ -2923,5 +2966,28 @@ sys.exit(0 if len(received) == EXPECTED else 14)
             status, 0,
             "receiver must exit 0 after authentic SCM_RIGHTS receive, not invented status"
         );
+    }
+
+    #[test]
+    fn supervised_spawn_accepts_host_proc_self_fd_program() {
+        // First-principles: Host pins the agent as `/proc/self/fd/<n>`. That
+        // pathname is meaningless in the supervisor; spawn must SCM_RIGHTS the
+        // executable FD and exec via the supervisor-local descriptor path.
+        let executable = std::fs::File::open("/bin/true").expect("open /bin/true");
+        let program = PathBuf::from(format!("/proc/self/fd/{}", executable.as_raw_fd()));
+        assert!(
+            program.exists(),
+            "Host must observe the pinned executable before handoff"
+        );
+
+        let mut supervisor = HostSessionSupervisor::start_via_fork().expect("start supervisor");
+        let launcher_pid = supervisor
+            .spawn_launcher(&program, &[], None, None, None)
+            .expect("spawn must accept Host /proc/self/fd program via SCM_RIGHTS");
+        let status = supervisor
+            .wait_launcher(launcher_pid)
+            .expect("wait supervised /bin/true");
+        assert_eq!(status, 0, "supervised /bin/true must exit 0");
+        drop(executable);
     }
 }
