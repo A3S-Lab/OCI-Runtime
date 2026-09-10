@@ -8,13 +8,14 @@ use crate::linux_kvm_recovery_smoke::report::canonical_sha256_digest;
 use crate::linux_kvm_recovery_smoke::{LinuxKvmRecoveryArtifacts, LinuxProcessIdentity};
 
 pub const LINUX_KVM_LIVE_RECOVERY_SMOKE_SCHEMA_VERSION: &str =
-    "a3s.oci.linux-kvm-live-recovery-smoke.v2";
+    "a3s.oci.linux-kvm-live-recovery-smoke.v3";
 
 /// Live Host reopen evidence: Guest survives Host SIGKILL and reattaches Running.
 ///
-/// v2 also proves retained exec I/O (Pipe stdin + Capture stdout) across Host
-/// SIGKILL on the same Guest process identity. Does **not** claim Box
-/// `retained_stream_handle_proven` or flip `b2_process_session_recovery_closed`.
+/// v3 keeps v2 retained exec I/O and also proves filesystem continuity
+/// (FileOp::Upload before Host SIGKILL, FileOp::Download after reattach on the
+/// same Running generation). Does **not** claim Box filesystem Live or flip
+/// `b2_process_session_recovery_closed`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinuxKvmLiveRecoveryEvidence {
     pub session_owner_mode_durable: bool,
@@ -46,6 +47,12 @@ pub struct LinuxKvmLiveRecoveryEvidence {
     pub read_output_after_reattach: bool,
     /// Aggregate: before-kill I/O + after-reattach write + read on same exec.
     pub retained_exec_io_proven: bool,
+    /// First Host uploaded a unique payload under a known container path.
+    pub file_upload_before_kill: bool,
+    /// Replacement Host downloaded the same path after Running reattach.
+    pub file_download_after_reattach: bool,
+    /// Aggregate: upload before kill + exact download match after reattach.
+    pub retained_filesystem_proven: bool,
     pub host_service_sigkill_delivered: bool,
     pub first_host_service_reaped: bool,
     pub stale_socket_retained: bool,
@@ -104,6 +111,9 @@ impl LinuxKvmLiveRecoveryEvidence {
             && self.write_stdin_after_reattach
             && self.read_output_after_reattach
             && self.retained_exec_io_proven
+            && self.file_upload_before_kill
+            && self.file_download_after_reattach
+            && self.retained_filesystem_proven
             && self.host_service_sigkill_delivered
             && self.first_host_service_reaped
             && self.stale_socket_retained
@@ -245,6 +255,9 @@ mod tests {
                 write_stdin_after_reattach: true,
                 read_output_after_reattach: true,
                 retained_exec_io_proven: true,
+                file_upload_before_kill: true,
+                file_download_after_reattach: true,
+                retained_filesystem_proven: true,
                 host_service_sigkill_delivered: true,
                 first_host_service_reaped: true,
                 stale_socket_retained: true,
@@ -297,9 +310,14 @@ mod tests {
         not_durable.recovery.session_owner_mode_durable = false;
         assert!(!not_durable.is_success());
 
-        let mut no_io = report;
+        let mut no_io = report.clone();
         no_io.recovery.retained_exec_io_proven = false;
         no_io.recovery.write_stdin_after_reattach = false;
         assert!(!no_io.is_success());
+
+        let mut no_fs = report;
+        no_fs.recovery.retained_filesystem_proven = false;
+        no_fs.recovery.file_download_after_reattach = false;
+        assert!(!no_fs.is_success());
     }
 }

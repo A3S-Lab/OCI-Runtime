@@ -375,13 +375,16 @@ return to their baselines. The nested runtime schema is
 `a3s.oci.linux-kvm-recovery-matrix.v2`.
 
 The Live Host reopen gate is a separate opt-in evidence path. It does not
-overload the stopped-only recovery schema. With
-`A3S_OCI_KVM_SESSION_OWNER=1`, create+start a real KVM generation, SIGKILL the
+overload the stopped-only recovery schema or stopped-only
+`linux-kvm-filesystem-reopen` (journal/recreate). With
+`A3S_OCI_KVM_SESSION_OWNER=1`, create+start a real KVM generation, prove
+retained exec I/O and FileOp::Upload on the Running generation, SIGKILL the
 Host Service, require Guest/session-owner survival
 (`live_vm_processes_reaped` must stay false), then prove a replacement Host
 reattaches **Running** with continuous init identity, retained exec I/O on the
 same process ID (`retained_exec_io_proven`: Pipe stdin + Capture stdout before
-Host SIGKILL and after reattach), and no invented exit:
+Host SIGKILL and after reattach), exact FileOp::Download match
+(`retained_filesystem_proven`), and no invented exit:
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
@@ -389,9 +392,23 @@ A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-live-recovery.sh
 ```
 
-Nested runtime schema: `a3s.oci.linux-kvm-live-recovery-smoke.v2`. Aggregate:
-`a3s.oci.linux-kvm-live-recovery-matrix.v1`. This harness does **not** claim Box
-`retained_stream_handle_proven` or close W2/B2 / cutover flags.
+Nested runtime schema: `a3s.oci.linux-kvm-live-recovery-smoke.v3`. Aggregate:
+`a3s.oci.linux-kvm-live-recovery-matrix.v1`. **Existing-host WSL2 `/dev/kvm`
+greened Live filesystem continuity** on revision
+`2decde5832a713abf4d859b2c11881b50de15d3d` with matrix report
+`/var/tmp/a3s-oci-kvm-live-fs-v3-20260910214714.json` SHA-256
+`74d60f3e472ae7380fb702ea416fc4cbad01f28ab95af268dedaa0d0533e316b`
+(system-image manifest
+`805d4afea01b1c3a9ed7343b2406edfc6c7e43912e35134ec72661c29fe56449`;
+continuous init PID 361; `retained_filesystem_proven` /
+`file_upload_before_kill` / `file_download_after_reattach` /
+`retained_exec_io_proven` / `guest_survived_host_sigkill` /
+`service_restart_recovered`). Does **not** close W2/B2 alone: Box process
+Live sibling (`retained_stream_handle_proven` / `kvm_microvm_live_claimed`)
+is greened separately on Box main, while Box filesystem Live sibling and
+`b2_process_session_recovery_closed` remain open; Native Live filesystem
+evidence is still required for full W2. No cutover / HostRuntimeService
+registration.
 
 A third qualification-only Host Service serves the A3S Box product-lifecycle
 scope `box-product-lifecycle-only-v1` without promoting the public KVM

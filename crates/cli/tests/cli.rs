@@ -1013,7 +1013,7 @@ fn linux_kvm_live_recovery_smoke_fails_closed_without_creating_evidence() {
         .expect("Linux KVM Live recovery smoke output must be valid JSON");
     assert_eq!(
         report["schema_version"],
-        "a3s.oci.linux-kvm-live-recovery-smoke.v2"
+        "a3s.oci.linux-kvm-live-recovery-smoke.v3"
     );
     assert_ne!(report["status"], "available");
     assert!(!std::path::Path::new(&missing_parent).exists());
