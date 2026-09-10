@@ -515,6 +515,11 @@ pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
             digest.to_string(),
         ));
     }
+    if let Ok(value) = std::env::var("A3S_OCI_GUEST_HOST_RECONNECT") {
+        if !value.is_empty() {
+            environment.push(("A3S_OCI_GUEST_HOST_RECONNECT".to_string(), value));
+        }
+    }
     if let Err(error) = context.set_exec(AGENT_GUEST_PATH, &[], &environment) {
         return fail_worker(&mut evidence, error.to_string());
     }

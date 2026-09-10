@@ -2180,13 +2180,16 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   durable `a3s-oci-krun-shim session-owner` helper + AgentVmSession
   `A3S_OCI_KVM_SESSION_OWNER=1` spawn path land parentage that outlives Host
   Service (default remains Host-PID owner-watchdog so stopped-only owner-death
-  gates stay green). **Still required:** replacement Host authenticated
-  reattach of the **same** Guest incarnation to `Live` Running (continuous init
-  identity, no invented exit); orphaned session roots stay rejected without that
-  evidence. Defer retained streaming handle continuity and
-  `b2_process_session_recovery_closed` / `kvm_microvm_live_claimed` until Live
-  reattach is greened on existing-host WSL2 `/dev/kvm`. Does not register KVM
-  with normal HostRuntimeService, flip default supervised create, or cut over
+  gates stay green). **Landed in-tree (not W2/B2-closed):** Host-control bridge
+  proxy, guest Host-reconnect loop, authenticated Live binding publish/load,
+  and `recover` reattach to `UtilityVmAttachment::Live` /
+  `DriverRecovery::observed` without inventing exit. **Still required:**
+  existing-host WSL2 `/dev/kvm` evidence that replacement Host reattaches the
+  **same** Guest incarnation with continuous init identity; orphaned session
+  roots stay rejected without that greened evidence. Defer retained streaming
+  handle continuity and `b2_process_session_recovery_closed` /
+  `kvm_microvm_live_claimed` until that evidence. Does not register KVM with
+  normal HostRuntimeService, flip default supervised create, or cut over
   MicroVM product routing.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.

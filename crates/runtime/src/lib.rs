@@ -78,6 +78,11 @@ mod kvm_durable_session_owner;
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
+mod kvm_live_session_binding;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 mod linux_kvm_recovery_smoke;
 #[cfg(all(
     target_os = "linux",

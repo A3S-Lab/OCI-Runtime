@@ -32,8 +32,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
   `A3S_OCI_KVM_SESSION_OWNER=1` so AgentVmSession spawns through the helper
   (Tokio-safe; injects `--owner-pid` as the helper PID). First-principles tests
   cover fork-based Host-death survival and helper parentage. Default remains
-  Host-bound stopped-only. Does not yet prove Live reattach after Host reopen,
-  register KVM, or close W2/B2.
+  Host-bound stopped-only.
+
+- Opt-in KVM Live Host reattach path (observation-only): session-owner
+  `--host-control` bridge, guest `A3S_OCI_GUEST_HOST_RECONNECT=1` vsock loop,
+  durable Live binding (`a3s.oci.kvm-live-session-binding.v1`) with PID +
+  start-time authentication, and `UtilityVmRuntimeDriver::recover` Live reopen
+  through the surviving bridge. Unit coverage for binding auth and Host
+  disconnect / second Host connect proxying (fake shim; no `/dev/kvm`). Does
+  **not** flip cutover flags, register KVM with normal HostRuntimeService, or
+  close W2/B2 until existing-host WSL2 `/dev/kvm` Live evidence is greened.
 
 ### Changed
 

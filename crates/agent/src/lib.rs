@@ -497,6 +497,22 @@ pub fn run_transport_qualification_with_security(
     run_linux(token, Some(request), runtime_parent, None, security)
 }
 
+/// Opt-in utility-VM Host reopen: after a clean Host EOF, reconnect vsock and
+/// serve again with the same executor so Live containers survive Host death.
+const GUEST_HOST_RECONNECT_ENV: &str = "A3S_OCI_GUEST_HOST_RECONNECT";
+
+#[cfg(target_os = "linux")]
+fn guest_host_reconnect_enabled() -> bool {
+    matches!(
+        std::env::var_os(GUEST_HOST_RECONNECT_ENV),
+        Some(value)
+            if matches!(
+                value.to_string_lossy().trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+    )
+}
+
 #[cfg(target_os = "linux")]
 fn run_linux(
     token: SessionToken,
@@ -507,7 +523,7 @@ fn run_linux(
 ) -> Result<()> {
     let recovery_path = take_recovery_report_path()?;
     let recovery_token = token.clone();
-    let stream = vsock::connect_host_with_retry()?;
+    let reconnect = guest_host_reconnect_enabled() && qualification.is_none();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()
@@ -520,13 +536,6 @@ fn run_linux(
             .for_operation("run-guest-agent")
         })?;
     runtime.block_on(async move {
-        let stream = tokio::net::UnixStream::from_std(stream).map_err(|error| {
-            Error::new(
-                ErrorCode::Internal,
-                format!("failed to register guest vsock stream: {error}"),
-            )
-            .for_operation("run-guest-agent")
-        })?;
         let service = Arc::new(match runtime_parent {
             Some(runtime_parent) => {
                 LinuxExecutor::new_utility_vm(runtime_parent, attachments).await?
@@ -534,27 +543,44 @@ fn run_linux(
             None => LinuxExecutor::new().await?,
         });
         let protocol_service: Arc<dyn GuestAgentService> = service.clone();
-        let (serve_result, qualification_fault) = match qualification {
-            Some(request) => {
-                let fault = Arc::new(
-                    transport_qualification::GuestTransportQualificationFault::new(request),
-                );
-                let protocol_fault: Arc<dyn AgentTransportFaultInjector> = fault.clone();
-                let result = a3s_oci_agent_protocol::serve_agent_connection_with_fault_injector(
+
+        let (serve_result, qualification_fault) = if let Some(request) = qualification {
+            let stream = connect_guest_vsock_stream().await?;
+            let fault = Arc::new(
+                transport_qualification::GuestTransportQualificationFault::new(request),
+            );
+            let protocol_fault: Arc<dyn AgentTransportFaultInjector> = fault.clone();
+            let result = a3s_oci_agent_protocol::serve_agent_connection_with_fault_injector(
+                stream,
+                token,
+                protocol_service,
+                protocol_fault,
+            )
+            .await;
+            (result, Some(fault))
+        } else if reconnect {
+            loop {
+                let stream = connect_guest_vsock_stream().await?;
+                let result = a3s_oci_agent_protocol::serve_agent_connection(
                     stream,
-                    token,
-                    protocol_service,
-                    protocol_fault,
+                    token.clone(),
+                    protocol_service.clone(),
                 )
                 .await;
-                (result, Some(fault))
+                match result {
+                    Err(error) if is_clean_host_disconnect(&error) => continue,
+                    other => break (other, None),
+                }
             }
-            None => (
+        } else {
+            let stream = connect_guest_vsock_stream().await?;
+            (
                 a3s_oci_agent_protocol::serve_agent_connection(stream, token, protocol_service)
                     .await,
                 None,
-            ),
+            )
         };
+
         let cleanup_result = service.shutdown_with_recovery().await.and_then(|records| {
             write_recovery_report(recovery_path.as_deref(), &recovery_token, records, security)
         });
@@ -562,6 +588,18 @@ fn run_linux(
             Some(fault) => transport_qualification::finish(serve_result, cleanup_result, &fault),
             None => finish_guest_session(serve_result, cleanup_result),
         }
+    })
+}
+
+#[cfg(target_os = "linux")]
+async fn connect_guest_vsock_stream() -> Result<tokio::net::UnixStream> {
+    let stream = vsock::connect_host_with_retry()?;
+    tokio::net::UnixStream::from_std(stream).map_err(|error| {
+        Error::new(
+            ErrorCode::Internal,
+            format!("failed to register guest vsock stream: {error}"),
+        )
+        .for_operation("run-guest-agent")
     })
 }
 
