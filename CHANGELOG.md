@@ -27,6 +27,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Re-greened tip-source Native Linux full smoke including soak on clean tip
+  `d337aef892e1bffd8a5ef9820112780656041eb2` (Merge #297) via
+  `.github/scripts/native-linux-smoke.sh` EXIT=0 on existing-host WSL2.
+  Soak report `/var/tmp/a3s-oci-native-smoke-tip-d337aef/soak-report.json`
+  schema `a3s.oci.native-linux-soak.v2`, status `available`,
+  `configuration.iterations=25`, `configuration.concurrent_containers=4`,
+  `reason=null`, SHA-256
+  `2614c462ea4c1dfd7aa40df0d6e9f54332f7c7b517186198fe11530f0a2e6cc1`.
+  Observation-only; does not promote readiness, fresh-host, cutover, or B2.
 - Documented the Fresh-host promotion checklist in `ROADMAP.md` (with
   pointers from `docs/windows-whpx.md` and `docs/linux-native.md`):
   existing-host greening does not promote readiness; exact WHPX R2 and

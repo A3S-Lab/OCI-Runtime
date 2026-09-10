@@ -1932,6 +1932,15 @@ generation slot must disappear after each wave and the complete executor root
 must disappear at shutdown. Hook failure/security-negative soak and runtime-process
 reattachment remain separate promotion work.
 
+**Tip-source refresh (existing-host WSL2, observation-only):** clean tip
+`d337aef892e1bffd8a5ef9820112780656041eb2` (Merge #297) greened the full
+`.github/scripts/native-linux-smoke.sh` harness (EXIT=0), including soak report
+`/var/tmp/a3s-oci-native-smoke-tip-d337aef/soak-report.json` schema
+`a3s.oci.native-linux-soak.v2`, status `available`, 25 iterations × 4 concurrent
+containers, SHA-256
+`2614c462ea4c1dfd7aa40df0d6e9f54332f7c7b517186198fe11530f0a2e6cc1`. Does not
+promote readiness, fresh-host, cutover, or B2.
+
 ## Abrupt owner-death recovery gate
 
 The Native Linux executor does not leave an uncontrolled workload behind when
