@@ -1960,7 +1960,12 @@ capability ceiling, seccomp) plus live init namespace/root descriptors and the
 recovery cgroup leaf, then supervisor-parents the helper. Live Host and
 Host-reopen supervised exec deposit capture/pipe I/O the same way create does
 (exclusive `MSG_DEPOSIT_OUTPUT` / stdin dup deposit + relay). Terminal/inherit
-remain Unavailable. Default create stays Host-bound.
+remain Unavailable. Host-reopen `file` / `filesystem` rebuild the same retained
+execution context and call the existing descriptor-confined helpers;
+`NativeLinuxDriver` routes those operations through `live_for` (dead init →
+`Unavailable`, wrong generation → `Conflict`) instead of the old
+`require_live` process-session fail-closed gate. Default create stays
+Host-bound.
 
 Qualification may enable supervised create with
 `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. When set, Native create starts one
@@ -1989,6 +1994,13 @@ supervised launcher liveness via `/proc/<pid>/stat` (zombies are terminal —
 `wait_launcher` across `select!`, so a cancelled race arm cannot leave the
 supervisor mutex held across `MSG_WAIT` and deadlock timeout cleanup. Once the
 launcher is terminal, Host performs the authentic `wait_launcher` reap.
+
+Native Live Host reopen filesystem evidence harness
+(`a3s.oci.linux-native-live-recovery-smoke.v1`, CLI
+`linux-native-live-recovery-smoke`,
+`.github/scripts/linux-native-live-recovery.sh`) is stubbed fail-closed until
+greened under `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. It is distinct from
+stopped-only `native-linux-recovery`. Product path and unit tests land first.
 
 When the original Host control socketpair closes (owner death), the supervisor
 does **not** reap waitable children and does **not** start a replacement

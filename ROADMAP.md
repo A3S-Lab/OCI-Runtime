@@ -2222,7 +2222,13 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   (`retained_stream_handle_proven` / `kvm_microvm_live_claimed`) is greened
   separately on Box main, while Box filesystem Live sibling and
   `b2_process_session_recovery_closed` remain open; Native Live filesystem
-  evidence is still required for full W2. Does not register KVM with normal
+  **product path** (Host-reopen `file`/`filesystem` via rebuilt
+  `RetainedExecutionContext` + `live_for`) and first-principles unit tests are
+  landed — TODO: green
+  `a3s.oci.linux-native-live-recovery-smoke.v1` /
+  `.github/scripts/linux-native-live-recovery.sh` under
+  `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1` (distinct from stopped-only
+  `native-linux-recovery`) for full W2. Does not register KVM with normal
   HostRuntimeService, flip default supervised create, or cut over MicroVM
   product routing.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI

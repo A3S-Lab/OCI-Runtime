@@ -10,8 +10,9 @@ use std::time::Duration;
 use a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT;
 use a3s_oci_sdk::oci_spec::runtime::Process;
 use a3s_oci_sdk::{
-    ContainerStats, ContainerTarget, Error, ErrorCode, IoMode, OciBundle, ProcessId, ProcessIo,
-    ProcessRecord, ProcessTarget, Result, CONTROL_CGROUP_NAME, WORKLOAD_CGROUP_NAME,
+    ContainerStats, ContainerTarget, Error, ErrorCode, FileRequest, FileResponse, FilesystemRequest,
+    FilesystemResponse, IoMode, OciBundle, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
+    Result, ValidateRequest, CONTROL_CGROUP_NAME, WORKLOAD_CGROUP_NAME,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -426,7 +427,7 @@ impl SessionSupervisorReattachCache {
 /// with [`ErrorCode::Unavailable`] instead of inventing empty output. Dead
 /// exec identities are omitted from inventory without inventing exit status.
 /// [`Self::wait_process`] for init uses the supervised launcher wait path; exec
-/// waits require a recorded helper identity and use authentic supervisor
+/// waits require a recorded helper identity and use authentic superviso
 /// `MSG_WAIT`. v5 exec records without helper fail closed with
 /// [`ErrorCode::Unavailable`]. Authentic [`Self::pause`] / [`Self::resume`] /
 /// [`Self::stats`] use the durable recovery cgroup leaf (kernel freezer and
@@ -451,7 +452,7 @@ pub struct LinuxLiveSupervisedSession {
     /// Exec identities spawned after Host reopen (also persisted on disk).
     post_reopen_execs: Mutex<Vec<RecoveryExecRecord>>,
     /// Restored stdin write ends taken from supervisor deposits, keyed by
-    /// process id (init uses the create launcher deposit; exec uses the helper
+    /// process id (init uses the create launcher deposit; exec uses the helpe
     /// deposit). A single init-only slot cannot serve retained streaming exec.
     stdin: AsyncMutex<BTreeMap<ProcessId, tokio::fs::File>>,
 }
@@ -467,7 +468,7 @@ impl LinuxLiveSupervisedSession {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn shared_supervisor(&self) -> &SharedSessionSupervisor {
-        &self.supervisor
+        &self.superviso
     }
 
     /// Whether an authentic stdin write end was restored for the init process.
@@ -590,15 +591,15 @@ impl LinuxLiveSupervisedSession {
     #[must_use]
     pub fn supervisor_pid(&self) -> i32 {
         self.record
-            .session_supervisor
+            .session_superviso
             .expect("live supervised session always records a supervisor")
             .pid()
     }
 
     /// Poll authentic captured chunks from the supervisor-owned exclusive drain.
     ///
-    /// Init uses the create-time launcher deposit. Exec uses the recorded helper
-    /// PID from recovery / post-reopen spawn — never the create launcher, or
+    /// Init uses the create-time launcher deposit. Exec uses the recorded helpe
+    /// PID from recovery / post-reopen spawn — never the create launcher, o
     /// Host would drain the wrong buffer and observe exit without capture EOF.
     /// When no output deposit exists, returns [`ErrorCode::Unavailable`] instead
     /// of inventing an empty successful stream.
@@ -633,7 +634,7 @@ impl LinuxLiveSupervisedSession {
         guard
             .read_output(launcher_pid, after_sequence, max_bytes, wait_timeout_ms)
             .map_err(|error| {
-                // Preserve fail-closed codes from the relay (Unavailable for
+                // Preserve fail-closed codes from the relay (Unavailable fo
                 // missing deposit, ResourceExhausted for stale cursors).
                 recovery_error(error.code, error.message)
             })
@@ -748,6 +749,39 @@ impl LinuxLiveSupervisedSession {
     /// Read normalized cgroup-v2 stats from the durable recovery leaf.
     pub async fn stats(&self) -> Result<ContainerStats> {
         stats_from_leaf(self.recovery_cgroup_leaf()?, self.target.clone()).await
+    }
+
+    /// Exact-generation file transfer after Host reopen.
+    ///
+    /// Rebuilds [`RetainedExecutionContext`] the same way post-reopen exec does
+    /// (durable `config.json` + live init namespace/root descriptors), then
+    /// calls the existing descriptor-confined filesystem helper. Fail-closes
+    /// when init is gone. Wrong generation fail-closes with Conflict. Does not
+    /// invent payload bytes.
+    pub async fn file(
+        &self,
+        init_executable: &Path,
+        request: FileRequest,
+    ) -> Result<FileResponse> {
+        request.validate()?;
+        self.require_live_filesystem_target(&request.target, "file")?;
+        let execution_context = self.rebuild_retained_execution_context().await?;
+        super::filesystem::file_with_context(init_executable, &execution_context, &request).await
+    }
+
+    /// Exact-generation filesystem metadata or mutation after Host reopen.
+    ///
+    /// Same retained-context rebuild as [`Self::file`] / post-reopen exec.
+    pub async fn filesystem(
+        &self,
+        init_executable: &Path,
+        request: FilesystemRequest,
+    ) -> Result<FilesystemResponse> {
+        request.validate()?;
+        self.require_live_filesystem_target(&request.target, "filesystem")?;
+        let execution_context = self.rebuild_retained_execution_context().await?;
+        super::filesystem::filesystem_with_context(init_executable, &execution_context, &request)
+            .await
     }
 
     /// Spawn a new supervisor-parented exec after Host reopen.
@@ -987,7 +1021,7 @@ impl LinuxLiveSupervisedSession {
 
     /// Block until the supervised launcher exits and return its raw wait status.
     ///
-    /// Status comes from the reattached supervisor (`MSG_WAIT`). This never
+    /// Status comes from the reattached supervisor (`MSG_WAIT`). This neve
     /// invents an exit code for a still-live launcher.
     pub fn wait_launcher(&self) -> Result<i32> {
         if let Some(status) = *self.launcher_wait_status.lock().map_err(|_| {
@@ -1181,6 +1215,134 @@ impl LinuxLiveSupervisedSession {
             })
     }
 
+    fn require_live_filesystem_target(
+        &self,
+        target: &ContainerTarget,
+        operation: &'static str,
+    ) -> Result<()> {
+        if target != &self.target {
+            return Err(recovery_error(
+                ErrorCode::Conflict,
+                format!(
+                    "container {} has live supervised recovery for generation {:?}, not requested generation {:?} during {operation}",
+                    self.target.id, self.target.generation, target.generation
+                ),
+            ));
+        }
+        if !self.init_is_live()? {
+            return Err(recovery_error(
+                ErrorCode::Unavailable,
+                format!(
+                    "container {} generation {:?} cannot {operation} without a live init identity",
+                    self.target.id, self.target.generation
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn rebuild_retained_execution_context(&self) -> Result<RetainedExecutionContext> {
+        let snapshot = read_bounded_plain_file(
+            &self.runtime_directory.join(CONFIG_SNAPSHOT_NAME),
+            MAX_RECORD_BYTES,
+        )?;
+        let observed = config_digest_for(&snapshot);
+        if observed != self.config_digest {
+            return Err(recovery_error(
+                ErrorCode::Conflict,
+                format!(
+                    "native recovery configuration changed under {}: record {}, snapshot {observed}",
+                    self.runtime_directory.display(),
+                    self.config_digest
+                ),
+            ));
+        }
+        let config_json = String::from_utf8(snapshot).map_err(|error| {
+            recovery_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "native recovery config snapshot is not UTF-8 under {}: {error}",
+                    self.runtime_directory.display()
+                ),
+            )
+        })?;
+        let bundle =
+            OciBundle::from_json(self.runtime_directory.clone(), config_json).map_err(|error| {
+                recovery_error(
+                    error.code,
+                    format!(
+                        "failed to reload durable config for Host-reopen filesystem under {}: {}",
+                        self.runtime_directory.display(),
+                        error.message
+                    ),
+                )
+            })?;
+        if bundle.config_digest() != self.config_digest {
+            return Err(recovery_error(
+                ErrorCode::Conflict,
+                format!(
+                    "reloaded config digest {} does not match recovery {}",
+                    bundle.config_digest(),
+                    self.config_digest
+                ),
+            ));
+        }
+        let spec = bundle.spec();
+        let init_process = spec.process().as_ref().ok_or_else(|| {
+            recovery_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "container {} generation {:?} durable config has no init process for retained context rebuild",
+                    self.target.id, self.target.generation
+                ),
+            )
+        })?;
+        let init_uid = init_process.user().uid();
+        let init_gid = init_process.user().gid();
+        let additional_gids = init_process
+            .user()
+            .additional_gids()
+            .as_ref()
+            .cloned()
+            .unwrap_or_default();
+        let namespace_plan =
+            NamespacePlan::from_linux(spec.linux().as_ref(), init_uid, init_gid, &additional_gids)
+                .map_err(|error| {
+                    recovery_error(
+                        error.code,
+                        format!(
+                            "failed to rebuild namespace plan for Host-reopen retained context: {}",
+                            error.message
+                        ),
+                    )
+                })?;
+
+        let init_pid = self.init_pid();
+        let rootfs = tokio::fs::File::open(format!("/proc/{init_pid}/root"))
+            .await
+            .map_err(|error| {
+                recovery_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "failed to open live init root for Host-reopen retained context PID {init_pid}: {error}"
+                    ),
+                )
+            })?
+            .into_std()
+            .await;
+        RetainedExecutionContext::capture(&namespace_plan, init_pid, rootfs)
+            .await
+            .map_err(|error| {
+                recovery_error(
+                    error.code,
+                    format!(
+                        "failed to rebuild retained execution context from live init PID {init_pid}: {}",
+                        error.message
+                    ),
+                )
+            })
+    }
+
     async fn rebuild_exec_spawn_inputs(&self) -> Result<RebuiltExecSpawnInputs> {
         let snapshot = read_bounded_plain_file(
             &self.runtime_directory.join(CONFIG_SNAPSHOT_NAME),
@@ -1237,25 +1399,6 @@ impl LinuxLiveSupervisedSession {
                 ),
             )
         })?;
-        let init_uid = init_process.user().uid();
-        let init_gid = init_process.user().gid();
-        let additional_gids = init_process
-            .user()
-            .additional_gids()
-            .as_ref()
-            .cloned()
-            .unwrap_or_default();
-        let namespace_plan =
-            NamespacePlan::from_linux(spec.linux().as_ref(), init_uid, init_gid, &additional_gids)
-                .map_err(|error| {
-                    recovery_error(
-                        error.code,
-                        format!(
-                            "failed to rebuild namespace plan for Host-reopen exec: {}",
-                            error.message
-                        ),
-                    )
-                })?;
         let capabilities =
             CapabilityPlan::from_oci(init_process.capabilities().as_ref()).map_err(|error| {
                 recovery_error(
@@ -1276,31 +1419,7 @@ impl LinuxLiveSupervisedSession {
             )
         })?;
 
-        let init_pid = self.init_pid();
-        let rootfs = tokio::fs::File::open(format!("/proc/{init_pid}/root"))
-            .await
-            .map_err(|error| {
-                recovery_error(
-                    ErrorCode::Unavailable,
-                    format!(
-                        "failed to open live init root for Host-reopen exec PID {init_pid}: {error}"
-                    ),
-                )
-            })?
-            .into_std()
-            .await;
-        let execution_context =
-            RetainedExecutionContext::capture(&namespace_plan, init_pid, rootfs)
-                .await
-                .map_err(|error| {
-                    recovery_error(
-                        error.code,
-                        format!(
-                            "failed to rebuild retained execution context from live init PID {init_pid}: {}",
-                            error.message
-                        ),
-                    )
-                })?;
+        let execution_context = self.rebuild_retained_execution_context().await?;
         let init_pidfd = self
             .record
             .init
@@ -2800,7 +2919,7 @@ fn write_atomic_record<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         .create_new(true)
         .mode(0o600)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
-    // Publish with rename, not hard_link: container recovery is updated after
+    // Publish with rename, not hard_link: container recovery is updated afte
     // create (supervised exec identities). hard_link to an existing path fails
     // with EEXIST and left keyed exec stuck after a successful spawn.
     let result = (|| -> io::Result<()> {
@@ -5187,7 +5306,7 @@ mod tests {
                 Err(_) => unsafe { libc::_exit(163) },
             };
             drop(child_stdout);
-            if supervisor
+            if superviso
                 .deposit_output(launcher_pid, Some(host_stdout), None)
                 .is_err()
             {
@@ -5524,7 +5643,7 @@ mod tests {
             panic!("first generation must recover as Live");
         };
 
-        // Without the cache, a second reattach would fail: the supervisor
+        // Without the cache, a second reattach would fail: the superviso
         // accepts only one replacement control connection after Host EOF.
         let recovery_b = recover_stale_generation(
             &parent,
@@ -5582,6 +5701,421 @@ mod tests {
         terminate_pid(supervisor_pid);
         let _ = wait_for_child(supervisor_pid);
         assert!(!stale_root.exists());
+    }
+
+    fn resolve_test_agent_executable() -> PathBuf {
+        if let Ok(path) = std::env::var("CARGO_BIN_EXE_a3s-oci-agent") {
+            return PathBuf::from(path);
+        }
+        let mut path = std::env::current_exe().expect("current test executable");
+        path.pop();
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "deps")
+        {
+            path.pop();
+        }
+        let candidate = path.join("a3s-oci-agent");
+        assert!(
+            candidate.is_file(),
+            "a3s-oci-agent must be built beside the test profile at {}",
+            candidate.display()
+        );
+        candidate
+    }
+
+    async fn recover_live_filesystem_fixture(
+        label: &str,
+    ) -> (
+        tempfile::TempDir,
+        SessionSupervisorReattachCache,
+        LinuxLiveSupervisedSession,
+        i32,
+        ContainerTarget,
+    ) {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixStream;
+        use std::path::Path;
+
+        use super::super::pid_supervisor::{terminate_pid, wait_for_child};
+        use super::super::session_supervisor::HostSessionSupervisor;
+
+        let temporary = tempfile::tempdir().expect("temporary recovery parent");
+        let parent = temporary.path().join("executor");
+        std::fs::create_dir(&parent).expect("executor parent");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
+            .expect("protect executor parent");
+        let current_root = parent.join("current");
+        std::fs::create_dir(&current_root).expect("current root");
+        std::fs::set_permissions(&current_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect current root");
+
+        let (mut parent_ready, mut child_ready) =
+            UnixStream::pair().expect("live filesystem ready channel");
+        let host_pid = unsafe { libc::fork() };
+        assert!(host_pid >= 0, "fork fake host for live filesystem");
+        if host_pid == 0 {
+            drop(parent_ready);
+            let mut supervisor = match HostSessionSupervisor::start_via_fork() {
+                Ok(supervisor) => supervisor,
+                Err(_) => unsafe { libc::_exit(221) },
+            };
+            let launcher_pid = match supervisor.spawn_launcher(
+                Path::new("/bin/sleep"),
+                &["30".into()],
+                None,
+                None,
+                None,
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(222) },
+            };
+            let identity = supervisor.identity().clone();
+            let mut payload = Vec::with_capacity(16);
+            payload.extend_from_slice(&identity.pid().to_be_bytes());
+            payload.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+            payload.extend_from_slice(&launcher_pid.to_be_bytes());
+            if child_ready.write_all(&payload).is_err() {
+                unsafe { libc::_exit(223) }
+            }
+            std::mem::forget(supervisor);
+            loop {
+                unsafe { libc::pause() };
+            }
+        }
+        drop(child_ready);
+        let mut payload = [0_u8; 16];
+        parent_ready
+            .read_exact(&mut payload)
+            .expect("read live filesystem supervisor evidence");
+        let supervisor_pid = i32::from_be_bytes(payload[0..4].try_into().expect("pid bytes"));
+        let supervisor_start = u64::from_be_bytes(payload[4..12].try_into().expect("start bytes"));
+        let launcher_pid = i32::from_be_bytes(payload[12..16].try_into().expect("launcher bytes"));
+
+        let owner = ProcessIdentity {
+            pid: 2_100_901,
+            start_time_ticks: 0x91a,
+        };
+        let stale_root = parent.join(runtime_root_name(owner));
+        std::fs::create_dir(&stale_root).expect("stale root");
+        std::fs::set_permissions(&stale_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect stale root");
+        write_atomic_record(
+            &stale_root.join(OWNER_RECORD_NAME),
+            &ExecutorOwnerRecord {
+                schema_version: OWNER_SCHEMA_VERSION.to_string(),
+                owner,
+            },
+        )
+        .expect("owner record");
+        let slot = stale_root.join("c-0000000000000001");
+        std::fs::create_dir(&slot).expect("container slot");
+        std::fs::set_permissions(&slot, std::fs::Permissions::from_mode(0o700))
+            .expect("protect container slot");
+        // Mount namespace is declared so rebuild opens /proc/<init>/root. The
+        // supervised sleep stays in the host mount namespace, so the helpe
+        // operates against that exact root without inventing a private rootfs.
+        // Match the calling euid/egid so Host-reopen upload/mkdir do not require
+        // root when the test harness is unprivileged.
+        let uid = unsafe { libc::geteuid() };
+        let gid = unsafe { libc::getegid() };
+        let config = format!(
+            r#"{{"ociVersion":"1.3.0","process":{{"user":{{"uid":{uid},"gid":{gid}}},"args":["/bin/sleep","30"],"cwd":"/"}},"root":{{"path":"rootfs"}},"linux":{{"namespaces":[{{"type":"pid"}},{{"type":"mount"}}]}}}}"#
+        );
+        let config = config.into_bytes();
+        let digest = config_digest_for(&config);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        options
+            .open(slot.join(CONFIG_SNAPSHOT_NAME))
+            .and_then(|mut file| file.write_all(&config))
+            .expect("configuration snapshot");
+        let target = ContainerTarget::exact(
+            a3s_oci_sdk::ContainerId::new(format!("live-fs-{label}")).expect("container ID"),
+            a3s_oci_sdk::Generation(1),
+        );
+        let init = ProcessIdentity {
+            pid: launcher_pid,
+            start_time_ticks: process_observation(launcher_pid)
+                .expect("observe launcher")
+                .expect("launcher live")
+                .start_time_ticks,
+        };
+        write_atomic_record(
+            &slot.join(CONTAINER_RECORD_NAME),
+            &ContainerRecoveryRecord {
+                schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
+                target: target.clone(),
+                config_digest: digest.clone(),
+                owner,
+                launcher: init,
+                init,
+                session_supervisor: Some(ProcessIdentity {
+                    pid: supervisor_pid,
+                    start_time_ticks: supervisor_start,
+                }),
+                execs: Vec::new(),
+                cgroup: None,
+                intel_rdt: None,
+            },
+        )
+        .expect("container recovery record");
+
+        terminate_pid(host_pid);
+        let _ = wait_for_child(host_pid);
+
+        let supervisors = SessionSupervisorReattachCache::default();
+        let recovery = recover_stale_generation(
+            &parent,
+            &current_root,
+            &target,
+            &digest,
+            Some(launcher_pid),
+            &supervisors,
+        )
+        .await
+        .expect("live supervisor must reattach for filesystem continuity")
+        .expect("recovery match");
+        let StaleGenerationRecovery::Live(live) = recovery else {
+            panic!("live session supervisor must recover as Live");
+        };
+        (temporary, supervisors, live, supervisor_pid, target)
+    }
+
+    async fn cleanup_live_filesystem_session(
+        live: LinuxLiveSupervisedSession,
+        supervisor_pid: i32,
+        supervisors: SessionSupervisorReattachCache,
+    ) {
+        use super::super::pid_supervisor::{terminate_pid, wait_for_child};
+
+        let _ = live.kill_launcher();
+        let _ = live.wait_launcher();
+        if let Ok(tombstone) = live.into_tombstone() {
+            let _ = delete_stale_generation(&tombstone).await;
+        }
+        drop(supervisors);
+        terminate_pid(supervisor_pid);
+        let _ = wait_for_child(supervisor_pid);
+    }
+
+    #[tokio::test]
+    async fn live_session_downloads_bytes_planted_before_host_reattach() {
+        use a3s_oci_sdk::{FileOp, FileRequest};
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+        let agent = resolve_test_agent_executable();
+        let (_temporary, supervisors, live, supervisor_pid, target) =
+            recover_live_filesystem_fixture("preplant").await;
+
+        let nonce = format!("{}-{}", std::process::id(), live.init_pid());
+        let path = format!("/tmp/.a3s-oci-live-fs-preplant-{nonce}.bin");
+        let expected = format!("a3s-oci-live-fs-preplant-{nonce}\0binary\n").into_bytes();
+        // Simulate FileOp::Upload completed before Host death: bytes already
+        // visible through the live init root before reopen helpers run.
+        std::fs::write(&path, &expected).expect("plant retained filesystem bytes");
+
+        let downloaded = live
+            .file(
+                &agent,
+                FileRequest {
+                    target: target.clone(),
+                    op: FileOp::Download,
+                    path: path.clone(),
+                    data: None,
+                    user: None,
+                    context: None,
+                },
+            )
+            .await
+            .expect("Host-reopen download must return planted bytes");
+        let decoded = downloaded
+            .data
+            .as_deref()
+            .map(|value| STANDARD.decode(value))
+            .transpose()
+            .expect("download payload must be base64")
+            .expect("download payload must be present");
+        assert_eq!(decoded, expected);
+        assert_eq!(downloaded.size, expected.len() as u64);
+
+        let _ = std::fs::remove_file(&path);
+        cleanup_live_filesystem_session(live, supervisor_pid, supervisors).await;
+    }
+
+    #[tokio::test]
+    async fn live_session_upload_stat_and_download_after_reattach() {
+        use a3s_oci_sdk::{
+            FileOp, FileRequest, FilesystemEntryKind, FilesystemOp, FilesystemRequest,
+            OperationContext, OperationId,
+        };
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+        let agent = resolve_test_agent_executable();
+        let (_temporary, supervisors, live, supervisor_pid, target) =
+            recover_live_filesystem_fixture("upload").await;
+
+        let nonce = format!("{}-{}", std::process::id(), live.init_pid());
+        let dir = format!("/tmp/.a3s-oci-live-fs-dir-{nonce}");
+        let path = format!("{dir}/payload.bin");
+        let expected = format!("a3s-oci-live-fs-upload-{nonce}\0binary\n").into_bytes();
+        // request.user defaults to root:root; unprivileged harnesses must pass
+        // the calling ids or mkdir/upload chown fail-closes PermissionDenied.
+        let owner = format!("{}:{}", unsafe { libc::geteuid() }, unsafe {
+            libc::getegid()
+        });
+
+        live.filesystem(
+            &agent,
+            FilesystemRequest {
+                target: target.clone(),
+                op: FilesystemOp::MakeDir,
+                path: dir.clone(),
+                destination: None,
+                depth: 0,
+                user: Some(owner.clone()),
+                context: Some(OperationContext::new(
+                    OperationId::new(format!("live-fs-mkdir-{nonce}")).expect("operation id"),
+                )),
+            },
+        )
+        .await
+        .expect("Host-reopen mkdir must succeed against live init root");
+
+        live.file(
+            &agent,
+            FileRequest {
+                target: target.clone(),
+                op: FileOp::Upload,
+                path: path.clone(),
+                data: Some(STANDARD.encode(&expected)),
+                user: Some(owner.clone()),
+                context: Some(OperationContext::new(
+                    OperationId::new(format!("live-fs-upload-{nonce}")).expect("operation id"),
+                )),
+            },
+        )
+        .await
+        .expect("Host-reopen upload must succeed");
+
+        let statted = live
+            .filesystem(
+                &agent,
+                FilesystemRequest {
+                    target: target.clone(),
+                    op: FilesystemOp::Stat,
+                    path: path.clone(),
+                    destination: None,
+                    depth: 0,
+                    user: Some(owner),
+                    context: None,
+                },
+            )
+            .await
+            .expect("Host-reopen stat must see uploaded path");
+        let entry = statted.entry.expect("stat must return an entry");
+        assert_eq!(entry.kind, FilesystemEntryKind::File);
+        assert_eq!(entry.size, expected.len() as i64);
+
+        let downloaded = live
+            .file(
+                &agent,
+                FileRequest {
+                    target: target.clone(),
+                    op: FileOp::Download,
+                    path: path.clone(),
+                    data: None,
+                    user: None,
+                    context: None,
+                },
+            )
+            .await
+            .expect("Host-reopen download must match upload");
+        let decoded = downloaded
+            .data
+            .as_deref()
+            .map(|value| STANDARD.decode(value))
+            .transpose()
+            .expect("download payload must be base64")
+            .expect("download payload must be present");
+        assert_eq!(decoded, expected);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+        cleanup_live_filesystem_session(live, supervisor_pid, supervisors).await;
+    }
+
+    #[tokio::test]
+    async fn live_session_file_fail_closes_when_init_is_dead() {
+        use a3s_oci_sdk::{FileOp, FileRequest};
+        use std::path::Path;
+
+        use super::super::pid_supervisor::terminate_pid;
+
+        // Fail-closed before spawning the filesystem helper, so any path works.
+        let agent = Path::new("/bin/true");
+        let (_temporary, supervisors, live, supervisor_pid, target) =
+            recover_live_filesystem_fixture("dead-init").await;
+
+        terminate_pid(live.init_pid());
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while live.init_is_live().expect("init observation") && std::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            !live.init_is_live().expect("init observation"),
+            "init must exit before Unavailable assertion"
+        );
+
+        let error = live
+            .file(
+                agent,
+                FileRequest {
+                    target: target.clone(),
+                    op: FileOp::Download,
+                    path: "/tmp/.a3s-oci-live-fs-missing.bin".to_string(),
+                    data: None,
+                    user: None,
+                    context: None,
+                },
+            )
+            .await
+            .expect_err("dead init must fail closed");
+        assert_eq!(error.code, ErrorCode::Unavailable);
+
+        cleanup_live_filesystem_session(live, supervisor_pid, supervisors).await;
+    }
+
+    #[tokio::test]
+    async fn live_session_file_fail_closes_wrong_generation() {
+        use a3s_oci_sdk::{FileOp, FileRequest, Generation};
+        use std::path::Path;
+
+        // Fail-closed on the generation fence before spawning the helper.
+        let agent = Path::new("/bin/true");
+        let (_temporary, supervisors, live, supervisor_pid, target) =
+            recover_live_filesystem_fixture("wrong-gen").await;
+
+        let wrong = ContainerTarget::exact(target.id.clone(), Generation(99));
+        let error = live
+            .file(
+                agent,
+                FileRequest {
+                    target: wrong,
+                    op: FileOp::Download,
+                    path: "/tmp/.a3s-oci-live-fs-wrong-gen.bin".to_string(),
+                    data: None,
+                    user: None,
+                    context: None,
+                },
+            )
+            .await
+            .expect_err("wrong generation must Conflict");
+        assert_eq!(error.code, ErrorCode::Conflict);
+
+        cleanup_live_filesystem_session(live, supervisor_pid, supervisors).await;
     }
 
     struct RecoveryFixture {
@@ -5752,7 +6286,7 @@ mod tests {
         assert_eq!(record.execs[0].identity.pid, self_pid);
         assert_eq!(
             record.execs[0]
-                .helper
+                .helpe
                 .as_ref()
                 .expect("helper identity")
                 .pid,

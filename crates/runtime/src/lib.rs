@@ -94,6 +94,8 @@ mod linux_kvm_live_recovery_smoke;
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 mod linux_kvm_service;
+#[cfg(target_os = "linux")]
+mod linux_native_live_recovery_smoke;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_hvf_host_smoke;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -244,6 +246,13 @@ pub use linux_kvm_recovery_smoke::{
 pub use linux_kvm_live_recovery_smoke::{
     linux_kvm_live_recovery_smoke, LinuxKvmLiveRecoveryEvidence, LinuxKvmLiveRecoverySmokeConfig,
     LinuxKvmLiveRecoverySmokeReport, LINUX_KVM_LIVE_RECOVERY_SMOKE_SCHEMA_VERSION,
+};
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use linux_native_live_recovery_smoke::{
+    linux_native_live_recovery_smoke, LinuxNativeLiveRecoveryEvidence,
+    LinuxNativeLiveRecoverySmokeConfig, LinuxNativeLiveRecoverySmokeReport,
+    LINUX_NATIVE_LIVE_RECOVERY_SMOKE_SCHEMA_VERSION,
 };
 #[cfg(all(
     target_os = "linux",

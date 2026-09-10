@@ -27,6 +27,20 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Native Linux Live Host-reopen file/filesystem continuity: after supervised
+  Host reopen, `LinuxLiveSupervisedSession::{file,filesystem}` rebuild
+  `RetainedExecutionContext` the same way post-reopen exec does and call the
+  existing descriptor-confined helpers. `NativeLinuxDriver::{file,filesystem}`
+  route through `live_for` (not `require_live` fail-closed). Dead init →
+  `Unavailable`; wrong generation → `Conflict`. First-principles unit tests
+  cover planted-byte download, upload/stat/download, dead init, and generation
+  fencing. Evidence harness stub
+  `a3s.oci.linux-native-live-recovery-smoke.v1` / CLI
+  `linux-native-live-recovery-smoke` /
+  `.github/scripts/linux-native-live-recovery.sh` fails closed until greened
+  (opt-in `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`; distinct from stopped-only
+  `native-linux-recovery`). Does not flip default create / B2 / cutover flags.
+
 - Opt-in durable KVM `session-owner` helper on `a3s-oci-krun-shim` plus
   `session-owner-probe` parentage probe. Host can set
   `A3S_OCI_KVM_SESSION_OWNER=1` so AgentVmSession spawns through the helper

@@ -32,7 +32,7 @@ use crate::native_checkpoint::{NativeCriuCheckpoint, NativeRestoreRecovery};
 ///
 /// The default feature inventory remains `probe-only`. Constructing this
 /// driver is the explicit experimental opt-in that allows
-/// [`crate::HostRuntimeService`] to exercise the currently reviewed executor
+/// [`crate::HostRuntimeService`] to exercise the currently reviewed executo
 /// profile without linking or initializing libkrun.
 #[derive(Debug)]
 pub struct NativeLinuxDriver {
@@ -116,7 +116,7 @@ impl NativeLinuxDriver {
         let mut driver = Self::open_experimental(&runtime_parent, &init_executable).await?;
         driver.operations.push(RuntimeOperation::Checkpoint);
         driver.operations.push(RuntimeOperation::Restore);
-        driver
+        drive
             .capability
             .evidence
             .insert("checkpoint_backend".to_string(), "criu".to_string());
@@ -150,7 +150,7 @@ impl NativeLinuxDriver {
             "checkpoint_opt_in".to_string(),
             "open-experimental-with-criu".to_string(),
         );
-        driver
+        drive
             .capability
             .evidence
             .insert("restore_backend".to_string(), "criu".to_string());
@@ -436,7 +436,7 @@ impl RuntimeDriver for NativeLinuxDriver {
 
         let durable_pid = *record.state.pid();
         let recovery = self
-            .executor
+            .executo
             .recover_stale_generation(&target, &record.config_digest, durable_pid)
             .await?;
         if !can_commit_stopped {
@@ -543,7 +543,7 @@ impl RuntimeDriver for NativeLinuxDriver {
         let expected_digest = request.bundle.config_digest().to_string();
         let expected_target = request.target.clone();
         let state = self
-            .executor
+            .executo
             .create_with_inherited_descriptors(
                 AgentCreateRequest {
                     context: request.context,
@@ -650,7 +650,7 @@ impl RuntimeDriver for NativeLinuxDriver {
             .await?
         {
             let (init_executable, pinned) = self
-                .executor
+                .executo
                 .duplicate_init_executable()
                 .map_err(|error| error.for_operation("native-linux-exec"))?;
             let (pid, terminal) = live
@@ -885,14 +885,56 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn file(&self, request: FileRequest) -> Result<FileResponse> {
-        self.require_live(&request.target, "native-linux-file")
-            .await?;
+        let target = request.target.clone();
+        if let Some(live) = self.live_for(&target, "native-linux-file").await? {
+            let (init_executable, pinned) = self
+                .executo
+                .duplicate_init_executable()
+                .map_err(|error| error.for_operation("native-linux-file"))?;
+            let result = live
+                .file(&init_executable, request)
+                .await
+                .map_err(|error| error.for_operation("native-linux-file"));
+            drop(pinned);
+            return result;
+        }
+        if self
+            .recovered_for(&target, "native-linux-file")
+            .await?
+            .is_some()
+        {
+            return Err(recovered_stopped_error(&target, "native-linux-file"));
+        }
         self.client.file(request).await
     }
 
     async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
-        self.require_live(&request.target, "native-linux-filesystem")
-            .await?;
+        let target = request.target.clone();
+        if let Some(live) = self
+            .live_for(&target, "native-linux-filesystem")
+            .await?
+        {
+            let (init_executable, pinned) = self
+                .executo
+                .duplicate_init_executable()
+                .map_err(|error| error.for_operation("native-linux-filesystem"))?;
+            let result = live
+                .filesystem(&init_executable, request)
+                .await
+                .map_err(|error| error.for_operation("native-linux-filesystem"));
+            drop(pinned);
+            return result;
+        }
+        if self
+            .recovered_for(&target, "native-linux-filesystem")
+            .await?
+            .is_some()
+        {
+            return Err(recovered_stopped_error(
+                &target,
+                "native-linux-filesystem",
+            ));
+        }
         self.client.filesystem(request).await
     }
 
