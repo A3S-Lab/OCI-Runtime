@@ -27,7 +27,18 @@ done
 host_class="${A3S_OCI_LINUX_KVM_HOST_CLASS:-existing}"
 attestation_path="${A3S_OCI_LINUX_KVM_FRESH_HOST_ATTESTATION:-}"
 skip_soak="${A3S_OCI_LINUX_KVM_SKIP_SOAK:-0}"
+soak_iterations_env="${A3S_OCI_LINUX_KVM_SOAK_ITERATIONS:-}"
+if [[ -n "$soak_iterations_env" ]]; then
+  effective_soak_iterations="$soak_iterations_env"
+else
+  effective_soak_iterations="$LINUX_KVM_PROMOTION_SOAK_ITERATIONS"
+fi
 linux_kvm_assert_fresh_host_skip_policy "$host_class" "$skip_soak"
+linux_kvm_assert_fresh_host_soak_profile "$host_class" "$effective_soak_iterations"
+if [[ "$host_class" == "fresh" ]]; then
+  # Pin the promotion soak depth so child gates cannot inherit a reduced profile.
+  export A3S_OCI_LINUX_KVM_SOAK_ITERATIONS="$LINUX_KVM_PROMOTION_SOAK_ITERATIONS"
+fi
 fresh_host_attestation="$(
   linux_kvm_resolve_fresh_host_attestation "$host_class" "$attestation_path"
 )"
@@ -160,12 +171,20 @@ run_gate create-reopen \
   a3s.oci.linux-kvm-create-reopen-matrix.v2
 
 soak_ran=0
+soak_requested_iterations=0
+soak_completed_iterations=0
 if [[ "$skip_soak" != "1" ]]; then
   run_gate soak \
     .github/scripts/linux-kvm-soak.sh \
     A3S_OCI_LINUX_KVM_SOAK_REPORT \
     a3s.oci.linux-kvm-soak-matrix.v2
   soak_ran=1
+  soak_requested_iterations="$(
+    jq --raw-output '.requested_iterations // 0' "$gates_dir/soak.json"
+  )"
+  soak_completed_iterations="$(
+    jq --raw-output '.completed_iterations // 0' "$gates_dir/soak.json"
+  )"
 fi
 
 completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -174,7 +193,9 @@ promotes="$(
     "$host_class" \
     "$fresh_host_attestation" \
     "$skip_soak" \
-    "$soak_ran"
+    "$soak_ran" \
+    "$soak_requested_iterations" \
+    "$soak_completed_iterations"
 )"
 
 gates_json="$(jq --slurp --compact-output '.' "$gates_ndjson")"
@@ -185,6 +206,8 @@ jq --null-input \
   --argjson promotes_readiness "$promotes" \
   --argjson fresh_host_attestation "$fresh_host_attestation" \
   --argjson included_soak "$([[ "$soak_ran" == "1" ]] && printf true || printf false)" \
+  --argjson soak_requested_iterations "$soak_requested_iterations" \
+  --argjson soak_completed_iterations "$soak_completed_iterations" \
   --arg started_at_utc "$started_at" \
   --arg completed_at_utc "$completed_at" \
   --arg commit "$(git rev-parse HEAD)" \
@@ -199,6 +222,8 @@ jq --null-input \
     promotes_readiness: $promotes_readiness,
     fresh_host_attestation: $fresh_host_attestation,
     included_soak: $included_soak,
+    soak_requested_iterations: $soak_requested_iterations,
+    soak_completed_iterations: $soak_completed_iterations,
     started_at_utc: $started_at_utc,
     completed_at_utc: $completed_at_utc,
     commit: $commit,
@@ -212,6 +237,7 @@ jq --null-input \
 
 jq --exit-status \
   --arg host_class "$host_class" \
+  --argjson promotion_soak_iterations "$LINUX_KVM_PROMOTION_SOAK_ITERATIONS" \
   '
   .schema_version == "a3s.oci.linux-kvm-release-matrix.v1"
   and .platform == "linux"
@@ -226,6 +252,8 @@ jq --exit-status \
       and .included_soak
       and .gate_count == 6
       and any(.gates[]; .name == "soak")
+      and .soak_requested_iterations == $promotion_soak_iterations
+      and .soak_completed_iterations == $promotion_soak_iterations
       and (.fresh_host_attestation.schema_version
            == "a3s.oci.linux-kvm-fresh-host-attestation.v1")
     else
