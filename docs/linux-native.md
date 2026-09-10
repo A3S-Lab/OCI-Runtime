@@ -1960,7 +1960,12 @@ capability ceiling, seccomp) plus live init namespace/root descriptors and the
 recovery cgroup leaf, then supervisor-parents the helper. Live Host and
 Host-reopen supervised exec deposit capture/pipe I/O the same way create does
 (exclusive `MSG_DEPOSIT_OUTPUT` / stdin dup deposit + relay). Terminal/inherit
-remain Unavailable. Default create stays Host-bound.
+remain Unavailable. Host-reopen `file` / `filesystem` rebuild the same retained
+execution context and call the existing descriptor-confined helpers;
+`NativeLinuxDriver` routes those operations through `live_for` (dead init →
+`Unavailable`, wrong generation → `Conflict`) instead of the old
+`require_live` process-session fail-closed gate. Default create stays
+Host-bound.
 
 Qualification may enable supervised create with
 `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. When set, Native create starts one
@@ -1989,6 +1994,32 @@ supervised launcher liveness via `/proc/<pid>/stat` (zombies are terminal —
 `wait_launcher` across `select!`, so a cancelled race arm cannot leave the
 supervisor mutex held across `MSG_WAIT` and deadlock timeout cleanup. Once the
 launcher is terminal, Host performs the authentic `wait_launcher` reap.
+
+Native Live Host reopen filesystem evidence harness
+(`a3s.oci.linux-native-live-recovery-smoke.v1`, CLI
+`linux-native-live-recovery-smoke`,
+`.github/scripts/linux-native-live-recovery.sh`) is implemented under
+`A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`: create+start a long-running native
+container, FileOp::Upload a unique payload, SIGKILL the Host Service, require
+init survival, spawn a replacement Host on the same root, require Running with
+continuous init identity, then FileOp::Download exact match
+(`retained_filesystem_proven`). `retained_exec_io_proven` is optional for v1.
+The harness builds a **rootful** sleep bundle (no userns id maps) so create
+does not run as mapped UID against the private work tree. Report JSON is
+snake_case (aligned with KVM Live). **Existing-host WSL2 greened** on revision
+`695bf4f73af986b8131f496de85753e491734836` with report
+`/var/tmp/a3s-oci-native-live-fs-v1-20260910225133.json` SHA-256
+`1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`. Distinct
+from stopped-only `native-linux-recovery`. Does not flip B2 / cutover.
+
+```bash
+A3S_OCI_NATIVE_SESSION_SUPERVISOR=1 \
+  bash .github/scripts/linux-native-live-recovery.sh
+# optional: A3S_OCI_NATIVE_LIVE_BUNDLE=/absolute/path/to/oci-bundle
+# optional: A3S_OCI_LINUX_NATIVE_LIVE_RECOVERY_REPORT=/absolute/path/to/report.json
+# Requires cleared supplementary groups (setpriv CAP_SETGID / sudo / CI matched-cred).
+# Rootful sleep bundle is prepared by default when A3S_OCI_NATIVE_LIVE_BUNDLE is unset.
+```
 
 When the original Host control socketpair closes (owner death), the supervisor
 does **not** reap waitable children and does **not** start a replacement

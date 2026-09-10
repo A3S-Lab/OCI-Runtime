@@ -32,7 +32,7 @@ use crate::native_checkpoint::{NativeCriuCheckpoint, NativeRestoreRecovery};
 ///
 /// The default feature inventory remains `probe-only`. Constructing this
 /// driver is the explicit experimental opt-in that allows
-/// [`crate::HostRuntimeService`] to exercise the currently reviewed executor
+/// [`crate::HostRuntimeService`] to exercise the currently reviewed executo
 /// profile without linking or initializing libkrun.
 #[derive(Debug)]
 pub struct NativeLinuxDriver {
@@ -885,14 +885,56 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn file(&self, request: FileRequest) -> Result<FileResponse> {
-        self.require_live(&request.target, "native-linux-file")
-            .await?;
+        let target = request.target.clone();
+        if let Some(live) = self.live_for(&target, "native-linux-file").await? {
+            let (init_executable, pinned) = self
+                .executor
+                .duplicate_init_executable()
+                .map_err(|error| error.for_operation("native-linux-file"))?;
+            let result = live
+                .file(&init_executable, request)
+                .await
+                .map_err(|error| error.for_operation("native-linux-file"));
+            drop(pinned);
+            return result;
+        }
+        if self
+            .recovered_for(&target, "native-linux-file")
+            .await?
+            .is_some()
+        {
+            return Err(recovered_stopped_error(&target, "native-linux-file"));
+        }
         self.client.file(request).await
     }
 
     async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
-        self.require_live(&request.target, "native-linux-filesystem")
-            .await?;
+        let target = request.target.clone();
+        if let Some(live) = self
+            .live_for(&target, "native-linux-filesystem")
+            .await?
+        {
+            let (init_executable, pinned) = self
+                .executor
+                .duplicate_init_executable()
+                .map_err(|error| error.for_operation("native-linux-filesystem"))?;
+            let result = live
+                .filesystem(&init_executable, request)
+                .await
+                .map_err(|error| error.for_operation("native-linux-filesystem"));
+            drop(pinned);
+            return result;
+        }
+        if self
+            .recovered_for(&target, "native-linux-filesystem")
+            .await?
+            .is_some()
+        {
+            return Err(recovered_stopped_error(
+                &target,
+                "native-linux-filesystem",
+            ));
+        }
         self.client.filesystem(request).await
     }
 

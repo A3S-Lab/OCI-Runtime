@@ -360,6 +360,23 @@ enum Command {
         #[arg(long, value_name = "REVISION")]
         source_revision: String,
     },
+    /// Qualify opt-in Native Live Host reopen filesystem continuity (stub).
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    LinuxNativeLiveRecoverySmoke {
+        /// Absolute `a3s-oci-agent` executable.
+        #[arg(long, value_name = "FILE")]
+        agent: PathBuf,
+        /// OCI bundle for the supervised Native Live attempt.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// Existing private directory that retains Live recovery evidence.
+        #[arg(long, value_name = "DIR")]
+        work_parent: PathBuf,
+        /// Exact source revision embedded in the qualification report.
+        #[arg(long, value_name = "REVISION")]
+        source_revision: String,
+    },
     /// Qualify all Host/Guest Create interruption stages through real KVM owners.
     #[cfg(all(
         target_os = "linux",

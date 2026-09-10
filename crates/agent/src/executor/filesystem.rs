@@ -27,6 +27,28 @@ pub(crate) fn run_container_filesystem_if_requested() -> Option<Result<()>> {
     helper::run_if_requested()
 }
 
+/// Descriptor-confined file transfer against a retained execution context.
+///
+/// Used by the live Host executor and by Host-reopen
+/// [`super::recovery::LinuxLiveSupervisedSession`] after rebuilding that
+/// context from the authenticated live init identity.
+pub(crate) async fn file_with_context(
+    executable: &Path,
+    context: &crate::executor::namespace::RetainedExecutionContext,
+    request: &FileRequest,
+) -> Result<FileResponse> {
+    helper::file(executable, context, request).await
+}
+
+/// Descriptor-confined filesystem metadata/mutation against a retained context.
+pub(crate) async fn filesystem_with_context(
+    executable: &Path,
+    context: &crate::executor::namespace::RetainedExecutionContext,
+    request: &FilesystemRequest,
+) -> Result<FilesystemResponse> {
+    helper::filesystem(executable, context, request).await
+}
+
 const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
 const RESOLVE_IN_ROOT: u64 = 0x10;
 const MAX_ACCOUNT_FILE_BYTES: u64 = 1024 * 1024;

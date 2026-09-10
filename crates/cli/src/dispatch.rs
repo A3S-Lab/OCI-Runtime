@@ -364,6 +364,30 @@ fn dispatch(
                 ExitCode::from(2)
             })
         }),
+        #[cfg(target_os = "linux")]
+        Command::LinuxNativeLiveRecoverySmoke {
+            agent,
+            bundle,
+            work_parent,
+            source_revision,
+        } => command_future!({
+            let report = a3s_oci_runtime::linux_native_live_recovery_smoke(
+                a3s_oci_runtime::LinuxNativeLiveRecoverySmokeConfig {
+                    agent,
+                    bundle,
+                    work_parent,
+                    source_revision: Some(source_revision),
+                },
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }),
         #[cfg(all(
             target_os = "linux",
             any(target_arch = "x86_64", target_arch = "aarch64")
@@ -1689,7 +1713,7 @@ mod tests {
             })
             .expect("spawn bounded command-dispatch worker");
 
-        worker
+        worke
             .join()
             .expect("command dispatch must not overflow a bounded stack");
     }
