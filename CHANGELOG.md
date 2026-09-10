@@ -27,10 +27,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
-- Opt-in durable KVM session-owner scaffold (`A3S_OCI_KVM_SESSION_OWNER`) with
-  first-principles Linux tests: Host-analogue exit leaves the session owner and
-  child alive; owner shutdown reaps the child process group. Default remains
-  Host-bound (stopped-only). Does not yet wire shim spawn, Live reattach,
+- Opt-in durable KVM `session-owner` helper on `a3s-oci-krun-shim` plus
+  `session-owner-probe` parentage probe. Host can set
+  `A3S_OCI_KVM_SESSION_OWNER=1` so AgentVmSession spawns through the helper
+  (Tokio-safe; injects `--owner-pid` as the helper PID). First-principles tests
+  cover fork-based Host-death survival and helper parentage. Default remains
+  Host-bound stopped-only. Does not yet prove Live reattach after Host reopen,
   register KVM, or close W2/B2.
 
 ### Changed

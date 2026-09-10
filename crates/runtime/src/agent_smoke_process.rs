@@ -16,6 +16,122 @@ pub(crate) struct RunningShim {
     stderr: JoinHandle<io::Result<BoundedOutput>>,
 }
 
+/// Host-bound or opt-in durable KVM session ownership for one shim.
+pub(crate) enum ManagedShim {
+    HostBound(RunningShim),
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    Durable(crate::kvm_durable_session_owner::DurableSessionOwner),
+}
+
+impl ManagedShim {
+    pub(crate) fn process_id(&self) -> Option<u32> {
+        match self {
+            Self::HostBound(running) => running.process_id(),
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            Self::Durable(owner) => Some(owner.child_pid().get()),
+        }
+    }
+
+    pub(crate) fn host_bound_mut(&mut self) -> Option<&mut RunningShim> {
+        match self {
+            Self::HostBound(running) => Some(running),
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            Self::Durable(_) => None,
+        }
+    }
+
+    pub(crate) async fn wait_and_collect(self) -> CompletedShim {
+        match self {
+            Self::HostBound(running) => running.wait_and_collect().await,
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            Self::Durable(owner) => durable_wait_and_collect(owner, false).await,
+        }
+    }
+
+    pub(crate) async fn terminate_and_collect(self) -> CompletedShim {
+        match self {
+            Self::HostBound(running) => running.terminate_and_collect().await,
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            Self::Durable(owner) => durable_wait_and_collect(owner, true).await,
+        }
+    }
+
+    pub(crate) async fn collect_after_wait(self, status: io::Result<ExitStatus>) -> CompletedShim {
+        match self {
+            Self::HostBound(running) => running.collect_after_wait(status).await,
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            Self::Durable(owner) => {
+                let _ = status;
+                durable_wait_and_collect(owner, true).await
+            }
+        }
+    }
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+async fn durable_wait_and_collect(
+    owner: crate::kvm_durable_session_owner::DurableSessionOwner,
+    force_kill: bool,
+) -> CompletedShim {
+    use std::os::unix::process::ExitStatusExt;
+    use std::time::Instant;
+
+    if force_kill {
+        let _ = owner.shutdown();
+        return CompletedShim {
+            status: Some(ExitStatus::from_raw(9 << 8)),
+            stdout: BoundedOutput::default(),
+            stderr: BoundedOutput::default(),
+            timed_out: false,
+            collection_errors: Vec::new(),
+        };
+    }
+
+    let deadline = Instant::now() + SHIM_EXIT_TIMEOUT;
+    while Instant::now() < deadline {
+        if !owner.child_alive() {
+            let _ = owner.shutdown();
+            return CompletedShim {
+                status: Some(ExitStatus::from_raw(0)),
+                stdout: BoundedOutput::default(),
+                stderr: BoundedOutput::default(),
+                timed_out: false,
+                collection_errors: Vec::new(),
+            };
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let _ = owner.shutdown();
+    CompletedShim {
+        status: Some(ExitStatus::from_raw(9 << 8)),
+        stdout: BoundedOutput::default(),
+        stderr: BoundedOutput::default(),
+        timed_out: true,
+        collection_errors: Vec::new(),
+    }
+}
+
 impl RunningShim {
     pub(crate) fn spawn(command: &mut Command) -> io::Result<Self> {
         #[cfg(any(
