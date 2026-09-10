@@ -200,7 +200,7 @@ jq --exit-status \
   --arg architecture "$architecture" \
   --arg manifest_sha256 "$manifest_sha256" \
   --arg source_revision "$source_revision" \
-  '.schema_version == "a3s.oci.linux-kvm-live-recovery-smoke.v1"
+  '.schema_version == "a3s.oci.linux-kvm-live-recovery-smoke.v2"
    and .platform == "linux" and .architecture == $architecture
    and .status == "available" and .kvm_required
    and .expected_case_count == 1 and .case_count == 1
@@ -215,6 +215,11 @@ jq --exit-status \
    and .recovery.live_binding_published
    and .recovery.live_binding_authenticated_after_kill
    and .recovery.durable_guest_endpoint_retained
+   and (.recovery.retained_exec_process_id | type == "string" and length > 0)
+   and .recovery.exec_io_before_kill
+   and .recovery.write_stdin_after_reattach
+   and .recovery.read_output_after_reattach
+   and .recovery.retained_exec_io_proven
    and .recovery.replacement_socket_new_owner
    and .recovery.replacement_state_running
    and .recovery.init_identity_unchanged
@@ -270,5 +275,6 @@ jq --exit-status \
    and .report.status == "available"
    and .report.recovery.service_restart_recovered
    and .report.recovery.guest_survived_host_sigkill
+   and .report.recovery.retained_exec_io_proven
    and (.report.recovery.live_vm_processes_reaped | not)
    and (.reason == null)' "$report_path" >/dev/null

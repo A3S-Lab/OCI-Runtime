@@ -1,11 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use a3s_oci_sdk::oci_spec::runtime::ContainerState;
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
-    ContainerId, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, ErrorCode,
-    IsolationRequest, KillRequest, ListRequest, ProcessesRequest, Signal, StartRequest,
-    StateRequest, WaitRequest,
+    ContainerId, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, ErrorCode, ExecRequest,
+    IoMode, IsolationRequest, KillRequest, ListRequest, OutputStream, ProcessId, ProcessIo,
+    ProcessTarget, ProcessesRequest, ReadOutputRequest, Signal, StartRequest, StateRequest,
+    WaitRequest, WriteStdinRequest,
 };
 use tokio::time::{sleep, Instant};
 
@@ -256,6 +257,7 @@ async fn run_first_owner(
         );
     }
     evidence.durable_pipe_name = Some(binding.pipe_name.clone());
+    prove_retained_exec_io_before_kill(prepared, &client, &target, evidence).await?;
     let durable_endpoint = durable_endpoint_dir(&binding);
     drop(client);
     Ok(durable_endpoint)
@@ -336,6 +338,21 @@ async fn run_replacement(
     if !evidence.process_inventory_nonempty {
         return Err("replacement Live process inventory was empty".to_string());
     }
+    let retained_exec_present = evidence
+        .retained_exec_process_id
+        .as_deref()
+        .is_some_and(|id| {
+            processes
+                .iter()
+                .any(|process| process.target.process_id.as_str() == id)
+        });
+    if !retained_exec_present {
+        return Err(
+            "replacement Live process inventory lost the retained exec process ID".to_string(),
+        );
+    }
+
+    prove_retained_exec_io_after_reattach(prepared, &client, &target, evidence).await?;
 
     evidence.no_invented_exit_status =
         assert_no_invented_exit(&client, &target, runtime_root).await?;
@@ -401,6 +418,153 @@ async fn run_replacement(
         return Err("replacement Host Service did not shut down cleanly after Live reopen".to_string());
     }
     Ok(())
+}
+
+async fn prove_retained_exec_io_before_kill(
+    prepared: &PreparedQualification,
+    client: &a3s_oci_sdk::RuntimeClient,
+    target: &ContainerTarget,
+    evidence: &mut super::report::LinuxKvmLiveRecoveryEvidence,
+) -> Result<(), String> {
+    let process_id = ProcessId::new(format!("live-io-{}", prepared.nonce))
+        .map_err(|error| format!("failed to construct Live retained-exec process ID: {error}"))?;
+    let process = retained_echo_process()?;
+    let io = ProcessIo {
+        stdin: IoMode::Pipe,
+        stdout: IoMode::Capture,
+        stderr: IoMode::Capture,
+        terminal_size: None,
+    };
+    let process_target = ProcessTarget {
+        container: target.clone(),
+        process_id: process_id.clone(),
+    };
+    call(
+        "Live retained exec",
+        client.exec(ExecRequest {
+            context: operation("kvm-lr", &prepared.nonce, "exec-io")?,
+            container: target.clone(),
+            process_id: process_id.clone(),
+            process,
+            io,
+        }),
+    )
+    .await?;
+    evidence.retained_exec_process_id = Some(process_id.as_str().to_string());
+
+    // Wait for the shell readiness marker before the first stdin write.
+    wait_for_captured_needle(client, &process_target, b"live-io-ready\n", 0).await?;
+    let before = format!("before-{}\n", prepared.nonce);
+    call(
+        "Live retained write_stdin before Host SIGKILL",
+        client.write_stdin(WriteStdinRequest {
+            context: operation("kvm-lr", &prepared.nonce, "stdin-before")?,
+            process: process_target.clone(),
+            data: before.into_bytes(),
+        }),
+    )
+    .await?;
+    let expected = format!("echo:before-{}\n", prepared.nonce);
+    wait_for_captured_needle(client, &process_target, expected.as_bytes(), 0).await?;
+    evidence.exec_io_before_kill = true;
+    Ok(())
+}
+
+async fn prove_retained_exec_io_after_reattach(
+    prepared: &PreparedQualification,
+    client: &a3s_oci_sdk::RuntimeClient,
+    target: &ContainerTarget,
+    evidence: &mut super::report::LinuxKvmLiveRecoveryEvidence,
+) -> Result<(), String> {
+    let process_id = evidence
+        .retained_exec_process_id
+        .as_deref()
+        .ok_or_else(|| "retained exec process ID missing before replacement I/O".to_string())?;
+    let process_id = ProcessId::new(process_id.to_string())
+        .map_err(|error| format!("invalid retained exec process ID: {error}"))?;
+    let process_target = ProcessTarget {
+        container: target.clone(),
+        process_id,
+    };
+    let after = format!("after-{}\n", prepared.nonce);
+    call(
+        "Live retained write_stdin after Host reattach",
+        client.write_stdin(WriteStdinRequest {
+            context: operation("kvm-lr", &prepared.nonce, "stdin-after")?,
+            process: process_target.clone(),
+            data: after.into_bytes(),
+        }),
+    )
+    .await?;
+    evidence.write_stdin_after_reattach = true;
+    let expected = format!("echo:after-{}\n", prepared.nonce);
+    wait_for_captured_needle(client, &process_target, expected.as_bytes(), 0).await?;
+    evidence.read_output_after_reattach = true;
+    evidence.retained_exec_io_proven = evidence.exec_io_before_kill
+        && evidence.write_stdin_after_reattach
+        && evidence.read_output_after_reattach
+        && evidence
+            .retained_exec_process_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty());
+    if !evidence.retained_exec_io_proven {
+        return Err("Live retained exec I/O evidence failed its completeness audit".to_string());
+    }
+    Ok(())
+}
+
+fn retained_echo_process() -> Result<Process, String> {
+    // Pipe stdin + Capture stdout. Guest Pipe stdout is unsupported on KVM;
+    // Capture proves byte continuity across Host SIGKILL on the same process ID.
+    // Stay alive after stdin EOF so Host death alone does not exit the shell.
+    let command = "printf 'live-io-ready\\n'; while true; do if IFS= read -r line; then printf 'echo:%s\\n' \"$line\"; else while true; do /bin/busybox sleep 3600 || sleep 3600; done; fi; done";
+    serde_json::from_value(serde_json::json!({
+        "terminal": false,
+        "user": {"uid": 0, "gid": 0, "umask": 18},
+        "args": ["/bin/sh", "-c", command],
+        "env": ["PATH=/bin:/usr/bin"],
+        "cwd": "/",
+        "noNewPrivileges": true
+    }))
+    .map_err(|error| format!("failed to construct Live retained-exec process: {error}"))
+}
+
+async fn wait_for_captured_needle(
+    client: &a3s_oci_sdk::RuntimeClient,
+    process: &ProcessTarget,
+    needle: &[u8],
+    mut after_sequence: u64,
+) -> Result<(), String> {
+    let deadline = Instant::now() + LIVE_TIMEOUT;
+    let mut buffer = Vec::new();
+    while Instant::now() < deadline {
+        let chunks = call(
+            "Live retained read_output",
+            client.read_output(ReadOutputRequest {
+                process: process.clone(),
+                after_sequence,
+                max_bytes: 4096,
+                wait_timeout_ms: Some(250),
+            }),
+        )
+        .await?;
+        for chunk in chunks {
+            if chunk.stream != OutputStream::Stdout {
+                continue;
+            }
+            after_sequence = after_sequence.max(chunk.sequence);
+            buffer.extend_from_slice(&chunk.data);
+        }
+        if buffer.windows(needle.len()).any(|window| window == needle) {
+            return Ok(());
+        }
+        sleep(POLL_INTERVAL).await;
+    }
+    Err(format!(
+        "Live retained Capture stdout did not observe {:?} within {:?}",
+        String::from_utf8_lossy(needle),
+        LIVE_TIMEOUT
+    ))
 }
 
 async fn assert_no_invented_exit(

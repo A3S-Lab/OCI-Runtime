@@ -379,7 +379,9 @@ overload the stopped-only recovery schema. With
 `A3S_OCI_KVM_SESSION_OWNER=1`, create+start a real KVM generation, SIGKILL the
 Host Service, require Guest/session-owner survival
 (`live_vm_processes_reaped` must stay false), then prove a replacement Host
-reattaches **Running** with continuous init identity and no invented exit:
+reattaches **Running** with continuous init identity, retained exec I/O on the
+same process ID (`retained_exec_io_proven`: Pipe stdin + Capture stdout before
+Host SIGKILL and after reattach), and no invented exit:
 
 ```bash
 A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
@@ -387,9 +389,9 @@ A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-live-recovery.sh
 ```
 
-Nested runtime schema: `a3s.oci.linux-kvm-live-recovery-smoke.v1`. Aggregate:
-`a3s.oci.linux-kvm-live-recovery-matrix.v1`. This harness landing does **not**
-close W2/B2 until an existing-host `/dev/kvm` report is greened.
+Nested runtime schema: `a3s.oci.linux-kvm-live-recovery-smoke.v2`. Aggregate:
+`a3s.oci.linux-kvm-live-recovery-matrix.v1`. This harness does **not** claim Box
+`retained_stream_handle_proven` or close W2/B2 / cutover flags.
 
 A third qualification-only Host Service serves the A3S Box product-lifecycle
 scope `box-product-lifecycle-only-v1` without promoting the public KVM
