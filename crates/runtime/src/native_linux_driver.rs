@@ -356,6 +356,34 @@ impl NativeLinuxDriver {
         }
     }
 
+    async fn refuse_live_wait_process_without_ownership(
+        &self,
+        target: &ContainerTarget,
+    ) -> Result<()> {
+        if self
+            .live_for(target, "native-linux-wait-process")
+            .await?
+            .is_some()
+        {
+            return Err(Error::new(
+                ErrorCode::Unavailable,
+                format!(
+                    "container {} generation {:?} retained durable process identities after Host reopen, but wait_process requires wait ownership (parentage/pidfd wait) that this Host does not hold; refusing to invent exit status",
+                    target.id, target.generation
+                ),
+            )
+            .for_operation("native-linux-wait-process"));
+        }
+        if self
+            .recovered_for(target, "native-linux-wait-process")
+            .await?
+            .is_some()
+        {
+            return Err(recovered_stopped_error(target, "native-linux-wait-process"));
+        }
+        Ok(())
+    }
+
     async fn require_live(&self, target: &ContainerTarget, operation: &'static str) -> Result<()> {
         self.require_live_process_session(target, operation).await
     }
@@ -651,13 +679,29 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn signal_process(&self, request: DriverSignalProcessRequest) -> Result<()> {
-        self.require_live(&request.target.container, "native-linux-signal-process")
-            .await?;
+        if let Some(live) = self
+            .live_for(&request.target.container, "native-linux-signal-process")
+            .await?
+        {
+            return live
+                .signal_process(&request.target.process_id, request.signal.get())
+                .map_err(|error| error.for_operation("native-linux-signal-process"));
+        }
+        if self
+            .recovered_for(&request.target.container, "native-linux-signal-process")
+            .await?
+            .is_some()
+        {
+            return Err(recovered_stopped_error(
+                &request.target.container,
+                "native-linux-signal-process",
+            ));
+        }
         self.client.signal_process(request).await
     }
 
     async fn wait_process(&self, request: DriverWaitProcessRequest) -> Result<ExitStatus> {
-        self.require_live(&request.target.container, "native-linux-wait-process")
+        self.refuse_live_wait_process_without_ownership(&request.target.container)
             .await?;
         self.client.wait_process(request).await
     }
