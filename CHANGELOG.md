@@ -58,7 +58,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   greening used revision `695bf4f73af986b8131f496de85753e491734836` (report
   SHA-256
   `1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`).
-  **Existing-host WSL2 v2 greened** with report
+  **Existing-host WSL2 v2 greened** on revision
+  `f047d862bd0a000392cf9bd013854590c1e4a7c7` with report
   `/var/tmp/a3s-oci-native-live-io-v2-20260911003055.json` SHA-256
   `88def24f4fb652bdf03a7204c7f087aa18e783f060230535858779d002b17c34`
   (`retained_exec_io_proven` / `exec_io_before_kill` /

@@ -2014,14 +2014,14 @@ private work tree. Report JSON is snake_case (aligned with KVM Live). Prior
 v1 filesystem-only greening used revision
 `695bf4f73af986b8131f496de85753e491734836` (report SHA-256
 `1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`).
-**Existing-host WSL2 greened v2 retained exec I/O + filesystem** with report
+**Existing-host WSL2 greened v2 retained exec I/O + filesystem** on revision
+`f047d862bd0a000392cf9bd013854590c1e4a7c7` with report
 `/var/tmp/a3s-oci-native-live-io-v2-20260911003055.json` SHA-256
 `88def24f4fb652bdf03a7204c7f087aa18e783f060230535858779d002b17c34`
 (`retained_exec_io_proven` / `exec_io_before_kill` /
 `write_stdin_after_reattach` / `read_output_after_reattach` /
 `retained_filesystem_proven` / `init_survived_host_sigkill` /
-`replacement_state_running`). Tip revision digest is recorded in CHANGELOG /
-ROADMAP after the landing commit. Distinct from stopped-only
+`replacement_state_running`). Distinct from stopped-only
 `native-linux-recovery`. Does not flip B2 / cutover.
 
 ```bash
