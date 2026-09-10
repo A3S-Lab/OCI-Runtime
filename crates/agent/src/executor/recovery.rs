@@ -8,23 +8,25 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT;
+use a3s_oci_sdk::oci_spec::runtime::Process;
 use a3s_oci_sdk::{
     ContainerStats, ContainerTarget, Error, ErrorCode, IoMode, OciBundle, ProcessId, ProcessIo,
     ProcessRecord, ProcessTarget, Result, CONTROL_CGROUP_NAME, WORKLOAD_CGROUP_NAME,
 };
-use a3s_oci_sdk::oci_spec::runtime::Process;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::{sleep, Instant};
 
-use super::cgroup::{leaf_is_frozen, open_cgroup_procs, set_leaf_frozen, stats_from_leaf, CgroupManager};
 use super::capability::CapabilityPlan;
+use super::cgroup::{
+    leaf_is_frozen, open_cgroup_procs, set_leaf_frozen, stats_from_leaf, CgroupManager,
+};
 use super::device::{cleanup_device_target_manifest, load_device_target_manifest};
 use super::exec_process::{ExecProcess, ExecSpawnContext};
 use super::intel_rdt::{is_resctrl_mountpoint, IntelRdtRecovery};
-use super::namespace::{RetainedExecutionContext, NamespacePlan};
+use super::namespace::{NamespacePlan, RetainedExecutionContext};
 use super::pid_supervisor::terminate_pid;
 use super::pidfd::{PidFd, SignalOutcome};
 use super::plan::ProcessPlan;
@@ -762,9 +764,11 @@ impl LinuxLiveSupervisedSession {
         plan.attach_seccomp(&rebuilt.seccomp);
         plan.capabilities
             .validate_exec_ceiling(rebuilt.capabilities)?;
-        rebuilt
-            .execution_context
-            .validate_process_ids(plan.uid, plan.gid, &plan.additional_gids)?;
+        rebuilt.execution_context.validate_process_ids(
+            plan.uid,
+            plan.gid,
+            &plan.additional_gids,
+        )?;
 
         let process_directory = allocate_process_directory(&self.runtime_directory)?;
         super::create_private_directory(&process_directory).await?;
@@ -776,8 +780,8 @@ impl LinuxLiveSupervisedSession {
             )
         })?;
         if let Err(error) = super::write_private_snapshot(&snapshot, &encoded).await {
-            let _ = super::remove_process_directory(&self.runtime_directory, &process_directory)
-                .await;
+            let _ =
+                super::remove_process_directory(&self.runtime_directory, &process_directory).await;
             return Err(error);
         }
 
@@ -802,8 +806,9 @@ impl LinuxLiveSupervisedSession {
         {
             Ok(process) => process,
             Err(error) => {
-                let _ = super::remove_process_directory(&self.runtime_directory, &process_directory)
-                    .await;
+                let _ =
+                    super::remove_process_directory(&self.runtime_directory, &process_directory)
+                        .await;
                 return Err(error);
             }
         };
@@ -819,8 +824,8 @@ impl LinuxLiveSupervisedSession {
             terminal,
         ) {
             let _ = process.force_stop().await;
-            let _ = super::remove_process_directory(&self.runtime_directory, &process_directory)
-                .await;
+            let _ =
+                super::remove_process_directory(&self.runtime_directory, &process_directory).await;
             return Err(error);
         }
         let identity = ProcessIdentity::capture(payload_pid, "container exec payload")?;
@@ -1147,8 +1152,8 @@ impl LinuxLiveSupervisedSession {
                 ),
             )
         })?;
-        let bundle = OciBundle::from_json(self.runtime_directory.clone(), config_json)
-            .map_err(|error| {
+        let bundle =
+            OciBundle::from_json(self.runtime_directory.clone(), config_json).map_err(|error| {
                 recovery_error(
                     error.code,
                     format!(
@@ -1186,23 +1191,19 @@ impl LinuxLiveSupervisedSession {
             .as_ref()
             .cloned()
             .unwrap_or_default();
-        let namespace_plan = NamespacePlan::from_linux(
-            spec.linux().as_ref(),
-            init_uid,
-            init_gid,
-            &additional_gids,
-        )
-        .map_err(|error| {
-            recovery_error(
-                error.code,
-                format!(
-                    "failed to rebuild namespace plan for Host-reopen exec: {}",
-                    error.message
-                ),
-            )
-        })?;
-        let capabilities = CapabilityPlan::from_oci(init_process.capabilities().as_ref())
-            .map_err(|error| {
+        let namespace_plan =
+            NamespacePlan::from_linux(spec.linux().as_ref(), init_uid, init_gid, &additional_gids)
+                .map_err(|error| {
+                    recovery_error(
+                        error.code,
+                        format!(
+                            "failed to rebuild namespace plan for Host-reopen exec: {}",
+                            error.message
+                        ),
+                    )
+                })?;
+        let capabilities =
+            CapabilityPlan::from_oci(init_process.capabilities().as_ref()).map_err(|error| {
                 recovery_error(
                     error.code,
                     format!(
@@ -1246,7 +1247,10 @@ impl LinuxLiveSupervisedSession {
                         ),
                     )
                 })?;
-        let init_pidfd = self.record.init.open_authenticated_pidfd("live supervised init")?;
+        let init_pidfd = self
+            .record
+            .init
+            .open_authenticated_pidfd("live supervised init")?;
         let workload_cgroup_procs = match self.record.cgroup.as_ref() {
             Some(cgroup) => Some(open_cgroup_procs(&cgroup.leaf).map_err(|error| {
                 recovery_error(
@@ -4588,7 +4592,7 @@ mod tests {
         use std::path::Path;
 
         use a3s_oci_sdk::oci_spec::runtime::Process;
-        use a3s_oci_sdk::{IoMode, ProcessIo, ProcessId};
+        use a3s_oci_sdk::{IoMode, ProcessId, ProcessIo};
 
         use super::super::pid_supervisor::{terminate_pid, wait_for_child};
         use super::super::session_supervisor::HostSessionSupervisor;

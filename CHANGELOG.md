@@ -27,6 +27,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Supervised process `try_wait` / ready-race liveness no longer treats
+  `/proc/<pid>` existence as "still running". Zombies keep a `/proc` entry, so
+  keyed captured exec helpers that had already exited never surfaced an exit
+  status (and never completed authentic `wait_launcher` reaping) when Host
+  polled with `timeout_ms: 0`. Liveness now reads `/proc/<pid>/stat` and treats
+  `Z`/`X`/`x` as terminal; once terminal, sync `try_wait` reaps via
+  `wait_launcher`. The same zombie-aware check drives supervised create/exec
+  ready-race observation.
 - Supervised `container-exec` can update an existing native `recovery.json`
   after create: `write_atomic_record` now `rename`s the pending file into
   place instead of `hard_link`ing (which fails with EEXIST when the create

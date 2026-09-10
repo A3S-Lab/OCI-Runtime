@@ -19,8 +19,8 @@ use super::pid;
 use super::pid_supervisor::terminate_pid;
 use super::pidfd::{PidFd, SignalOutcome};
 use super::process::{
-    bind_control_listener, convert_exit_status, prepare_supervised_stdio, terminate_host_child,
-    SharedSessionSupervisor,
+    bind_control_listener, convert_exit_status, prepare_supervised_stdio, supervised_pid_is_alive,
+    terminate_host_child, SharedSessionSupervisor,
 };
 use super::process_group::ProcessGroupLease;
 
@@ -98,10 +98,9 @@ impl ExecProcess {
         session_supervisor: Option<SharedSessionSupervisor>,
     ) -> Result<Self> {
         let process_group = ProcessGroupLease::open_for_snapshot(snapshot).await?;
-        let inherited = context.execution_context.inherited_descriptors(
-            context.init_pidfd,
-            context.workload_cgroup_procs,
-        )?;
+        let inherited = context
+            .execution_context
+            .inherited_descriptors(context.init_pidfd, context.workload_cgroup_procs)?;
         let namespace_arguments = context.execution_context.namespace_arguments();
         let (listener, control_name) = bind_control_listener()?;
 
@@ -134,9 +133,13 @@ impl ExecProcess {
             .await?
         };
 
-        let runtime_pid =
-            complete_exec_handshake(&mut child, &listener, context.init_signal, context.execution_context)
-                .await?;
+        let runtime_pid = complete_exec_handshake(
+            &mut child,
+            &listener,
+            context.init_signal,
+            context.execution_context,
+        )
+        .await?;
 
         let pidfd = PidFd::open(runtime_pid)?;
         let terminal = child_terminal(&child, terminal);
@@ -184,7 +187,42 @@ impl ExecProcess {
                     format!("failed to inspect exec process state: {error}"),
                 )
             })?,
-            ExecChild::Supervised { status, .. } => status.clone(),
+            ExecChild::Supervised {
+                helper_pid,
+                supervisor,
+                status,
+            } => {
+                if let Some(status) = status.clone() {
+                    Some(status)
+                } else if supervised_pid_is_alive(*helper_pid) {
+                    None
+                } else {
+                    // Mirror LauncherChild::try_wait: zombies keep `/proc/<pid>`,
+                    // so cached-only polls never observe exit without MSG_WAIT.
+                    let pid = i32::try_from(*helper_pid).map_err(|error| {
+                        exec_error(
+                            ErrorCode::Internal,
+                            format!("supervised exec helper PID does not fit i32: {error}"),
+                        )
+                    })?;
+                    let supervisor = Arc::clone(supervisor);
+                    let raw = supervisor
+                        .lock()
+                        .map_err(|_| {
+                            exec_error(ErrorCode::Internal, "session supervisor lock is poisoned")
+                        })?
+                        .wait_launcher(pid)
+                        .map_err(|error| {
+                            exec_error(
+                                ErrorCode::Internal,
+                                format!("failed to wait supervised exec helper: {error}"),
+                            )
+                        })?;
+                    let waited = ProcessExitStatus::from_raw(raw);
+                    *status = Some(waited.clone());
+                    Some(waited)
+                }
+            }
         };
         status
             .map(|status| self.cache_exit_status(status))
@@ -442,20 +480,19 @@ async fn spawn_supervised_exec(
     }
     let output_relay =
         (capture_stdout || capture_stderr).then(|| (Arc::clone(supervisor), helper_pid));
-    let process_io =
-        match ProcessIoHandle::attach_supervised(io, host_pipes.stdin, output_relay) {
-            Ok(process_io) => process_io,
-            Err(error) => {
-                terminate_supervised_helper(supervisor, helper_pid).await;
-                return Err(exec_error(
-                    error.code,
-                    format!(
-                        "failed to attach supervised exec process I/O: {}",
-                        error.message
-                    ),
-                ));
-            }
-        };
+    let process_io = match ProcessIoHandle::attach_supervised(io, host_pipes.stdin, output_relay) {
+        Ok(process_io) => process_io,
+        Err(error) => {
+            terminate_supervised_helper(supervisor, helper_pid).await;
+            return Err(exec_error(
+                error.code,
+                format!(
+                    "failed to attach supervised exec process I/O: {}",
+                    error.message
+                ),
+            ));
+        }
+    };
     if matches!(io.stdin, IoMode::Pipe) {
         if let Err(error) = process_io.bind_stdin_deposit(Arc::clone(supervisor), helper_pid) {
             terminate_supervised_helper(supervisor, helper_pid).await;
@@ -726,7 +763,7 @@ async fn wait_exec_child_for_ready_race(child: &mut ExecChild) -> io::Result<Pro
             }
             let watched = *helper_pid;
             loop {
-                if !std::path::Path::new("/proc").join(watched.to_string()).exists() {
+                if !supervised_pid_is_alive(watched) {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -818,10 +855,13 @@ fn append_exec_os_arguments(
             .into(),
     );
     for namespace in namespace_arguments {
-        args.push(format!(
-            "{}:{}:{}",
-            namespace.name, namespace.clone_flag, namespace.descriptor
-        ).into());
+        args.push(
+            format!(
+                "{}:{}:{}",
+                namespace.name, namespace.clone_flag, namespace.descriptor
+            )
+            .into(),
+        );
     }
 }
 

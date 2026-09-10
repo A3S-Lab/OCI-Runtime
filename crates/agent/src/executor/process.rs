@@ -44,7 +44,6 @@ use super::plan::InitPlan;
 use super::process_group::ProcessGroupLease;
 use super::seccomp::SeccompPlan;
 use super::RootfsScope;
-pub(in crate::executor) use launch::prepare_supervised_stdio;
 pub(super) use launch::{
     bind_control_listener, terminate, terminate_host_child, SharedSessionSupervisor,
 };
@@ -52,6 +51,7 @@ use launch::{
     cleanup_uncommitted_create, cleanup_unstarted_cgroup, retain_original_rootfs,
     supervised_create_unsupported_reason, validate_rootless_device_mounts, LauncherChild,
 };
+pub(in crate::executor) use launch::{prepare_supervised_stdio, supervised_pid_is_alive};
 
 const INIT_READY_TIMEOUT: Duration = Duration::from_secs(10);
 

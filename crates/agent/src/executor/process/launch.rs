@@ -40,15 +40,35 @@ impl LauncherChild {
     pub(super) fn try_wait(&mut self) -> std::io::Result<Option<ProcessExitStatus>> {
         match self {
             Self::Local(child) => child.try_wait(),
-            Self::Supervised { pid, status, .. } => {
+            Self::Supervised {
+                pid,
+                supervisor,
+                status,
+            } => {
                 if let Some(status) = status.clone() {
                     return Ok(Some(status));
                 }
                 if supervised_pid_is_alive(*pid) {
                     return Ok(None);
                 }
-                // Process is gone; fall through to authentic wait_launcher on wait().
-                Ok(None)
+                // Zombie or gone: `/proc/<pid>` still exists for zombies, so
+                // existence checks alone never progress. Reap via MSG_WAIT now
+                // so sync poll paths (wait_process timeout_ms=0) observe exit.
+                let pid = i32::try_from(*pid).map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "supervised launcher PID does not fit i32",
+                    )
+                })?;
+                let supervisor = Arc::clone(supervisor);
+                let raw = supervisor
+                    .lock()
+                    .map_err(|_| std::io::Error::other("session supervisor lock is poisoned"))?
+                    .wait_launcher(pid)
+                    .map_err(|error| std::io::Error::other(error.to_string()))?;
+                let waited = ProcessExitStatus::from_raw(raw);
+                *status = Some(waited.clone());
+                Ok(Some(waited))
             }
         }
     }
@@ -113,8 +133,59 @@ impl LauncherChild {
     }
 }
 
-fn supervised_pid_is_alive(pid: u32) -> bool {
-    std::path::Path::new("/proc").join(pid.to_string()).exists()
+/// True when `/proc/<pid>` shows a non-terminal process state.
+///
+/// Zombies still have a `/proc/<pid>` directory. Treating path existence as
+/// liveness left supervised `try_wait` and ready-race observers never calling
+/// `wait_launcher`, so keyed exec exit status never surfaced to Host wait.
+pub(in crate::executor) fn supervised_pid_is_alive(pid: u32) -> bool {
+    match supervised_proc_stat_state(pid) {
+        Some(state) => !is_terminal_proc_state(state),
+        None => false,
+    }
+}
+
+fn supervised_proc_stat_state(pid: u32) -> Option<u8> {
+    parse_proc_stat_state(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+}
+
+fn parse_proc_stat_state(contents: &str) -> Option<u8> {
+    let closing = contents.rfind(") ")?;
+    contents.as_bytes().get(closing + 2).copied()
+}
+
+const fn is_terminal_proc_state(state: u8) -> bool {
+    matches!(state, b'Z' | b'X' | b'x')
+}
+
+#[cfg(test)]
+mod supervised_liveness_tests {
+    use super::{is_terminal_proc_state, parse_proc_stat_state, supervised_pid_is_alive};
+
+    #[test]
+    fn parse_proc_stat_state_reads_field_after_comm() {
+        assert_eq!(parse_proc_stat_state("42 (sleep) S 1 1"), Some(b'S'));
+        assert_eq!(parse_proc_stat_state("99 (a) Z 1 1"), Some(b'Z'));
+        // Comm may contain spaces / parentheses before the final ") ".
+        assert_eq!(parse_proc_stat_state("7 (weird ) name) R 1 1"), Some(b'R'));
+        assert_eq!(parse_proc_stat_state("broken"), None);
+    }
+
+    #[test]
+    fn terminal_proc_states_match_recovery_observation() {
+        for state in *b"ZXx" {
+            assert!(is_terminal_proc_state(state));
+        }
+        for state in *b"RSDTtI" {
+            assert!(!is_terminal_proc_state(state));
+        }
+    }
+
+    #[test]
+    fn current_process_is_alive_and_missing_pid_is_not() {
+        assert!(supervised_pid_is_alive(std::process::id()));
+        assert!(!supervised_pid_is_alive(u32::MAX));
+    }
 }
 
 /// Host-retained stdio pipe ends for a supervised launcher.
