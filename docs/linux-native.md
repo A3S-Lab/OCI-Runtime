@@ -1951,7 +1951,10 @@ launcher is terminal, Host performs the authentic `wait_launcher` reap.
 
 When the original Host control socketpair closes (owner death), the supervisor
 does **not** reap waitable children and does **not** start a replacement
-supervisor. Re-exec would break PDEATHSIG parentage and invent wait status.
+supervisor. The same durable path applies when Host dies mid-response
+(`BrokenPipe` / connection reset while publishing control replies such as
+capture `MSG_OUTPUT_CHUNKS`): the supervisor enters reattach instead of
+exiting. Re-exec would break PDEATHSIG parentage and invent wait status.
 Instead it publishes a deterministic abstract unix endpoint named
 `a3s.oci.session-supervise.<pid>.<start_time_ticks>` and accepts one
 replacement control connection. Deposited stdin write ends and exclusive
