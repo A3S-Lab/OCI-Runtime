@@ -88,15 +88,25 @@ impl ProcessIdentity {
     }
 
     fn capture(pid: i32, role: &str) -> Result<Self> {
-        let observation = process_observation(pid)?
-            .filter(|observation| !observation.is_terminated())
-            .ok_or_else(|| {
-                recovery_error(
-                    ErrorCode::Unavailable,
-                    format!("{role} PID {pid} exited before its recovery identity was captured"),
-                )
-                .retryable(true)
-            })?;
+        let observation = process_observation(pid)?.ok_or_else(|| {
+            recovery_error(
+                ErrorCode::Unavailable,
+                format!("{role} PID {pid} exited before its recovery identity was captured"),
+            )
+            .retryable(true)
+        })?;
+        // Zombies still expose authentic start-time in `/proc/<pid>/stat`. Short
+        // captured exec payloads (e.g. `printf`) can exit before Host persists
+        // recovery evidence; refusing `Z` turned that race into Unavailable and
+        // broke Live Host-reopen keyed exec. Fully reaped tasks (`X`/`x` or no
+        // `/proc` entry) still fail closed.
+        if matches!(observation.state, b'X' | b'x') {
+            return Err(recovery_error(
+                ErrorCode::Unavailable,
+                format!("{role} PID {pid} exited before its recovery identity was captured"),
+            )
+            .retryable(true));
+        }
         Ok(Self {
             pid,
             start_time_ticks: observation.start_time_ticks,
@@ -816,20 +826,22 @@ impl LinuxLiveSupervisedSession {
         let payload_pid = process.pid();
         let helper_pid = process.helper_pid();
         let terminal = process.terminal();
-        if let Err(error) = record_exec_identity(
+        let (identity, helper) = match record_exec_identity(
             &self.runtime_directory,
             process_id,
             payload_pid,
             helper_pid,
             terminal,
         ) {
-            let _ = process.force_stop().await;
-            let _ =
-                super::remove_process_directory(&self.runtime_directory, &process_directory).await;
-            return Err(error);
-        }
-        let identity = ProcessIdentity::capture(payload_pid, "container exec payload")?;
-        let helper = ProcessIdentity::capture(helper_pid, "container exec helper")?;
+            Ok(identities) => identities,
+            Err(error) => {
+                let _ = process.force_stop().await;
+                let _ =
+                    super::remove_process_directory(&self.runtime_directory, &process_directory)
+                        .await;
+                return Err(error);
+            }
+        };
         self.post_reopen_execs
             .lock()
             .map_err(|_| {
@@ -1474,7 +1486,7 @@ pub(super) fn record_exec_identity(
     payload_pid: i32,
     helper_pid: i32,
     terminal: bool,
-) -> Result<()> {
+) -> Result<(ProcessIdentity, ProcessIdentity)> {
     if process_id.is_init() {
         return Err(recovery_error(
             ErrorCode::InvalidArgument,
@@ -1516,7 +1528,8 @@ pub(super) fn record_exec_identity(
         helper: Some(helper),
         terminal,
     });
-    write_atomic_record(&path, &record)
+    write_atomic_record(&path, &record)?;
+    Ok((identity, helper))
 }
 
 /// Whether the generation recovery record retained a live session supervisor.
@@ -2910,6 +2923,39 @@ mod tests {
             }
             .is_terminated());
         }
+    }
+
+    #[test]
+    fn process_identity_capture_accepts_zombie_start_time() {
+        // SAFETY: parent reaps; child exits immediately to become a zombie.
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork zombie payload");
+        if child == 0 {
+            unsafe { libc::_exit(0) };
+        }
+        let mut saw_zombie = false;
+        for _ in 0..200 {
+            match process_observation(child) {
+                Ok(Some(observation)) if observation.state == b'Z' => {
+                    saw_zombie = true;
+                    break;
+                }
+                Ok(Some(_)) => std::thread::sleep(Duration::from_millis(5)),
+                Ok(None) | Err(_) => break,
+            }
+        }
+        assert!(saw_zombie, "child must still be a zombie under the parent");
+        let identity = ProcessIdentity::capture(child, "zombie payload")
+            .expect("zombie /proc start-time must still authenticate recovery identity");
+        assert_eq!(identity.pid(), child);
+        assert!(
+            !identity.is_live().expect("inspect zombie identity"),
+            "zombie identity must not report live"
+        );
+        let mut status = 0;
+        // SAFETY: reap the test zombie.
+        let reaped = unsafe { libc::waitpid(child, &mut status, 0) };
+        assert_eq!(reaped, child);
     }
 
     #[test]
