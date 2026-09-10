@@ -2717,12 +2717,14 @@ fn write_atomic_record<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         .create_new(true)
         .mode(0o600)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    // Publish with rename, not hard_link: container recovery is updated after
+    // create (supervised exec identities). hard_link to an existing path fails
+    // with EEXIST and left keyed exec stuck after a successful spawn.
     let result = (|| -> io::Result<()> {
         let mut file = options.open(&pending)?;
         file.write_all(&encoded)?;
         file.sync_all()?;
-        std::fs::hard_link(&pending, path)?;
-        std::fs::remove_file(&pending)?;
+        std::fs::rename(&pending, path)?;
         File::open(path.parent().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "recovery record has no parent")
         })?)?
@@ -5557,6 +5559,91 @@ mod tests {
                 init,
             }
         }
+    }
+
+    #[test]
+    fn write_atomic_record_replaces_an_existing_recovery_file() {
+        let temporary = tempfile::tempdir().expect("temporary path");
+        let path = temporary.path().join("recovery.json");
+        write_atomic_record(
+            &path,
+            &serde_json::json!({
+                "schemaVersion": "probe",
+                "generation": 1
+            }),
+        )
+        .expect("create recovery record");
+        write_atomic_record(
+            &path,
+            &serde_json::json!({
+                "schemaVersion": "probe",
+                "generation": 2
+            }),
+        )
+        .expect("replace recovery record");
+        let encoded = std::fs::read_to_string(&path).expect("read recovery record");
+        assert!(encoded.contains("\"generation\": 2"), "{encoded}");
+        let metadata = std::fs::symlink_metadata(&path).expect("metadata");
+        assert_eq!(metadata.mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn record_exec_identity_updates_existing_supervised_recovery() {
+        use std::process::{Command, Stdio};
+
+        let temporary = tempfile::tempdir().expect("temporary path");
+        let path = temporary.path().join(CONTAINER_RECORD_NAME);
+        let self_pid = std::process::id() as i32;
+        let owner = ProcessIdentity::capture(self_pid, "owner").expect("owner identity");
+        let mut helper = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn helper");
+        let helper_pid = helper.id() as i32;
+        let launcher = ProcessIdentity::capture(self_pid, "launcher").expect("launcher");
+        let init = ProcessIdentity::capture(self_pid, "init").expect("init");
+        let supervisor =
+            ProcessIdentity::capture(self_pid, "session supervisor").expect("supervisor");
+        write_atomic_record(
+            &path,
+            &ContainerRecoveryRecord {
+                schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
+                target: ContainerTarget::exact(
+                    a3s_oci_sdk::ContainerId::new("box-1").expect("container ID"),
+                    a3s_oci_sdk::Generation(1),
+                ),
+                config_digest: "sha256:test".to_string(),
+                owner,
+                launcher,
+                init,
+                session_supervisor: Some(supervisor),
+                execs: Vec::new(),
+                cgroup: None,
+                intel_rdt: None,
+            },
+        )
+        .expect("seed supervised recovery");
+
+        let process_id = a3s_oci_sdk::ProcessId::new("exec-1").expect("process ID");
+        record_exec_identity(temporary.path(), &process_id, self_pid, helper_pid, false)
+            .expect("append exec identity");
+        let record = read_container_record(&path).expect("reread recovery");
+        assert_eq!(record.execs.len(), 1);
+        assert_eq!(record.execs[0].process_id, process_id);
+        assert_eq!(record.execs[0].identity.pid, self_pid);
+        assert_eq!(
+            record.execs[0]
+                .helper
+                .as_ref()
+                .expect("helper identity")
+                .pid,
+            helper_pid
+        );
+        let _ = helper.kill();
+        let _ = helper.wait();
     }
 
     #[test]
