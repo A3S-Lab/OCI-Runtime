@@ -2229,7 +2229,7 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   `.github/scripts/linux-native-live-recovery.sh` is implemented under
   `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1` (distinct from stopped-only
   `native-linux-recovery`). **Existing-host WSL2 Native Live filesystem
-  greened** with report
+  greened** on revision `695bf4f73af986b8131f496de85753e491734836` with report
   `/var/tmp/a3s-oci-native-live-fs-v1-20260910225133.json` SHA-256
   `1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`
   (`retained_filesystem_proven` / `file_upload_before_kill` /

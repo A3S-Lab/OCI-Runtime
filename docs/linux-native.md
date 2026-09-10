@@ -2006,7 +2006,8 @@ continuous init identity, then FileOp::Download exact match
 (`retained_filesystem_proven`). `retained_exec_io_proven` is optional for v1.
 The harness builds a **rootful** sleep bundle (no userns id maps) so create
 does not run as mapped UID against the private work tree. Report JSON is
-snake_case (aligned with KVM Live). **Existing-host WSL2 greened** with report
+snake_case (aligned with KVM Live). **Existing-host WSL2 greened** on revision
+`695bf4f73af986b8131f496de85753e491734836` with report
 `/var/tmp/a3s-oci-native-live-fs-v1-20260910225133.json` SHA-256
 `1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`. Distinct
 from stopped-only `native-linux-recovery`. Does not flip B2 / cutover.

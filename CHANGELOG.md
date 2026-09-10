@@ -41,8 +41,9 @@ All notable changes to A3S OCI Runtime are documented in this file.
   Host create+start → FileOp::Upload → Host SIGKILL → init survival →
   replacement Host Running reattach with continuous init identity → exact
   FileOp::Download (`retained_filesystem_proven`; `retained_exec_io_proven`
-  optional for v1). **Existing-host WSL2 Native Live filesystem greened** with
-  report `/var/tmp/a3s-oci-native-live-fs-v1-20260910225133.json` SHA-256
+  optional for v1). **Existing-host WSL2 Native Live filesystem greened** on
+  revision `695bf4f73af986b8131f496de85753e491734836` with report
+  `/var/tmp/a3s-oci-native-live-fs-v1-20260910225133.json` SHA-256
   `1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`
   (`retained_filesystem_proven` / `file_upload_before_kill` /
   `file_download_after_reattach` / `init_survived_host_sigkill` /
