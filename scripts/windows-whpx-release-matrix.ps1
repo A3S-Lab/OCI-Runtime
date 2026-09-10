@@ -86,48 +86,7 @@ function Assert-NoA3sOciProcesses {
     }
 }
 
-function Resolve-FreshHostAttestation {
-    param(
-        [Parameter(Mandatory)] [ValidateSet('existing', 'fresh')] [string]$HostClass,
-        [string]$AttestationPath
-    )
-    $hasPath = -not [string]::IsNullOrWhiteSpace($AttestationPath)
-
-    if ($HostClass -eq 'existing') {
-        if ($hasPath) {
-            throw 'FreshHostAttestation is only valid with -HostClass fresh.'
-        }
-        # Explicit empty result: `return $null` can still surface prior pipeline
-        # output under StrictMode callers; emit nothing and stop.
-        return
-    }
-
-    if (-not $hasPath) {
-        throw 'HostClass=fresh requires -FreshHostAttestation pointing to a single-use operator attestation JSON.'
-    }
-    $resolved = (Resolve-Path -LiteralPath $AttestationPath -ErrorAction Stop).Path
-    Assert-RegularFile -Path $resolved -Label 'Fresh-host attestation' | Out-Null
-    $attestation = Get-Content -LiteralPath $resolved -Raw | ConvertFrom-Json
-    if ($attestation.schema_version -ne 'a3s.oci.windows-whpx-fresh-host-attestation.v1') {
-        throw "Unexpected fresh-host attestation schema: $($attestation.schema_version)"
-    }
-    if ($attestation.operator_attests_fresh_provisioning -ne $true) {
-        throw 'Fresh-host attestation must set operator_attests_fresh_provisioning=true.'
-    }
-    $provisionedAt = Get-OptionalProperty -Object $attestation -Name 'provisioned_at_utc'
-    if ([string]::IsNullOrWhiteSpace([string]$provisionedAt)) {
-        throw 'Fresh-host attestation must include provisioned_at_utc.'
-    }
-    $hostname = Get-OptionalProperty -Object $attestation -Name 'hostname'
-    return [ordered]@{
-        path = $resolved
-        sha256 = (Get-Sha256 -Path $resolved)
-        schema_version = [string]$attestation.schema_version
-        operator_attests_fresh_provisioning = $true
-        provisioned_at_utc = [string]$provisionedAt
-        hostname = if ($null -eq $hostname) { $null } else { [string]$hostname }
-    }
-}
+. (Join-Path $PSScriptRoot 'lib\windows-whpx-fresh-host-attestation.ps1')
 
 function Invoke-GateScript {
     param(
@@ -215,14 +174,11 @@ if ($systemImageSha256 -ne $systemImage.image.sha256 -or
 }
 $systemImageManifestSha256 = Get-Sha256 -Path $systemImageManifest
 $rootfsSha256 = Get-Sha256 -Path $rootfsArchive
-$freshHostAttestation = $null
-$hasFreshHostAttestation = $false
-if ($HostClass -eq 'fresh') {
-    $freshHostAttestation = Resolve-FreshHostAttestation `
-        -HostClass $HostClass `
-        -AttestationPath $FreshHostAttestation
-    $hasFreshHostAttestation = $true
-}
+# Always resolve so existing+attestation-path fails closed (mirrors Linux KVM).
+$freshHostAttestation = Resolve-WhpxFreshHostAttestation `
+    -HostClass $HostClass `
+    -AttestationPath $FreshHostAttestation
+$hasFreshHostAttestation = $null -ne $freshHostAttestation
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $runId = '{0}-{1}' -f (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'), $PID

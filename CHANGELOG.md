@@ -27,6 +27,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Extracted WHPX fresh-host attestation resolution into
+  `scripts/lib/windows-whpx-fresh-host-attestation.ps1` and added fail-closed
+  unit checks in `scripts/windows-whpx-fresh-host-attestation-test.ps1`
+  (mirrors Linux KVM attestation unit tests). The release matrix now always
+  resolves attestation so `HostClass=existing` with `-FreshHostAttestation`
+  is rejected. Does not promote readiness or claim a fresh-host matrix pass.
 - Re-greened tip-source Native Linux full smoke including soak on clean tip
   `d337aef892e1bffd8a5ef9820112780656041eb2` (Merge #297) via
   `.github/scripts/native-linux-smoke.sh` EXIT=0 on existing-host WSL2.
