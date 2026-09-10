@@ -177,7 +177,7 @@ scripts/prepare-utility-vm-bundle.sh \
   --alpine-archive "$alpine_archive" \
   --config fixtures/utility-vm/config.linux-kvm.json \
   --bundle "$bundle" \
-  --cgroups-path a3s-oci-kvm-live-recovery
+  --cgroups-path a3s-oci-kvm-l
 evidence_parent="$work/evidence"
 mkdir "$evidence_parent"
 chmod 0700 "$work" "$bundle" "$evidence_parent"

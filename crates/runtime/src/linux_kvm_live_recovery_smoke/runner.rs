@@ -60,7 +60,7 @@ pub async fn run(config: LinuxKvmLiveRecoverySmokeConfig) -> LinuxKvmLiveRecover
             work_parent: config.work_parent,
             source_revision: config.source_revision,
         },
-        "kvm-live",
+        "klr",
         "Linux KVM Live recovery qualification endpoint",
     )
     .await
@@ -195,9 +195,9 @@ async fn run_first_owner(
     )
     .await?;
     evidence.qualification_scope_verified = true;
-    let id = ContainerId::new(format!("kvm-live-owner-{}", prepared.nonce))
+    let id = ContainerId::new(format!("kvm-lr-{}", prepared.nonce))
         .map_err(|error| format!("failed to construct Live recovery container ID: {error}"))?;
-    let context = operation("kvm-live-recovery", &prepared.nonce, "create")?;
+    let context = operation("kvm-lr", &prepared.nonce, "create")?;
     let staged = bundle::stage(&prepared.bundle, runtime_root, &id, &context.operation_id).await?;
     let create = CreateRequest {
         context,
@@ -218,7 +218,7 @@ async fn run_first_owner(
     let started = call(
         "KVM Live recovery start",
         client.start(StartRequest {
-            context: operation("kvm-live-recovery", &prepared.nonce, "start")?,
+            context: operation("kvm-lr", &prepared.nonce, "start")?,
             target: target.clone(),
         }),
     )
@@ -334,7 +334,7 @@ async fn run_replacement(
     call(
         "replacement Live kill",
         client.kill(KillRequest {
-            context: operation("kvm-live-recovery", &prepared.nonce, "kill")?,
+            context: operation("kvm-lr", &prepared.nonce, "kill")?,
             target: target.clone(),
             signal: Signal::new(libc::SIGKILL)
                 .map_err(|error| format!("failed to construct SIGKILL: {error}"))?,
@@ -354,7 +354,7 @@ async fn run_replacement(
     call(
         "replacement Live stopped-only delete",
         client.delete(DeleteRequest {
-            context: operation("kvm-live-recovery", &prepared.nonce, "delete")?,
+            context: operation("kvm-lr", &prepared.nonce, "delete")?,
             target: target.clone(),
             mode: DeleteMode::StoppedOnly,
         }),
