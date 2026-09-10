@@ -8,9 +8,13 @@ use crate::linux_kvm_recovery_smoke::report::canonical_sha256_digest;
 use crate::linux_kvm_recovery_smoke::{LinuxKvmRecoveryArtifacts, LinuxProcessIdentity};
 
 pub const LINUX_KVM_LIVE_RECOVERY_SMOKE_SCHEMA_VERSION: &str =
-    "a3s.oci.linux-kvm-live-recovery-smoke.v1";
+    "a3s.oci.linux-kvm-live-recovery-smoke.v2";
 
 /// Live Host reopen evidence: Guest survives Host SIGKILL and reattaches Running.
+///
+/// v2 also proves retained exec I/O (Pipe stdin + Capture stdout) across Host
+/// SIGKILL on the same Guest process identity. Does **not** claim Box
+/// `retained_stream_handle_proven` or flip `b2_process_session_recovery_closed`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinuxKvmLiveRecoveryEvidence {
     pub session_owner_mode_durable: bool,
@@ -31,6 +35,17 @@ pub struct LinuxKvmLiveRecoveryEvidence {
     pub durable_guest_endpoint_retained: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub durable_pipe_name: Option<String>,
+    /// Exec process ID retained across Host SIGKILL for I/O continuity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retained_exec_process_id: Option<String>,
+    /// First Host proved write_stdin + read_output echo before SIGKILL.
+    pub exec_io_before_kill: bool,
+    /// Replacement Host write_stdin on the same process ID succeeded.
+    pub write_stdin_after_reattach: bool,
+    /// Replacement Host read_output observed the post-reattach echo.
+    pub read_output_after_reattach: bool,
+    /// Aggregate: before-kill I/O + after-reattach write + read on same exec.
+    pub retained_exec_io_proven: bool,
     pub host_service_sigkill_delivered: bool,
     pub first_host_service_reaped: bool,
     pub stale_socket_retained: bool,
@@ -81,6 +96,14 @@ impl LinuxKvmLiveRecoveryEvidence {
                 .durable_pipe_name
                 .as_deref()
                 .is_some_and(|name| name.starts_with("a3s-oci-agent-") && name.len() > 16)
+            && self
+                .retained_exec_process_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
+            && self.exec_io_before_kill
+            && self.write_stdin_after_reattach
+            && self.read_output_after_reattach
+            && self.retained_exec_io_proven
             && self.host_service_sigkill_delivered
             && self.first_host_service_reaped
             && self.stale_socket_retained
@@ -217,6 +240,11 @@ mod tests {
                 live_binding_published: true,
                 durable_guest_endpoint_retained: true,
                 durable_pipe_name: Some(format!("a3s-oci-agent-{}", "a".repeat(32))),
+                retained_exec_process_id: Some("live-io-exec".to_string()),
+                exec_io_before_kill: true,
+                write_stdin_after_reattach: true,
+                read_output_after_reattach: true,
+                retained_exec_io_proven: true,
                 host_service_sigkill_delivered: true,
                 first_host_service_reaped: true,
                 stale_socket_retained: true,
@@ -265,8 +293,13 @@ mod tests {
         changed_init.recovery.init_identity_unchanged = false;
         assert!(!changed_init.is_success());
 
-        let mut not_durable = report;
+        let mut not_durable = report.clone();
         not_durable.recovery.session_owner_mode_durable = false;
         assert!(!not_durable.is_success());
+
+        let mut no_io = report;
+        no_io.recovery.retained_exec_io_proven = false;
+        no_io.recovery.write_stdin_after_reattach = false;
+        assert!(!no_io.is_success());
     }
 }

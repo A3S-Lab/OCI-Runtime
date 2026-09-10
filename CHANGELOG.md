@@ -44,16 +44,20 @@ All notable changes to A3S OCI Runtime are documented in this file.
   close W2/B2 until existing-host WSL2 `/dev/kvm` Live evidence is greened.
 
 - Opt-in Linux KVM Live Host reopen evidence gate (observation-only): schema
-  `a3s.oci.linux-kvm-live-recovery-smoke.v1`, CLI
+  `a3s.oci.linux-kvm-live-recovery-smoke.v2`, CLI
   `linux-kvm-live-recovery-smoke`, and
   `.github/scripts/linux-kvm-live-recovery.sh` matrix wrapper
   (`a3s.oci.linux-kvm-live-recovery-matrix.v1`). Proves
-  `A3S_OCI_KVM_SESSION_OWNER=1` create+start → Host SIGKILL → Guest /
-  session-owner survival → replacement Host Running reattach with continuous
-  init identity and no invented exit. Distinct from stopped-only
-  `linux-kvm-recovery` (`live_vm_processes_reaped` must be false). Existing-host
-  WSL2 `/dev/kvm` greened on `c3b5fc54…` (matrix SHA-256
-  `15d99d8e5b087112612859783ed76881bcc3e8be68b513032edb8673b1958db3`); W2/B2 and
+  `A3S_OCI_KVM_SESSION_OWNER=1` create+start → retained exec I/O (Pipe stdin +
+  Capture stdout) → Host SIGKILL → Guest / session-owner survival → replacement
+  Host Running reattach with continuous init identity, the same exec process ID,
+  post-reattach write_stdin/read_output (`retained_exec_io_proven`), and no
+  invented exit. Distinct from stopped-only `linux-kvm-recovery`
+  (`live_vm_processes_reaped` must be false). Does **not** claim Box
+  `retained_stream_handle_proven` or flip W2/B2 / cutover flags. Prior Host
+  survival-only greening used smoke v1 on `c3b5fc54…`; v2 greened on existing-host
+  WSL2 `/dev/kvm` at `a7e60d06…` (matrix SHA-256
+  `888623a38d8399ff65047a5f1e294cbdff2d77b54302172afeab3c081a2ce88c`). W2/B2 and
   cutover flags remain open.
 
 ### Changed
