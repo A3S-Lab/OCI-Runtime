@@ -9,6 +9,8 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::windows::fs::MetadataExt;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
@@ -36,7 +38,9 @@ use tokio::time::timeout;
 use crate::agent_launch_cleanup::FailedAgentVmLaunchCleanup;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use crate::agent_pipe::WindowsAgentPipeListener;
-use crate::agent_smoke_process::{BoundedOutput, CompletedShim, RunningShim, MAX_CAPTURE_BYTES};
+use crate::agent_smoke_process::{
+    BoundedOutput, CompletedShim, ManagedShim, RunningShim, MAX_CAPTURE_BYTES,
+};
 #[cfg(unix)]
 use crate::agent_socket::UnixAgentSocketListener;
 use crate::report::AgentVmSmokeReport;
@@ -66,7 +70,7 @@ type PlatformAgentStream = UnixStream;
 pub(crate) struct AgentVmSession {
     report: AgentVmSmokeReport,
     client: AgentClient<PlatformAgentStream>,
-    running: RunningShim,
+    running: ManagedShim,
     console: PathBuf,
     runtime_share_required: bool,
     expected_system_image_manifest_sha256: Option<String>,
@@ -1069,6 +1073,17 @@ impl AgentVmSession {
             Ok(encoded) => encoded,
             Err(error) => return Err(failed(report, error.to_string())),
         };
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        let durable_owner = crate::kvm_durable_session_owner::owner_mode_from_env()
+            == crate::kvm_durable_session_owner::KvmOwnerMode::DurableSession;
+        #[cfg(not(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )))]
+        let durable_owner = false;
         let mut command = Command::new(prepared_shim.command_path());
         command
             .arg("agent-vm-smoke")
@@ -1086,15 +1101,18 @@ impl AgentVmSession {
                 .arg("--runtime-share")
                 .arg(runtime_share_path)
                 .arg("--socket-path")
-                .arg(listener.socket_path())
-                .arg("--owner-pid")
-                .arg(std::process::id().to_string());
+                .arg(listener.socket_path());
+            if !durable_owner {
+                command
+                    .arg("--owner-pid")
+                    .arg(std::process::id().to_string());
+            }
             command
                 .arg("--console-device")
                 .arg(console_identity.0.to_string())
                 .arg("--console-inode")
                 .arg(console_identity.1.to_string());
-            if let Some(path) = recovery_report {
+            if let Some(path) = recovery_report.as_ref() {
                 command.arg("--recovery-report").arg(path);
             }
         }
@@ -1142,16 +1160,62 @@ impl AgentVmSession {
         if let Some(encoded) = &encoded_qualification {
             command.env(AGENT_TRANSPORT_QUALIFICATION_ENV, encoded);
         }
-        let mut running = match RunningShim::spawn(&mut command) {
-            Ok(running) => running,
-            Err(error) => {
+        let mut running = if durable_owner {
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            {
+                match spawn_durable_linux_agent_vm(
+                    prepared_shim.command_path(),
+                    &rootfs,
+                    &console,
+                    endpoint.pipe_name(),
+                    system_image_manifest_path,
+                    runtime_share_path,
+                    listener.socket_path(),
+                    console_identity,
+                    recovery_report.as_deref(),
+                    qualify_kvm_post_probe_failure,
+                    qualify_kvm_compatibility_drift,
+                    vm_attachment_manifest_sha256,
+                    encoded_token.as_str(),
+                    encoded_qualification.as_deref(),
+                ) {
+                    Ok(owner) => ManagedShim::Durable(owner),
+                    Err(error) => {
+                        return Err(failed(
+                            report,
+                            format!(
+                                "failed to start durable libkrun session-owner for {}: {error}",
+                                prepared_shim.display_path().display()
+                            ),
+                        ));
+                    }
+                }
+            }
+            #[cfg(not(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )))]
+            {
                 return Err(failed(
                     report,
-                    format!(
-                        "failed to start libkrun shim {}: {error}",
-                        prepared_shim.display_path().display()
-                    ),
+                    "durable KVM session ownership is only supported on Linux",
                 ));
+            }
+        } else {
+            match RunningShim::spawn(&mut command) {
+                Ok(running) => ManagedShim::HostBound(running),
+                Err(error) => {
+                    return Err(failed(
+                        report,
+                        format!(
+                            "failed to start libkrun shim {}: {error}",
+                            prepared_shim.display_path().display()
+                        ),
+                    ));
+                }
             }
         };
         drop(command);
@@ -1180,9 +1244,40 @@ impl AgentVmSession {
         let accept = accept_bridge(listener, shim_process_id);
         tokio::pin!(accept);
         let bridge_outcome = timeout(BRIDGE_TIMEOUT, async {
-            tokio::select! {
-                result = &mut accept => BridgeOutcome::Connected(result),
-                status = running.child_mut().wait() => BridgeOutcome::ShimExited(status),
+            if let Some(host_bound) = running.host_bound_mut() {
+                tokio::select! {
+                    result = &mut accept => BridgeOutcome::Connected(result),
+                    status = host_bound.child_mut().wait() => BridgeOutcome::ShimExited(status),
+                }
+            } else {
+                #[cfg(all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                ))]
+                {
+                    loop {
+                        tokio::select! {
+                            result = &mut accept => break BridgeOutcome::Connected(result),
+                            _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                                if let ManagedShim::Durable(owner) = &running {
+                                    if !owner.child_alive() {
+                                        break BridgeOutcome::ShimExited(Ok(
+                                            // Synthetic unsuccessful status: durable path has no Child wait.
+                                            ExitStatus::from_raw(1),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                #[cfg(not(all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )))]
+                {
+                    BridgeOutcome::Connected(accept.await)
+                }
             }
         })
         .await;
@@ -2467,6 +2562,76 @@ const fn expected_guest_architecture(platform: HostPlatform) -> &'static str {
         HostPlatform::Macos => "aarch64",
         _ => "",
     }
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn spawn_durable_linux_agent_vm(
+    krun_shim: &Path,
+    rootfs: &Path,
+    console: &Path,
+    pipe_name: &str,
+    system_image_manifest: &Path,
+    runtime_share: &Path,
+    socket_path: &Path,
+    console_identity: (u64, u64),
+    recovery_report: Option<&Path>,
+    qualify_kvm_post_probe_failure: bool,
+    qualify_kvm_compatibility_drift: Option<&str>,
+    vm_attachment_manifest_sha256: Option<&str>,
+    session_token: &str,
+    transport_qualification: Option<&str>,
+) -> io::Result<crate::kvm_durable_session_owner::DurableSessionOwner> {
+    use std::ffi::OsString;
+
+    let ready_file = runtime_share.join(".a3s-oci-kvm-session-owner.ready");
+    let mut argv = vec![
+        OsString::from("agent-vm-smoke"),
+        OsString::from("--rootfs"),
+        rootfs.as_os_str().to_owned(),
+        OsString::from("--console"),
+        console.as_os_str().to_owned(),
+        OsString::from("--pipe-name"),
+        OsString::from(pipe_name),
+        OsString::from("--system-image-manifest"),
+        system_image_manifest.as_os_str().to_owned(),
+        OsString::from("--runtime-share"),
+        runtime_share.as_os_str().to_owned(),
+        OsString::from("--socket-path"),
+        socket_path.as_os_str().to_owned(),
+        OsString::from("--console-device"),
+        OsString::from(console_identity.0.to_string()),
+        OsString::from("--console-inode"),
+        OsString::from(console_identity.1.to_string()),
+    ];
+    if let Some(path) = recovery_report {
+        argv.push(OsString::from("--recovery-report"));
+        argv.push(path.as_os_str().to_owned());
+    }
+    if qualify_kvm_post_probe_failure {
+        argv.push(OsString::from("--qualify-kvm-post-probe-failure"));
+    }
+    if let Some(case) = qualify_kvm_compatibility_drift {
+        argv.push(OsString::from("--qualify-kvm-compatibility-drift"));
+        argv.push(OsString::from(case));
+    }
+    if let Some(digest) = vm_attachment_manifest_sha256 {
+        argv.push(OsString::from("--vm-attachment-manifest-sha256"));
+        argv.push(OsString::from(digest));
+    }
+
+    let mut envs = vec![(AGENT_SESSION_TOKEN_ENV, session_token)];
+    if let Some(encoded) = transport_qualification {
+        envs.push((AGENT_TRANSPORT_QUALIFICATION_ENV, encoded));
+    }
+    crate::kvm_durable_session_owner::spawn_via_session_owner_helper_with_env(
+        krun_shim,
+        &argv,
+        &ready_file,
+        &envs,
+    )
 }
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]

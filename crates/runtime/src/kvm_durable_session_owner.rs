@@ -22,9 +22,8 @@ use std::time::Duration;
 /// Environment flag that requests durable KVM session ownership.
 ///
 /// When unset/false, Host remains the shim parent (stopped-only on Host death).
-/// When true, callers must spawn through [`spawn_holding_child`] so the
-/// session owner — not Host — is the shim's direct parent.
-#[allow(dead_code)] // public opt-in surface; shim spawn wire-up is the next slice
+/// When true, callers must spawn through [`spawn_via_session_owner_helper`] so
+/// the session owner — not Host — is the shim's direct parent.
 pub const KVM_SESSION_OWNER_ENV: &str = "A3S_OCI_KVM_SESSION_OWNER";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,7 +35,6 @@ pub enum KvmOwnerMode {
 }
 
 /// Resolve ownership mode from the process environment.
-#[allow(dead_code)] // public opt-in surface; shim spawn wire-up is the next slice
 pub fn owner_mode_from_env() -> KvmOwnerMode {
     owner_mode_from_value(env::var(KVM_SESSION_OWNER_ENV).ok().as_deref())
 }
@@ -70,6 +68,14 @@ impl DurableSessionOwner {
 
     pub fn child_pid(&self) -> NonZeroU32 {
         self.child_pid
+    }
+
+    pub fn child_alive(&self) -> bool {
+        process_alive(self.child_pid)
+    }
+
+    pub fn owner_alive(&self) -> bool {
+        process_alive(self.owner_pid)
     }
 
     /// Terminate the session owner and its process-group child.
@@ -110,19 +116,108 @@ impl DurableSessionOwner {
     }
 }
 
+/// Spawn `a3s-oci-krun-shim session-owner` as a Host child (Tokio-safe).
+///
+/// `shim_argv` is the trailing shim argv (for example `agent-vm-smoke ...`) and
+/// must not include `--owner-pid`. The helper injects its own PID.
+pub fn spawn_via_session_owner_helper(
+    krun_shim: &std::path::Path,
+    shim_argv: &[std::ffi::OsString],
+    ready_file: &std::path::Path,
+) -> io::Result<DurableSessionOwner> {
+    spawn_via_session_owner_helper_with_env(krun_shim, shim_argv, ready_file, &[])
+}
+
+/// Like [`spawn_via_session_owner_helper`], forwarding extra environment into the
+/// session-owner (and therefore the shim).
+pub fn spawn_via_session_owner_helper_with_env(
+    krun_shim: &std::path::Path,
+    shim_argv: &[std::ffi::OsString],
+    ready_file: &std::path::Path,
+    envs: &[(&str, &str)],
+) -> io::Result<DurableSessionOwner> {
+    use std::fs;
+    use std::time::Instant;
+
+    if shim_argv.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "durable session-owner shim argv must be non-empty",
+        ));
+    }
+    if shim_argv.iter().any(|arg| arg == "--owner-pid") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "durable session-owner shim argv must not include --owner-pid",
+        ));
+    }
+    if ready_file.exists() {
+        let _ = fs::remove_file(ready_file);
+    }
+
+    let mut owner = Command::new(krun_shim);
+    owner
+        .arg("session-owner")
+        .arg("--ready-file")
+        .arg(ready_file)
+        .args(shim_argv)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for (key, value) in envs {
+        owner.env(key, value);
+    }
+    let mut spawned = owner.spawn()?;
+    let owner_pid = NonZeroU32::new(spawned.id()).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "durable session-owner helper returned a zero PID",
+        )
+    })?;
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let child_pid = loop {
+        if let Ok(bytes) = fs::read(ready_file) {
+            let text = String::from_utf8_lossy(&bytes);
+            if let Some(line) = text.lines().next() {
+                if let Ok(pid) = line.trim().parse::<u32>() {
+                    if let Some(pid) = NonZeroU32::new(pid) {
+                        break pid;
+                    }
+                }
+            }
+        }
+        match spawned.try_wait()? {
+            Some(status) => {
+                return Err(io::Error::other(format!(
+                    "durable session-owner helper exited before readiness: {status}"
+                )));
+            }
+            None if Instant::now() >= deadline => {
+                let _ = spawned.kill();
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "timed out waiting for durable session-owner readiness",
+                ));
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+
+    // Detach: do not kill_on_drop; Host SIGKILL must leave the owner alive.
+    std::mem::forget(spawned);
+
+    Ok(DurableSessionOwner {
+        owner_pid,
+        child_pid,
+    })
+}
+
 /// Spawn a durable session owner that becomes the direct parent of `child`.
 ///
-/// The owner process:
-/// - is forked from the current Host process;
-/// - forks/execs `child` with `process_group(0)` so the Linux krun parentage
-///   and process-group invariants can hold;
-/// - stays alive until [`DurableSessionOwner::shutdown`] or the owner is
-///   SIGKILL'd (Host exit alone does not terminate it).
-///
-/// The caller must not `kill_on_drop` this owner if Host death should leave
-/// the Guest running for Live reopen.
+/// Prefer [`spawn_via_session_owner_helper`] from Tokio Host paths. This fork
+/// helper is for isolated single-threaded tests only.
 pub fn spawn_holding_child(child: Command) -> io::Result<DurableSessionOwner> {
-    let mut child = child;
     let (owner_ready_reader, owner_ready_writer) = anonymous_pipe()?;
     let (child_ready_reader, child_ready_writer) = anonymous_pipe()?;
 
@@ -422,6 +517,55 @@ mod tests {
         let _ = gate;
         let _ = PathBuf::from("keep tempdir until assertions finish");
         drop(temp);
+    }
+
+    #[test]
+    fn session_owner_helper_parents_probe_and_survives_host_detach() {
+        let shim = env::var("A3S_OCI_KRUN_SHIM")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                path.pop(); // crates/runtime -> crates
+                path.pop(); // crates -> repo root
+                let candidate = path.join("target/debug/a3s-oci-krun-shim");
+                candidate.is_file().then_some(candidate)
+            });
+        let Some(shim) = shim else {
+            eprintln!("skipping: build a3s-oci-krun-shim or set A3S_OCI_KRUN_SHIM");
+            return;
+        };
+        assert!(shim.is_file(), "krun shim must be a file: {shim:?}");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ready = temp.path().join("ready");
+        let argv = [
+            std::ffi::OsString::from("session-owner-probe"),
+            std::ffi::OsString::from("--sleep-ms"),
+            std::ffi::OsString::from("60000"),
+        ];
+        let owner = spawn_via_session_owner_helper(&shim, &argv, &ready)
+            .expect("spawn via session-owner helper");
+
+        let status = fs::read_to_string(format!("/proc/{}/status", owner.child_pid().get()))
+            .expect("read child status");
+        let ppid = status
+            .lines()
+            .find_map(|line| line.strip_prefix("PPid:\t"))
+            .expect("PPid line")
+            .trim()
+            .parse::<u32>()
+            .expect("parse PPid");
+        assert_eq!(
+            ppid,
+            owner.owner_pid().get(),
+            "probe child must be parented by the durable session owner"
+        );
+        assert!(owner.child_alive());
+        assert!(owner.owner_alive());
+
+        owner.shutdown().expect("shutdown helper-backed owner");
     }
 
     #[test]

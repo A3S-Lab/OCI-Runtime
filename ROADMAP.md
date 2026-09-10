@@ -2122,6 +2122,75 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   generations.
 - [ ] Prove Box process-session recovery across an out-of-process runtime
   restart on real native Linux and utility-VM drivers.
+<<<<<<< HEAD
+=======
+  Foundation retained: `session_supervisor` first-principles tests prove the
+  host-surviving supervisor identity (PID + start-time) and lifetime split
+  versus Host-bound PDEATHSIG. Production `HostSessionSupervisor` /
+  `session-supervise` can parent workloads and survive Host death; recovery
+  schema `a3s.oci.native-linux-recovery.v4` can record the supervisor identity.
+  Opt-in Native create (`A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`) now spawns the
+  launcher under that supervisor and persists `sessionSupervisor` on create.
+  Control-channel reattach slice is retained: after Host EOF the supervisor
+  publishes `a3s.oci.session-supervise.<pid>.<start_time>` and
+  `HostSessionSupervisor::reattach` authenticates and resumes wait/spawn
+  without inventing exit status (re-exec remains wrong for PDEATHSIG
+  parentage). Host reopen now reattaches a live recorded supervisor in
+  `recover_stale_generation` and returns `StaleGenerationRecovery::Live` with
+  wait/kill of the supervised launcher; stopped-only delete proceeds only after
+  launcher/init exit.   Multi-container Host reopen reuses one reattached
+  control connection via `SessionSupervisorReattachCache` (one supervisor
+  identity → one control Arc across generations). Partial Host-reopen process
+  inventory now exposes the authenticated live init plus still-live durable
+  exec identities from recovery
+  `a3s.oci.native-linux-recovery.v6` (v5 normalizes without helper; empty after
+  those identities exit; no invented exit status). Supervised exec persists
+  payload + helper PID + start-time into the
+  recovery record and spawns under the session supervisor so the payload can
+  survive Host death with authentic `MSG_WAIT` ownership. Host reopen keeps
+  `DriverRecovery::observed`
+  (not `recreated_running_with_processes`) because omitting dead execs must
+  not Conflict with Host exact-match rebind. Host-reopen stdin restore is
+  retained: supervised create deposits a duplicate stdin write end via
+  SCM_RIGHTS; reopen takes it for authentic write/close. Host-reopen exclusive
+  stdout/stderr restore is retained: supervised create moves capture read ends
+  to the supervisor (SCM_RIGHTS move, not `F_DUPFD`); the supervisor sole-drains
+  into a bounded buffer; Host/live reopen poll authentic chunks via control IPC;
+  missing deposit fail-closes with `Unavailable` (never invents an empty
+  stream). Authenticated Host-reopen `signal_process` for durable init/exec
+  identities is retained: PID + start-time re-auth, then pidfd delivery,
+  without restoring a fake `PreparedProcess`. Live `wait_process` for durable
+  exec uses supervisor `MSG_WAIT` when a helper identity is recorded (v6); v5
+  exec records without helper fail closed. Authentic Host-reopen
+  `pause` / `resume` / `stats` use the durable recovery cgroup leaf (kernel
+  freezer + cgroup-v2 counters) without restoring `PreparedProcess`; missing
+  cgroup evidence fail-closes with `Unavailable`. New `exec` after Host reopen
+  rebuilds the minimum authentic spawn context from the durable config snapshot
+  plus live init namespace/root descriptors and the recovery cgroup leaf, then
+  supervisor-parents the helper (`ExecProcess::spawn_with_context`). Null I/O
+  only in this slice; capture/pipe/terminal remain Unavailable. Default create
+  stays Host-bound. Opt-in supervised create accepts rootless device mounts over
+  the Host create-control SCM_RIGHTS path (same as default create; mounts do not
+  ride `spawn_launcher`). Existing-host WSL2 Box live-session v3 evidence on
+  OCI `7001ce5a4c32cd6e2bbb9a833fc45fd05d2318c9` proves retained streaming
+  handle continuity across Native Host owner SIGKILL (report SHA-256
+  `bc36ff5b895b6320b57322328f78910be82eddfb2203b97bd2c86455b1929d02`,
+  `retained_stream_handle_proven=true`). That does **not** close W2/B2 alone:
+  utility-VM Live, default create Host-bound policy, fresh-host, and cutover
+  remain open.
+- [ ] Opt-in KVM / utility-VM Live Host reopen (observation-only; no cutover):
+  durable `a3s-oci-krun-shim session-owner` helper + AgentVmSession
+  `A3S_OCI_KVM_SESSION_OWNER=1` spawn path land parentage that outlives Host
+  Service (default remains Host-PID owner-watchdog so stopped-only owner-death
+  gates stay green). **Still required:** replacement Host authenticated
+  reattach of the **same** Guest incarnation to `Live` Running (continuous init
+  identity, no invented exit); orphaned session roots stay rejected without that
+  evidence. Defer retained streaming handle continuity and
+  `b2_process_session_recovery_closed` / `kvm_microvm_live_claimed` until Live
+  reattach is greened on existing-host WSL2 `/dev/kvm`. Does not register KVM
+  with normal HostRuntimeService, flip default supervised create, or cut over
+  MicroVM product routing.
+>>>>>>> 40febe2 (docs(roadmap): note durable session-owner spawn; Live reattach still open)
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,

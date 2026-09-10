@@ -101,6 +101,38 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
     },
+    /// Opt-in durable session owner: become the shim's direct parent so Host
+    /// SIGKILL does not tear down the Guest (Linux KVM Live reopen path).
+    ///
+    /// Default Host-bound ownership is unchanged. This helper setsid()'s, injects
+    /// `--owner-pid` as its own PID, spawns the trailing shim argv as a new
+    /// process group, and publishes the shim PID to `--ready-file`.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    SessionOwner {
+        /// Host path that receives one line `<shim_pid>\n` after spawn.
+        #[arg(long, value_name = "FILE")]
+        ready_file: PathBuf,
+        /// Shim argv (for example `agent-vm-smoke ...`). Must not include
+        /// `--owner-pid`; this process injects it.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        shim_argv: Vec<std::ffi::OsString>,
+    },
+    /// Qualification-only child used under `session-owner` to prove parentage.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    SessionOwnerProbe {
+        /// Injected by `session-owner`; must equal this process's getppid().
+        #[arg(long, value_name = "PID")]
+        owner_pid: NonZeroU32,
+        /// How long to sleep after the parentage check succeeds.
+        #[arg(long, default_value_t = 3_600_000, value_name = "MS")]
+        sleep_ms: u64,
+    },
     /// Boot the Linux agent at its fixed guest path and bridge its control vsock.
     AgentVmSmoke {
         /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
@@ -367,6 +399,34 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         }
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        Command::SessionOwner {
+            ready_file,
+            shim_argv,
+        } => match run_session_owner(ready_file, shim_argv) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("a3s-oci-krun-shim: session-owner failed: {error}");
+                ExitCode::FAILURE
+            }
+        },
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        Command::SessionOwnerProbe {
+            owner_pid,
+            sleep_ms,
+        } => match run_session_owner_probe(owner_pid, sleep_ms) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("a3s-oci-krun-shim: session-owner-probe failed: {error}");
+                ExitCode::FAILURE
+            }
+        },
         Command::VmSmoke {
             rootfs,
             #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -1038,6 +1098,85 @@ fn parse_runtime_share_identities(
              --runtime-share-inode plus --runtime-state-device and --runtime-state-inode"
                 .to_string(),
         ),
+    }
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn run_session_owner_probe(owner_pid: NonZeroU32, sleep_ms: u64) -> Result<ExitCode, String> {
+    // SAFETY: getppid has no failure mode.
+    let parent = unsafe { libc::getppid() };
+    let expected = libc::pid_t::try_from(owner_pid.get())
+        .map_err(|error| format!("owner_pid does not fit pid_t: {error}"))?;
+    if parent != expected {
+        return Err(format!(
+            "session-owner-probe parentage mismatch: getppid={parent} owner_pid={expected}"
+        ));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+    Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn run_session_owner(
+    ready_file: PathBuf,
+    shim_argv: Vec<std::ffi::OsString>,
+) -> Result<ExitCode, String> {
+    use std::fs;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    if shim_argv.is_empty() {
+        return Err("session-owner requires a non-empty shim argv after the subcommand".into());
+    }
+    if shim_argv.iter().any(|arg| arg == "--owner-pid") {
+        return Err("session-owner shim argv must not include --owner-pid".into());
+    }
+
+    // Detach from the Host session so Host teardown does not SIGHUP this owner.
+    // SAFETY: setsid requires a non-leader; Command::spawn children are.
+    if unsafe { libc::setsid() } < 0 {
+        return Err(format!(
+            "session-owner setsid failed: {}",
+            io::Error::last_os_error()
+        ));
+    }
+
+    let owner_pid = std::process::id();
+    let owner_pid = NonZeroU32::new(owner_pid)
+        .ok_or_else(|| "session-owner observed a zero process ID".to_string())?;
+    let exe = std::env::current_exe()
+        .map_err(|error| format!("resolve session-owner executable: {error}"))?;
+
+    let mut child = Command::new(&exe);
+    child.args(&shim_argv);
+    child.arg("--owner-pid").arg(owner_pid.to_string());
+    child
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let mut spawned = child
+        .spawn()
+        .map_err(|error| format!("spawn shim under session-owner: {error}"))?;
+    let shim_pid = NonZeroU32::new(spawned.id())
+        .ok_or_else(|| "shim under session-owner has no process ID".to_string())?;
+
+    let tmp = ready_file.with_extension("tmp");
+    fs::write(&tmp, format!("{}\n", shim_pid.get()))
+        .map_err(|error| format!("write session-owner ready tmp: {error}"))?;
+    fs::rename(&tmp, &ready_file)
+        .map_err(|error| format!("publish session-owner ready file: {error}"))?;
+
+    match spawned.wait() {
+        Ok(status) if status.success() => Ok(ExitCode::SUCCESS),
+        Ok(status) => Ok(ExitCode::from(status.code().unwrap_or(1) as u8)),
+        Err(error) => Err(format!("wait for session-owner shim: {error}")),
     }
 }
 
