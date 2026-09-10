@@ -463,8 +463,32 @@ newly provisioned host together with
 `A3S_OCI_LINUX_KVM_FRESH_HOST_ATTESTATION` pointing at a digest-bound
 `a3s.oci.linux-kvm-fresh-host-attestation.v1` JSON that sets
 `operator_attests_fresh_provisioning=true` and `provisioned_at_utc`. Fresh
-without attestation is rejected. Set `A3S_OCI_LINUX_KVM_SKIP_SOAK=1` to omit
-soak during focused debugging; a promotion run must leave soak enabled.
+without attestation is rejected. `host_class=existing` with an attestation
+path is also rejected. Fail-closed resolution is covered by
+`.github/scripts/linux-kvm-fresh-host-attestation-test.sh` (no matrix run, no
+readiness promotion). Set `A3S_OCI_LINUX_KVM_SKIP_SOAK=1` to omit soak during
+focused debugging; a promotion run must leave soak enabled.
+
+Example attestation:
+
+```json
+{
+  "schema_version": "a3s.oci.linux-kvm-fresh-host-attestation.v1",
+  "operator_attests_fresh_provisioning": true,
+  "provisioned_at_utc": "2026-09-07T00:00:00Z",
+  "hostname": "kvm-release-01"
+}
+```
+
+Promotion command shape (fresh host only):
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_RELEASE_MATRIX_REPORT=/absolute/path/to/release-matrix.json \
+  A3S_OCI_LINUX_KVM_HOST_CLASS=fresh \
+  A3S_OCI_LINUX_KVM_FRESH_HOST_ATTESTATION=/absolute/path/to/fresh-host-attestation.json \
+  bash .github/scripts/linux-kvm-release-matrix.sh
+```
 
 **Fresh-host promotion checklist:** Existing-host WSL2 `/dev/kvm` greening on
 this machine does **not** promote KVM R2L readiness. This used Windows + WSL

@@ -27,6 +27,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Symmetrized Linux KVM and WHPX fresh-host attestation fail-closed unit
+  checks (reject `operator_attests_fresh_provisioning=false`, missing
+  `provisioned_at_utc`, and symlink attestation paths where applicable) and
+  added a pasteable KVM attestation example plus fresh-host command shape in
+  `docs/linux-native.md`. Does not promote readiness or claim a fresh-host
+  matrix pass.
 - Extracted WHPX fresh-host attestation resolution into
   `scripts/lib/windows-whpx-fresh-host-attestation.ps1` and added fail-closed
   unit checks in `scripts/windows-whpx-fresh-host-attestation-test.ps1`
