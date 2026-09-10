@@ -6,6 +6,16 @@ Standards baseline: **OCI Runtime Specification 1.3.0**
 
 Primary consumer: **A3S Box through `a3s-oci-sdk`**
 
+## A3S Cloud substrate obligations
+
+**Status as of 2026-09-10.**
+
+Cloud `BX0` depends on Box, which depends on this runtime for process and
+isolation mechanics. Hardware-backed MicroVM/TEE drivers Box pins for `BX0.3`
+must fail closed when isolation cannot be met. This repository must not own
+Box product types, registries, builds, or Cloud placement. See
+[Cloud foundations roadmap](https://github.com/A3S-Lab/Cloud/blob/main/docs/project-roadmaps/foundations-and-execution.md).
+
 ## Release Contract
 
 The production runtime must implement every normative OCI Runtime
@@ -179,11 +189,6 @@ Completed:
   endpoint, bundle-handoff, runtime-share, recovery-report, and configured
   Guest `cgroupsPath` lifetime checks. CI records zero completed iterations and
   skips the Alpine fixture when KVM cannot be opened;
-- a distinct `box-product-lifecycle-only-v1` Host Service entry
-  (`a3s-oci box-kvm-qualification-service`) that keeps the public KVM candidate
-  `probe-only` while exposing an explicit Unix owner for A3S Box product
-  lifecycle qualification. It is separate from owner-death recovery and
-  bounded soak and is not a production promotion path;
 - one fail-closed `a3s.oci.linux-kvm-provenance.v1` contract shared by the
   authenticated entry, post-probe failure, compatibility-drift, lifecycle,
   owner-restart, and soak reports. It requires a clean exact checkout, rejects
@@ -277,10 +282,6 @@ Completed:
   and namespace descriptors, per-process pidfds and replay journals, stable
   process wait, cgroup-v2 pause/resume, live process inventory, init-exit
   supervision, and complete session cleanup;
-- Linux executor init-image handoffs are descriptor-bound at executor open:
-  create, exec, filesystem, and native-restore helper children execute the
-  retained private inode through `/proc/self/fd`, while the external CRIU
-  boundary receives a canonical path for its independent verification contract;
 - helper-backed rootless native Linux create/start/exec/signal/wait/kill/delete
   evidence on x86_64 and aarch64, with container root mapped exactly to the
   nonzero effective host UID/GID, subordinate UID/GID ranges installed through
@@ -344,11 +345,8 @@ Completed:
   observed owner disconnect, then continues inventory, stdin, output, signal,
   wait, and cleanup after reconnecting to a replacement durable host service.
   The x86_64 and aarch64 production owner routes and fresh-Box-process
-  stopped-only restart gates now pass; Native retained-stream live-session
-  continuity is greened on existing-host WSL2 via Box
-  (`bc36ff5b895b6320b57322328f78910be82eddfb2203b97bd2c86455b1929d02` on OCI
-  `7001ce5a…`). Utility-VM Live reattachment, WHPX, default-routing, and
-  broader cutover gates remain open;
+  stopped-only restart gates now pass; real-driver live-session reattachment
+  plus WHPX, default-routing, and broader cutover gates remain open;
 - Linux executor enforcement for exact capability sets with real bounding,
   effective, permitted, inheritable, and ambient kernel read-back, exec
   bounding ceilings, exact `no_new_privileges` read-back, private
@@ -481,24 +479,8 @@ Completed:
 
 Not yet complete:
 
-- equivalent fresh-host utility-VM transport/reopen qualification for WHPX and
-  the KVM backend; the complete 180-path HVF matrix is retained, WHPX has
-  existing-host 180/180 operation-stage plus 11/11 transport-fault/Host
-  shutdown evidence, and KVM Create durable reopen now covers all nine
-  operation stages plus both Host-shutdown stages under
-  `a3s.oci.oci-vm-reopen-replacement.v3` /
-  `a3s.oci.linux-kvm-create-reopen-matrix.v2` on existing WSL hosts (fresh-host
-  retained evidence and promotion remain open). Retained clean-checkout
-  evidence: source revision `9021b194dfcdd732cd199b68785db1d3a841edd9`,
-  matrix SHA-256
-  `0fb26ebac0ff05797851bf751bb8443d46a5ac4fdc8b91f91e8b380d281cd6d7`
-  (11/11 `available`, including `host-before-shutdown` and
-  `host-after-shutdown`). KVM Create durable reopen also
-  requires a system image whose guest agent accepts virtiofs-remapped
-  private-tree ownership for recovery files, and fixtures prepared with
-  `scripts/prepare-utility-vm-bundle.sh` (UID/GID maps bound to the extracting
-  owner). A stale agent image surfaces as Create/`device-targets.json`
-  `Permission denied` under virtiofs;
+- equivalent real-host utility-VM transport/reopen qualification for WHPX and
+  the KVM backend; the complete 180-path HVF matrix is retained;
 - complete shared guest OCI executor;
 - a production workload driver;
 - OCI hook rollback, crash recovery, security-negative, and soak
@@ -763,8 +745,7 @@ enforce it. No property is silently ignored.
 - [x] Reclaim completed Native Linux guest mutation records only after the Host
   durably commits success or terminal failure. Keep prepared, retryable, and
   asynchronous in-flight effects replayable; acknowledge every derived stdin
-  chunk identity (retaining the mapping across caller cancellation); and reject
-  mixed pending/completed acknowledgement batches
+  chunk identity; and reject mixed pending/completed acknowledgement batches
   atomically. Unit evidence fills all 4,096 guest slots before releasing them,
   and three complete containerd matrices pass through one unchanged Host PID.
 - [x] Carry the same post-commit reclamation boundary across utility-VM
@@ -1268,43 +1249,7 @@ enforce it. No property is silently ignored.
 - [ ] Repeat the retained real-host operation-stage and shutdown qualification
   on WHPX and the future KVM backend before promoting either driver's
   readiness. This is a per-driver release gate; it does not reopen the
-  protocol contract or the completed HVF matrix. WHPX now has a focused
-  `scripts/windows-whpx-transport-fault-cleanup.ps1` entry for the shared
-  11-stage `oci-vm-transport-fault-cleanup` matrix (nine Create Host/Guest
-  stages plus both Host shutdown stages). Clean commit `35ed746` retained an
-  available existing-host summary
-  (`475143c36a07296e10910bba92b639d8bf3b2e5bb798f6839302b51873989b0b`) covering
-  all 11 stages. Clean revision `afc78ae` later retained the same 11/11 matrix
-  after rebuilding the Windows system image with Guest Agent `af266852`
-  (summary
-  `9737f6f31547ac253b15819a8793d4159750b3f6f92fafa81805d3e4056d5891`); the prior
-  Sept 6 image agent could not decode the Windows `base64:` handoff. The same
-  commit also retained an existing-host
-  `a3s.oci.windows-whpx-release-matrix.v1` observation run
-  (`b51fe030b2967122d9ad4bc78abe7bb210dd4d33b124f7dee1cc84bc6daf1bdc`,
-  `host_class=existing`, `promotes_readiness=false`) binding handle-reclamation,
-  driver/recovery smoke, transport-fault cleanup, soak, and 180-path
-  operation-reopen. Create reopen now also covers both Host shutdown stages
-  after a successful Create (`a3s.oci.oci-vm-reopen-replacement.v3`; full
-  matrix is 182 cases = 20×9 operation stages + Create's two Host-shutdown
-  stages). Existing-host focused Create evidence retained both
-  `host-before-shutdown` and `host-after-shutdown` as `available`
-  (`summary`
-  `4632cc6c68f3d837a59d98b379972d62b6168202945bbdbe56f1e75100d4c552`).
-  `-HostClass fresh` now also requires a digest-bound
-  `a3s.oci.windows-whpx-fresh-host-attestation.v1` operator attestation before
-  `promotes_readiness` can be set. Fresh-host WHPX evidence and the equivalent
-  KVM retained report are still required before this checklist item can close.
-  Linux KVM now has `linux-kvm-release-matrix.sh` with the same
-  `host_class=existing|fresh` and digest-bound
-  `a3s.oci.linux-kvm-fresh-host-attestation.v1` gate pattern as WHPX;
-  only `host_class=fresh` with attestation may set `promotes_readiness`.
-  Existing-host WSL2 x86_64 evidence retained on clean revision
-  `95d624f9831b79abf86bc8e369df849054c63eaf` (all six core gates
-  `available`; matrix SHA-256
-  `5c701cb6116170483b666df966c9304e224640e37f07966079b2f0d7e923cd8b`;
-  `promotes_readiness=false`). Fresh-host attestation and AArch64 retained
-  reports are still required before this checklist item can close.
+  protocol contract or the completed HVF matrix.
 - [x] Implement all OCI hook phases with typed prestart, createRuntime,
   createContainer, startContainer, and poststart failure rollback, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
@@ -1345,11 +1290,6 @@ real-driver coverage remains open for the other utility-VM backends.
     before VM launch.
   - [x] Move one-time token and recovery-report handoff into the exact share and
     require versioned shim evidence that the device was configured.
-  - [x] Bind Windows WHPX guest handoff to the explicit
-    `windows-virtiofs-acl-v1` metadata contract. Normalize only virtio-fs's
-    known synthetic `0755`/`0644` modes to the private `0700`/`0600` contract
-    through opened descriptors while retaining Windows DACL authority,
-    identity fencing, and fail-closed rejection of unknown modes.
   - [x] Add an explicit digest-bound product bundle-handoff extension that
     stages by create-operation identity, moves only after the runtime allocates
     the real generation, and preserves exact replay and owned cleanup.
@@ -1373,25 +1313,14 @@ real-driver coverage remains open for the other utility-VM backends.
     before VM entry.
   - [ ] Run the complete WHPX SDK and recovery matrices against those exact
     assets on a fresh Windows host.
-    - [x] On the existing Windows 10 Pro 23H2 x86_64 host, run all 20 workload
-      operations through all 9 operation-reopen stages (180 / 180 cases),
-      retaining immutable asset, owner/fault, and cleanup evidence.
-    - [x] On the existing Windows 11 Pro 23H2 x86_64 host with
-      HypervisorPlatform enabled, clean revision `5404704` retained available
-      direct-driver, owner-death/service-recovery, and full soak (56/56)
-      reports against the pinned system image. This does not satisfy the
-      fresh-host parent gate.
 
   The August 15, 2026 implementation builds the Alpine 3.22.5 x86_64 ext4
   image twice and requires byte-for-byte equality, binds Linux 6.12.91 and the
   Box/libkrun/firmware source revisions in `a3s.oci.windows-system-image.v1`,
   pins the manifest, image, `krun.dll`, and `libkrunfw.dll` with read-only
   Windows handles, rejects reparse paths and identity changes, and rehashes
-  every asset immediately before VM entry. The Host also retains a no-follow
-  Windows shim handle with write/delete sharing disabled through
-  `CreateProcess`, binding its volume/file identity before launch. The shim
-  attaches the image as a read-only virtio-blk root and exports
-  bundle/token/recovery data only through
+  every asset immediately before VM entry. The shim attaches the image as a
+  read-only virtio-blk root and exports bundle/token/recovery data only through
   the separate writable runtime share. These two implementation items do not
   close the parent gate until a fresh WHPX host retains the full matrix.
 - [x] Establish the named-pipe/vsock bridge.
@@ -1433,12 +1362,6 @@ real-driver coverage remains open for the other utility-VM backends.
   - [x] Emit nonzero current-process handle counts immediately before libkrun
     context creation and after `krun_start_enter` returns. Shim schema v6 and
     Host validation require exact equality before cleanup can succeed.
-  - [x] Run an independent same-process WHPX reclamation gate for 8 VM cycles;
-    the retained current-host evidence was 115 cold, 122 baseline, 122 final,
-    zero final delta, and a restored runtime share. Clean revision `afc78ae`
-    later retained 119 cold, 126 baseline, 126 final, zero final delta, and a
-    restored runtime share on Windows 11 Pro 23H2 with HypervisorPlatform
-    enabled.
   - [ ] Retain that exact evidence across the complete fresh-host WHPX SDK,
     recovery, negative, and soak matrices.
 
@@ -1459,21 +1382,18 @@ then may WHPX become `experimental`.
 - [x] Verify a signed round trip on a local Apple Silicon host and verify that
   a missing entitlement returns `HV_DENIED`.
 - [x] Stage a runtime-owned, checksum-verified macOS libkrun bundle only for
-  the isolated shim. The shim retains no-follow handles for both dylibs,
-  rechecks device/inode, size, and exact bytes after loading, and repeats the
-  same verification immediately before HVF entry.
+  the isolated shim.
 - [x] Create, configure plain agent vsock, and release one libkrun context
   without entering a VM.
 - [x] Enter a real HVF VM in an isolated, bounded worker and require a
-  per-run nonce-bound guest marker, natural zero exit, worker reap, and
-  descriptor-relative identity-safe marker cleanup.
+  guest-written host marker, natural zero exit, worker reap, and marker
+  cleanup.
 - [x] Retain fail-closed unavailable-HVF and missing-entitlement evidence
   without accepting pre-entry configuration as guest execution.
 - [x] Boot the same pinned A3S Linux kernel and immutable system root through
   HVF, retain their digests in the host report, keep the writable
-  per-generation share separate and descriptor-pinned through VM entry, and
-  rerun the complete macOS SDK and soak matrices against those exact assets.
-  The retained Apple Silicon run used
+  per-generation share separate, and rerun the complete macOS SDK and soak
+  matrices against those exact assets. The retained Apple Silicon run used
   manifest SHA-256
   `e7206ea5c645259fcc9f00d8b3042792d6a6b380436a0a38a1b85dda7c0d4284`,
   raw-image SHA-256
@@ -1489,7 +1409,7 @@ then may WHPX become `experimental`.
   by WHPX, including bounded running wait, exact repeated exit status,
   pause/resume, live process inventory, resource update, normalized stats, and
   the exact six-device privileged profile. Keep durable target-cleanup evidence
-  on the descriptor-pinned writable runtime share, create temporary source nodes only on
+  on the writable runtime share, create temporary source nodes only on
   Guest-local devtmpfs, and remove those sources at the Create barrier without
   weakening device identity validation.
 - [x] Prove deterministic VM, process, descriptor, and filesystem cleanup
@@ -1596,29 +1516,21 @@ release-promotion gates above.
   architecture. CI builds byte-reproducible x86_64 and AArch64 ext4 roots,
   proves that each contains the exact supplied static agent, embeds the exact
   target bundle from the strict shared asset manifest, and configures the
-  descriptor-pinned root read-only in an isolated libkrun context. The
-  writable generation share and its required `run/` state child retain
-  independent no-follow descriptors and identity checks through entry.
-  Manifest, image, target, runtime, symbolic-link, replacement, and same-size
-  content drift all fail closed before VM entry.
+  descriptor-pinned root read-only in an isolated libkrun context. Manifest,
+  image, target, runtime, symbolic-link, replacement, and same-size content
+  drift all fail closed before VM entry.
 - [ ] Start the KVM worker in an isolated shim, mount only the protected
   per-generation runtime share, and authenticate the AF_VSOCK guest-agent
   session without falling back to host-kernel execution.
 
   The current candidate implements the isolated worker, descriptor-pinned
-  runtime share and required `run/` state child, parent-to-worker device/inode
-  identity binding for both share entries, and KVM device, pidfd-bound direct
-  shim owner, kernel-verified direct Unix peer, one-time token handoff,
-  protocol-v10 negotiation, exact immutable boot evidence, and
-  process/endpoint/handoff cleanup. The x86_64
+  runtime share and KVM device, pidfd-bound direct shim owner, kernel-verified
+  direct Unix peer, one-time token handoff, protocol-v10 negotiation, exact
+  immutable boot evidence, and process/endpoint/handoff cleanup. The x86_64
   and AArch64 CI lanes require real authenticated entry whenever their KVM
   probe is available and otherwise retain explicit post-configuration KVM
   failure evidence. This parent remains open until both advertised
-  architectures retain successful real-entry reports. Clean x86_64 WSL2
-  revision `39b7e56` retained available
-  `a3s.oci.linux-kvm-agent-entry.v1` and
-  `a3s.oci.linux-kvm-post-probe-failure.v1` reports after rebuilding the
-  pinned system image; AArch64 and fresh-host promotion evidence remain open.
+  architectures retain successful real-entry reports.
 - [x] Implement the launch-capable KVM `RuntimeDriver` candidate through the
   shared twenty-operation adapter with exact-generation routing, bounded
   shutdown, and complete process, endpoint, share, and runtime-root ownership.
@@ -1640,9 +1552,7 @@ release-promotion gates above.
     `a3s.oci.linux-kvm-lifecycle-matrix.v2` report retains endpoint,
     shim-process, runtime-state, bootstrap, token/recovery, and marker cleanup.
     Runners without usable KVM emit `unavailable` with zero cases and skip the
-    Alpine fixture rather than manufacturing a pass. Clean x86_64 WSL2 revision
-    `2d89f67` retained an available 17/17 lifecycle report; fresh-host
-    promotion evidence remains open.
+    Alpine fixture rather than manufacturing a pass.
   - [x] Add a qualification-only Unix Host Service and real-process recovery
     entry. It binds the override to
     `linux-kvm-owner-death-restart-only-v1`, kills the exact live service with
@@ -1651,16 +1561,13 @@ release-promotion gates above.
     verifies exact stopped/Wait replay plus stopped-only Delete and zero
     transient residue. Runners without KVM retain an explicit zero-case
     `a3s.oci.linux-kvm-recovery-matrix.v2` report without downloading Alpine.
-    Clean x86_64 WSL2 revision `2d89f67` retained an available 1/1
-    owner-death/restart report; fresh-host promotion evidence remains open.
   - [x] Add a separately scoped bounded KVM soak for x86_64 and AArch64. One
     durable Host Service runs 25 fresh exact generations by default and retains
     per-wave generation/replay, process-incarnation, descriptor, marker,
     endpoint, bundle-handoff, runtime-share, recovery-report, console, and
     configured Guest `cgroupsPath` lifetime evidence. Unavailable runners emit
     `a3s.oci.linux-kvm-soak-matrix.v2` with zero completed iterations and do not
-    download Alpine. Clean x86_64 WSL2 revision `2d89f67` retained an available
-    25/25 soak report; fresh-host promotion evidence remains open.
+    download Alpine.
   - [x] Close the KVM-independent driver isolation preflight before any Guest
     share or VM exists. Dedicated-VM Create now rejects `SharedHostKernel`,
     `SharedGuestKernel`, an inexact generation, or a missing atomic handoff
@@ -1669,24 +1576,10 @@ release-promotion gates above.
     before `shares/<container>/<generation>` is created. The same production
     path and cleanup assertions run on Linux x86_64 and AArch64 CI without
     requiring `/dev/kvm`.
-  - [x] Add the Linux KVM nine-stage File owner-replacement qualification.
-    The gate uses an isolated writable `/tmp` mount, retains the exact upload
-    request and generation, rehydrates committed uploads in a replacement
-    Guest, verifies a byte-for-byte download effect, fences changed and stale
-    identities, and proves explicit cleanup. Clean x86_64 revision `fa4c593`
-    retained 9 / 9 stages; CI wires both advertised architectures.
-  - [x] Add the corresponding Linux KVM nine-stage Filesystem
-    owner-replacement qualification. The gate retains mkdir metadata and
-    durable response identity, verifies replacement Stat and Remove effects,
-    fences changed paths and stale generations, and proves zero residue. Clean
-    x86_64 revision `fa4c593` retained 9 / 9 stages; CI wires both advertised
-    architectures.
   - [ ] Retain the `available` 17-case lifecycle, owner-death/restart, and
     25-wave soak reports on fresh x86_64 and AArch64 KVM hosts. The lifecycle
     artifact must include the integrated ten-case Guest path-isolation report;
     any other real-entry Guest negative-isolation profiles remain separate.
-    Existing-host x86_64 WSL2 observation on clean revision `2d89f67` is
-    retained in `docs/linux-native.md` and does not satisfy this gate.
 - [x] Retain fail-closed context evidence for invalid, missing, symbolic-link,
   or drifted Linux libkrun, firmware, and exported-kernel assets.
 - [ ] Retain real-entry fail-closed evidence for an initialization-failing KVM
@@ -2229,71 +2122,6 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   generations.
 - [ ] Prove Box process-session recovery across an out-of-process runtime
   restart on real native Linux and utility-VM drivers.
-  Foundation retained: `session_supervisor` first-principles tests prove the
-  host-surviving supervisor identity (PID + start-time) and lifetime split
-  versus Host-bound PDEATHSIG. Production `HostSessionSupervisor` /
-  `session-supervise` can parent workloads and survive Host death; recovery
-  schema `a3s.oci.native-linux-recovery.v4` can record the supervisor identity.
-  Opt-in Native create (`A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`) now spawns the
-  launcher under that supervisor and persists `sessionSupervisor` on create.
-  Control-channel reattach slice is retained: after Host EOF the supervisor
-  publishes `a3s.oci.session-supervise.<pid>.<start_time>` and
-  `HostSessionSupervisor::reattach` authenticates and resumes wait/spawn
-  without inventing exit status (re-exec remains wrong for PDEATHSIG
-  parentage). Host reopen now reattaches a live recorded supervisor in
-  `recover_stale_generation` and returns `StaleGenerationRecovery::Live` with
-  wait/kill of the supervised launcher; stopped-only delete proceeds only after
-  launcher/init exit.   Multi-container Host reopen reuses one reattached
-  control connection via `SessionSupervisorReattachCache` (one supervisor
-  identity → one control Arc across generations). Partial Host-reopen process
-  inventory now exposes the authenticated live init plus still-live durable
-  exec identities from recovery
-  `a3s.oci.native-linux-recovery.v6` (v5 normalizes without helper; empty after
-  those identities exit; no invented exit status). Supervised exec persists
-  payload + helper PID + start-time into the
-  recovery record and spawns under the session supervisor so the payload can
-  survive Host death with authentic `MSG_WAIT` ownership. Host reopen keeps
-  `DriverRecovery::observed`
-  (not `recreated_running_with_processes`) because omitting dead execs must
-  not Conflict with Host exact-match rebind. Host-reopen stdin restore is
-  retained: supervised create deposits a duplicate stdin write end via
-  SCM_RIGHTS; reopen takes it for authentic write/close. Host-reopen exclusive
-  stdout/stderr restore is retained: supervised create moves capture read ends
-  to the supervisor (SCM_RIGHTS move, not `F_DUPFD`); the supervisor sole-drains
-  into a bounded buffer; Host/live reopen poll authentic chunks via control IPC;
-  missing deposit fail-closes with `Unavailable` (never invents an empty
-  stream). Authenticated Host-reopen `signal_process` for durable init/exec
-  identities is retained: PID + start-time re-auth, then pidfd delivery,
-  without restoring a fake `PreparedProcess`. Live `wait_process` for durable
-  exec uses supervisor `MSG_WAIT` when a helper identity is recorded (v6); v5
-  exec records without helper fail closed. Authentic Host-reopen
-  `pause` / `resume` / `stats` use the durable recovery cgroup leaf (kernel
-  freezer + cgroup-v2 counters) without restoring `PreparedProcess`; missing
-  cgroup evidence fail-closes with `Unavailable`. New `exec` after Host reopen
-  rebuilds the minimum authentic spawn context from the durable config snapshot
-  plus live init namespace/root descriptors and the recovery cgroup leaf, then
-  supervisor-parents the helper (`ExecProcess::spawn_with_context`). Null I/O
-  only in this slice; capture/pipe/terminal remain Unavailable. Default create
-  stays Host-bound. Opt-in supervised create accepts rootless device mounts over
-  the Host create-control SCM_RIGHTS path (same as default create; mounts do not
-  ride `spawn_launcher`). Existing-host WSL2 Box live-session v3 evidence on
-  OCI `7001ce5a4c32cd6e2bbb9a833fc45fd05d2318c9` proves retained streaming
-  handle continuity across Native Host owner SIGKILL (report SHA-256
-  `bc36ff5b895b6320b57322328f78910be82eddfb2203b97bd2c86455b1929d02`,
-  `retained_stream_handle_proven=true`). That does **not** close W2/B2 alone:
-  utility-VM Live, default create Host-bound policy, fresh-host, and cutover
-  remain open.
-- [ ] Opt-in KVM / utility-VM Live Host reopen (observation-only; no cutover):
-  introduce a durable session-owner process that is the shim's direct parent
-  and outlives Host Service (default remains Host-PID owner-watchdog so
-  stopped-only owner-death gates stay green). Replacement Host must
-  authenticated-reattach the **same** Guest incarnation to `Live` Running
-  (continuous init identity, no invented exit); orphaned session roots stay
-  rejected without that evidence. Defer retained streaming handle continuity
-  and `b2_process_session_recovery_closed` / `kvm_microvm_live_claimed` until
-  this Live reattach path is greened on existing-host WSL2 `/dev/kvm`. Does
-  not register KVM with normal HostRuntimeService, flip default supervised
-  create, or cut over MicroVM product routing.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,
@@ -2345,15 +2173,6 @@ evidence.
 - [ ] Run real `containerd` and `ctr` integration suites for lifecycle, exec,
   I/O, signals, stats, restart, forced cleanup, stale identity, and parallel
   tasks against every advertised driver profile.
-  Observation retained: Linux KVM dedicated-vm
-  create/start/exec/kill/wait/delete vertical slice through private
-  containerd + `box-kvm-qualification-service`
-  (`.github/scripts/linux-kvm-containerd-lifecycle.sh`,
-  `a3s.oci.linux-kvm-containerd-lifecycle.v3`) including init and exec
-  Created/Running/Stopped daemon restart under `KillMode=process` with
-  preserved PID/driver/isolation/exec identity. Does not close the full Native
-  Linux restart-boundary matrix, packaged-shim, fresh-host, or AArch64
-  promotion.
 - [ ] Publish the shim with signed or checksummed runtime packages and retain
   the exact containerd, shim, SDK, runtime, and driver compatibility record.
 
@@ -2601,37 +2420,10 @@ against a dedicated private containerd root, state, socket, and systemd unit;
 the production daemon remained active at PID 2485480. Independent audits after
 the probe and every pass found zero matching task, container, shim,
 qualification process, workload process, bundle, live Runtime record, cgroup,
-or snapshot. The September 3 follow-up at source revision
-`fa9393d473c2f2305ce8f7ec67054acea7ea54a0` retains three consecutive
-2.2.1 WSL2 x86_64 passes (96.53/96.63/96.59 seconds) with a code-enforced
-ordered ledger covering all 23 restart, shim-rehydration, and forced-cleanup
-boundaries. The exact static-musl artifact and Cargo.lock digests, unchanged
-default-containerd PID, isolated Host/daemon cleanup, and zero-residue audit
-are recorded in `compat/containerd-runtime-v2.json`. This closes the
-qualification-evidence sub-item for the implemented Native Linux path, but
-the R7 release gates remain open: every advertised driver profile and the
-exact signed/checksummed release-package compatibility record still require
-their own real-host evidence.
-
-The current Runtime revision `af8c5f97ac1f4eb506b32e8d57b3d1c0d5fb3645` also
-passed three isolated containerd 2.2.1 WSL2 x86_64 matrices using the staged
-static-musl package. The runs completed in 95.09, 95.25, and 114.44 seconds,
-covered all 23 restart, shim-rehydration, and forced-cleanup boundaries, and
-retained the package qualification report (SHA-256
-`d87aa3ff3cd58843d57f51b75b91ca6d05c880f043d24477789105dfc065ba86`) plus
-executable digests in the compatibility record. This strengthens the Native
-Linux package evidence but does not close the cross-driver or signed
-published-package release gates.
-
-The release workflow now creates `package-manifest.json` inside each Linux
-host-runtime archive before compression. Its v1 schema binds the source
-revision, selected Native Linux profile, containerd Runtime V2 contract and
-protocol ranges, the qualification report, and every regular package entry's
-relative path, mode, size, and SHA-256 digest. The packaged verifier checks the
-complete inventory and rejects symlink, special-file, path, or identity
-substitution. A signed
-published archive and a retained exact release qualification remain required
-to close this gate.
+or snapshot. The remaining R7 items stay open until the implemented
+`ResizePty` process-I/O forced-cleanup gate retains its three-pass real-host
+record, every advertised driver profile passes, and the published
+release-artifact compatibility record is complete.
 
 Exit gate: containerd task, restart, I/O, and cleanup suites pass through the
 public SDK without the Box CLI, a direct VMM path, duplicate lifecycle state,
