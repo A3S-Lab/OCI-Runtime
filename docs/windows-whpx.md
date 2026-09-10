@@ -445,8 +445,12 @@ soak, and operation-reopen against the same immutable assets, emitting
 newly provisioned host together with `-FreshHostAttestation` pointing at a
 digest-bound `a3s.oci.windows-whpx-fresh-host-attestation.v1` JSON that sets
 `operator_attests_fresh_provisioning=true` and `provisioned_at_utc`. The
-default `existing` class cannot close the promotion gate, and `fresh` without
-attestation is rejected:
+default `existing` class cannot close the promotion gate, `existing` with
+`-FreshHostAttestation` is rejected, and `fresh` without attestation is
+rejected. Fail-closed resolution lives in
+`scripts/lib/windows-whpx-fresh-host-attestation.ps1` and is covered by
+`scripts/windows-whpx-fresh-host-attestation-test.ps1` (no matrix run, no
+readiness promotion):
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `

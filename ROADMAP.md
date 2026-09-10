@@ -159,9 +159,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 Attestation schema `a3s.oci.windows-whpx-fresh-host-attestation.v1` must set
 `operator_attests_fresh_provisioning=true` and `provisioned_at_utc`. Fresh
 without attestation is rejected; `existing` never sets
-`promotes_readiness=true`. The matrix must keep all six bound gates available
-(handle-reclamation, driver smoke, recovery smoke, 11-stage transport-fault
-cleanup, soak, 180-path operation-reopen). See
+`promotes_readiness=true`. `existing` plus `-FreshHostAttestation` is also
+rejected (fail-closed; see
+`scripts/windows-whpx-fresh-host-attestation-test.ps1`). The matrix must keep
+all six bound gates available (handle-reclamation, driver smoke, recovery
+smoke, 11-stage transport-fault cleanup, soak, 180-path operation-reopen). See
 [`docs/windows-whpx.md`](docs/windows-whpx.md).
 
 ### Linux KVM R2L
