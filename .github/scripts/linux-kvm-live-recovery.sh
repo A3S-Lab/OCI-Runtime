@@ -53,7 +53,8 @@ runtime_assets_manifest="crates/krun/runtime/runtime-assets.json"
 
 temporary_root="${RUNNER_TEMP:-/tmp}"
 test -d "$temporary_root"
-work="$(mktemp -d "$temporary_root/a3s-oci-kvm-live-recovery.XXXXXX")"
+# Keep the private work prefix short: SUN_LEN bounds the Host Service socket path.
+work="$(mktemp -d "$temporary_root/a3s-oci-klr.XXXXXX")"
 runtime_report="$work/runtime-report.json"
 runtime_stderr="$work/runtime.stderr.log"
 cleanup() {
@@ -64,7 +65,7 @@ cleanup() {
     return 0
   fi
   case "$work" in
-    "$temporary_root"/a3s-oci-kvm-live-recovery.*)
+    "$temporary_root"/a3s-oci-klr.*)
       rm -rf -- "$work"
       ;;
     *)

@@ -60,7 +60,7 @@ pub async fn run(config: LinuxKvmLiveRecoverySmokeConfig) -> LinuxKvmLiveRecover
             work_parent: config.work_parent,
             source_revision: config.source_revision,
         },
-        "kvm-live-recovery",
+        "kvm-live",
         "Linux KVM Live recovery qualification endpoint",
     )
     .await
