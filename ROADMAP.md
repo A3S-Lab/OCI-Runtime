@@ -2120,8 +2120,26 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   through a fresh Box process, reconcile stopped state without invented exit
   evidence, delete the exact old generation, and restart the next Box and OCI
   generations.
-- [ ] Prove Box process-session recovery across an out-of-process runtime
+- [x] Prove Box process-session recovery across an out-of-process runtime
   restart on real native Linux and utility-VM drivers.
+  **Closed** by aggregated existing-host WSL2 evidence with Box main
+  `5f74b5c2356aca534bf35fa5b4d80043c95a691c` + OCI
+  `61f77712e420c176dfc1a5d7ba2457e8c8299dcf`: Native Live stream+filesystem
+  (Box `a3s.box.linux-native-live-session.v4` report SHA-256
+  `3d158d6755afcd187f883234768f54aaa1dbd330e56a2ef763d11164fd6b5818`; OCI
+  Native Live FS smoke
+  `1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`) and
+  KVM MicroVM Live stream+filesystem (Box
+  `a3s.box.linux-kvm-live-session.v2` report SHA-256
+  `1f8cede9c5906b915a067d8347ede99ceb647b3eb93408610daca7c0ea5f758f`; OCI
+  KVM Live FS matrix
+  `74d60f3e472ae7380fb702ea416fc4cbad01f28ab95af268dedaa0d0533e316b`).
+  That satisfies W2's Native + one utility-VM driver owner-death /
+  service-restart matrix for live process, I/O, and filesystem reattach.
+  Box harness schemas keep `b2_process_session_recovery_closed=false` by
+  design (individual reports never self-certify B2/R6 close). Does **not**
+  flip default create Host-bound policy, cutover, HostRuntimeService
+  registration, fresh-host promotion, or broader Utility-VM product claims.
   Foundation retained: `session_supervisor` first-principles tests prove the
   host-surviving supervisor identity (PID + start-time) and lifetime split
   versus Host-bound PDEATHSIG. Production `HostSessionSupervisor` /
@@ -2173,10 +2191,11 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   OCI `7001ce5a4c32cd6e2bbb9a833fc45fd05d2318c9` proves retained streaming
   handle continuity across Native Host owner SIGKILL (report SHA-256
   `bc36ff5b895b6320b57322328f78910be82eddfb2203b97bd2c86455b1929d02`,
-  `retained_stream_handle_proven=true`). That does **not** close W2/B2 alone:
-  utility-VM Live, default create Host-bound policy, fresh-host, and cutover
+  `retained_stream_handle_proven=true`). That slice alone did **not** close
+  W2/B2; the aggregated Native+KVM matrix above does for the process-session
+  parent while default create Host-bound policy, fresh-host, and cutover
   remain open.
-- [ ] Opt-in KVM / utility-VM Live Host reopen (observation-only; no cutover):
+- [x] Opt-in KVM / utility-VM Live Host reopen (observation-only; no cutover):
   durable `a3s-oci-krun-shim session-owner` helper + AgentVmSession
   `A3S_OCI_KVM_SESSION_OWNER=1` spawn path land parentage that outlives Host
   Service (default remains Host-PID owner-watchdog so stopped-only owner-death
@@ -2217,11 +2236,12 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   `805d4afea01b1c3a9ed7343b2406edfc6c7e43912e35134ec72661c29fe56449`; continuous
   init PID 361; `retained_filesystem_proven` / `file_upload_before_kill` /
   `file_download_after_reattach` / `retained_exec_io_proven` /
-  `guest_survived_host_sigkill` / `service_restart_recovered`). That does
-  **not** close W2/B2 alone: Box process Live sibling
-  (`retained_stream_handle_proven` / `kvm_microvm_live_claimed`) is greened
-  separately on Box main, while Box filesystem Live sibling and
-  `b2_process_session_recovery_closed` remain open; Native Live filesystem
+  `guest_survived_host_sigkill` / `service_restart_recovered`). Box process
+  Live sibling (`retained_stream_handle_proven` / `kvm_microvm_live_claimed`)
+  and Box filesystem Live sibling (Native Live v4 + KVM Live v2) are greened
+  on Box main `5f74b5c2…`; together they close the R6 process-session recovery
+  parent above. Box harness schemas keep
+  `b2_process_session_recovery_closed=false` by design. Native Live filesystem
   **product path** (Host-reopen `file`/`filesystem` via rebuilt
   `RetainedExecutionContext` + `live_for`) and first-principles unit tests are
   landed; Host-reopen filesystem evidence harness
@@ -2234,10 +2254,9 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   `1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`
   (`retained_filesystem_proven` / `file_upload_before_kill` /
   `file_download_after_reattach` / `init_survived_host_sigkill` /
-  `replacement_state_running`). That still does **not** close W2/B2 alone
-  (Box filesystem Live sibling and `b2_process_session_recovery_closed`
-  remain open). Does not register KVM with normal HostRuntimeService, flip
-  default supervised create, or cut over MicroVM product routing.
+  `replacement_state_running`). Does not register KVM with normal
+  HostRuntimeService, flip default supervised create, or cut over MicroVM
+  product routing.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,
@@ -2263,12 +2282,14 @@ service suitable for the unified Box adapter. Box persists an explicit
 minimal OCI bundle, and passes the opt-in x86_64 and aarch64 production-owner
 composition through all four SDKs. Separate gates on both architectures now
 prove owner/Box process restart with safe stopped-only reconciliation and
-explicit next-generation restart. The broader gate remains unchecked until
-live session reattachment passes on the real driver, the same production
-composition passes WHPX, and the default/MicroVM cutover is complete. OCI
-Runtime independently proves that abrupt Native Linux owner death safely
-terminates and reconciles the exact generation without inventing terminal
-evidence.
+explicit next-generation restart. Live session reattachment on existing-host
+Native Linux and KVM MicroVM is checklist-closed under the process-session
+recovery parent above; Box harness schemas keep
+`b2_process_session_recovery_closed=false`, and the broader gate remains
+open until fresh-host promotion, WHPX parity, and the default/MicroVM cutover
+complete. OCI Runtime independently proves that abrupt Native Linux owner
+death safely terminates and reconciles the exact generation without inventing
+terminal evidence when Live is not opted in.
 
 ### R7 — containerd Runtime V2
 

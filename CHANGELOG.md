@@ -25,6 +25,24 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Close ROADMAP R6 process-session recovery and opt-in KVM Live Host reopen
+  parents after aggregated existing-host WSL2 Native + KVM Live greening
+  (Box `5f74b5c2…` / OCI `61f77712…`; Box Native v4 SHA-256
+  `3d158d6755afcd187f883234768f54aaa1dbd330e56a2ef763d11164fd6b5818`, Box
+  KVM v2 SHA-256
+  `1f8cede9c5906b915a067d8347ede99ceb647b3eb93408610daca7c0ea5f758f`, OCI
+  Native Live FS
+  `1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`, OCI
+  KVM Live FS matrix
+  `74d60f3e472ae7380fb702ea416fc4cbad01f28ab95af268dedaa0d0533e316b`).
+  Box harness schemas keep `b2_process_session_recovery_closed=false` by
+  design. Does **not** flip default create Host-bound policy, cutover,
+  HostRuntimeService registration, or fresh-host promotion. Corrects stale
+  text that still claimed Box filesystem Live siblings remain open after
+  Box #299/#301.
+
 ### Added
 
 - Native Linux Live Host-reopen file/filesystem continuity: after supervised
@@ -93,12 +111,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
   continuous init PID 361; `retained_filesystem_proven` /
   `file_upload_before_kill` / `file_download_after_reattach` /
   `retained_exec_io_proven` / `guest_survived_host_sigkill` /
-  `service_restart_recovered`). Does **not** close W2/B2 alone: Box process
-  Live sibling (`retained_stream_handle_proven` /
-  `kvm_microvm_live_claimed`) is greened separately on Box main, while Box
-  filesystem Live sibling and `b2_process_session_recovery_closed` remain
-  open; Native Live filesystem evidence is greened separately (see above). No
-  cutover / HostRuntimeService registration.
+  `service_restart_recovered`). Box process Live sibling
+  (`retained_stream_handle_proven` / `kvm_microvm_live_claimed`) and Box
+  filesystem Live sibling are greened separately on Box main; together with
+  this matrix they close the R6 process-session recovery parent while Box
+  harness schemas keep `b2_process_session_recovery_closed=false`. Native Live
+  filesystem evidence is greened separately (see above). No cutover /
+  HostRuntimeService registration.
 
 ### Changed
 

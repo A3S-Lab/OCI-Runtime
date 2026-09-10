@@ -403,12 +403,14 @@ greened Live filesystem continuity** on revision
 continuous init PID 361; `retained_filesystem_proven` /
 `file_upload_before_kill` / `file_download_after_reattach` /
 `retained_exec_io_proven` / `guest_survived_host_sigkill` /
-`service_restart_recovered`). Does **not** close W2/B2 alone: Box process
-Live sibling (`retained_stream_handle_proven` / `kvm_microvm_live_claimed`)
-is greened separately on Box main, while Box filesystem Live sibling and
-`b2_process_session_recovery_closed` remain open; Native Live filesystem
-evidence is still required for full W2. No cutover / HostRuntimeService
-registration.
+`service_restart_recovered`). Does **not** alone flip Box harness
+`b2_process_session_recovery_closed` (reports never self-certify B2/R6
+close). Box process Live sibling (`retained_stream_handle_proven` /
+`kvm_microvm_live_claimed`) and Box filesystem Live sibling (Native Live
+v4 + KVM Live v2) are greened on Box main `5f74b5c2…` and, with this OCI
+matrix, close the R6 process-session recovery parent. Native Live filesystem
+evidence is still required for full W2 and is greened separately. No
+cutover / HostRuntimeService registration.
 
 A third qualification-only Host Service serves the A3S Box product-lifecycle
 scope `box-product-lifecycle-only-v1` without promoting the public KVM
