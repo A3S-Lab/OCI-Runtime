@@ -1997,22 +1997,32 @@ supervised launcher liveness via `/proc/<pid>/stat` (zombies are terminal —
 supervisor mutex held across `MSG_WAIT` and deadlock timeout cleanup. Once the
 launcher is terminal, Host performs the authentic `wait_launcher` reap.
 
-Native Live Host reopen filesystem evidence harness
-(`a3s.oci.linux-native-live-recovery-smoke.v1`, CLI
+Native Live Host reopen evidence harness
+(`a3s.oci.linux-native-live-recovery-smoke.v2`, CLI
 `linux-native-live-recovery-smoke`,
 `.github/scripts/linux-native-live-recovery.sh`) is implemented under
 `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`: create+start a long-running native
-container, FileOp::Upload a unique payload, SIGKILL the Host Service, require
-init survival, spawn a replacement Host on the same root, require Running with
-continuous init identity, then FileOp::Download exact match
-(`retained_filesystem_proven`). `retained_exec_io_proven` is optional for v1.
-The harness builds a **rootful** sleep bundle (no userns id maps) so create
-does not run as mapped UID against the private work tree. Report JSON is
-snake_case (aligned with KVM Live). **Existing-host WSL2 greened** on revision
-`695bf4f73af986b8131f496de85753e491734836` with report
-`/var/tmp/a3s-oci-native-live-fs-v1-20260910225133.json` SHA-256
-`1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`. Distinct
-from stopped-only `native-linux-recovery`. Does not flip B2 / cutover.
+container, prove retained exec I/O (Pipe stdin + Capture stdout
+`exec_io_before_kill`), FileOp::Upload a unique payload, SIGKILL the Host
+Service, require init survival, spawn a replacement Host on the same root,
+require Running with continuous init identity and the same exec process ID,
+post-reattach write_stdin/read_output (`retained_exec_io_proven`), then
+FileOp::Download exact match (`retained_filesystem_proven`). v2 requires both
+filesystem and exec I/O continuity. The harness builds a **rootful** sleep
+bundle (no userns id maps) so create does not run as mapped UID against the
+private work tree. Report JSON is snake_case (aligned with KVM Live). Prior
+v1 filesystem-only greening used revision
+`695bf4f73af986b8131f496de85753e491734836` (report SHA-256
+`1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`).
+**Existing-host WSL2 greened v2 retained exec I/O + filesystem** with report
+`/var/tmp/a3s-oci-native-live-io-v2-20260911003055.json` SHA-256
+`88def24f4fb652bdf03a7204c7f087aa18e783f060230535858779d002b17c34`
+(`retained_exec_io_proven` / `exec_io_before_kill` /
+`write_stdin_after_reattach` / `read_output_after_reattach` /
+`retained_filesystem_proven` / `init_survived_host_sigkill` /
+`replacement_state_running`). Tip revision digest is recorded in CHANGELOG /
+ROADMAP after the landing commit. Distinct from stopped-only
+`native-linux-recovery`. Does not flip B2 / cutover.
 
 ```bash
 A3S_OCI_NATIVE_SESSION_SUPERVISOR=1 \

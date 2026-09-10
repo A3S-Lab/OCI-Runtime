@@ -4,8 +4,12 @@ use a3s_oci_core::CapabilityStatus;
 use serde::{Deserialize, Serialize};
 
 /// Schema for the Native Linux Live Host reopen evidence gate.
+///
+/// v2 requires retained exec I/O (Pipe stdin + Capture stdout) across Host
+/// SIGKILL in addition to filesystem continuity. Does **not** flip default
+/// create / B2 / cutover flags (reports never self-certify B2/R6 close).
 pub const LINUX_NATIVE_LIVE_RECOVERY_SMOKE_SCHEMA_VERSION: &str =
-    "a3s.oci.linux-native-live-recovery-smoke.v1";
+    "a3s.oci.linux-native-live-recovery-smoke.v2";
 
 /// Nested evidence for one Native Live Host reopen attempt.
 ///
@@ -15,12 +19,22 @@ pub const LINUX_NATIVE_LIVE_RECOVERY_SMOKE_SCHEMA_VERSION: &str =
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinuxNativeLiveRecoveryEvidence {
     pub session_supervisor_mode_opt_in: bool,
+    /// Exec process ID retained across Host SIGKILL for I/O continuity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_exec_process_id: Option<String>,
+    /// First Host proved write_stdin + read_output echo before SIGKILL.
+    pub exec_io_before_kill: bool,
+    /// Replacement Host write_stdin on the same process ID succeeded.
+    pub write_stdin_after_reattach: bool,
+    /// Replacement Host read_output observed the post-reattach echo.
+    pub read_output_after_reattach: bool,
     pub file_upload_before_kill: bool,
     pub host_sigkill_delivered: bool,
     pub init_survived_host_sigkill: bool,
     pub replacement_state_running: bool,
     pub file_download_after_reattach: bool,
     pub retained_filesystem_proven: bool,
+    /// Aggregate: before-kill I/O + after-reattach write + read on same exec.
     pub retained_exec_io_proven: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -30,6 +44,10 @@ impl LinuxNativeLiveRecoveryEvidence {
     fn initial() -> Self {
         Self {
             session_supervisor_mode_opt_in: false,
+            retained_exec_process_id: None,
+            exec_io_before_kill: false,
+            write_stdin_after_reattach: false,
+            read_output_after_reattach: false,
             file_upload_before_kill: false,
             host_sigkill_delivered: false,
             init_survived_host_sigkill: false,
@@ -41,12 +59,20 @@ impl LinuxNativeLiveRecoveryEvidence {
         }
     }
 
-    /// Whether every Live filesystem continuity field is authentically set.
+    /// Whether every Live continuity field is authentically set.
     ///
-    /// `retained_exec_io_proven` is optional for v1 (filesystem-only success).
+    /// v2 requires both filesystem continuity and retained exec I/O.
     #[must_use]
     pub fn is_success(&self) -> bool {
         self.session_supervisor_mode_opt_in
+            && self
+                .retained_exec_process_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
+            && self.exec_io_before_kill
+            && self.write_stdin_after_reattach
+            && self.read_output_after_reattach
+            && self.retained_exec_io_proven
             && self.file_upload_before_kill
             && self.host_sigkill_delivered
             && self.init_survived_host_sigkill
@@ -98,16 +124,20 @@ impl LinuxNativeLiveRecoverySmokeReport {
 mod tests {
     use super::*;
 
-    fn complete_filesystem_evidence() -> LinuxNativeLiveRecoveryEvidence {
+    fn complete_evidence() -> LinuxNativeLiveRecoveryEvidence {
         LinuxNativeLiveRecoveryEvidence {
             session_supervisor_mode_opt_in: true,
+            retained_exec_process_id: Some("live-io-test".to_string()),
+            exec_io_before_kill: true,
+            write_stdin_after_reattach: true,
+            read_output_after_reattach: true,
             file_upload_before_kill: true,
             host_sigkill_delivered: true,
             init_survived_host_sigkill: true,
             replacement_state_running: true,
             file_download_after_reattach: true,
             retained_filesystem_proven: true,
-            retained_exec_io_proven: false,
+            retained_exec_io_proven: true,
             reason: None,
         }
     }
@@ -123,8 +153,8 @@ mod tests {
     }
 
     #[test]
-    fn success_requires_filesystem_continuity_fields() {
-        let evidence = complete_filesystem_evidence();
+    fn success_requires_filesystem_and_exec_io_continuity() {
+        let evidence = complete_evidence();
         assert!(evidence.is_success());
 
         let mut missing_upload = evidence.clone();
@@ -139,6 +169,26 @@ mod tests {
         missing_proven.retained_filesystem_proven = false;
         assert!(!missing_proven.is_success());
 
+        let mut missing_io = evidence.clone();
+        missing_io.retained_exec_io_proven = false;
+        assert!(!missing_io.is_success());
+
+        let mut missing_before = evidence.clone();
+        missing_before.exec_io_before_kill = false;
+        assert!(!missing_before.is_success());
+
+        let mut missing_stdin = evidence.clone();
+        missing_stdin.write_stdin_after_reattach = false;
+        assert!(!missing_stdin.is_success());
+
+        let mut missing_stdout = evidence.clone();
+        missing_stdout.read_output_after_reattach = false;
+        assert!(!missing_stdout.is_success());
+
+        let mut missing_process_id = evidence.clone();
+        missing_process_id.retained_exec_process_id = None;
+        assert!(!missing_process_id.is_success());
+
         let mut missing_running = evidence.clone();
         missing_running.replacement_state_running = false;
         assert!(!missing_running.is_success());
@@ -149,27 +199,22 @@ mod tests {
     }
 
     #[test]
-    fn report_success_requires_available_case_and_filesystem_evidence() {
+    fn report_success_requires_available_case_and_complete_evidence() {
         let mut report = LinuxNativeLiveRecoverySmokeReport::initial(
             PathBuf::from("/tmp/native-live"),
             "x86_64".to_string(),
         );
         report.status = CapabilityStatus::Available;
         report.case_count = 1;
-        report.recovery = complete_filesystem_evidence();
+        report.recovery = complete_evidence();
         assert!(report.is_success());
 
         report.recovery.retained_filesystem_proven = false;
         assert!(!report.is_success());
-    }
 
-    #[test]
-    fn retained_exec_io_is_not_required_for_v1_success() {
-        let mut evidence = complete_filesystem_evidence();
-        evidence.retained_exec_io_proven = false;
-        assert!(evidence.is_success());
-        evidence.retained_exec_io_proven = true;
-        assert!(evidence.is_success());
+        report.recovery = complete_evidence();
+        report.recovery.retained_exec_io_proven = false;
+        assert!(!report.is_success());
     }
 
     #[test]
@@ -180,7 +225,7 @@ mod tests {
         );
         report.status = CapabilityStatus::Available;
         report.case_count = 1;
-        report.recovery = complete_filesystem_evidence();
+        report.recovery = complete_evidence();
         let json = serde_json::to_value(&report).expect("serialize report");
         assert_eq!(
             json.get("schema_version").and_then(|value| value.as_str()),
@@ -202,5 +247,35 @@ mod tests {
             Some(true)
         );
         assert!(recovery.get("retainedFilesystemProven").is_none());
+        assert_eq!(
+            recovery
+                .get("retained_exec_io_proven")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            recovery
+                .get("exec_io_before_kill")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            recovery
+                .get("write_stdin_after_reattach")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            recovery
+                .get("read_output_after_reattach")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            recovery
+                .get("retained_exec_process_id")
+                .and_then(|value| value.as_str()),
+            Some("live-io-test")
+        );
     }
 }

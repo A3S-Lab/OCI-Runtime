@@ -45,29 +45,30 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
-- Native Linux Live Host-reopen file/filesystem continuity: after supervised
-  Host reopen, `LinuxLiveSupervisedSession::{file,filesystem}` rebuild
-  `RetainedExecutionContext` the same way post-reopen exec does and call the
-  existing descriptor-confined helpers. `NativeLinuxDriver::{file,filesystem}`
-  route through `live_for` (not `require_live` fail-closed). Dead init →
-  `Unavailable`; wrong generation → `Conflict`. First-principles unit tests
-  cover planted-byte download, upload/stat/download, dead init, and generation
-  fencing. Evidence harness
-  `a3s.oci.linux-native-live-recovery-smoke.v1` / CLI
+- Native Linux Live Host-reopen retained exec I/O + filesystem continuity
+  (smoke schema **v2**): supervised Host create+start → Pipe stdin + Capture
+  stdout echo (`exec_io_before_kill`) → FileOp::Upload → Host SIGKILL → init
+  survival → replacement Host Running reattach with continuous init identity
+  and the same exec process ID → post-reattach write_stdin/read_output
+  (`retained_exec_io_proven`) → exact FileOp::Download
+  (`retained_filesystem_proven`). Success requires both filesystem and exec
+  I/O. Schema `a3s.oci.linux-native-live-recovery-smoke.v2` / CLI
   `linux-native-live-recovery-smoke` /
-  `.github/scripts/linux-native-live-recovery.sh` is implemented: supervised
-  Host create+start → FileOp::Upload → Host SIGKILL → init survival →
-  replacement Host Running reattach with continuous init identity → exact
-  FileOp::Download (`retained_filesystem_proven`; `retained_exec_io_proven`
-  optional for v1). **Existing-host WSL2 Native Live filesystem greened** on
-  revision `695bf4f73af986b8131f496de85753e491734836` with report
-  `/var/tmp/a3s-oci-native-live-fs-v1-20260910225133.json` SHA-256
-  `1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`
-  (`retained_filesystem_proven` / `file_upload_before_kill` /
-  `file_download_after_reattach` / `init_survived_host_sigkill` /
-  `replacement_state_running`; `retained_exec_io_proven` remains optional for
-  v1). Distinct from stopped-only `native-linux-recovery`. Does not flip
-  default create / B2 / cutover flags.
+  `.github/scripts/linux-native-live-recovery.sh`. Prior v1 filesystem-only
+  greening used revision `695bf4f73af986b8131f496de85753e491734836` (report
+  SHA-256
+  `1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`).
+  **Existing-host WSL2 v2 greened** with report
+  `/var/tmp/a3s-oci-native-live-io-v2-20260911003055.json` SHA-256
+  `88def24f4fb652bdf03a7204c7f087aa18e783f060230535858779d002b17c34`
+  (`retained_exec_io_proven` / `exec_io_before_kill` /
+  `write_stdin_after_reattach` / `read_output_after_reattach` /
+  `retained_filesystem_proven` / `init_survived_host_sigkill` /
+  `replacement_state_running`). Product path: after supervised Host reopen,
+  `LinuxLiveSupervisedSession::{file,filesystem}` rebuild
+  `RetainedExecutionContext` the same way post-reopen exec does. Distinct
+  from stopped-only `native-linux-recovery`. Does not flip default create /
+  B2 / cutover flags.
 
 - Opt-in durable KVM `session-owner` helper on `a3s-oci-krun-shim` plus
   `session-owner-probe` parentage probe. Host can set

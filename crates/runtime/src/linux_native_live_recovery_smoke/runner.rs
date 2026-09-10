@@ -1,4 +1,4 @@
-//! Native Linux Live Host reopen filesystem evidence runner.
+//! Native Linux Live Host reopen filesystem + retained exec I/O evidence runner.
 
 use std::future::Future;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -6,14 +6,16 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use a3s_oci_core::CapabilityStatus;
-use a3s_oci_sdk::oci_spec::runtime::ContainerState;
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
     ContainerId, ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest,
-    FileOp, FileRequest, IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId,
-    ProcessIo, RuntimeClient, Signal, StartRequest, StateRequest, WaitRequest,
+    ExecRequest, FileOp, FileRequest, IoMode, IsolationRequest, KillRequest, OciBundle,
+    OperationContext, OperationId, OutputStream, ProcessId, ProcessIo, ProcessTarget,
+    ProcessesRequest, ReadOutputRequest, RuntimeClient, Signal, StartRequest, StateRequest,
+    WaitRequest, WriteStdinRequest,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use tokio::time::{sleep, timeout};
+use tokio::time::{sleep, timeout, Instant};
 
 use crate::native_hook_recovery_smoke::{
     capture_native_process_identity, NativeLinuxProcessIdentity,
@@ -25,6 +27,8 @@ use super::report::LinuxNativeLiveRecoverySmokeReport;
 use super::LinuxNativeLiveRecoverySmokeConfig;
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+const LIVE_IO_TIMEOUT: Duration = Duration::from_secs(15);
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const SESSION_SUPERVISOR_ENV: &str = "A3S_OCI_NATIVE_SESSION_SUPERVISOR";
 
 struct PreparedRun {
@@ -213,9 +217,8 @@ async fn run_first_owner(
         .ok_or_else(|| "Native Live start did not retain a live init PID".to_string())?;
     let init_identity = capture_native_process_identity(init_pid)?;
 
+    prove_retained_exec_io_before_kill(prepared, &client, &target, evidence).await?;
     prove_retained_filesystem_before_kill(prepared, &client, &target, evidence).await?;
-    // retained_exec_io_proven stays false for v1; filesystem-only success is enough.
-    let _ = evidence.retained_exec_io_proven;
     drop(client);
     Ok((init_identity, target))
 }
@@ -249,6 +252,28 @@ async fn run_replacement(
         );
     }
 
+    let processes = call(
+        "replacement Native Live process inventory",
+        client.processes(ProcessesRequest {
+            target: target.clone(),
+        }),
+    )
+    .await?;
+    let retained_exec_present = evidence
+        .retained_exec_process_id
+        .as_deref()
+        .is_some_and(|id| {
+            processes
+                .iter()
+                .any(|process| process.target.process_id.as_str() == id)
+        });
+    if !retained_exec_present {
+        return Err(
+            "replacement Live process inventory lost the retained exec process ID".to_string(),
+        );
+    }
+
+    prove_retained_exec_io_after_reattach(prepared, &client, target, evidence).await?;
     prove_retained_filesystem_after_reattach(prepared, &client, target, evidence).await?;
 
     call(
@@ -282,6 +307,99 @@ async fn run_replacement(
     drop(client);
     if !replacement.terminate().await? {
         return Err("replacement Host Service did not shut down cleanly".to_string());
+    }
+    Ok(())
+}
+
+async fn prove_retained_exec_io_before_kill(
+    prepared: &PreparedRun,
+    client: &RuntimeClient,
+    target: &ContainerTarget,
+    evidence: &mut super::report::LinuxNativeLiveRecoveryEvidence,
+) -> Result<(), String> {
+    let process_id = ProcessId::new(format!("live-io-{}", prepared.nonce))
+        .map_err(|error| format!("failed to construct Live retained-exec process ID: {error}"))?;
+    let process = retained_echo_process()?;
+    let io = ProcessIo {
+        stdin: IoMode::Pipe,
+        stdout: IoMode::Capture,
+        stderr: IoMode::Capture,
+        terminal_size: None,
+    };
+    let process_target = ProcessTarget {
+        container: target.clone(),
+        process_id: process_id.clone(),
+    };
+    call(
+        "Live retained exec",
+        client.exec(ExecRequest {
+            context: operation(&prepared.nonce, "exec-io")?,
+            container: target.clone(),
+            process_id: process_id.clone(),
+            process,
+            io,
+        }),
+    )
+    .await?;
+    evidence.retained_exec_process_id = Some(process_id.as_str().to_string());
+
+    // Wait for the shell readiness marker before the first stdin write.
+    wait_for_captured_needle(client, &process_target, b"live-io-ready\n", 0).await?;
+    let before = format!("before-{}\n", prepared.nonce);
+    call(
+        "Live retained write_stdin before Host SIGKILL",
+        client.write_stdin(WriteStdinRequest {
+            context: operation(&prepared.nonce, "stdin-before")?,
+            process: process_target.clone(),
+            data: before.into_bytes(),
+        }),
+    )
+    .await?;
+    let expected = format!("echo:before-{}\n", prepared.nonce);
+    wait_for_captured_needle(client, &process_target, expected.as_bytes(), 0).await?;
+    evidence.exec_io_before_kill = true;
+    Ok(())
+}
+
+async fn prove_retained_exec_io_after_reattach(
+    prepared: &PreparedRun,
+    client: &RuntimeClient,
+    target: &ContainerTarget,
+    evidence: &mut super::report::LinuxNativeLiveRecoveryEvidence,
+) -> Result<(), String> {
+    let process_id = evidence
+        .retained_exec_process_id
+        .as_deref()
+        .ok_or_else(|| "retained exec process ID missing before replacement I/O".to_string())?;
+    let process_id = ProcessId::new(process_id.to_string())
+        .map_err(|error| format!("invalid retained exec process ID: {error}"))?;
+    let process_target = ProcessTarget {
+        container: target.clone(),
+        process_id,
+    };
+    let after = format!("after-{}\n", prepared.nonce);
+    call(
+        "Live retained write_stdin after Host reattach",
+        client.write_stdin(WriteStdinRequest {
+            context: operation(&prepared.nonce, "stdin-after")?,
+            process: process_target.clone(),
+            data: after.into_bytes(),
+        }),
+    )
+    .await?;
+    evidence.write_stdin_after_reattach = true;
+    let expected = format!("echo:after-{}\n", prepared.nonce);
+    wait_for_captured_needle(client, &process_target, expected.as_bytes(), 0).await?;
+    evidence.read_output_after_reattach = true;
+    evidence.retained_exec_io_proven = evidence.exec_io_before_kill
+        && evidence.write_stdin_after_reattach
+        && evidence.read_output_after_reattach
+        && evidence
+            .retained_exec_process_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty());
+    if !evidence.retained_exec_io_proven {
+        return Err("Live retained exec I/O evidence failed its completeness audit".to_string());
     }
     Ok(())
 }
@@ -409,6 +527,59 @@ fn retained_filesystem_path(nonce: &str) -> String {
 
 fn retained_filesystem_payload(nonce: &str) -> Vec<u8> {
     format!("a3s-oci-native-live-fs-{nonce}\0binary\n").into_bytes()
+}
+
+fn retained_echo_process() -> Result<Process, String> {
+    // Pipe stdin + Capture stdout. Stay alive after stdin EOF so Host death
+    // alone does not exit the shell (parity with KVM Live retained exec).
+    let command = "printf 'live-io-ready\\n'; while true; do if IFS= read -r line; then printf 'echo:%s\\n' \"$line\"; else while true; do /bin/busybox sleep 3600 || sleep 3600; done; fi; done";
+    serde_json::from_value(serde_json::json!({
+        "terminal": false,
+        "user": {"uid": 0, "gid": 0, "umask": 18},
+        "args": ["/bin/sh", "-c", command],
+        "env": ["PATH=/bin:/usr/bin"],
+        "cwd": "/",
+        "noNewPrivileges": true
+    }))
+    .map_err(|error| format!("failed to construct Live retained-exec process: {error}"))
+}
+
+async fn wait_for_captured_needle(
+    client: &RuntimeClient,
+    process: &ProcessTarget,
+    needle: &[u8],
+    mut after_sequence: u64,
+) -> Result<(), String> {
+    let deadline = Instant::now() + LIVE_IO_TIMEOUT;
+    let mut buffer = Vec::new();
+    while Instant::now() < deadline {
+        let chunks = call(
+            "Live retained read_output",
+            client.read_output(ReadOutputRequest {
+                process: process.clone(),
+                after_sequence,
+                max_bytes: 4096,
+                wait_timeout_ms: Some(250),
+            }),
+        )
+        .await?;
+        for chunk in chunks {
+            if chunk.stream != OutputStream::Stdout {
+                continue;
+            }
+            after_sequence = after_sequence.max(chunk.sequence);
+            buffer.extend_from_slice(&chunk.data);
+        }
+        if buffer.windows(needle.len()).any(|window| window == needle) {
+            return Ok(());
+        }
+        sleep(POLL_INTERVAL).await;
+    }
+    Err(format!(
+        "Live retained Capture stdout did not observe {:?} within {:?}",
+        String::from_utf8_lossy(needle),
+        LIVE_IO_TIMEOUT
+    ))
 }
 
 fn operation(nonce: &str, suffix: &str) -> Result<OperationContext, String> {
