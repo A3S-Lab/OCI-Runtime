@@ -27,6 +27,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Supervised `container-exec` can update an existing native `recovery.json`
+  after create: `write_atomic_record` now `rename`s the pending file into
+  place instead of `hard_link`ing (which fails with EEXIST when the create
+  record already exists). Keyed captured exec was failing closed at
+  `record_exec_identity` with `File exists (os error 17)` after a successful
+  spawn, leaving Live session qualification hung.
 - Supervised `container-exec` now mirrors create for capture/pipe I/O: after
   `spawn_launcher_with_inherited` it deposits stdin (dup) and exclusive
   stdout/stderr read ends into the session supervisor, then attaches with a
