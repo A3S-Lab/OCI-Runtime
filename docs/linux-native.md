@@ -1913,8 +1913,12 @@ without helper fail closed with `Unavailable`. Authentic Host-reopen
 `pause` / `resume` / `stats` use the durable recovery cgroup leaf (kernel
 `cgroup.freeze` / `cgroup.events` and normalized cgroup-v2 counters) without
 restoring `PreparedProcess`; missing cgroup evidence fail-closes with
-`Unavailable`. New `exec` likewise remains Unavailable pending namespace /
-rootfs / process-session restore. Default create stays Host-bound.
+`Unavailable`. New `exec` after Host reopen rebuilds the minimum authentic
+spawn context from the durable `config.json` snapshot (namespace plan,
+capability ceiling, seccomp) plus live init namespace/root descriptors and the
+recovery cgroup leaf, then supervisor-parents the helper. Only Null process I/O
+is accepted in this slice; capture/pipe/terminal/inherit fail closed with
+`Unavailable`. Default create stays Host-bound.
 
 Qualification may enable supervised create with
 `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. When set, Native create starts one
@@ -1953,8 +1957,9 @@ durable identities is restored via pidfd after PID + start-time re-auth.
 Live `wait_process` for durable exec uses supervisor `MSG_WAIT` on the recorded
 helper child when present; v5 exec records without helper fail closed.
 Authentic `pause` / `resume` / `stats` read and write the durable recovery
-cgroup leaf. New `exec` still requires namespace/rootfs/`PreparedProcess`
-restore and remains Unavailable rather than inventing exit status.
+cgroup leaf. New `exec` rebuilds authentic spawn context from recovery config
+plus live init and supervisor-parents the helper (Null I/O only; capture/pipe
+remain Unavailable rather than inventing streams).
 
 ### Hook owner-death crash boundary
 

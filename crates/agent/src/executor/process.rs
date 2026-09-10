@@ -1209,6 +1209,11 @@ impl PreparedProcess {
         self.pidfd.raw_descriptor()
     }
 
+    /// Authenticated init pidfd for exec handshake liveness checks.
+    pub(super) const fn pidfd(&self) -> &PidFd {
+        &self.pidfd
+    }
+
     pub(super) fn workload_cgroup_procs_descriptor(&self) -> Option<std::os::fd::RawFd> {
         self.cgroup
             .as_ref()

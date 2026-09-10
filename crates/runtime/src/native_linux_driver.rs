@@ -645,8 +645,36 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn exec(&self, request: DriverExecRequest) -> Result<DriverProcess> {
-        self.require_live(&request.target.container, "native-linux-exec")
-            .await?;
+        if let Some(live) = self
+            .live_for(&request.target.container, "native-linux-exec")
+            .await?
+        {
+            let (init_executable, pinned) = self
+                .executor
+                .duplicate_init_executable()
+                .map_err(|error| error.for_operation("native-linux-exec"))?;
+            let (pid, terminal) = live
+                .exec(
+                    &request.target.process_id,
+                    &request.process,
+                    &request.io,
+                    &init_executable,
+                )
+                .await
+                .map_err(|error| error.for_operation("native-linux-exec"))?;
+            drop(pinned);
+            return DriverProcess::new(pid, terminal);
+        }
+        if self
+            .recovered_for(&request.target.container, "native-linux-exec")
+            .await?
+            .is_some()
+        {
+            return Err(recovered_stopped_error(
+                &request.target.container,
+                "native-linux-exec",
+            ));
+        }
         self.client.exec(request).await
     }
 

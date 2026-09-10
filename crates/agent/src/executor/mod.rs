@@ -1116,8 +1116,8 @@ impl LinuxExecutor {
     /// Live `wait_process` uses supervisor `MSG_WAIT` when a helper identity is
     /// recorded (v6); v5 exec records without helper fail closed. Authentic
     /// pause/resume/stats use the durable recovery cgroup leaf. New `exec`
-    /// still requires full `PreparedProcess` restore and remains Unavailable.
-    /// Generations that share
+    /// rebuilds the minimum authentic spawn context from recovery config plus
+    /// live init (Null I/O only in this slice). Generations that share
     /// one `sessionSupervisor` identity reuse one control connection through
     /// [`SessionSupervisorReattachCache`].
     pub async fn recover_stale_generation(
@@ -1146,6 +1146,13 @@ impl LinuxExecutor {
     /// Remove the exact transient paths retained by a recovered tombstone.
     pub async fn delete_stale_generation(&self, tombstone: &LinuxExecutorTombstone) -> Result<()> {
         recovery::delete_stale_generation(tombstone).await
+    }
+
+    /// Duplicate the pinned agent/init executable path for Host-reopen exec spawn.
+    ///
+    /// The returned file must stay open until spawn finishes resolving the path.
+    pub fn duplicate_init_executable(&self) -> Result<(PathBuf, File)> {
+        self.init_executable.duplicate_command_path()
     }
 
     /// Create through the native in-process path with validated inherited

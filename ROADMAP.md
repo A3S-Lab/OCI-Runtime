@@ -2266,8 +2266,12 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   exec records without helper fail closed. Authentic Host-reopen
   `pause` / `resume` / `stats` use the durable recovery cgroup leaf (kernel
   freezer + cgroup-v2 counters) without restoring `PreparedProcess`; missing
-  cgroup evidence fail-closes with `Unavailable`. New `exec` still requires
-  namespace/rootfs/`PreparedProcess` restore and stays Unavailable. The
+  cgroup evidence fail-closes with `Unavailable`. New `exec` after Host reopen
+  rebuilds the minimum authentic spawn context from the durable config snapshot
+  plus live init namespace/root descriptors and the recovery cgroup leaf, then
+  supervisor-parents the helper (`ExecProcess::spawn_with_context`). Null I/O
+  only in this slice; capture/pipe/terminal remain Unavailable. Default create
+  stays Host-bound. The
   real-host Box live-session gate and default create Host-bound policy remain
   open.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI

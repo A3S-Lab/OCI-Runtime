@@ -927,7 +927,11 @@ fn open_control_workload_membership(
     })
 }
 
-fn open_cgroup_procs(path: &Path) -> Result<File> {
+/// Open a protected write handle to `cgroup.procs` under an existing leaf.
+///
+/// Used by Live Host-reopen exec to place a new helper into the durable recovery
+/// workload leaf without restoring a full [`CgroupHandle`].
+pub(super) fn open_cgroup_procs(path: &Path) -> Result<File> {
     let file = OpenOptions::new()
         .write(true)
         .open(path.join(CGROUP_PROCS))
