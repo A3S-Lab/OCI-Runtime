@@ -2283,6 +2283,17 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   `retained_stream_handle_proven=true`). That does **not** close W2/B2 alone:
   utility-VM Live, default create Host-bound policy, fresh-host, and cutover
   remain open.
+- [ ] Opt-in KVM / utility-VM Live Host reopen (observation-only; no cutover):
+  introduce a durable session-owner process that is the shim's direct parent
+  and outlives Host Service (default remains Host-PID owner-watchdog so
+  stopped-only owner-death gates stay green). Replacement Host must
+  authenticated-reattach the **same** Guest incarnation to `Live` Running
+  (continuous init identity, no invented exit); orphaned session roots stay
+  rejected without that evidence. Defer retained streaming handle continuity
+  and `b2_process_session_recovery_closed` / `kvm_microvm_live_claimed` until
+  this Live reattach path is greened on existing-host WSL2 `/dev/kvm`. Does
+  not register KVM with normal HostRuntimeService, flip default supervised
+  create, or cut over MicroVM product routing.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,
