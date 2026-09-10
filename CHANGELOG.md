@@ -51,8 +51,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
   `A3S_OCI_KVM_SESSION_OWNER=1` create+start → Host SIGKILL → Guest /
   session-owner survival → replacement Host Running reattach with continuous
   init identity and no invented exit. Distinct from stopped-only
-  `linux-kvm-recovery` (`live_vm_processes_reaped` must be false). Does **not**
-  close W2/B2 until existing-host `/dev/kvm` evidence is greened.
+  `linux-kvm-recovery` (`live_vm_processes_reaped` must be false). Existing-host
+  WSL2 `/dev/kvm` greened on `c3b5fc54…` (matrix SHA-256
+  `15d99d8e5b087112612859783ed76881bcc3e8be68b513032edb8673b1958db3`); W2/B2 and
+  cutover flags remain open.
 
 ### Changed
 
@@ -72,6 +74,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   retried retryable Unavailable I/O errors, so Host SIGKILL after idle Start made
   the Guest shut down, reaped the utility VM, and failed Live session-owner survival.
   Rebuild the musl Guest Agent into the KVM system image after this contract change.
+- Reattached KVM Live Host shutdown reclaims the durable `/tmp/<pipe>/` endpoint
+  after SIGKILL of session-owner (graceful unlink is skipped on SIGKILL).
 - Durable KVM Live host-control socket now binds under `/tmp/<pipe>/host-control.sock`
   beside the guest agent socket instead of under the long runtime share path,
   which exceeded Linux `SUN_LEN` and made session-owner exit before readiness.
