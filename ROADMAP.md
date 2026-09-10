@@ -2066,7 +2066,14 @@ and recovery suites in the Windows guest and on native Linux.
   reopen, resume, generation reuse, and leak checks across four independent
   slots on x86_64 and aarch64 without KVM. CI defaults to 25 waves, verifies
   100 complete lifecycles from dynamic operation counts, and retains each
-  architecture's JSON report.
+  architecture's JSON report. **Tip-source Native soak refresh (observation-
+  only):** clean tip `d337aef892e1bffd8a5ef9820112780656041eb2` (Merge #297)
+  greened full `.github/scripts/native-linux-smoke.sh` EXIT=0 on existing-host
+  WSL2, including soak schema `a3s.oci.native-linux-soak.v2` status
+  `available` (25 iterations × 4 concurrent) report
+  `/var/tmp/a3s-oci-native-smoke-tip-d337aef/soak-report.json` SHA-256
+  `2614c462ea4c1dfd7aa40df0d6e9f54332f7c7b517186198fe11530f0a2e6cc1`. Does not
+  promote readiness, fresh-host, cutover, or B2.
 - [x] Retain a versioned real-driver configuration matrix for private,
   host-inherited, and donor-shared network namespaces; shared/read-only bind
   and private-tmpfs storage; inline/script/direct/nonzero init; and independent
