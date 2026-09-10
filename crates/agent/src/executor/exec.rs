@@ -180,12 +180,15 @@ impl LinuxExecutor {
                 .containers
                 .get_mut(&key)
                 .ok_or_else(|| missing_locked_container(&key))?;
+            let survive_host_death =
+                super::recovery::recovery_has_session_supervisor(&record.runtime_directory)?;
             match ExecProcess::spawn(
                 &snapshot,
                 init_executable,
                 &record.process,
                 request.process.terminal().unwrap_or(false),
                 &process_io,
+                survive_host_death,
             )
             .await
             {
@@ -208,12 +211,29 @@ impl LinuxExecutor {
                     return Err(error);
                 }
             };
-        state
-            .containers
-            .get_mut(&key)
-            .ok_or_else(|| missing_locked_container(&key))?
-            .processes
-            .insert(request.target.process_id.clone(), process);
+        {
+            let record = state
+                .containers
+                .get_mut(&key)
+                .ok_or_else(|| missing_locked_container(&key))?;
+            if super::recovery::recovery_has_session_supervisor(&record.runtime_directory)? {
+                if let Err(error) = super::recovery::record_exec_identity(
+                    &record.runtime_directory,
+                    &request.target.process_id,
+                    process.pid(),
+                    process.terminal(),
+                ) {
+                    let mut process = process;
+                    let _ = process.force_stop().await;
+                    let _ =
+                        remove_process_directory(&container_directory, &process_directory).await;
+                    return Err(error);
+                }
+            }
+            record
+                .processes
+                .insert(request.target.process_id.clone(), process);
+        }
         Ok(response)
     }
 

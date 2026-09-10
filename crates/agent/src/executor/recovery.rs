@@ -30,7 +30,8 @@ const OWNER_RECORD_NAME: &str = "owner.json";
 const CONTAINER_RECORD_NAME: &str = "recovery.json";
 const CONFIG_SNAPSHOT_NAME: &str = "config.json";
 const OWNER_SCHEMA_VERSION: &str = "a3s.oci.native-linux-executor-owner.v1";
-const CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.native-linux-recovery.v4";
+const CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.native-linux-recovery.v5";
+const CONTAINER_SCHEMA_VERSION_V4: &str = "a3s.oci.native-linux-recovery.v4";
 const CONTAINER_SCHEMA_VERSION_V3: &str = "a3s.oci.native-linux-recovery.v3";
 const CONTAINER_SCHEMA_VERSION_V2: &str = "a3s.oci.native-linux-recovery.v2";
 const CONTAINER_SCHEMA_VERSION_V1: &str = "a3s.oci.native-linux-recovery.v1";
@@ -155,6 +156,19 @@ impl From<IntelRdtRecovery> for RecoveryIntelRdtRecord {
     }
 }
 
+/// Authenticated exec identity retained for Live Host reopen inventory.
+///
+/// Only PID + start-time (plus process ID and terminal mode) are durable.
+/// Exit status is never recorded here; dead identities are omitted from
+/// inventory instead of inventing a terminal result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecoveryExecRecord {
+    process_id: ProcessId,
+    identity: ProcessIdentity,
+    terminal: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ContainerRecoveryRecord {
@@ -165,6 +179,23 @@ struct ContainerRecoveryRecord {
     launcher: ProcessIdentity,
     init: ProcessIdentity,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_supervisor: Option<ProcessIdentity>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    execs: Vec<RecoveryExecRecord>,
+    cgroup: Option<RecoveryCgroupRecord>,
+    intel_rdt: Option<RecoveryIntelRdtRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct V4ContainerRecoveryRecord {
+    schema_version: String,
+    target: ContainerTarget,
+    config_digest: String,
+    owner: ProcessIdentity,
+    launcher: ProcessIdentity,
+    init: ProcessIdentity,
+    #[serde(default)]
     session_supervisor: Option<ProcessIdentity>,
     cgroup: Option<RecoveryCgroupRecord>,
     intel_rdt: Option<RecoveryIntelRdtRecord>,
@@ -291,12 +322,14 @@ impl SessionSupervisorReattachCache {
 /// Host-reopen handle for one generation whose session supervisor survived.
 ///
 /// This restores supervisor control for wait/kill of the recorded launcher, a
-/// partial process inventory (authenticated live init only), an authentic
-/// stdin write end when the original Host deposited one, and exclusive
-/// capture stdout/stderr through the supervisor IPC relay when those read ends
-/// were moved at create. Missing output deposit fail-closes
-/// [`Self::read_output`] with [`ErrorCode::Unavailable`] instead of inventing
-/// empty output. Durable exec inventory remains unrestored.
+/// process inventory of the authenticated live init plus still-live durable
+/// exec identities, an authentic stdin write end when the original Host
+/// deposited one, and exclusive capture stdout/stderr through the supervisor
+/// IPC relay when those read ends were moved at create. Missing output deposit
+/// fail-closes [`Self::read_output`] with [`ErrorCode::Unavailable`] instead of
+/// inventing empty output. Dead exec identities are omitted from inventory
+/// without inventing exit status. Full `PreparedProcess` restore for signal /
+/// wait / new exec remains open.
 #[derive(Debug)]
 pub struct LinuxLiveSupervisedSession {
     target: ContainerTarget,
@@ -361,39 +394,77 @@ impl LinuxLiveSupervisedSession {
         self.record.init.is_live()
     }
 
-    /// Partial process inventory for Host reopen.
+    /// Process inventory for Host reopen.
     ///
-    /// When the authenticated init identity is still live, returns exactly one
-    /// init [`ProcessRecord`]. Returns an empty inventory when init has exited.
-    /// Does not invent exec entries (recovery v4 does not record them) and does
-    /// not invent exit status.
+    /// Returns the authenticated init [`ProcessRecord`] when that identity is
+    /// still live, plus every durable exec whose PID + start-time identity is
+    /// still live. Dead init or exec identities are omitted. Does not invent
+    /// exit status for missing processes.
     pub fn process_inventory(&self) -> Result<Vec<ProcessRecord>> {
-        if !self.init_is_live()? {
-            return Ok(Vec::new());
+        let mut records = Vec::new();
+        if self.init_is_live()? {
+            let pid = u32::try_from(self.init_pid()).map_err(|error| {
+                recovery_error(
+                    ErrorCode::Internal,
+                    format!(
+                        "live supervised init PID {} does not fit the SDK process model: {error}",
+                        self.init_pid()
+                    ),
+                )
+            })?;
+            if pid == 0 {
+                return Err(recovery_error(
+                    ErrorCode::Internal,
+                    "live supervised process inventory contained PID zero",
+                ));
+            }
+            records.push(ProcessRecord {
+                target: ProcessTarget {
+                    container: self.target.clone(),
+                    process_id: ProcessId::init(),
+                },
+                pid: Some(pid),
+                terminal: false,
+            });
         }
-        let pid = u32::try_from(self.init_pid()).map_err(|error| {
-            recovery_error(
-                ErrorCode::Internal,
-                format!(
-                    "live supervised init PID {} does not fit the SDK process model: {error}",
-                    self.init_pid()
-                ),
-            )
-        })?;
-        if pid == 0 {
-            return Err(recovery_error(
-                ErrorCode::Internal,
-                "live supervised process inventory contained PID zero",
-            ));
+        for exec in &self.record.execs {
+            if exec.process_id.is_init() {
+                return Err(recovery_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "container {} generation {:?} recovery retained init as an exec identity",
+                        self.target.id, self.target.generation
+                    ),
+                ));
+            }
+            if !exec.identity.is_live()? {
+                continue;
+            }
+            let pid = u32::try_from(exec.identity.pid()).map_err(|error| {
+                recovery_error(
+                    ErrorCode::Internal,
+                    format!(
+                        "live supervised exec PID {} does not fit the SDK process model: {error}",
+                        exec.identity.pid()
+                    ),
+                )
+            })?;
+            if pid == 0 {
+                return Err(recovery_error(
+                    ErrorCode::Internal,
+                    "live supervised exec inventory contained PID zero",
+                ));
+            }
+            records.push(ProcessRecord {
+                target: ProcessTarget {
+                    container: self.target.clone(),
+                    process_id: exec.process_id.clone(),
+                },
+                pid: Some(pid),
+                terminal: exec.terminal,
+            });
         }
-        Ok(vec![ProcessRecord {
-            target: ProcessTarget {
-                container: self.target.clone(),
-                process_id: ProcessId::init(),
-            },
-            pid: Some(pid),
-            terminal: false,
-        }])
+        Ok(records)
     }
 
     /// Authenticated session-supervisor identity that parents the launcher.
@@ -696,10 +767,79 @@ pub(super) async fn write_container_record(
         launcher,
         init,
         session_supervisor,
+        execs: Vec::new(),
         cgroup,
         intel_rdt,
     };
     write_atomic_record(&runtime_directory.join(CONTAINER_RECORD_NAME), &record)
+}
+
+/// Persist one authenticated exec identity into the generation recovery record.
+///
+/// Only called for supervised generations (`sessionSupervisor` present). Captures
+/// PID + start-time before returning success; never records exit status.
+pub(super) fn record_exec_identity(
+    runtime_directory: &Path,
+    process_id: &ProcessId,
+    pid: i32,
+    terminal: bool,
+) -> Result<()> {
+    if process_id.is_init() {
+        return Err(recovery_error(
+            ErrorCode::InvalidArgument,
+            "recovery exec identity cannot use the reserved init process ID",
+        ));
+    }
+    let path = runtime_directory.join(CONTAINER_RECORD_NAME);
+    let mut record = read_container_record(&path)?;
+    if record.session_supervisor.is_none() {
+        return Err(recovery_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "refusing to persist exec {} without a recorded session supervisor under {}",
+                process_id,
+                runtime_directory.display()
+            ),
+        ));
+    }
+    if record
+        .execs
+        .iter()
+        .any(|exec| &exec.process_id == process_id)
+    {
+        return Err(recovery_error(
+            ErrorCode::AlreadyExists,
+            format!(
+                "process {} already has durable recovery evidence under {}",
+                process_id,
+                runtime_directory.display()
+            ),
+        ));
+    }
+    let identity = ProcessIdentity::capture(pid, "container exec")?;
+    record.schema_version = CONTAINER_SCHEMA_VERSION.to_string();
+    record.execs.push(RecoveryExecRecord {
+        process_id: process_id.clone(),
+        identity,
+        terminal,
+    });
+    write_atomic_record(&path, &record)
+}
+
+/// Whether the generation recovery record retained a live session supervisor.
+pub(super) fn recovery_has_session_supervisor(runtime_directory: &Path) -> Result<bool> {
+    let path = runtime_directory.join(CONTAINER_RECORD_NAME);
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => Ok(read_container_record(&path)?.session_supervisor.is_some()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(recovery_io_error(
+            format!(
+                "failed to inspect native recovery record {}: {error}",
+                path.display()
+            ),
+            error,
+        )),
+    }
 }
 
 pub(super) async fn recover_stale_generation(
@@ -985,6 +1125,19 @@ fn read_container_record(path: &Path) -> Result<ContainerRecoveryRecord> {
                 ),
             )
         }),
+        CONTAINER_SCHEMA_VERSION_V4 => {
+            let previous: V4ContainerRecoveryRecord =
+                serde_json::from_value(value).map_err(|error| {
+                    recovery_error(
+                        ErrorCode::FailedPrecondition,
+                        format!(
+                            "v4 native container recovery record {} is invalid: {error}",
+                            path.display()
+                        ),
+                    )
+                })?;
+            Ok(normalize_v4_container_record(previous))
+        }
         CONTAINER_SCHEMA_VERSION_V3 => {
             let previous: V3ContainerRecoveryRecord =
                 serde_json::from_value(value).map_err(|error| {
@@ -1073,9 +1226,25 @@ fn normalize_legacy_container_record(
         launcher: legacy.launcher,
         init: legacy.init,
         session_supervisor: None,
+        execs: Vec::new(),
         cgroup,
         intel_rdt: None,
     })
+}
+
+fn normalize_v4_container_record(previous: V4ContainerRecoveryRecord) -> ContainerRecoveryRecord {
+    ContainerRecoveryRecord {
+        schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
+        target: previous.target,
+        config_digest: previous.config_digest,
+        owner: previous.owner,
+        launcher: previous.launcher,
+        init: previous.init,
+        session_supervisor: previous.session_supervisor,
+        execs: Vec::new(),
+        cgroup: previous.cgroup,
+        intel_rdt: previous.intel_rdt,
+    }
 }
 
 fn normalize_v3_container_record(previous: V3ContainerRecoveryRecord) -> ContainerRecoveryRecord {
@@ -1087,6 +1256,7 @@ fn normalize_v3_container_record(previous: V3ContainerRecoveryRecord) -> Contain
         launcher: previous.launcher,
         init: previous.init,
         session_supervisor: None,
+        execs: Vec::new(),
         cgroup: previous.cgroup,
         intel_rdt: previous.intel_rdt,
     }
@@ -1103,6 +1273,7 @@ fn normalize_v2_container_record(
         launcher: previous.launcher,
         init: previous.init,
         session_supervisor: None,
+        execs: Vec::new(),
         cgroup: previous.cgroup,
         intel_rdt: None,
     }
@@ -2161,6 +2332,7 @@ mod tests {
         assert_eq!(normalized.schema_version, CONTAINER_SCHEMA_VERSION);
         assert!(normalized.intel_rdt.is_none());
         assert!(normalized.session_supervisor.is_none());
+        assert!(normalized.execs.is_empty());
     }
 
     #[test]
@@ -2191,7 +2363,46 @@ mod tests {
         let normalized = normalize_v3_container_record(previous);
         assert_eq!(normalized.schema_version, CONTAINER_SCHEMA_VERSION);
         assert!(normalized.session_supervisor.is_none());
+        assert!(normalized.execs.is_empty());
         assert!(normalized.intel_rdt.is_none());
+    }
+
+    #[test]
+    fn v4_recovery_record_normalizes_without_inventing_exec_inventory() {
+        let previous = V4ContainerRecoveryRecord {
+            schema_version: CONTAINER_SCHEMA_VERSION_V4.to_string(),
+            target: ContainerTarget::exact(
+                a3s_oci_sdk::ContainerId::new("v4-record").expect("container ID"),
+                a3s_oci_sdk::Generation(1),
+            ),
+            config_digest: "sha256:test".to_string(),
+            owner: ProcessIdentity {
+                pid: 100,
+                start_time_ticks: 1,
+            },
+            launcher: ProcessIdentity {
+                pid: 101,
+                start_time_ticks: 2,
+            },
+            init: ProcessIdentity {
+                pid: 102,
+                start_time_ticks: 3,
+            },
+            session_supervisor: Some(ProcessIdentity {
+                pid: 103,
+                start_time_ticks: 4,
+            }),
+            cgroup: None,
+            intel_rdt: None,
+        };
+
+        let normalized = normalize_v4_container_record(previous);
+        assert_eq!(normalized.schema_version, CONTAINER_SCHEMA_VERSION);
+        assert!(normalized.session_supervisor.is_some());
+        assert!(
+            normalized.execs.is_empty(),
+            "v4 records must normalize without inventing durable exec entries"
+        );
     }
 
     #[test]
@@ -2437,6 +2648,7 @@ mod tests {
                     supervisor_pid,
                     supervisor_start,
                 )),
+                execs: Vec::new(),
                 cgroup: None,
                 intel_rdt: None,
             },
@@ -2531,6 +2743,229 @@ mod tests {
             .expect("stopped-only delete after live wait");
         assert!(!stale_root.exists());
         // Ensure the forgotten supervisor is cleaned up for the test process.
+        terminate_pid(supervisor_pid);
+        let _ = wait_for_child(supervisor_pid);
+    }
+
+    #[tokio::test]
+    async fn live_session_inventory_exposes_live_exec_and_omits_dead_without_inventing_exit() {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixStream;
+        use std::path::Path;
+
+        use super::super::pid_supervisor::{terminate_pid, wait_for_child};
+        use super::super::session_supervisor::HostSessionSupervisor;
+
+        let temporary = tempfile::tempdir().expect("temporary recovery parent");
+        let parent = temporary.path().join("executor");
+        std::fs::create_dir(&parent).expect("executor parent");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
+            .expect("protect executor parent");
+        let current_root = parent.join("current");
+        std::fs::create_dir(&current_root).expect("current root");
+        std::fs::set_permissions(&current_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect current root");
+
+        let (mut parent_ready, mut child_ready) =
+            UnixStream::pair().expect("exec inventory ready channel");
+        // SAFETY: parent reaps the fake Host; child owns the production supervisor.
+        let host_pid = unsafe { libc::fork() };
+        assert!(host_pid >= 0, "fork fake host for exec inventory");
+        if host_pid == 0 {
+            drop(parent_ready);
+            let mut supervisor = match HostSessionSupervisor::start_via_fork() {
+                Ok(supervisor) => supervisor,
+                Err(_) => unsafe { libc::_exit(151) },
+            };
+            let launcher_pid = match supervisor.spawn_launcher(
+                Path::new("/bin/sleep"),
+                &["30".into()],
+                None,
+                None,
+                None,
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(152) },
+            };
+            let exec_pid = match supervisor.spawn_launcher(
+                Path::new("/bin/sleep"),
+                &["30".into()],
+                None,
+                None,
+                None,
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(153) },
+            };
+            let identity = supervisor.identity().clone();
+            let mut payload = Vec::with_capacity(20);
+            payload.extend_from_slice(&identity.pid().to_be_bytes());
+            payload.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+            payload.extend_from_slice(&launcher_pid.to_be_bytes());
+            payload.extend_from_slice(&exec_pid.to_be_bytes());
+            if child_ready.write_all(&payload).is_err() {
+                unsafe { libc::_exit(154) }
+            }
+            std::mem::forget(supervisor);
+            loop {
+                unsafe { libc::pause() };
+            }
+        }
+        drop(child_ready);
+        let mut payload = [0_u8; 20];
+        parent_ready
+            .read_exact(&mut payload)
+            .expect("read exec-inventory supervisor evidence");
+        let supervisor_pid = i32::from_be_bytes(payload[0..4].try_into().expect("pid bytes"));
+        let supervisor_start = u64::from_be_bytes(payload[4..12].try_into().expect("start bytes"));
+        let launcher_pid = i32::from_be_bytes(payload[12..16].try_into().expect("launcher bytes"));
+        let exec_pid = i32::from_be_bytes(payload[16..20].try_into().expect("exec bytes"));
+
+        let owner = ProcessIdentity {
+            pid: 2_100_500,
+            start_time_ticks: 0x515,
+        };
+        let stale_root = parent.join(runtime_root_name(owner));
+        std::fs::create_dir(&stale_root).expect("stale root");
+        std::fs::set_permissions(&stale_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect stale root");
+        write_atomic_record(
+            &stale_root.join(OWNER_RECORD_NAME),
+            &ExecutorOwnerRecord {
+                schema_version: OWNER_SCHEMA_VERSION.to_string(),
+                owner,
+            },
+        )
+        .expect("owner record");
+        let slot = stale_root.join("c-0000000000000001");
+        std::fs::create_dir(&slot).expect("container slot");
+        std::fs::set_permissions(&slot, std::fs::Permissions::from_mode(0o700))
+            .expect("protect container slot");
+        let config = br#"{"ociVersion":"1.3.0"}"#;
+        let digest = config_digest_for(config);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        options
+            .open(slot.join(CONFIG_SNAPSHOT_NAME))
+            .and_then(|mut file| file.write_all(config))
+            .expect("configuration snapshot");
+        let target = ContainerTarget::exact(
+            a3s_oci_sdk::ContainerId::new("live-exec-inventory").expect("container ID"),
+            a3s_oci_sdk::Generation(1),
+        );
+        let init = ProcessIdentity {
+            pid: launcher_pid,
+            start_time_ticks: process_observation(launcher_pid)
+                .expect("observe launcher")
+                .expect("launcher live")
+                .start_time_ticks,
+        };
+        let exec_id = a3s_oci_sdk::ProcessId::new("worker").expect("exec process ID");
+        let exec_identity = ProcessIdentity {
+            pid: exec_pid,
+            start_time_ticks: process_observation(exec_pid)
+                .expect("observe exec")
+                .expect("exec live")
+                .start_time_ticks,
+        };
+        write_atomic_record(
+            &slot.join(CONTAINER_RECORD_NAME),
+            &ContainerRecoveryRecord {
+                schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
+                target: target.clone(),
+                config_digest: digest.clone(),
+                owner,
+                launcher: init,
+                init,
+                session_supervisor: Some(ProcessIdentity::from_authenticated(
+                    supervisor_pid,
+                    supervisor_start,
+                )),
+                execs: vec![RecoveryExecRecord {
+                    process_id: exec_id.clone(),
+                    identity: exec_identity,
+                    terminal: false,
+                }],
+                cgroup: None,
+                intel_rdt: None,
+            },
+        )
+        .expect("container recovery record");
+
+        terminate_pid(host_pid);
+        let _ = wait_for_child(host_pid);
+
+        let supervisors = SessionSupervisorReattachCache::default();
+        let recovery = recover_stale_generation(
+            &parent,
+            &current_root,
+            &target,
+            &digest,
+            Some(launcher_pid),
+            &supervisors,
+        )
+        .await
+        .expect("live supervisor must reattach with durable exec inventory")
+        .expect("recovery match");
+        let StaleGenerationRecovery::Live(live) = recovery else {
+            panic!("live session supervisor must recover as Live");
+        };
+
+        let inventory = live
+            .process_inventory()
+            .expect("live inventory must not invent failure");
+        assert_eq!(
+            inventory.len(),
+            2,
+            "live reopen must expose authenticated init plus still-live exec"
+        );
+        assert!(inventory[0].target.process_id.is_init());
+        assert_eq!(
+            inventory[0].pid,
+            Some(u32::try_from(launcher_pid).expect("launcher pid fits u32"))
+        );
+        assert_eq!(inventory[1].target.process_id, exec_id);
+        assert_eq!(
+            inventory[1].pid,
+            Some(u32::try_from(exec_pid).expect("exec pid fits u32"))
+        );
+        assert!(
+            !inventory[1].terminal,
+            "inventory must retain durable terminal mode, not invent one"
+        );
+
+        terminate_pid(exec_pid);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let gone = process_observation(exec_pid)
+                .expect("observe terminated exec")
+                .is_none_or(|observation| observation.is_terminated());
+            if gone {
+                break;
+            }
+            if Instant::now() >= deadline {
+                panic!("exec PID {exec_pid} did not exit after SIGKILL");
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+        let after_exit = live
+            .process_inventory()
+            .expect("inventory after exec exit must not invent failure");
+        assert_eq!(after_exit.len(), 1, "dead exec must be omitted");
+        assert!(after_exit[0].target.process_id.is_init());
+        assert!(
+            after_exit.iter().all(|record| record.pid.is_some()),
+            "omitting a dead exec must not invent a terminal ProcessRecord"
+        );
+
+        live.kill_launcher().expect("kill supervised launcher");
+        let _ = live.wait_launcher().expect("wait supervised launcher");
+        let tombstone = live
+            .into_tombstone()
+            .expect("dead supervised children can become a stopped tombstone");
+        delete_stale_generation(&tombstone)
+            .await
+            .expect("stopped-only delete after live wait");
         terminate_pid(supervisor_pid);
         let _ = wait_for_child(supervisor_pid);
     }
@@ -2668,6 +3103,7 @@ mod tests {
                     supervisor_pid,
                     supervisor_start,
                 )),
+                execs: Vec::new(),
                 cgroup: None,
                 intel_rdt: None,
             },
@@ -2850,6 +3286,7 @@ mod tests {
                     supervisor_pid,
                     supervisor_start,
                 )),
+                execs: Vec::new(),
                 cgroup: None,
                 intel_rdt: None,
             },
@@ -3073,6 +3510,7 @@ mod tests {
                         supervisor_pid,
                         supervisor_start,
                     )),
+                    execs: Vec::new(),
                     cgroup: None,
                     intel_rdt: None,
                 },
@@ -3238,6 +3676,7 @@ mod tests {
                     },
                     init,
                     session_supervisor: None,
+                    execs: Vec::new(),
                     cgroup: None,
                     intel_rdt: None,
                 },

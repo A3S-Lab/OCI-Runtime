@@ -40,6 +40,7 @@ impl ExecProcess {
         init_process: &super::process::PreparedProcess,
         terminal: bool,
         io: &ProcessIo,
+        survive_host_death: bool,
     ) -> Result<Self> {
         let context = init_process.execution_context();
         let process_group = ProcessGroupLease::open_for_snapshot(snapshot).await?;
@@ -57,13 +58,16 @@ impl ExecProcess {
             .arg(context.root_descriptor().to_string())
             .arg(init_pidfd.to_string())
             .arg(std::process::id().to_string())
+            .arg(if survive_host_death { "1" } else { "0" })
             .arg(
                 cgroup_procs
                     .map(|descriptor| descriptor.to_string())
                     .unwrap_or_else(|| "none".to_string()),
             );
         append_namespace_arguments(&mut command, &namespace_arguments);
-        command.env_clear().kill_on_drop(true);
+        // Supervised Live reopen leaves the helper alive across Host death, so
+        // Drop must not SIGKILL it. Default Host-bound execs still kill-on-drop.
+        command.env_clear().kill_on_drop(!survive_host_death);
         let io_setup = ProcessIoHandle::configure(&mut command, io)?;
         let terminal_io = io_setup.uses_terminal();
         // SAFETY: the callback runs in the freshly forked command child and
