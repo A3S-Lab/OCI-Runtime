@@ -1,15 +1,15 @@
 pub(crate) mod bundle;
-mod host;
-mod prepare;
-mod qualification;
-mod report;
+pub(crate) mod host;
+pub(crate) mod prepare;
+pub(crate) mod qualification;
+pub(crate) mod report;
 mod runner;
 mod soak_report;
 mod soak_runner;
 
 pub use report::{
-    LinuxKvmRecoveryEvidence, LinuxKvmRecoverySmokeReport, LinuxProcessIdentity,
-    LINUX_KVM_RECOVERY_SMOKE_SCHEMA_VERSION,
+    LinuxKvmRecoveryArtifacts, LinuxKvmRecoveryEvidence, LinuxKvmRecoverySmokeReport,
+    LinuxProcessIdentity, LINUX_KVM_RECOVERY_SMOKE_SCHEMA_VERSION,
 };
 pub use runner::{run as linux_kvm_recovery_smoke, LinuxKvmRecoverySmokeConfig};
 pub use soak_report::{

@@ -18,7 +18,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const MARKER_PATH: &str = "/.a3s-oci-create-start-smoke";
 const MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-user-time-v1\n";
 
-pub(super) async fn verify_qualification_scope(
+pub(crate) async fn verify_qualification_scope(
     client: &RuntimeClient,
     expected_scope: &str,
 ) -> Result<(), String> {
@@ -50,7 +50,7 @@ pub(super) async fn verify_qualification_scope(
     Ok(())
 }
 
-pub(super) async fn wait_for_marker(
+pub(crate) async fn wait_for_marker(
     client: &RuntimeClient,
     target: &ContainerTarget,
 ) -> Result<(), String> {
@@ -90,7 +90,7 @@ pub(super) async fn wait_for_marker(
     }
 }
 
-pub(super) async fn wait_for_vm_descendants(
+pub(crate) async fn wait_for_vm_descendants(
     host_pid: u32,
 ) -> Result<Vec<LinuxProcessIdentity>, String> {
     let deadline = Instant::now() + QUALIFICATION_TIMEOUT;
@@ -106,7 +106,7 @@ pub(super) async fn wait_for_vm_descendants(
     }
 }
 
-pub(super) fn operation(
+pub(crate) fn operation(
     prefix: &str,
     nonce: &str,
     suffix: &str,
@@ -116,7 +116,7 @@ pub(super) fn operation(
         .map_err(|error| format!("failed to construct KVM qualification operation ID: {error}"))
 }
 
-pub(super) async fn call<T>(
+pub(crate) async fn call<T>(
     label: &str,
     future: impl Future<Output = a3s_oci_sdk::Result<T>>,
 ) -> Result<T, String> {

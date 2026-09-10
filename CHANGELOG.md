@@ -27,6 +27,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Opt-in Linux KVM Live Host reopen evidence gate (observation-only): schema
+  `a3s.oci.linux-kvm-live-recovery-smoke.v1`, CLI
+  `linux-kvm-live-recovery-smoke`, and
+  `.github/scripts/linux-kvm-live-recovery.sh` matrix wrapper
+  (`a3s.oci.linux-kvm-live-recovery-matrix.v1`). Proves
+  `A3S_OCI_KVM_SESSION_OWNER=1` create+start → Host SIGKILL → Guest /
+  session-owner survival → replacement Host Running reattach with continuous
+  init identity and no invented exit. Distinct from stopped-only
+  `linux-kvm-recovery` (`live_vm_processes_reaped` must be false). Does **not**
+  close W2/B2 until existing-host `/dev/kvm` evidence is greened.
+
 - Opt-in durable KVM `session-owner` helper on `a3s-oci-krun-shim` plus
   `session-owner-probe` parentage probe. Host can set
   `A3S_OCI_KVM_SESSION_OWNER=1` so AgentVmSession spawns through the helper
@@ -42,6 +53,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
   disconnect / second Host connect proxying (fake shim; no `/dev/kvm`). Does
   **not** flip cutover flags, register KVM with normal HostRuntimeService, or
   close W2/B2 until existing-host WSL2 `/dev/kvm` Live evidence is greened.
+- Dedicated Live Host reopen evidence harness
+  (`a3s.oci.linux-kvm-live-recovery-smoke.v1`, CLI
+  `linux-kvm-live-recovery-smoke`, `.github/scripts/linux-kvm-live-recovery.sh`)
+  with inverted post-SIGKILL assertions versus stopped-only
+  `linux-kvm-recovery`: Guest/session-owner survive, binding authenticates,
+  replacement Host reattaches Running with continuous init identity and no
+  invented exit. Distinct schema; does not overload the stopped-only gate.
 
 ### Changed
 
