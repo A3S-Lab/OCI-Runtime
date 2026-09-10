@@ -170,7 +170,8 @@ async fn run_live_recovery(
     )
     .await?;
     let replacement_result =
-        run_replacement(prepared, &runtime_root, &mut replacement, evidence).await;
+        run_replacement(prepared, &runtime_root, &endpoint_baseline, &mut replacement, evidence)
+            .await;
     if replacement_result.is_err() {
         emergency_reap_survivors(evidence).await;
         replacement.emergency_stop().await;
@@ -241,10 +242,12 @@ async fn run_first_owner(
     let binding = wait_for_live_binding(runtime_root).await?;
     evidence.live_binding_published = true;
     retain_binding_identities(evidence, &binding)?;
-    evidence.authenticated_endpoint_consumed =
-        host::wait_for_endpoint_inventory(endpoint_baseline).await?;
-    if !evidence.authenticated_endpoint_consumed {
-        return Err("live KVM session retained its one-shot endpoint".to_string());
+    evidence.durable_guest_endpoint_retained =
+        wait_for_exactly_one_new_endpoint(endpoint_baseline).await?;
+    if !evidence.durable_guest_endpoint_retained {
+        return Err(
+            "Live durable guest endpoint was not retained under /tmp/a3s-oci-agent-*".to_string(),
+        );
     }
     drop(client);
     Ok(())
@@ -253,6 +256,7 @@ async fn run_first_owner(
 async fn run_replacement(
     prepared: &PreparedQualification,
     runtime_root: &Path,
+    endpoint_baseline: &std::collections::BTreeSet<PathBuf>,
     replacement: &mut HostServiceProcess,
     evidence: &mut super::report::LinuxKvmLiveRecoveryEvidence,
 ) -> Result<(), String> {
@@ -377,8 +381,11 @@ async fn run_replacement(
     drop(client);
     evidence.replacement_exit_success = replacement.terminate().await?;
     evidence.replacement_socket_removed = !prepared.service_root.join("runtime.sock").exists();
+    evidence.durable_guest_endpoint_cleaned =
+        host::wait_for_endpoint_inventory(endpoint_baseline).await?;
     evidence.service_restart_recovered = evidence.replacement_exit_success
         && evidence.replacement_socket_removed
+        && evidence.durable_guest_endpoint_cleaned
         && evidence.replacement_state_running
         && evidence.init_identity_unchanged
         && evidence.no_invented_exit_status;
@@ -601,6 +608,26 @@ fn walk_for_binding(root: &Path, found: &mut Vec<PathBuf>) -> Result<(), String>
         }
     }
     Ok(())
+}
+
+async fn wait_for_exactly_one_new_endpoint(
+    baseline: &std::collections::BTreeSet<PathBuf>,
+) -> Result<bool, String> {
+    let deadline = Instant::now() + LIVE_TIMEOUT;
+    loop {
+        let current = host::endpoint_inventory()?;
+        let added = current
+            .difference(baseline)
+            .cloned()
+            .collect::<Vec<_>>();
+        if added.len() == 1 {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        sleep(POLL_INTERVAL).await;
+    }
 }
 
 async fn emergency_reap_survivors(evidence: &super::report::LinuxKvmLiveRecoveryEvidence) {

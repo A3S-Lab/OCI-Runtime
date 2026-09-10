@@ -27,7 +27,9 @@ pub struct LinuxKvmLiveRecoveryEvidence {
     pub session_owner_identity: Option<LinuxProcessIdentity>,
     pub shim_identity: Option<LinuxProcessIdentity>,
     pub live_binding_published: bool,
-    pub authenticated_endpoint_consumed: bool,
+    /// Durable Live keeps `/tmp/a3s-oci-agent-*/` for session-owner reattach
+    /// (opposite of stopped-only one-shot endpoint consumption).
+    pub durable_guest_endpoint_retained: bool,
     pub host_service_sigkill_delivered: bool,
     pub first_host_service_reaped: bool,
     pub stale_socket_retained: bool,
@@ -47,6 +49,7 @@ pub struct LinuxKvmLiveRecoveryEvidence {
     pub force_cleanup_succeeded: bool,
     pub replacement_exit_success: bool,
     pub replacement_socket_removed: bool,
+    pub durable_guest_endpoint_cleaned: bool,
     pub service_restart_recovered: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -72,7 +75,7 @@ impl LinuxKvmLiveRecoveryEvidence {
             && self.session_owner_identity.is_some()
             && self.shim_identity.is_some()
             && self.live_binding_published
-            && self.authenticated_endpoint_consumed
+            && self.durable_guest_endpoint_retained
             && self.host_service_sigkill_delivered
             && self.first_host_service_reaped
             && self.stale_socket_retained
@@ -92,6 +95,7 @@ impl LinuxKvmLiveRecoveryEvidence {
             && self.force_cleanup_succeeded
             && self.replacement_exit_success
             && self.replacement_socket_removed
+            && self.durable_guest_endpoint_cleaned
             && self.service_restart_recovered
             && self.reason.is_none()
     }
@@ -206,7 +210,7 @@ mod tests {
                 session_owner_identity: Some(owner),
                 shim_identity: Some(shim),
                 live_binding_published: true,
-                authenticated_endpoint_consumed: true,
+                durable_guest_endpoint_retained: true,
                 host_service_sigkill_delivered: true,
                 first_host_service_reaped: true,
                 stale_socket_retained: true,
@@ -225,6 +229,7 @@ mod tests {
                 force_cleanup_succeeded: true,
                 replacement_exit_success: true,
                 replacement_socket_removed: true,
+                durable_guest_endpoint_cleaned: true,
                 service_restart_recovered: true,
                 reason: None,
             },

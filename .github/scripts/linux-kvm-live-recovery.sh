@@ -214,7 +214,8 @@ jq --exit-status \
    and .recovery.guest_survived_host_sigkill
    and .recovery.live_binding_published
    and .recovery.live_binding_authenticated_after_kill
-   and .recovery.replacement_socket_new_owne
+   and .recovery.durable_guest_endpoint_retained
+   and .recovery.replacement_socket_new_owner
    and .recovery.replacement_state_running
    and .recovery.init_identity_unchanged
    and .recovery.no_invented_exit_status
@@ -222,6 +223,7 @@ jq --exit-status \
    and .recovery.force_cleanup_succeeded
    and .recovery.replacement_socket_removed
    and .recovery.replacement_exit_success
+   and .recovery.durable_guest_endpoint_cleaned
    and .recovery.service_restart_recovered
    and (.reason == null)' "$runtime_report" >/dev/null
 
