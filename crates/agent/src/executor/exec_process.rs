@@ -407,7 +407,7 @@ async fn complete_exec_handshake(
     let ready = timeout(EXEC_READY_TIMEOUT, async {
         tokio::select! {
             accepted = listener.accept() => ReadyOutcome::Connected(accepted),
-            status = wait_exec_child(child) => ReadyOutcome::Exited(status),
+            status = wait_exec_child_for_ready_race(child) => ReadyOutcome::Exited(status),
         }
     })
     .await;
@@ -621,6 +621,31 @@ async fn wait_exec_child(child: &mut ExecChild) -> io::Result<ProcessExitStatus>
             let waited = ProcessExitStatus::from_raw(raw);
             *status = Some(waited.clone());
             Ok(waited)
+        }
+    }
+}
+
+/// Observe exec-helper exit without holding the session-supervisor mutex.
+///
+/// Same ready-race hazard as supervised create: `wait_launcher` must not run
+/// under `select!(accept, wait)` while the helper is still alive.
+async fn wait_exec_child_for_ready_race(child: &mut ExecChild) -> io::Result<ProcessExitStatus> {
+    match child {
+        ExecChild::Host(_) => wait_exec_child(child).await,
+        ExecChild::Supervised {
+            helper_pid, status, ..
+        } => {
+            if let Some(status) = status.clone() {
+                return Ok(status);
+            }
+            let watched = *helper_pid;
+            loop {
+                if !std::path::Path::new("/proc").join(watched.to_string()).exists() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            wait_exec_child(child).await
         }
     }
 }
