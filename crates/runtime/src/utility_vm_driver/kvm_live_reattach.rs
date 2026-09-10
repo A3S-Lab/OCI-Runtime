@@ -144,12 +144,15 @@ pub(super) async fn try_reattach_live(
         .for_operation("utility-vm-kvm-live-reattach")
     })?;
     let durable = DurableSessionOwner::from_authenticated(owner_pid, shim_pid);
+    let guest_endpoint_dir = PathBuf::from(crate::agent_socket::PRIVATE_TMP_ROOT).join(&binding.pipe_name);
     let service: Arc<dyn GuestAgentService> = Arc::new(client);
     let launched = LaunchedUtilityVm {
         client: AgentDriverClient::new(service, "KVM guest agent", "kvm"),
         owner: Arc::new(ReattachedKvmOwner {
             durable: std::sync::Mutex::new(Some(durable)),
             runtime_share: paths.mount_root.clone(),
+            host_control_socket: host_control,
+            guest_endpoint_dir,
         }),
     };
     let guest = Arc::new(UtilityVmGuest {
@@ -231,6 +234,8 @@ async fn connect_host_control(host_control: &Path) -> Result<UnixStream> {
 struct ReattachedKvmOwner {
     durable: std::sync::Mutex<Option<DurableSessionOwner>>,
     runtime_share: PathBuf,
+    host_control_socket: PathBuf,
+    guest_endpoint_dir: PathBuf,
 }
 
 #[async_trait]
@@ -251,6 +256,12 @@ impl UtilityVmOwner for ReattachedKvmOwner {
                 .for_operation("shutdown-reattached-kvm-utility-vm")
             })?;
         }
+        // SIGKILL skips session-owner's graceful socket unlink; Host must reclaim
+        // the durable Live endpoint so reopen evidence does not leave orphans.
+        let agent_socket = self.guest_endpoint_dir.join("agent.sock");
+        let _ = std::fs::remove_file(&self.host_control_socket);
+        let _ = std::fs::remove_file(&agent_socket);
+        let _ = std::fs::remove_dir(&self.guest_endpoint_dir);
         Ok(())
     }
 }
