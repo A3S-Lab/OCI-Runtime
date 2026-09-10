@@ -2244,16 +2244,22 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   `b2_process_session_recovery_closed=false` by design. Native Live filesystem
   **product path** (Host-reopen `file`/`filesystem` via rebuilt
   `RetainedExecutionContext` + `live_for`) and first-principles unit tests are
-  landed; Host-reopen filesystem evidence harness
-  `a3s.oci.linux-native-live-recovery-smoke.v1` /
+  landed; Host-reopen evidence harness
+  `a3s.oci.linux-native-live-recovery-smoke.v2` /
   `.github/scripts/linux-native-live-recovery.sh` is implemented under
   `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1` (distinct from stopped-only
-  `native-linux-recovery`). **Existing-host WSL2 Native Live filesystem
-  greened** on revision `695bf4f73af986b8131f496de85753e491734836` with report
-  `/var/tmp/a3s-oci-native-live-fs-v1-20260910225133.json` SHA-256
-  `1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`
-  (`retained_filesystem_proven` / `file_upload_before_kill` /
-  `file_download_after_reattach` / `init_survived_host_sigkill` /
+  `native-linux-recovery`). v2 requires retained exec I/O (Pipe stdin +
+  Capture stdout on the same process ID before Host SIGKILL and after
+  reattach) **and** filesystem continuity. Prior v1 filesystem-only greening
+  used revision `695bf4f73af986b8131f496de85753e491734836` (report SHA-256
+  `1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`).
+  **Existing-host WSL2 Native Live v2 greened** on revision
+  `f047d862bd0a000392cf9bd013854590c1e4a7c7` with report
+  `/var/tmp/a3s-oci-native-live-io-v2-20260911003055.json` SHA-256
+  `88def24f4fb652bdf03a7204c7f087aa18e783f060230535858779d002b17c34`
+  (`retained_exec_io_proven` / `retained_filesystem_proven` /
+  `exec_io_before_kill` / `write_stdin_after_reattach` /
+  `read_output_after_reattach` / `init_survived_host_sigkill` /
   `replacement_state_running`). Does not register KVM with normal
   HostRuntimeService, flip default supervised create, or cut over MicroVM
   product routing.
