@@ -55,8 +55,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
   invented exit. Distinct from stopped-only `linux-kvm-recovery`
   (`live_vm_processes_reaped` must be false). Does **not** claim Box
   `retained_stream_handle_proven` or flip W2/B2 / cutover flags. Prior Host
-  survival-only greening used smoke v1 on `c3b5fc54…`; v2 requires a fresh
-  `/dev/kvm` matrix before treating retained exec I/O as greened.
+  survival-only greening used smoke v1 on `c3b5fc54…`; v2 greened on existing-host
+  WSL2 `/dev/kvm` at `a7e60d06…` (matrix SHA-256
+  `888623a38d8399ff65047a5f1e294cbdff2d77b54302172afeab3c081a2ce88c`). W2/B2 and
+  cutover flags remain open.
 
 ### Changed
 

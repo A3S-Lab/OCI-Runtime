@@ -2196,11 +2196,18 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   init PID; `guest_survived_host_sigkill` /
   `service_restart_recovered`). **v2 adds** retained exec I/O across Host
   SIGKILL (`retained_exec_io_proven`: Pipe stdin + Capture stdout on the same
-  process ID before kill and after reattach). That does **not** close W2/B2
-  alone: defer Box `retained_stream_handle_proven` MicroVM sibling and
-  `b2_process_session_recovery_closed` / `kvm_microvm_live_claimed` until those
-  criteria. Does not register KVM with normal HostRuntimeService, flip default
-  supervised create, or cut over MicroVM product routing.
+  process ID before kill and after reattach). **Existing-host WSL2 `/dev/kvm`
+  greened retained exec I/O** on revision
+  `a7e60d06cd16a5b47e4e629e5507639d6b547e05` with matrix SHA-256
+  `888623a38d8399ff65047a5f1e294cbdff2d77b54302172afeab3c081a2ce88c`
+  (system-image manifest
+  `805d4afea01b1c3a9ed7343b2406edfc6c7e43912e35134ec72661c29fe56449`; continuous
+  init PID 359; `retained_exec_io_proven` /
+  `guest_survived_host_sigkill` / `service_restart_recovered`). That does
+  **not** close W2/B2 alone: defer Box `retained_stream_handle_proven` MicroVM
+  sibling and `b2_process_session_recovery_closed` / `kvm_microvm_live_claimed`
+  until those criteria. Does not register KVM with normal HostRuntimeService,
+  flip default supervised create, or cut over MicroVM product routing.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,
