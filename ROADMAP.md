@@ -2271,9 +2271,10 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   plus live init namespace/root descriptors and the recovery cgroup leaf, then
   supervisor-parents the helper (`ExecProcess::spawn_with_context`). Null I/O
   only in this slice; capture/pipe/terminal remain Unavailable. Default create
-  stays Host-bound. The
-  real-host Box live-session gate and default create Host-bound policy remain
-  open.
+  stays Host-bound. Opt-in supervised create accepts rootless device mounts over
+  the Host create-control SCM_RIGHTS path (same as default create; mounts do not
+  ride `spawn_launcher`). The real-host Box live-session gate and default create
+  Host-bound policy remain open.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,

@@ -116,6 +116,79 @@ async fn parent_sends_device_mounts_over_the_authenticated_control_socket() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn parent_sends_empty_device_mount_frame_over_the_control_socket() {
+    let (child, parent) = StdUnixStream::pair().expect("create control socket pair");
+    parent
+        .set_nonblocking(true)
+        .expect("make control parent nonblocking");
+    let parent = tokio::net::UnixStream::from_std(parent).expect("register control parent");
+    send_device_mounts(&parent, &[]).expect("send empty mount frame");
+    let received = super::receive_device_mounts(&child, 0).expect("receive empty mount frame");
+    assert!(received.is_empty());
+}
+
+#[test]
+fn cross_process_device_mount_scm_rights_does_not_require_host_parentage() {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+
+    let (mut parent_report, mut child_report) = StdUnixStream::pair().expect("report channel");
+    let (parent_control, child_control) = StdUnixStream::pair().expect("device mount control");
+    // SAFETY: parent reaps the peer; peer receives mounts without Host→Launcher
+    // parentage. SCM_RIGHTS delivery is socket-peer authenticated, matching
+    // supervised create where Supervisor parents the launcher and Host only
+    // holds the create-control socket.
+    let peer_pid = unsafe { libc::fork() };
+    assert!(peer_pid >= 0, "fork device-mount peer");
+    if peer_pid == 0 {
+        drop(parent_report);
+        drop(parent_control);
+        let expected = super::super::device::ROOTLESS_DEVICE_MOUNT_COUNT;
+        match super::receive_device_mounts(&child_control, expected) {
+            Ok(mounts) if mounts.len() == expected => {
+                let _ = child_report.write_all(&[1]);
+                unsafe { libc::_exit(0) }
+            }
+            Ok(_) => {
+                let _ = child_report.write_all(&[2]);
+                unsafe { libc::_exit(1) }
+            }
+            Err(_) => {
+                let _ = child_report.write_all(&[3]);
+                unsafe { libc::_exit(2) }
+            }
+        }
+    }
+    drop(child_report);
+    drop(child_control);
+    let mounts = (0..super::super::device::ROOTLESS_DEVICE_MOUNT_COUNT)
+        .map(|_| OwnedFd::from(std::fs::File::open("/dev/null").expect("device fixture")))
+        .collect::<Vec<_>>();
+    let descriptors = mounts.iter().map(AsRawFd::as_raw_fd).collect::<Vec<_>>();
+    super::super::device_mount_transport::send_descriptor_frame(
+        parent_control.as_raw_fd(),
+        0xD1,
+        &descriptors,
+    )
+    .expect("send must succeed without parenting the peer");
+    drop(parent_control);
+    drop(mounts);
+    let mut status = [0_u8; 1];
+    parent_report
+        .read_exact(&mut status)
+        .expect("read peer receive status");
+    assert_eq!(status[0], 1, "peer must receive the authentic mount count");
+    let mut wait_status = 0;
+    // SAFETY: wait for the exact forked peer.
+    let waited = unsafe { libc::waitpid(peer_pid, &mut wait_status, 0) };
+    assert_eq!(waited, peer_pid);
+    assert!(
+        libc::WIFEXITED(wait_status) && libc::WEXITSTATUS(wait_status) == 0,
+        "peer must exit 0 with authentic receive, not invented status ({wait_status})"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn ready_round_trip_carries_the_runtime_and_optional_namespace_init_pids() {
     for namespace_init_pid in [Some(41_999), None] {
         let (mut writer, reader) = StdUnixStream::pair().expect("create control socket pair");

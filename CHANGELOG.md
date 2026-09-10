@@ -27,6 +27,19 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Opt-in supervised Native create now accepts **rootless device mounts**. Host
+  still prepares mounts via the device-policy authority and, after the
+  supervisor-parented launcher connects to the Host create-control socket,
+  authenticates peer PID and transfers descriptors with SCM_RIGHTS
+  (`send_device_mounts`) — the same Host→init control path as default create.
+  Empty and nonempty frames share that path; mounts do not ride
+  `spawn_launcher` FD lists. Remaining supervised Unsupported gates
+  (terminal/inherit I/O, pinned utility-VM bundles, inherited workload
+  descriptors) stay fail-closed. First-principles coverage: supervised create
+  preflight allows mounts while keeping other gates; empty and nonempty control
+  frames; cross-process SCM_RIGHTS without Host parentage; Host→supervisor-child
+  delivery. Default create stays Host-bound
+  (`A3S_OCI_NATIVE_SESSION_SUPERVISOR=1` remains opt-in).
 - Native Linux Host-reopen **new `exec` spawn-context rebuild** on the Live
   supervised path. Reloads the durable `config.json` snapshot for namespace
   plan / capability ceiling / seccomp, captures authentic namespace and root

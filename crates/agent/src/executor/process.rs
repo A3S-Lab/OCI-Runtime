@@ -50,7 +50,7 @@ pub(super) use launch::{
 };
 use launch::{
     cleanup_uncommitted_create, cleanup_unstarted_cgroup, retain_original_rootfs,
-    validate_rootless_device_mounts, LauncherChild,
+    supervised_create_unsupported_reason, validate_rootless_device_mounts, LauncherChild,
 };
 
 const INIT_READY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -111,42 +111,17 @@ impl PreparedProcess {
         let rootless = user_mapping_runtime.is_rootless();
         let supervised = session_supervisor.is_some();
         if supervised {
-            if pinned_bundle.is_some() {
-                return Err(process_error(
-                    ErrorCode::Unsupported,
-                    "session-supervisor create does not support descriptor-pinned utility-VM bundles yet",
-                ));
-            }
-            if !rootless_device_mounts.is_empty() {
-                return Err(process_error(
-                    ErrorCode::Unsupported,
-                    "session-supervisor create does not support rootless device mounts yet",
-                ));
-            }
-            if inherited_descriptors.schema().is_some() {
-                return Err(process_error(
-                    ErrorCode::Unsupported,
-                    "session-supervisor create does not support inherited workload descriptors yet",
-                ));
-            }
-            if matches!(io.stdin, IoMode::Terminal)
-                || matches!(io.stdout, IoMode::Terminal)
-                || matches!(io.stderr, IoMode::Terminal)
-                || io.terminal_size.is_some()
-            {
-                return Err(process_error(
-                    ErrorCode::Unsupported,
-                    "session-supervisor create does not support terminal process I/O yet",
-                ));
-            }
-            if matches!(io.stdin, IoMode::Inherit)
-                || matches!(io.stdout, IoMode::Inherit)
-                || matches!(io.stderr, IoMode::Inherit)
-            {
-                return Err(process_error(
-                    ErrorCode::Unsupported,
-                    "session-supervisor create does not support inherited process I/O yet",
-                ));
+            // Rootless device mounts are intentionally allowed: after the
+            // supervised launcher connects to the Host create-control socket,
+            // Host still authenticates peer PID and sends mounts via SCM_RIGHTS
+            // (`send_device_mounts`). Parentage is Supervisor→Launcher; the
+            // mount frame never needs to ride spawn_launcher FD lists.
+            if let Some(reason) = supervised_create_unsupported_reason(
+                pinned_bundle.is_some(),
+                inherited_descriptors.schema().is_some(),
+                io,
+            ) {
+                return Err(process_error(ErrorCode::Unsupported, reason));
             }
         }
         let (original_rootfs, pinned_rootfs) =
