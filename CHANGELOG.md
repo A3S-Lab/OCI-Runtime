@@ -25,6 +25,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Document existing-host WSL2 Box live-session v3 retained-stream evidence on
+  OCI `7001ce5a…` (report SHA-256
+  `bc36ff5b895b6320b57322328f78910be82eddfb2203b97bd2c86455b1929d02`,
+  `retained_stream_handle_proven=true`). Default create remains Host-bound;
+  utility-VM Live, fresh-host, and cutover stay open. Does not close W2/B2
+  alone.
+
 ### Fixed
 
 - Live Host-reopen restores stdin deposits per process identity: init uses the

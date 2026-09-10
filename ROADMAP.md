@@ -344,8 +344,11 @@ Completed:
   observed owner disconnect, then continues inventory, stdin, output, signal,
   wait, and cleanup after reconnecting to a replacement durable host service.
   The x86_64 and aarch64 production owner routes and fresh-Box-process
-  stopped-only restart gates now pass; real-driver live-session reattachment
-  plus WHPX, default-routing, and broader cutover gates remain open;
+  stopped-only restart gates now pass; Native retained-stream live-session
+  continuity is greened on existing-host WSL2 via Box
+  (`bc36ff5b895b6320b57322328f78910be82eddfb2203b97bd2c86455b1929d02` on OCI
+  `7001ce5a…`). Utility-VM Live reattachment, WHPX, default-routing, and
+  broader cutover gates remain open;
 - Linux executor enforcement for exact capability sets with real bounding,
   effective, permitted, inheritable, and ambient kernel read-back, exec
   bounding ceilings, exact `no_new_privileges` read-back, private
@@ -2273,8 +2276,13 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   only in this slice; capture/pipe/terminal remain Unavailable. Default create
   stays Host-bound. Opt-in supervised create accepts rootless device mounts over
   the Host create-control SCM_RIGHTS path (same as default create; mounts do not
-  ride `spawn_launcher`). The real-host Box live-session gate and default create
-  Host-bound policy remain open.
+  ride `spawn_launcher`). Existing-host WSL2 Box live-session v3 evidence on
+  OCI `7001ce5a4c32cd6e2bbb9a833fc45fd05d2318c9` proves retained streaming
+  handle continuity across Native Host owner SIGKILL (report SHA-256
+  `bc36ff5b895b6320b57322328f78910be82eddfb2203b97bd2c86455b1929d02`,
+  `retained_stream_handle_proven=true`). That does **not** close W2/B2 alone:
+  utility-VM Live, default create Host-bound policy, fresh-host, and cutover
+  remain open.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,
