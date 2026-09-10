@@ -25,6 +25,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in durable KVM session-owner scaffold (`A3S_OCI_KVM_SESSION_OWNER`) with
+  first-principles Linux tests: Host-analogue exit leaves the session owner and
+  child alive; owner shutdown reaps the child process group. Default remains
+  Host-bound (stopped-only). Does not yet wire shim spawn, Live reattach,
+  register KVM, or close W2/B2.
+
 ### Changed
 
 - Document existing-host WSL2 Box live-session v3 retained-stream evidence on
@@ -33,6 +41,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   `retained_stream_handle_proven=true`). Default create remains Host-bound;
   utility-VM Live, fresh-host, and cutover stay open. Does not close W2/B2
   alone.
+- ROADMAP: checklist for opt-in KVM durable session-owner Live Host reopen
+  (observation-only; no cutover).
 
 ### Fixed
 
