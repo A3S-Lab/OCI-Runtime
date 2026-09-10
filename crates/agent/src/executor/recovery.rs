@@ -422,9 +422,10 @@ impl SessionSupervisorReattachCache {
 /// cgroup evidence fail-closes with [`ErrorCode::Unavailable`]. New `exec`
 /// rebuilds the minimum authentic spawn context from the durable config
 /// snapshot plus live init namespace/root descriptors (and the recovery cgroup
-/// leaf when present), then supervisor-parents the helper. Capture/terminal I/O
-/// remain Unavailable; Null I/O is supported. Missing config or live init
-/// fail-closes without inventing exit status.
+/// leaf when present), then supervisor-parents the helper with the same
+/// capture/pipe deposit path as supervised create. Terminal/inherit remain
+/// Unavailable. Missing config or live init fail-closes without inventing exit
+/// status.
 #[derive(Debug)]
 pub struct LinuxLiveSupervisedSession {
     target: ContainerTarget,
@@ -705,11 +706,12 @@ impl LinuxLiveSupervisedSession {
     ///
     /// Rebuilds the minimum authentic spawn context from the durable
     /// `config.json` snapshot (namespace plan, capability ceiling, seccomp) plus
-    /// live init namespace/root descriptors and the recovery cgroup leaf. Only
-    /// Null process I/O is accepted in this slice — capture/terminal/pipe fail
-    /// closed with [`ErrorCode::Unavailable`] rather than inventing streams.
-    /// Successful spawn persists a v6 exec identity (payload + helper) so
-    /// inventory / signal / wait continue to work without inventing exit status.
+    /// live init namespace/root descriptors and the recovery cgroup leaf.
+    /// Null/capture/pipe I/O is accepted: capture and pipe deposit into the
+    /// session supervisor the same way supervised create does. Terminal and
+    /// inherit remain Unavailable. Successful spawn persists a v6 exec identity
+    /// (payload + helper) so inventory / signal / wait continue without
+    /// inventing exit status.
     pub async fn exec(
         &self,
         process_id: &ProcessId,
@@ -743,7 +745,7 @@ impl LinuxLiveSupervisedSession {
             Err(error) if error.code == ErrorCode::Unavailable => {}
             Err(error) => return Err(error),
         }
-        require_null_process_io(io)?;
+        require_supervised_exec_process_io(io)?;
         if self.find_exec_record(process_id).is_ok() {
             return Err(recovery_error(
                 ErrorCode::AlreadyExists,
@@ -1276,21 +1278,24 @@ struct RebuiltExecSpawnInputs {
     seccomp: SeccompPlan,
 }
 
-fn require_null_process_io(io: &ProcessIo) -> Result<()> {
-    let non_null = [
-        ("stdin", &io.stdin),
-        ("stdout", &io.stdout),
-        ("stderr", &io.stderr),
-    ]
-    .into_iter()
-    .find(|(_, mode)| !matches!(mode, IoMode::Null));
-    if let Some((stream, _)) = non_null {
-        return Err(recovery_error(
-            ErrorCode::Unavailable,
-            format!(
-                "Host-reopen exec currently supports Null {stream} only; capture/pipe/terminal/inherit remain Unavailable until authentic stream restore lands"
-            ),
-        ));
+fn require_supervised_exec_process_io(io: &ProcessIo) -> Result<()> {
+    for (stream, mode) in [
+        ("stdin", io.stdin),
+        ("stdout", io.stdout),
+        ("stderr", io.stderr),
+    ] {
+        match mode {
+            IoMode::Null | IoMode::Capture | IoMode::Pipe => {}
+            IoMode::Terminal | IoMode::Inherit => {
+                return Err(recovery_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "Host-reopen exec does not support {mode:?} {stream}; \
+                         use Null/Capture/Pipe (terminal/inherit remain Unavailable)"
+                    ),
+                ));
+            }
+        }
     }
     if io.terminal_size.is_some() {
         return Err(recovery_error(
@@ -4728,7 +4733,10 @@ mod tests {
             stderr: IoMode::Null,
             terminal_size: None,
         };
-        let capture_error = live
+        // Capture is now admitted at the I/O gate; without a real agent
+        // container-exec helper the spawn still fail-closes — never invents
+        // success or an empty capture stream.
+        let capture_spawn_error = live
             .exec(
                 &ProcessId::new("post-reopen-exec").expect("process id"),
                 &process,
@@ -4736,8 +4744,19 @@ mod tests {
                 Path::new("/bin/true"),
             )
             .await
-            .expect_err("capture I/O must stay Unavailable after Host reopen");
-        assert_eq!(capture_error.code, ErrorCode::Unavailable);
+            .expect_err("non-agent helper must fail closed without inventing capture exec success");
+        assert!(
+            matches!(
+                capture_spawn_error.code,
+                ErrorCode::FailedPrecondition
+                    | ErrorCode::Internal
+                    | ErrorCode::Unavailable
+                    | ErrorCode::PermissionDenied
+                    | ErrorCode::InvalidArgument
+            ),
+            "capture spawn must fail closed with a real error, got {:?}",
+            capture_spawn_error.code
+        );
 
         let null_io = ProcessIo {
             stdin: IoMode::Null,
@@ -4782,33 +4801,35 @@ mod tests {
     }
 
     #[test]
-    fn require_null_process_io_rejects_capture_and_pipe() {
+    fn require_supervised_exec_process_io_rejects_terminal_and_inherit() {
         use a3s_oci_sdk::{IoMode, ProcessIo};
 
         let ok = ProcessIo {
             stdin: IoMode::Null,
-            stdout: IoMode::Null,
-            stderr: IoMode::Null,
-            terminal_size: None,
-        };
-        require_null_process_io(&ok).expect("all-null I/O is accepted");
-
-        let capture = ProcessIo {
-            stdin: IoMode::Null,
             stdout: IoMode::Capture,
-            stderr: IoMode::Null,
+            stderr: IoMode::Pipe,
             terminal_size: None,
         };
-        let error = require_null_process_io(&capture).expect_err("capture must fail closed");
+        require_supervised_exec_process_io(&ok).expect("Null/Capture/Pipe I/O is accepted");
+
+        let terminal = ProcessIo {
+            stdin: IoMode::Terminal,
+            stdout: IoMode::Terminal,
+            stderr: IoMode::Terminal,
+            terminal_size: None,
+        };
+        let error =
+            require_supervised_exec_process_io(&terminal).expect_err("terminal must fail closed");
         assert_eq!(error.code, ErrorCode::Unavailable);
 
-        let pipe = ProcessIo {
-            stdin: IoMode::Pipe,
+        let inherit = ProcessIo {
+            stdin: IoMode::Inherit,
             stdout: IoMode::Null,
             stderr: IoMode::Null,
             terminal_size: None,
         };
-        let error = require_null_process_io(&pipe).expect_err("pipe must fail closed");
+        let error =
+            require_supervised_exec_process_io(&inherit).expect_err("inherit must fail closed");
         assert_eq!(error.code, ErrorCode::Unavailable);
     }
 

@@ -27,6 +27,18 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Supervised `container-exec` now mirrors create for capture/pipe I/O: after
+  `spawn_launcher_with_inherited` it deposits stdin (dup) and exclusive
+  stdout/stderr read ends into the session supervisor, then attaches with a
+  supervised output relay. Without deposit, keyed captured exec fail-closed at
+  `attach_supervised` (or left helpers orphaned); Live session qualification
+  could not prove captured exec on a supervised generation. Host-reopen exec
+  admits the same Null/Capture/Pipe set (terminal/inherit stay Unavailable).
+- Supervised exec no longer self-deadlocks the executor state mutex: resolving
+  the session supervisor happened after `lock_owned()` while
+  `supervised_exec_session_supervisor` locked the same tokio mutex again,
+  leaving keyed exec stuck in `prepared` with no `container-exec` helper.
+  Supervisor lookup now runs before the owned claim.
 - Supervised create ready-race no longer calls `wait_launcher` (which holds the
   session-supervisor mutex for the whole MSG_WAIT) while racing
   `listener.accept()`. A cancelled `select!` arm left `spawn_blocking`

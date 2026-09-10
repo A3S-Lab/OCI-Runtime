@@ -6,7 +6,7 @@ use std::process::ExitStatus as ProcessExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
 
-use a3s_oci_sdk::{Error, ErrorCode, ExitStatus, ProcessIo, Result};
+use a3s_oci_sdk::{Error, ErrorCode, ExitStatus, IoMode, ProcessIo, Result};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
@@ -311,7 +311,7 @@ async fn spawn_supervised_exec(
         })?;
         guard.identity().pid()
     };
-    let (host_pipes, child_stdio) = prepare_supervised_stdio(io).map_err(|error| {
+    let (mut host_pipes, child_stdio) = prepare_supervised_stdio(io).map_err(|error| {
         exec_error(
             error.code,
             format!(
@@ -371,17 +371,103 @@ async fn spawn_supervised_exec(
             ));
         }
     };
-    let process_io = ProcessIoHandle::attach_supervised(io, host_pipes.stdin, None).map_err(
-        |error| {
-            exec_error(
+
+    // Mirror supervised create: deposit stdin/capture ends into the session
+    // supervisor before attach. Capture requires an exclusive supervisor drain
+    // (no Host-local competing reader); without deposit, attach_supervised
+    // fail-closes and keyed captured exec cannot complete.
+    if let Some(stdin) = host_pipes.stdin.as_ref() {
+        let deposit = unsafe { libc::fcntl(stdin.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+        if deposit < 0 {
+            terminate_supervised_helper(supervisor, helper_pid).await;
+            return Err(exec_error(
+                ErrorCode::Internal,
+                format!(
+                    "failed to duplicate supervised exec stdin for session-supervisor deposit: {}",
+                    io::Error::last_os_error()
+                ),
+            ));
+        }
+        let deposit_result = match supervisor.lock() {
+            Ok(mut guard) => {
+                let result = guard.deposit_stdin(helper_pid, deposit);
+                drop(guard);
+                Some(result)
+            }
+            Err(_) => None,
+        };
+        // SAFETY: SCM_RIGHTS transferred a copy (or deposit failed); close the
+        // local duplicate either way.
+        unsafe {
+            libc::close(deposit);
+        }
+        let deposit_error = match deposit_result {
+            Some(Ok(())) => None,
+            Some(Err(error)) => Some(error),
+            None => Some(exec_error(
+                ErrorCode::Internal,
+                "session supervisor lock is poisoned during exec stdin deposit",
+            )),
+        };
+        if let Some(error) = deposit_error {
+            terminate_supervised_helper(supervisor, helper_pid).await;
+            return Err(error);
+        }
+    }
+    let capture_stdout = host_pipes.stdout.is_some();
+    let capture_stderr = host_pipes.stderr.is_some();
+    if capture_stdout || capture_stderr {
+        let stdout = host_pipes.stdout.take();
+        let stderr = host_pipes.stderr.take();
+        let deposit_result = match supervisor.lock() {
+            Ok(mut guard) => {
+                let result = guard.deposit_output(helper_pid, stdout, stderr);
+                drop(guard);
+                Some(result)
+            }
+            Err(_) => None,
+        };
+        let deposit_error = match deposit_result {
+            Some(Ok(())) => None,
+            Some(Err(error)) => Some(error),
+            None => Some(exec_error(
+                ErrorCode::Internal,
+                "session supervisor lock is poisoned during exec output deposit",
+            )),
+        };
+        if let Some(error) = deposit_error {
+            terminate_supervised_helper(supervisor, helper_pid).await;
+            return Err(error);
+        }
+    }
+    let output_relay =
+        (capture_stdout || capture_stderr).then(|| (Arc::clone(supervisor), helper_pid));
+    let process_io =
+        match ProcessIoHandle::attach_supervised(io, host_pipes.stdin, output_relay) {
+            Ok(process_io) => process_io,
+            Err(error) => {
+                terminate_supervised_helper(supervisor, helper_pid).await;
+                return Err(exec_error(
+                    error.code,
+                    format!(
+                        "failed to attach supervised exec process I/O: {}",
+                        error.message
+                    ),
+                ));
+            }
+        };
+    if matches!(io.stdin, IoMode::Pipe) {
+        if let Err(error) = process_io.bind_stdin_deposit(Arc::clone(supervisor), helper_pid) {
+            terminate_supervised_helper(supervisor, helper_pid).await;
+            return Err(exec_error(
                 error.code,
                 format!(
-                    "failed to attach supervised exec process I/O: {}",
+                    "failed to bind supervised exec stdin deposit: {}",
                     error.message
                 ),
-            )
-        },
-    )?;
+            ));
+        }
+    }
     Ok((
         ExecChild::Supervised {
             helper_pid: raw_helper_pid,
