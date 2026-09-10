@@ -1907,17 +1907,18 @@ Missing deposit or lost cursor fail-closes with `Unavailable` /
 remain Unsupported on supervised create. Authenticated Host-reopen
 `signal_process` for durable init/exec identities is implemented: re-check
 PID + start-time, open a pidfd, deliver the signal — without restoring a fake
-`PreparedProcess`. `wait_process` stays Unavailable because the replacement
-Host does not hold wait ownership (parentage/pidfd wait) and must not invent
-exit status; new `exec` likewise remains Unavailable. Default create stays
-Host-bound.
+`PreparedProcess`. Live `wait_process` for durable exec uses supervisor
+`MSG_WAIT` when a helper identity is recorded (recovery v6); v5 exec records
+without helper fail closed with `Unavailable`. New `exec` likewise remains
+Unavailable. Default create stays Host-bound.
 
 Qualification may enable supervised create with
 `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. When set, Native create starts one
 durable supervisor, spawns the container launcher as its real child
 (`Host → Supervisor → Launcher`), passes `expected_owner_pid` as the
 supervisor PID so `container-init` re-arms PDEATHSIG correctly, and writes the
-authenticated supervisor identity into the recovery record (v5). Default create
+authenticated supervisor identity into the recovery record (v6; v5 exec records
+normalize without helper). Default create
 (no env) keeps Host-bound PDEATHSIG and omits `sessionSupervisor` so existing
 stopped-only recovery gates stay green. Supervised create currently rejects
 terminal/inherit I/O, pinned utility-VM bundles, rootless device mounts, and
@@ -1939,15 +1940,16 @@ exists, and authentic capture relay when stdout/stderr were moved at create.
 When several containers share one supervisor,
 `SessionSupervisorReattachCache` ensures only one control reconnect happens
 for that PID + start-time identity. Process inventory restores authenticated
-live init plus still-live durable exec identities from recovery v5 without
+live init plus still-live durable exec identities from recovery v6 without
 inventing exit status for dead execs (omit them). Host reopen keeps
 `DriverRecovery::observed` rather than `recreated_running_with_processes`
 because omitting dead execs is incompatible with Host exact-match exec rebind
 without inventing terminal evidence. Authenticated `signal_process` for those
 durable identities is restored via pidfd after PID + start-time re-auth.
-`wait_process` / new `exec` still require wait ownership or full
-`PreparedProcess` restore and remain Unavailable rather than inventing exit
-status.
+Live `wait_process` for durable exec uses supervisor `MSG_WAIT` on the recorded
+helper child when present; v5 exec records without helper fail closed. New
+`exec` still requires full `PreparedProcess` restore and remains Unavailable
+rather than inventing exit status.
 
 ### Hook owner-death crash boundary
 

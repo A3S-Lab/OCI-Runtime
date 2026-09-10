@@ -27,6 +27,18 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Native Linux Host-reopen **authentic `wait_process`** for durable exec
+  identities on the Live supervised path. Recovery schema advances to
+  `a3s.oci.native-linux-recovery.v6` with optional `helper` (supervisor-child
+  wait target) on exec records; v5 records normalize with `helper: None` and
+  fail closed with `Unavailable`. Supervised exec spawns through the session
+  supervisor (`spawn_launcher_with_inherited`, `SURVIVE=1`); Host-bound default
+  exec stays unchanged. `LinuxLiveSupervisedSession::wait_process` waits init via
+  launcher and exec via recorded helper using authentic `MSG_WAIT`; cached status
+  on repeat waits. `NativeLinuxDriver` routes live reopen through that path.
+  First-principles coverage: authentic signaled status after Host reopen, cached
+  second wait, unknown `NotFound`, v5 exec without helper `Unavailable`. Default
+  create stays Host-bound.
 - Native Linux Host-reopen **authenticated `signal_process`** for durable init
   and exec identities on the Live supervised path. After supervisor reattach,
   `LinuxLiveSupervisedSession::signal_process` re-checks PID + start-time,
@@ -34,9 +46,9 @@ All notable changes to A3S OCI Runtime are documented in this file.
   `PreparedProcess`. Unknown process IDs fail with `NotFound`; dead or
   start-time-drifted identities fail closed (`FailedPrecondition` /
   `Unavailable`) without inventing delivery success. `NativeLinuxDriver`
-  routes live reopen through that path. `wait_process` stays `Unavailable`
-  because this Host does not hold wait ownership (parentage/pidfd wait) and
-  must not invent exit status; new `exec` remains Unavailable. First-principles
+  routes live reopen through that path. Authentic `wait_process` for helper-
+  backed durable execs is unlocked in a later Unreleased entry (recovery v6).
+  New `exec` after reopen remains Unavailable. First-principles
   coverage: durable exec accepts SIGKILL after Host reopen; unknown IDs and
   dead identities fail closed; inventory omits the signaled-dead exec without
   invented wait status. Default create stays Host-bound.

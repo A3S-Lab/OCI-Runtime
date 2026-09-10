@@ -11,6 +11,7 @@ use tokio::time::{sleep, Instant};
 use super::exec_process::ExecProcess;
 use super::pidfd::SignalOutcome;
 use super::plan::ProcessPlan;
+use super::process::SharedSessionSupervisor;
 use super::state::{
     ContainerKey, ExecutorState, MutationKind, ProcessOperationPreparation, RecordedOutcome,
     RecordedRequest,
@@ -39,12 +40,18 @@ impl LinuxExecutor {
         // state.  Retries either observe the pending claim during handoff or
         // serialize behind the owner guard, then replay the exact recorded
         // result once the owner task finishes.
+        let session_supervisor = self.supervised_exec_session_supervisor(&request).await?;
         if let Some(mut state) = owner {
             match self.init_executable.duplicate_command_path() {
                 Ok((init_executable, pinned_executable)) => {
                     tokio::spawn(async move {
-                        let result =
-                            LinuxExecutor::exec_new(&init_executable, &mut state, &request).await;
+                        let result = LinuxExecutor::exec_new(
+                            &init_executable,
+                            &mut state,
+                            &request,
+                            session_supervisor,
+                        )
+                        .await;
                         if let Err(error) =
                             state.complete_process_operation(operation_id, operation, result)
                         {
@@ -77,10 +84,54 @@ impl LinuxExecutor {
         wait_for_process_operation(completion).await
     }
 
+    async fn supervised_exec_session_supervisor(
+        &self,
+        request: &AgentExecRequest,
+    ) -> Result<Option<SharedSessionSupervisor>> {
+        let key = ContainerKey::from_target(&request.target.container)?;
+        let runtime_directory = {
+            let state = self.state.lock().await;
+            state
+                .containers
+                .get(&key)
+                .ok_or_else(|| {
+                    executor_error(
+                        ErrorCode::NotFound,
+                        format!(
+                            "container {} generation {} does not exist",
+                            key.id, key.generation
+                        ),
+                    )
+                })?
+                .runtime_directory
+                .clone()
+        };
+        if !super::recovery::recovery_has_session_supervisor(&runtime_directory)? {
+            return Ok(None);
+        }
+        self.session_supervisor
+            .lock()
+            .map_err(|_| {
+                executor_error(
+                    ErrorCode::Internal,
+                    "session supervisor lock is poisoned during exec spawn",
+                )
+            })?
+            .clone()
+            .ok_or_else(|| {
+                executor_error(
+                    ErrorCode::Internal,
+                    "supervised generation recovery record is missing its session supervisor",
+                )
+            })
+            .map(Some)
+    }
+
     async fn exec_new(
         init_executable: &Path,
         state: &mut ExecutorState,
         request: &AgentExecRequest,
+        session_supervisor: Option<SharedSessionSupervisor>,
     ) -> Result<AgentProcess> {
         validate_deadline(&request.context)?;
         if request.target.process_id.is_init() {
@@ -180,15 +231,13 @@ impl LinuxExecutor {
                 .containers
                 .get_mut(&key)
                 .ok_or_else(|| missing_locked_container(&key))?;
-            let survive_host_death =
-                super::recovery::recovery_has_session_supervisor(&record.runtime_directory)?;
             match ExecProcess::spawn(
                 &snapshot,
                 init_executable,
                 &record.process,
                 request.process.terminal().unwrap_or(false),
                 &process_io,
-                survive_host_death,
+                session_supervisor,
             )
             .await
             {
@@ -221,6 +270,7 @@ impl LinuxExecutor {
                     &record.runtime_directory,
                     &request.target.process_id,
                     process.pid(),
+                    process.helper_pid(),
                     process.terminal(),
                 ) {
                     let mut process = process;

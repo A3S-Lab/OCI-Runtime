@@ -80,21 +80,21 @@ impl LauncherChild {
 }
 
 /// Host-retained stdio pipe ends for a supervised launcher.
-pub(super) struct SupervisedIoPipes {
-    pub(super) stdin: Option<OwnedFd>,
-    pub(super) stdout: Option<OwnedFd>,
-    pub(super) stderr: Option<OwnedFd>,
+pub(in crate::executor) struct SupervisedIoPipes {
+    pub(in crate::executor) stdin: Option<OwnedFd>,
+    pub(in crate::executor) stdout: Option<OwnedFd>,
+    pub(in crate::executor) stderr: Option<OwnedFd>,
 }
 
 /// Child-side stdio descriptors that must stay open until SCM_RIGHTS send completes.
-pub(super) struct SupervisedChildStdio {
-    pub(super) stdin: Option<OwnedFd>,
-    pub(super) stdout: Option<OwnedFd>,
-    pub(super) stderr: Option<OwnedFd>,
+pub(in crate::executor) struct SupervisedChildStdio {
+    pub(in crate::executor) stdin: Option<OwnedFd>,
+    pub(in crate::executor) stdout: Option<OwnedFd>,
+    pub(in crate::executor) stderr: Option<OwnedFd>,
 }
 
 /// Prepare Host/child stdio pipe ends for supervised spawn.
-pub(super) fn prepare_supervised_stdio(
+pub(in crate::executor) fn prepare_supervised_stdio(
     io: &ProcessIo,
 ) -> Result<(SupervisedIoPipes, SupervisedChildStdio)> {
     if matches!(io.stdin, IoMode::Terminal)
