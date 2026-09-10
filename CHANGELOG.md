@@ -27,6 +27,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Live Host-reopen restores stdin deposits per process identity: init uses the
+  create launcher deposit; durable exec uses the helper deposit. The previous
+  init-only slot made retained streaming `write_stdin`/`close_stdin` Unavailable
+  after reopen even when the exec helper deposit survived supervisor reattach.
+  Native driver write/close now pass `process_id` into the Live session.
 - Live Host-reopen `read_output` selects the capture deposit by process ID:
   init uses the create launcher PID; exec uses the recorded helper PID. Always
   reading the create launcher left post-reopen keyed captured exec waiting for
