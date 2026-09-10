@@ -2122,8 +2122,6 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   generations.
 - [ ] Prove Box process-session recovery across an out-of-process runtime
   restart on real native Linux and utility-VM drivers.
-<<<<<<< HEAD
-=======
   Foundation retained: `session_supervisor` first-principles tests prove the
   host-surviving supervisor identity (PID + start-time) and lifetime split
   versus Host-bound PDEATHSIG. Production `HostSessionSupervisor` /
@@ -2190,7 +2188,6 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   reattach is greened on existing-host WSL2 `/dev/kvm`. Does not register KVM
   with normal HostRuntimeService, flip default supervised create, or cut over
   MicroVM product routing.
->>>>>>> 40febe2 (docs(roadmap): note durable session-owner spawn; Live reattach still open)
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,
