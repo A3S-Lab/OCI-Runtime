@@ -27,6 +27,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Exec handshake opens the payload `pidfd` immediately after Ready and before
+  releasing START, while the payload is still blocked on the start barrier.
+  Opening after START let short captured commands exit and be reaped (ESRCH)
+  before Host could open a pidfd — Live Host-reopen keyed `printf` exec failed
+  closed at the lifecycle boundary.
 - `ProcessIdentity::capture` accepts zombie (`Z`) `/proc/<pid>/stat` entries:
   start-time remains authentic while the task is unreaped. Refusing zombies made
   short captured exec payloads (`printf`) fail closed with "exited before its
