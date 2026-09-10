@@ -450,8 +450,10 @@ pub struct LinuxLiveSupervisedSession {
     exec_wait_status: Mutex<BTreeMap<ProcessId, i32>>,
     /// Exec identities spawned after Host reopen (also persisted on disk).
     post_reopen_execs: Mutex<Vec<RecoveryExecRecord>>,
-    /// Restored Host stdin write end taken from the supervisor deposit.
-    stdin: AsyncMutex<Option<tokio::fs::File>>,
+    /// Restored stdin write ends taken from supervisor deposits, keyed by
+    /// process id (init uses the create launcher deposit; exec uses the helper
+    /// deposit). A single init-only slot cannot serve retained streaming exec.
+    stdin: AsyncMutex<BTreeMap<ProcessId, tokio::fs::File>>,
 }
 
 impl LinuxLiveSupervisedSession {
@@ -468,12 +470,18 @@ impl LinuxLiveSupervisedSession {
         &self.supervisor
     }
 
-    /// Whether an authentic stdin write end was restored from the supervisor.
+    /// Whether an authentic stdin write end was restored for the init process.
     #[must_use]
     pub fn has_restored_stdin(&self) -> bool {
+        self.has_restored_stdin_for(&ProcessId::init())
+    }
+
+    /// Whether an authentic stdin write end was restored for `process_id`.
+    #[must_use]
+    pub fn has_restored_stdin_for(&self, process_id: &ProcessId) -> bool {
         self.stdin
             .try_lock()
-            .map(|stdin| stdin.is_some())
+            .map(|stdin| stdin.contains_key(process_id))
             .unwrap_or(true)
     }
 
@@ -631,15 +639,15 @@ impl LinuxLiveSupervisedSession {
             })
     }
 
-    /// Write to the authentic restored stdin pipe end.
-    pub async fn write_stdin(&self, data: &[u8]) -> Result<()> {
+    /// Write to the authentic restored stdin pipe end for `process_id`.
+    pub async fn write_stdin(&self, process_id: &ProcessId, data: &[u8]) -> Result<()> {
         let mut guard = self.stdin.lock().await;
-        let stdin = guard.as_mut().ok_or_else(|| {
+        let stdin = guard.get_mut(process_id).ok_or_else(|| {
             recovery_error(
                 ErrorCode::Unavailable,
                 format!(
-                    "container {} generation {:?} has no restored stdin write end after Host reopen",
-                    self.target.id, self.target.generation
+                    "process {} in container {} generation {:?} has no restored stdin write end after Host reopen",
+                    process_id, self.target.id, self.target.generation
                 ),
             )
         })?;
@@ -647,8 +655,8 @@ impl LinuxLiveSupervisedSession {
             recovery_error(
                 ErrorCode::Unavailable,
                 format!(
-                    "failed to write restored stdin for container {} generation {:?}: {error}",
-                    self.target.id, self.target.generation
+                    "failed to write restored stdin for process {} in container {} generation {:?}: {error}",
+                    process_id, self.target.id, self.target.generation
                 ),
             )
         })?;
@@ -656,26 +664,42 @@ impl LinuxLiveSupervisedSession {
             recovery_error(
                 ErrorCode::Unavailable,
                 format!(
-                    "failed to flush restored stdin for container {} generation {:?}: {error}",
-                    self.target.id, self.target.generation
+                    "failed to flush restored stdin for process {} in container {} generation {:?}: {error}",
+                    process_id, self.target.id, self.target.generation
                 ),
             )
         })
     }
 
-    /// Close the restored stdin write end and drop any remaining supervisor deposit.
-    pub async fn close_stdin(&self) -> Result<()> {
+    /// Close the restored stdin write end for `process_id` and drop any remaining
+    /// supervisor deposit for that wait target.
+    pub async fn close_stdin(&self, process_id: &ProcessId) -> Result<()> {
         {
             let mut guard = self.stdin.lock().await;
-            guard.take();
+            guard.remove(process_id);
         }
+        let deposit_pid = if process_id.is_init() {
+            self.launcher_pid()
+        } else {
+            let exec = self.find_exec_record(process_id)?;
+            let helper = exec.helper.ok_or_else(|| {
+                recovery_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "process {} in container {} generation {:?} has no recorded supervisor wait target after Host reopen",
+                        process_id, self.target.id, self.target.generation
+                    ),
+                )
+            })?;
+            helper.pid()
+        };
         let mut supervisor = self.supervisor.lock().map_err(|_| {
             recovery_error(
                 ErrorCode::Internal,
                 "live supervised session supervisor lock is poisoned during stdin close",
             )
         })?;
-        supervisor.close_deposited_stdin(self.launcher_pid())?;
+        supervisor.close_deposited_stdin(deposit_pid)?;
         Ok(())
     }
 
@@ -865,9 +889,15 @@ impl LinuxLiveSupervisedSession {
             .push(RecoveryExecRecord {
                 process_id: process_id.clone(),
                 identity,
-                helper: Some(helper),
+                helper: Some(helper.clone()),
                 terminal,
             });
+        // Move the helper stdin deposit into the Live map before dropping the
+        // local ExecProcess write end — otherwise post-reopen write_stdin has
+        // nothing authentic to use.
+        if let Some(file) = take_deposited_stdin(&self.supervisor, helper.pid()) {
+            self.stdin.lock().await.insert(process_id.clone(), file);
+        }
         // Helper stays parented by the reattached supervisor; drop local wait
         // ownership so Live wait_process uses durable MSG_WAIT.
         drop(process);
@@ -1104,7 +1134,7 @@ impl LinuxLiveSupervisedSession {
         supervisor: SharedSessionSupervisor,
     ) -> Self {
         // Take before moving `supervisor` into Self; drop the lock first.
-        let stdin = take_deposited_stdin(&supervisor, tombstone.record.launcher.pid());
+        let stdin = take_deposited_stdin_by_process(&supervisor, &tombstone.record);
         Self {
             target: tombstone.target,
             config_digest: tombstone.config_digest,
@@ -1386,6 +1416,30 @@ fn take_deposited_stdin(
     };
     drop(guard);
     Some(owned_fd_to_tokio_file(fd))
+}
+
+/// Restore every authentic stdin deposit recorded for this generation.
+///
+/// Init uses the create launcher PID. Each durable exec uses its helper PID —
+/// the same key `ExecProcess` used at deposit time. Missing deposits are
+/// omitted (callers fail closed on write) rather than inventing a pipe.
+fn take_deposited_stdin_by_process(
+    supervisor: &SharedSessionSupervisor,
+    record: &ContainerRecoveryRecord,
+) -> BTreeMap<ProcessId, tokio::fs::File> {
+    let mut stdin = BTreeMap::new();
+    if let Some(file) = take_deposited_stdin(supervisor, record.launcher.pid()) {
+        stdin.insert(ProcessId::init(), file);
+    }
+    for exec in &record.execs {
+        let Some(helper) = exec.helper.as_ref() else {
+            continue;
+        };
+        if let Some(file) = take_deposited_stdin(supervisor, helper.pid()) {
+            stdin.insert(exec.process_id.clone(), file);
+        }
+    }
+    stdin
 }
 
 fn owned_fd_to_tokio_file(fd: OwnedFd) -> tokio::fs::File {
@@ -3500,7 +3554,7 @@ mod tests {
             "fixture without stdin deposit must not invent a restored write end"
         );
         let write_error = live
-            .write_stdin(b"nope")
+            .write_stdin(&ProcessId::init(), b"nope")
             .await
             .expect_err("write-stdin without deposit must fail closed");
         assert_eq!(write_error.code, ErrorCode::Unavailable);
@@ -5064,10 +5118,10 @@ mod tests {
             .expect_err("capture stdio must stay Unavailable");
         assert_eq!(read_error.code, ErrorCode::Unavailable);
 
-        live.write_stdin(b"hello-reopen\n")
+        live.write_stdin(&ProcessId::init(), b"hello-reopen\n")
             .await
             .expect("restored stdin must accept authentic writes");
-        live.close_stdin()
+        live.close_stdin(&ProcessId::init())
             .await
             .expect("close restored stdin must deliver EOF without inventing status");
         let status = live

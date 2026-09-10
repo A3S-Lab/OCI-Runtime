@@ -838,7 +838,7 @@ impl RuntimeDriver for NativeLinuxDriver {
             .await?
         {
             return live
-                .write_stdin(&request.data)
+                .write_stdin(&request.target.process_id, &request.data)
                 .await
                 .map_err(|error| error.for_operation("native-linux-write-stdin"));
         }
@@ -861,7 +861,7 @@ impl RuntimeDriver for NativeLinuxDriver {
             .await?
         {
             return live
-                .close_stdin()
+                .close_stdin(&request.target.process_id)
                 .await
                 .map_err(|error| error.for_operation("native-linux-close-stdin"));
         }
