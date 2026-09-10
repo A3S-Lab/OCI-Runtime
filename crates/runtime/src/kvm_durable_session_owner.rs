@@ -24,6 +24,7 @@ use std::time::Duration;
 /// When unset/false, Host remains the shim parent (stopped-only on Host death).
 /// When true, callers must spawn through [`spawn_holding_child`] so the
 /// session owner — not Host — is the shim's direct parent.
+#[allow(dead_code)] // public opt-in surface; shim spawn wire-up is the next slice
 pub const KVM_SESSION_OWNER_ENV: &str = "A3S_OCI_KVM_SESSION_OWNER";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +36,7 @@ pub enum KvmOwnerMode {
 }
 
 /// Resolve ownership mode from the process environment.
+#[allow(dead_code)] // public opt-in surface; shim spawn wire-up is the next slice
 pub fn owner_mode_from_env() -> KvmOwnerMode {
     owner_mode_from_value(env::var(KVM_SESSION_OWNER_ENV).ok().as_deref())
 }
