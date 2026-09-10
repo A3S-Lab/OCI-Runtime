@@ -34,11 +34,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
   route through `live_for` (not `require_live` fail-closed). Dead init →
   `Unavailable`; wrong generation → `Conflict`. First-principles unit tests
   cover planted-byte download, upload/stat/download, dead init, and generation
-  fencing. Evidence harness stub
+  fencing. Evidence harness
   `a3s.oci.linux-native-live-recovery-smoke.v1` / CLI
   `linux-native-live-recovery-smoke` /
-  `.github/scripts/linux-native-live-recovery.sh` fails closed until greened
-  (opt-in `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`; distinct from stopped-only
+  `.github/scripts/linux-native-live-recovery.sh` is implemented: supervised
+  Host create+start → FileOp::Upload → Host SIGKILL → init survival →
+  replacement Host Running reattach with continuous init identity → exact
+  FileOp::Download (`retained_filesystem_proven`; `retained_exec_io_proven`
+  optional for v1). Greening pending a real-host run under
+  `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1` (distinct from stopped-only
   `native-linux-recovery`). Does not flip default create / B2 / cutover flags.
 
 - Opt-in durable KVM `session-owner` helper on `a3s-oci-krun-shim` plus

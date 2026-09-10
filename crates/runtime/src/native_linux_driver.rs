@@ -116,7 +116,7 @@ impl NativeLinuxDriver {
         let mut driver = Self::open_experimental(&runtime_parent, &init_executable).await?;
         driver.operations.push(RuntimeOperation::Checkpoint);
         driver.operations.push(RuntimeOperation::Restore);
-        drive
+        driver
             .capability
             .evidence
             .insert("checkpoint_backend".to_string(), "criu".to_string());
@@ -150,7 +150,7 @@ impl NativeLinuxDriver {
             "checkpoint_opt_in".to_string(),
             "open-experimental-with-criu".to_string(),
         );
-        drive
+        driver
             .capability
             .evidence
             .insert("restore_backend".to_string(), "criu".to_string());
@@ -436,7 +436,7 @@ impl RuntimeDriver for NativeLinuxDriver {
 
         let durable_pid = *record.state.pid();
         let recovery = self
-            .executo
+            .executor
             .recover_stale_generation(&target, &record.config_digest, durable_pid)
             .await?;
         if !can_commit_stopped {
@@ -543,7 +543,7 @@ impl RuntimeDriver for NativeLinuxDriver {
         let expected_digest = request.bundle.config_digest().to_string();
         let expected_target = request.target.clone();
         let state = self
-            .executo
+            .executor
             .create_with_inherited_descriptors(
                 AgentCreateRequest {
                     context: request.context,
@@ -650,7 +650,7 @@ impl RuntimeDriver for NativeLinuxDriver {
             .await?
         {
             let (init_executable, pinned) = self
-                .executo
+                .executor
                 .duplicate_init_executable()
                 .map_err(|error| error.for_operation("native-linux-exec"))?;
             let (pid, terminal) = live
@@ -888,7 +888,7 @@ impl RuntimeDriver for NativeLinuxDriver {
         let target = request.target.clone();
         if let Some(live) = self.live_for(&target, "native-linux-file").await? {
             let (init_executable, pinned) = self
-                .executo
+                .executor
                 .duplicate_init_executable()
                 .map_err(|error| error.for_operation("native-linux-file"))?;
             let result = live
@@ -915,7 +915,7 @@ impl RuntimeDriver for NativeLinuxDriver {
             .await?
         {
             let (init_executable, pinned) = self
-                .executo
+                .executor
                 .duplicate_init_executable()
                 .map_err(|error| error.for_operation("native-linux-filesystem"))?;
             let result = live

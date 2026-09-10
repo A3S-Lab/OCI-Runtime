@@ -468,7 +468,7 @@ impl LinuxLiveSupervisedSession {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn shared_supervisor(&self) -> &SharedSessionSupervisor {
-        &self.superviso
+        &self.supervisor
     }
 
     /// Whether an authentic stdin write end was restored for the init process.
@@ -591,7 +591,7 @@ impl LinuxLiveSupervisedSession {
     #[must_use]
     pub fn supervisor_pid(&self) -> i32 {
         self.record
-            .session_superviso
+            .session_supervisor
             .expect("live supervised session always records a supervisor")
             .pid()
     }
@@ -6286,7 +6286,7 @@ mod tests {
         assert_eq!(record.execs[0].identity.pid, self_pid);
         assert_eq!(
             record.execs[0]
-                .helpe
+                .helper
                 .as_ref()
                 .expect("helper identity")
                 .pid,

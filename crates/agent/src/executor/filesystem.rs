@@ -503,7 +503,7 @@ impl RootView {
                 ids: Some((0, 0)),
             });
         };
-        let (user, group_override) = selecto
+        let (user, group_override) = selector
             .split_once(':')
             .map_or((selector, None), |(user, group)| (user, Some(group)));
         if user.is_empty() || group_override == Some("") {
@@ -512,7 +512,7 @@ impl RootView {
                 format!("invalid file user selector {selector:?}"),
             ));
         }
-        let account = use
+        let account = user
             .parse::<u32>()
             .ok()
             .and_then(|uid| self.accounts.users.iter().find(|entry| entry.id == uid))

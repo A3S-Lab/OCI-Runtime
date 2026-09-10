@@ -39,6 +39,8 @@ impl LinuxNativeLiveRecoveryEvidence {
     }
 
     /// Whether every Live filesystem continuity field is authentically set.
+    ///
+    /// `retained_exec_io_proven` is optional for v1 (filesystem-only success).
     #[must_use]
     pub fn is_success(&self) -> bool {
         self.session_supervisor_mode_opt_in
@@ -94,6 +96,20 @@ impl LinuxNativeLiveRecoverySmokeReport {
 mod tests {
     use super::*;
 
+    fn complete_filesystem_evidence() -> LinuxNativeLiveRecoveryEvidence {
+        LinuxNativeLiveRecoveryEvidence {
+            session_supervisor_mode_opt_in: true,
+            file_upload_before_kill: true,
+            host_sigkill_delivered: true,
+            init_survived_host_sigkill: true,
+            replacement_state_running: true,
+            file_download_after_reattach: true,
+            retained_filesystem_proven: true,
+            retained_exec_io_proven: false,
+            reason: None,
+        }
+    }
+
     #[test]
     fn stub_report_is_not_success_without_evidence() {
         let report = LinuxNativeLiveRecoverySmokeReport::initial(
@@ -102,5 +118,55 @@ mod tests {
         );
         assert!(!report.is_success());
         assert!(!report.recovery.is_success());
+    }
+
+    #[test]
+    fn success_requires_filesystem_continuity_fields() {
+        let evidence = complete_filesystem_evidence();
+        assert!(evidence.is_success());
+
+        let mut missing_upload = evidence.clone();
+        missing_upload.file_upload_before_kill = false;
+        assert!(!missing_upload.is_success());
+
+        let mut missing_download = evidence.clone();
+        missing_download.file_download_after_reattach = false;
+        assert!(!missing_download.is_success());
+
+        let mut missing_proven = evidence.clone();
+        missing_proven.retained_filesystem_proven = false;
+        assert!(!missing_proven.is_success());
+
+        let mut missing_running = evidence.clone();
+        missing_running.replacement_state_running = false;
+        assert!(!missing_running.is_success());
+
+        let mut missing_survival = evidence.clone();
+        missing_survival.init_survived_host_sigkill = false;
+        assert!(!missing_survival.is_success());
+    }
+
+    #[test]
+    fn report_success_requires_available_case_and_filesystem_evidence() {
+        let mut report = LinuxNativeLiveRecoverySmokeReport::initial(
+            PathBuf::from("/tmp/native-live"),
+            "x86_64".to_string(),
+        );
+        report.status = CapabilityStatus::Available;
+        report.case_count = 1;
+        report.recovery = complete_filesystem_evidence();
+        assert!(report.is_success());
+
+        report.recovery.retained_filesystem_proven = false;
+        assert!(!report.is_success());
+    }
+
+    #[test]
+    fn retained_exec_io_is_not_required_for_v1_success() {
+        let mut evidence = complete_filesystem_evidence();
+        evidence.retained_exec_io_proven = false;
+        assert!(evidence.is_success());
+        evidence.retained_exec_io_proven = true;
+        assert!(evidence.is_success());
     }
 }

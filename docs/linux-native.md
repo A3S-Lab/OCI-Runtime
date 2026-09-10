@@ -1998,9 +1998,22 @@ launcher is terminal, Host performs the authentic `wait_launcher` reap.
 Native Live Host reopen filesystem evidence harness
 (`a3s.oci.linux-native-live-recovery-smoke.v1`, CLI
 `linux-native-live-recovery-smoke`,
-`.github/scripts/linux-native-live-recovery.sh`) is stubbed fail-closed until
-greened under `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`. It is distinct from
-stopped-only `native-linux-recovery`. Product path and unit tests land first.
+`.github/scripts/linux-native-live-recovery.sh`) is implemented under
+`A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`: create+start a long-running native
+container, FileOp::Upload a unique payload, SIGKILL the Host Service, require
+init survival, spawn a replacement Host on the same root, require Running with
+continuous init identity, then FileOp::Download exact match
+(`retained_filesystem_proven`). `retained_exec_io_proven` is optional for v1.
+Greening pending a real-host run. Distinct from stopped-only
+`native-linux-recovery`.
+
+```bash
+A3S_OCI_NATIVE_SESSION_SUPERVISOR=1 \
+  bash .github/scripts/linux-native-live-recovery.sh
+# optional: A3S_OCI_NATIVE_LIVE_BUNDLE=/absolute/path/to/oci-bundle
+# optional: A3S_OCI_LINUX_NATIVE_LIVE_RECOVERY_REPORT=/absolute/path/to/report.json
+# Requires cleared supplementary groups (setpriv CAP_SETGID / sudo / CI matched-cred).
+```
 
 When the original Host control socketpair closes (owner death), the supervisor
 does **not** reap waitable children and does **not** start a replacement
