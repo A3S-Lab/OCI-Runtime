@@ -128,6 +128,78 @@ runtime-asset digest, platform, architecture, driver, isolation class, schema
 version, and exact test profile. A green capability probe, an unretained local
 run, or evidence from a different artifact does not satisfy an exit gate.
 
+## Fresh-host promotion checklist
+
+**Existing-host greening does not promote readiness.** A
+`host_class=existing` / `promotes_readiness=false` report (WSL2 `/dev/kvm`,
+this Windows WHPX workstation, or any previously used machine) is observation
+evidence only. It cannot flip WHPX R2 or Linux KVM R2L from `probe-only` to
+`experimental`, and it must not be rewritten as a fresh-host pass.
+
+**This used Windows + WSL machine cannot honestly attest fresh-host.** It has
+already run WHPX and KVM qualification suites, retains prior kernels, images,
+and runtime state, and is not a newly provisioned release host. Do not set
+`operator_attests_fresh_provisioning=true` here, and do not pass
+`-HostClass fresh` / `A3S_OCI_LINUX_KVM_HOST_CLASS=fresh` on this host.
+
+### WHPX R2 (Windows)
+
+Requires a **newly provisioned** WHPX-enabled Windows host, tip-matched
+immutable assets, and:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\windows-whpx-release-matrix.ps1 `
+  -RootfsArchive <alpine-minirootfs.tar.gz> `
+  -SystemImageManifest <system-image.json> `
+  -HostClass fresh `
+  -FreshHostAttestation <fresh-host-attestation.json>
+```
+
+Attestation schema `a3s.oci.windows-whpx-fresh-host-attestation.v1` must set
+`operator_attests_fresh_provisioning=true` and `provisioned_at_utc`. Fresh
+without attestation is rejected; `existing` never sets
+`promotes_readiness=true`. The matrix must keep all six bound gates available
+(handle-reclamation, driver smoke, recovery smoke, 11-stage transport-fault
+cleanup, soak, 180-path operation-reopen). See
+[`docs/windows-whpx.md`](docs/windows-whpx.md).
+
+### Linux KVM R2L
+
+Requires **fresh** x86_64 and AArch64 KVM-capable Linux hosts (not this WSL
+distro), tip-matched system-image manifests, and:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_RELEASE_MATRIX_REPORT=/absolute/path/to/release-matrix.json \
+  A3S_OCI_LINUX_KVM_HOST_CLASS=fresh \
+  A3S_OCI_LINUX_KVM_FRESH_HOST_ATTESTATION=/absolute/path/to/fresh-host-attestation.json \
+  bash .github/scripts/linux-kvm-release-matrix.sh
+```
+
+Attestation schema `a3s.oci.linux-kvm-fresh-host-attestation.v1` must set
+`operator_attests_fresh_provisioning=true` and `provisioned_at_utc`. Leave soak
+enabled for promotion (`A3S_OCI_LINUX_KVM_SKIP_SOAK` must be unset). Both
+architectures need `available` lifecycle (incl. Guest path-isolation),
+owner-death/restart, and 25-wave soak. See
+[`docs/linux-native.md`](docs/linux-native.md).
+
+### Ordered remaining gates after honest fresh-host
+
+1. **Fresh-host WHPX R2** and **fresh-host KVM R2L** (x86_64 + AArch64) with
+   attestation-bound `promotes_readiness=true` matrices above.
+2. **W4 Box cutover** — route `microvm` / `sandbox` through the SDK with no
+   silent fallback (R6 cutover items).
+3. **Default supervised create** — flip Native create off Host-bound
+   PDEATHSIG only after Live reopen policy is release-accepted
+   (`A3S_OCI_NATIVE_SESSION_SUPERVISOR=1` stays opt-in until then).
+4. **HostRuntimeService KVM registration** — public candidate stays
+   `probe-only` until fresh-host matrices pass; no premature registry.
+5. **B2 harness self-certify remains forbidden** as a single-report claim —
+   Box/OCI Live harnesses keep
+   `b2_process_session_recovery_closed=false` by design; aggregated
+   checklist close is not a self-attesting field inside one JSON report.
+
 ## Current Baseline
 
 Completed:

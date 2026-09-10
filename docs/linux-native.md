@@ -466,6 +466,14 @@ newly provisioned host together with
 without attestation is rejected. Set `A3S_OCI_LINUX_KVM_SKIP_SOAK=1` to omit
 soak during focused debugging; a promotion run must leave soak enabled.
 
+**Fresh-host promotion checklist:** Existing-host WSL2 `/dev/kvm` greening on
+this machine does **not** promote KVM R2L readiness. This used Windows + WSL
+host cannot honestly attest fresh-host. Exact fresh-host commands, AArch64
+requirements, and the ordered gates after fresh-host (W4 cutover, default
+supervised create, HostRuntimeService KVM registration, B2 harness
+self-certify still forbidden as a single-report claim) are in
+[`ROADMAP.md`](../ROADMAP.md#fresh-host-promotion-checklist).
+
 The Create operation-stage gate uses another qualification-only driver with
 the exact `linux-kvm-operation-stage-reopen-only-v1` scope:
 

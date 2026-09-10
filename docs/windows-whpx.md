@@ -913,6 +913,17 @@ owner-death/service-restart path now have real WHPX evidence. The retained
 exact owner termination, both recovery fault boundaries, service reopen,
 terminal replay, stopped-only delete, and complete transient cleanup.
 
+## Fresh-host promotion
+
+Existing-host WHPX greening on this workstation does **not** promote readiness.
+Only a newly provisioned WHPX host with `-HostClass fresh` and a digest-bound
+`a3s.oci.windows-whpx-fresh-host-attestation.v1` attestation may set
+`promotes_readiness=true`. This used Windows + WSL machine cannot honestly
+attest fresh-host. Canonical checklist and ordered post-fresh-host gates
+(W4 cutover, default supervised create, HostRuntimeService KVM registration,
+B2 self-certify still forbidden) live in
+[`ROADMAP.md`](../ROADMAP.md#fresh-host-promotion-checklist).
+
 ## Next Windows gate
 
 The version-pinned image, read-only root attachment, source/digest manifest,
