@@ -27,6 +27,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Supervised session-supervise remains durable when Host dies mid-response:
+  control write failures that mean peer gone (`BrokenPipe` / reset / abort /
+  EOF) enter the same abstract-unix reattach path as control-read EOF. Owner
+  SIGKILL while a capture relay publishes `MSG_OUTPUT_CHUNKS` previously exited
+  the supervisor (`failed to publish ... Broken pipe`), so Live Host-reopen
+  saw `Connection refused` on reattach. First-principles coverage: Host
+  SIGKILL during blocking `read_output` wait; replacement reattaches and waits.
 - Supervised process `try_wait` / ready-race liveness no longer treats
   `/proc/<pid>` existence as "still running". Zombies keep a `/proc` entry, so
   keyed captured exec helpers that had already exited never surfaced an exit
