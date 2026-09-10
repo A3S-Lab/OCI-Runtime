@@ -427,6 +427,26 @@ async fn assert_no_invented_exit(
     }
 }
 
+async fn wait_for_exactly_one_new_endpoint(
+    baseline: &std::collections::BTreeSet<PathBuf>,
+) -> Result<bool, String> {
+    let deadline = Instant::now() + LIVE_TIMEOUT;
+    loop {
+        let current = host::endpoint_inventory()?;
+        let added = current
+            .difference(baseline)
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        if added.len() == 1 {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        sleep(POLL_INTERVAL).await;
+    }
+}
+
 fn sigkill_recovery_report_present(
     runtime_root: &Path,
     target: &ContainerTarget,
