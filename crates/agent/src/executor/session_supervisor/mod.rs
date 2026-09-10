@@ -73,13 +73,19 @@ const FLAG_OUTPUT_STDOUT: u8 = 0b0000_0001;
 const FLAG_OUTPUT_STDERR: u8 = 0b0000_0010;
 const MAX_SPAWN_ARGS: usize = 64;
 const MAX_ARG_BYTES: usize = 8 * 1024;
-const MAX_SPAWN_FDS: usize = 6;
+/// Known create FDs (≤6) plus inherited exec descriptors (rootfs, init pidfd,
+/// cgroup.procs, retained namespaces). Worst case ≈ 3 stdio + 1 cgroup + 2
+/// control/workload + 11 inherited ≈ 17; keep headroom for SCM_RIGHTS.
+const MAX_SPAWN_FDS: usize = 20;
+const MAX_INHERITED_SPAWN_FDS: usize = 16;
 const ENV_OPT_IN: &str = "A3S_OCI_NATIVE_SESSION_SUPERVISOR";
 const FLAG_JOIN_CGROUP: u8 = 0b0000_0001;
 const FLAG_CONTROL_WORKLOAD: u8 = 0b0000_0010;
 const FLAG_STDIN: u8 = 0b0000_0100;
 const FLAG_STDOUT: u8 = 0b0000_1000;
 const FLAG_STDERR: u8 = 0b0001_0000;
+/// Additional descriptors installed at explicit target FD numbers before exec.
+const FLAG_INHERITED: u8 = 0b0010_0000;
 const REATTACH_ENDPOINT_PREFIX: &str = "a3s.oci.session-supervise.";
 const REATTACH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REATTACH_ACCEPT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -328,6 +334,11 @@ impl HostSessionSupervisor {
     ///
     /// `stdio` is `(stdin, stdout, stderr)` child-side descriptors. Present
     /// options are installed onto 0/1/2 in the launcher via `dup2`.
+    ///
+    /// `inherited` is `(source_fd, target_fd)` pairs: each source descriptor is
+    /// sent via SCM_RIGHTS and installed onto `target_fd` in the child before
+    /// exec (clearing `FD_CLOEXEC`). Used by supervised `container-exec` so
+    /// argv-embedded FD numbers remain valid under supervisor parentage.
     pub(crate) fn spawn_launcher(
         &mut self,
         program: &Path,
@@ -336,12 +347,34 @@ impl HostSessionSupervisor {
         control_workload: Option<(RawFd, RawFd)>,
         stdio: Option<(Option<RawFd>, Option<RawFd>, Option<RawFd>)>,
     ) -> Result<i32> {
+        self.spawn_launcher_with_inherited(program, args, join_cgroup_procs, control_workload, stdio, &[])
+    }
+
+    /// Like [`Self::spawn_launcher`], with optional inherited target FD installs.
+    pub(crate) fn spawn_launcher_with_inherited(
+        &mut self,
+        program: &Path,
+        args: &[std::ffi::OsString],
+        join_cgroup_procs: Option<RawFd>,
+        control_workload: Option<(RawFd, RawFd)>,
+        stdio: Option<(Option<RawFd>, Option<RawFd>, Option<RawFd>)>,
+        inherited: &[(RawFd, i32)],
+    ) -> Result<i32> {
         if args.len() > MAX_SPAWN_ARGS {
             return Err(supervisor_error(
                 ErrorCode::InvalidArgument,
                 format!(
                     "session supervisor spawn has {} arguments; maximum is {MAX_SPAWN_ARGS}",
                     args.len()
+                ),
+            ));
+        }
+        if inherited.len() > MAX_INHERITED_SPAWN_FDS {
+            return Err(supervisor_error(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "session supervisor spawn has {} inherited descriptors; maximum is {MAX_INHERITED_SPAWN_FDS}",
+                    inherited.len()
                 ),
             ));
         }
@@ -382,7 +415,34 @@ impl HostSessionSupervisor {
                 fds.push(descriptor);
             }
         }
-        payload.push(flags);
+        if !inherited.is_empty() {
+            flags |= FLAG_INHERITED;
+            let count = u8::try_from(inherited.len()).map_err(|_| {
+                supervisor_error(
+                    ErrorCode::InvalidArgument,
+                    "session supervisor inherited descriptor count does not fit u8",
+                )
+            })?;
+            for &(source, target) in inherited {
+                if target <= libc::STDERR_FILENO {
+                    return Err(supervisor_error(
+                        ErrorCode::InvalidArgument,
+                        format!(
+                            "session supervisor inherited target FD {target} must be greater than stderr"
+                        ),
+                    ));
+                }
+                let _ = source;
+                fds.push(source);
+            }
+            payload.push(flags);
+            payload.push(count);
+            for &(_, target) in inherited {
+                payload.extend_from_slice(&target.to_be_bytes());
+            }
+        } else {
+            payload.push(flags);
+        }
         self.control.write_all(&[MSG_SPAWN]).map_err(|error| {
             supervisor_error(
                 ErrorCode::Internal,
@@ -1040,11 +1100,57 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
         argv.push(read_os_string(control)?);
     }
     let flags = read_u8(control)?;
+    let unknown = flags
+        & !(FLAG_JOIN_CGROUP
+            | FLAG_CONTROL_WORKLOAD
+            | FLAG_STDIN
+            | FLAG_STDOUT
+            | FLAG_STDERR
+            | FLAG_INHERITED);
+    if unknown != 0 {
+        return Err(supervisor_error(
+            ErrorCode::InvalidArgument,
+            format!("session supervisor spawn flags contain unsupported bits {unknown:#x}"),
+        ));
+    }
+    let inherited_targets = if flags & FLAG_INHERITED != 0 {
+        let count = usize::from(read_u8(control)?);
+        if count == 0 || count > MAX_INHERITED_SPAWN_FDS {
+            return Err(supervisor_error(
+                ErrorCode::InvalidArgument,
+                format!("session supervisor inherited descriptor count {count} is invalid"),
+            ));
+        }
+        let mut targets = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut bytes = [0_u8; 4];
+            control.read_exact(&mut bytes).map_err(|error| {
+                supervisor_error(
+                    ErrorCode::Unavailable,
+                    format!("failed to read session-supervisor inherited target FD: {error}"),
+                )
+            })?;
+            let target = i32::from_be_bytes(bytes);
+            if target <= libc::STDERR_FILENO {
+                return Err(supervisor_error(
+                    ErrorCode::InvalidArgument,
+                    format!(
+                        "session supervisor inherited target FD {target} must be greater than stderr"
+                    ),
+                ));
+            }
+            targets.push(target);
+        }
+        targets
+    } else {
+        Vec::new()
+    };
     let expected_fds = usize::from((flags & FLAG_JOIN_CGROUP) != 0)
         + (2 * usize::from((flags & FLAG_CONTROL_WORKLOAD) != 0))
         + usize::from((flags & FLAG_STDIN) != 0)
         + usize::from((flags & FLAG_STDOUT) != 0)
-        + usize::from((flags & FLAG_STDERR) != 0);
+        + usize::from((flags & FLAG_STDERR) != 0)
+        + inherited_targets.len();
     let fds = if expected_fds == 0 {
         Vec::new()
     } else {
@@ -1108,6 +1214,16 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
     } else {
         None
     };
+    let mut inherited = Vec::with_capacity(inherited_targets.len());
+    for target in inherited_targets {
+        let source = fd_iter.next().ok_or_else(|| {
+            supervisor_error(
+                ErrorCode::Internal,
+                "session supervisor spawn missing inherited descriptor",
+            )
+        })?;
+        inherited.push((source, target));
+    }
 
     let program = argv.first().ok_or_else(|| {
         supervisor_error(
@@ -1129,6 +1245,10 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
     let stdin_raw = stdin.as_ref().map(AsRawFd::as_raw_fd);
     let stdout_raw = stdout.as_ref().map(AsRawFd::as_raw_fd);
     let stderr_raw = stderr.as_ref().map(AsRawFd::as_raw_fd);
+    let inherited_raw: Vec<(RawFd, i32)> = inherited
+        .iter()
+        .map(|(source, target)| (source.as_raw_fd(), *target))
+        .collect();
     // SAFETY: pre_exec only installs already-open descriptors and arms PDEATHSIG.
     unsafe {
         command.pre_exec(move || {
@@ -1144,6 +1264,7 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
                 )?;
             }
             install_stdio_from_pre_exec(stdin_raw, stdout_raw, stderr_raw)?;
+            install_inherited_from_pre_exec(&inherited_raw)?;
             Ok(())
         });
     }
@@ -1158,6 +1279,7 @@ fn handle_spawn_request(control: &mut UnixStream, supervisor_pid: i32) -> Result
     drop(stdin);
     drop(stdout);
     drop(stderr);
+    drop(inherited);
     let pid = match i32::try_from(child.id()) {
         Ok(pid) => pid,
         Err(error) => {
@@ -1197,6 +1319,16 @@ fn install_stdio_from_pre_exec(
             return Err(io::Error::last_os_error());
         }
         clear_cloexec_raw(2)?;
+    }
+    Ok(())
+}
+
+fn install_inherited_from_pre_exec(inherited: &[(RawFd, i32)]) -> io::Result<()> {
+    for &(source, target) in inherited {
+        if unsafe { libc::dup2(source, target) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        clear_cloexec_raw(target)?;
     }
     Ok(())
 }
@@ -1720,7 +1852,8 @@ fn send_with_fds(socket: RawFd, payload: &[u8], fds: &[RawFd]) -> Result<()> {
     let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
     message.msg_iov = &mut iov;
     message.msg_iovlen = 1;
-    let mut control = [0_u8; 256];
+    // Room for CMSG_SPACE(MAX_SPAWN_FDS * sizeof(RawFd)).
+    let mut control = [0_u8; 512];
     if !fds.is_empty() {
         let descriptor_bytes = std::mem::size_of_val(fds);
         message.msg_control = control.as_mut_ptr().cast();
@@ -1767,7 +1900,8 @@ fn receive_fds(socket: RawFd, expected: usize) -> Result<Vec<OwnedFd>> {
         iov_base: payload.as_mut_ptr().cast(),
         iov_len: payload.len(),
     };
-    let mut control = [0_u8; 256];
+    // Room for CMSG_SPACE(MAX_SPAWN_FDS * sizeof(RawFd)).
+    let mut control = [0_u8; 512];
     let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
     message.msg_iov = &mut iov;
     message.msg_iovlen = 1;

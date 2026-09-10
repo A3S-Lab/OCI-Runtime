@@ -44,12 +44,13 @@ use super::plan::InitPlan;
 use super::process_group::ProcessGroupLease;
 use super::seccomp::SeccompPlan;
 use super::RootfsScope;
+pub(in crate::executor) use launch::prepare_supervised_stdio;
 pub(super) use launch::{
     bind_control_listener, terminate, terminate_host_child, SharedSessionSupervisor,
 };
 use launch::{
-    cleanup_uncommitted_create, cleanup_unstarted_cgroup, prepare_supervised_stdio,
-    retain_original_rootfs, validate_rootless_device_mounts, LauncherChild,
+    cleanup_uncommitted_create, cleanup_unstarted_cgroup, retain_original_rootfs,
+    validate_rootless_device_mounts, LauncherChild,
 };
 
 const INIT_READY_TIMEOUT: Duration = Duration::from_secs(10);

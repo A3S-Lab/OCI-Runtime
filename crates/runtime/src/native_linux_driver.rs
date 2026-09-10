@@ -356,34 +356,6 @@ impl NativeLinuxDriver {
         }
     }
 
-    async fn refuse_live_wait_process_without_ownership(
-        &self,
-        target: &ContainerTarget,
-    ) -> Result<()> {
-        if self
-            .live_for(target, "native-linux-wait-process")
-            .await?
-            .is_some()
-        {
-            return Err(Error::new(
-                ErrorCode::Unavailable,
-                format!(
-                    "container {} generation {:?} retained durable process identities after Host reopen, but wait_process requires wait ownership (parentage/pidfd wait) that this Host does not hold; refusing to invent exit status",
-                    target.id, target.generation
-                ),
-            )
-            .for_operation("native-linux-wait-process"));
-        }
-        if self
-            .recovered_for(target, "native-linux-wait-process")
-            .await?
-            .is_some()
-        {
-            return Err(recovered_stopped_error(target, "native-linux-wait-process"));
-        }
-        Ok(())
-    }
-
     async fn require_live(&self, target: &ContainerTarget, operation: &'static str) -> Result<()> {
         self.require_live_process_session(target, operation).await
     }
@@ -657,7 +629,7 @@ impl RuntimeDriver for NativeLinuxDriver {
     async fn wait(&self, request: DriverWaitRequest) -> Result<ExitStatus> {
         if let Some(live) = self.live_for(&request.target, "native-linux-wait").await? {
             let raw = live.wait_launcher()?;
-            return supervised_wait_status(raw);
+            return supervised_wait_status(raw, "native-linux-wait");
         }
         if self
             .recovered_for(&request.target, "native-linux-wait")
@@ -701,8 +673,25 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn wait_process(&self, request: DriverWaitProcessRequest) -> Result<ExitStatus> {
-        self.refuse_live_wait_process_without_ownership(&request.target.container)
-            .await?;
+        if let Some(live) = self
+            .live_for(&request.target.container, "native-linux-wait-process")
+            .await?
+        {
+            let raw = live
+                .wait_process(&request.target.process_id)
+                .map_err(|error| error.for_operation("native-linux-wait-process"))?;
+            return supervised_wait_status(raw, "native-linux-wait-process");
+        }
+        if self
+            .recovered_for(&request.target.container, "native-linux-wait-process")
+            .await?
+            .is_some()
+        {
+            return Err(recovered_exit_evidence_error(
+                &request.target.container,
+                "native-linux-wait-process",
+            ));
+        }
         self.client.wait_process(request).await
     }
 
@@ -958,7 +947,7 @@ fn observe_live_supervised_driver_state_for_status(
     Ok(DriverState::stopped())
 }
 
-fn supervised_wait_status(raw: i32) -> Result<ExitStatus> {
+fn supervised_wait_status(raw: i32, operation: &'static str) -> Result<ExitStatus> {
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus as ProcessExitStatus;
 
@@ -971,9 +960,9 @@ fn supervised_wait_status(raw: i32) -> Result<ExitStatus> {
     }
     Err(Error::new(
         ErrorCode::Internal,
-        format!("supervised launcher returned unsupported wait status {raw}"),
+        format!("supervised process returned unsupported wait status {raw}"),
     )
-    .for_operation("native-linux-wait"))
+    .for_operation(operation))
 }
 
 fn recovered_stopped_error(target: &ContainerTarget, operation: &'static str) -> Error {

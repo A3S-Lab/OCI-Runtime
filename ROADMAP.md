@@ -2245,10 +2245,12 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   identity → one control Arc across generations). Partial Host-reopen process
   inventory now exposes the authenticated live init plus still-live durable
   exec identities from recovery
-  `a3s.oci.native-linux-recovery.v5` (empty after those identities exit; no
-  invented exit status). Supervised exec persists PID + start-time into the
-  recovery record and skips Host-bound PDEATHSIG so the payload can survive
-  Host death for Live reopen. Host reopen keeps `DriverRecovery::observed`
+  `a3s.oci.native-linux-recovery.v6` (v5 normalizes without helper; empty after
+  those identities exit; no invented exit status). Supervised exec persists
+  payload + helper PID + start-time into the
+  recovery record and spawns under the session supervisor so the payload can
+  survive Host death with authentic `MSG_WAIT` ownership. Host reopen keeps
+  `DriverRecovery::observed`
   (not `recreated_running_with_processes`) because omitting dead execs must
   not Conflict with Host exact-match rebind. Host-reopen stdin restore is
   retained: supervised create deposits a duplicate stdin write end via
@@ -2259,10 +2261,11 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   missing deposit fail-closes with `Unavailable` (never invents an empty
   stream). Authenticated Host-reopen `signal_process` for durable init/exec
   identities is retained: PID + start-time re-auth, then pidfd delivery,
-  without restoring a fake `PreparedProcess`. `wait_process` and new `exec`
-  stay Unavailable (no wait ownership / full session restore yet — never
-  invent exit status). The real-host Box live-session gate and default create
-  Host-bound policy remain open.
+  without restoring a fake `PreparedProcess`. Live `wait_process` for durable
+  exec uses supervisor `MSG_WAIT` when a helper identity is recorded (v6); v5
+  exec records without helper fail closed. New `exec` still requires full
+  `PreparedProcess` restore and stays Unavailable. The real-host Box live-session
+  gate and default create Host-bound policy remain open.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,
