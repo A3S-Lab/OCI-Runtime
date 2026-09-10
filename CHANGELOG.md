@@ -33,7 +33,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   `wait_launcher` owning the mutex so timeout cleanup could not kill/deposit
   and create stayed stuck in `prepared` with the launcher blocked on its
   control socket. Ready observation now polls `/proc/<pid>` and only then
-  performs the authentic `wait_launcher` once the launcher is gone.
+  performs the authentic `wait_launcher` once the launcher is gone. The same
+  ready-race fix applies to supervised `exec` helpers.
 - Supervised `spawn_launcher` no longer asks the session supervisor to open the
   Host-private `/proc/self/fd/<n>` pathname for the pinned agent executable
   (that path is ENOENT in the supervisor FD table). When Host passes a
