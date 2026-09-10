@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT;
 use a3s_oci_sdk::{
-    ContainerTarget, Error, ErrorCode, ProcessId, ProcessRecord, ProcessTarget, Result,
-    CONTROL_CGROUP_NAME, WORKLOAD_CGROUP_NAME,
+    ContainerStats, ContainerTarget, Error, ErrorCode, ProcessId, ProcessRecord, ProcessTarget,
+    Result, CONTROL_CGROUP_NAME, WORKLOAD_CGROUP_NAME,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -18,7 +18,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::{sleep, Instant};
 
-use super::cgroup::CgroupManager;
+use super::cgroup::{leaf_is_frozen, set_leaf_frozen, stats_from_leaf, CgroupManager};
 use super::device::{cleanup_device_target_manifest, load_device_target_manifest};
 use super::intel_rdt::{is_resctrl_mountpoint, IntelRdtRecovery};
 use super::pid_supervisor::terminate_pid;
@@ -410,8 +410,12 @@ impl SessionSupervisorReattachCache {
 /// [`Self::wait_process`] for init uses the supervised launcher wait path; exec
 /// waits require a recorded helper identity and use authentic supervisor
 /// `MSG_WAIT`. v5 exec records without helper fail closed with
-/// [`ErrorCode::Unavailable`]. New `exec` still requires full
-/// `PreparedProcess` restore and remains Unavailable.
+/// [`ErrorCode::Unavailable`]. Authentic [`Self::pause`] / [`Self::resume`] /
+/// [`Self::stats`] use the durable recovery cgroup leaf (kernel freezer and
+/// cgroup-v2 counters) without restoring a fake [`PreparedProcess`]. Missing
+/// cgroup evidence fail-closes with [`ErrorCode::Unavailable`]. New `exec`
+/// still requires namespace/rootfs/`PreparedProcess` restore and remains
+/// Unavailable.
 #[derive(Debug)]
 pub struct LinuxLiveSupervisedSession {
     target: ContainerTarget,
@@ -637,6 +641,65 @@ impl LinuxLiveSupervisedSession {
         })?;
         supervisor.close_deposited_stdin(self.launcher_pid())?;
         Ok(())
+    }
+
+    /// Authentic cgroup freezer observation for Host reopen state.
+    ///
+    /// Reads kernel `cgroup.events` on the durable recovery leaf. Missing cgroup
+    /// evidence fail-closes with [`ErrorCode::Unavailable`] instead of inventing
+    /// an unpaused observation.
+    pub fn is_paused(&self) -> Result<bool> {
+        leaf_is_frozen(self.recovery_cgroup_leaf()?)
+    }
+
+    /// Freeze the durable recovery cgroup leaf (OCI pause).
+    ///
+    /// Requires a live init identity and a recorded cgroup leaf. Writes
+    /// `cgroup.freeze` and waits for kernel confirmation — the same evidence
+    /// path as [`PreparedProcess`] pause, without restoring process-session
+    /// state.
+    pub async fn pause(&self) -> Result<()> {
+        if !self.init_is_live()? {
+            return Err(recovery_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "container {} generation {:?} cannot pause without a live init identity",
+                    self.target.id, self.target.generation
+                ),
+            ));
+        }
+        set_leaf_frozen(self.recovery_cgroup_leaf()?, true).await
+    }
+
+    /// Thaw the durable recovery cgroup leaf (OCI resume).
+    pub async fn resume(&self) -> Result<()> {
+        if !self.init_is_live()? {
+            return Err(recovery_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "container {} generation {:?} cannot resume without a live init identity",
+                    self.target.id, self.target.generation
+                ),
+            ));
+        }
+        set_leaf_frozen(self.recovery_cgroup_leaf()?, false).await
+    }
+
+    /// Read normalized cgroup-v2 stats from the durable recovery leaf.
+    pub async fn stats(&self) -> Result<ContainerStats> {
+        stats_from_leaf(self.recovery_cgroup_leaf()?, self.target.clone()).await
+    }
+
+    fn recovery_cgroup_leaf(&self) -> Result<&Path> {
+        self.record.cgroup.as_ref().map(|cgroup| cgroup.leaf.as_path()).ok_or_else(|| {
+            recovery_error(
+                ErrorCode::Unavailable,
+                format!(
+                    "container {} generation {:?} has no durable cgroup leaf after Host reopen; pause/resume/stats require recorded cgroup evidence",
+                    self.target.id, self.target.generation
+                ),
+            )
+        })
     }
 
     /// Block until a durable process exits and return its raw wait status.
@@ -3699,6 +3762,419 @@ mod tests {
         delete_stale_generation(&tombstone)
             .await
             .expect("stopped-only delete after live wait-process");
+        terminate_pid(supervisor_pid);
+        let _ = wait_for_child(supervisor_pid);
+    }
+
+    #[tokio::test]
+    async fn live_session_pauses_resumes_and_reads_stats_from_recovery_cgroup_leaf() {
+        use std::io::{Read, Write};
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::net::UnixStream;
+        use std::path::Path;
+
+        use super::super::pid_supervisor::{terminate_pid, wait_for_child};
+        use super::super::session_supervisor::HostSessionSupervisor;
+
+        let cgroup_root = Path::new("/sys/fs/cgroup");
+        if !cgroup_root.join("cgroup.controllers").is_file() {
+            eprintln!("skipping: host lacks cgroup v2 controllers for live pause/stats");
+            return;
+        }
+        let manager_root = cgroup_root.join(format!(
+            "a3s-oci-{}-live-cgroup-controls",
+            std::process::id()
+        ));
+        if let Err(error) = std::fs::create_dir(&manager_root) {
+            eprintln!(
+                "skipping: cannot create test cgroup manager {}: {error}",
+                manager_root.display()
+            );
+            return;
+        }
+        for controller in ["+cpu", "+memory", "+pids"] {
+            if let Err(error) =
+                std::fs::write(manager_root.join("cgroup.subtree_control"), controller)
+            {
+                let _ = std::fs::remove_dir(&manager_root);
+                eprintln!(
+                    "skipping: cannot enable {controller} on {}: {error}",
+                    manager_root.display()
+                );
+                return;
+            }
+        }
+        let leaf = manager_root.join("workload");
+        if let Err(error) = std::fs::create_dir(&leaf) {
+            let _ = std::fs::remove_dir(&manager_root);
+            eprintln!(
+                "skipping: cannot create test cgroup leaf {}: {error}",
+                leaf.display()
+            );
+            return;
+        }
+        let required = [
+            leaf.join("cgroup.freeze"),
+            leaf.join("cgroup.events"),
+            leaf.join("cpu.stat"),
+            leaf.join("memory.current"),
+            leaf.join("memory.max"),
+            leaf.join("memory.events"),
+            leaf.join("pids.current"),
+            leaf.join("pids.max"),
+            leaf.join("pids.events"),
+        ];
+        if let Some(missing) = required.iter().find(|path| !path.exists()) {
+            let _ = std::fs::remove_dir(&leaf);
+            let _ = std::fs::remove_dir(&manager_root);
+            eprintln!(
+                "skipping: test cgroup leaf lacks required control {}",
+                missing.display()
+            );
+            return;
+        }
+
+        let temporary = tempfile::tempdir().expect("temporary recovery parent");
+        let parent = temporary.path().join("executor");
+        std::fs::create_dir(&parent).expect("executor parent");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
+            .expect("protect executor parent");
+        let current_root = parent.join("current");
+        std::fs::create_dir(&current_root).expect("current root");
+        std::fs::set_permissions(&current_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect current root");
+
+        let (mut parent_ready, mut child_ready) =
+            UnixStream::pair().expect("cgroup controls ready channel");
+        // SAFETY: parent reaps the fake Host; child owns the production supervisor.
+        let host_pid = unsafe { libc::fork() };
+        assert!(host_pid >= 0, "fork fake host for cgroup controls reopen");
+        if host_pid == 0 {
+            drop(parent_ready);
+            let mut supervisor = match HostSessionSupervisor::start_via_fork() {
+                Ok(supervisor) => supervisor,
+                Err(_) => unsafe { libc::_exit(181) },
+            };
+            let launcher_pid = match supervisor.spawn_launcher(
+                Path::new("/bin/sleep"),
+                &["30".into()],
+                None,
+                None,
+                None,
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(182) },
+            };
+            if std::fs::write(leaf.join("cgroup.procs"), format!("{launcher_pid}\n")).is_err() {
+                unsafe { libc::_exit(183) };
+            }
+            let identity = supervisor.identity().clone();
+            let mut payload = Vec::with_capacity(16);
+            payload.extend_from_slice(&identity.pid().to_be_bytes());
+            payload.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+            payload.extend_from_slice(&launcher_pid.to_be_bytes());
+            if child_ready.write_all(&payload).is_err() {
+                unsafe { libc::_exit(184) }
+            }
+            std::mem::forget(supervisor);
+            loop {
+                unsafe { libc::pause() };
+            }
+        }
+        drop(child_ready);
+        let mut payload = [0_u8; 16];
+        parent_ready
+            .read_exact(&mut payload)
+            .expect("read cgroup-controls supervisor evidence");
+        let supervisor_pid = i32::from_be_bytes(payload[0..4].try_into().expect("pid bytes"));
+        let supervisor_start = u64::from_be_bytes(payload[4..12].try_into().expect("start bytes"));
+        let launcher_pid = i32::from_be_bytes(payload[12..16].try_into().expect("launcher bytes"));
+
+        let owner = ProcessIdentity {
+            pid: 2_100_800,
+            start_time_ticks: 0x818,
+        };
+        let stale_root = parent.join(runtime_root_name(owner));
+        std::fs::create_dir(&stale_root).expect("stale root");
+        std::fs::set_permissions(&stale_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect stale root");
+        write_atomic_record(
+            &stale_root.join(OWNER_RECORD_NAME),
+            &ExecutorOwnerRecord {
+                schema_version: OWNER_SCHEMA_VERSION.to_string(),
+                owner,
+            },
+        )
+        .expect("owner record");
+        let slot = stale_root.join("c-0000000000000001");
+        std::fs::create_dir(&slot).expect("container slot");
+        std::fs::set_permissions(&slot, std::fs::Permissions::from_mode(0o700))
+            .expect("protect container slot");
+        let config = br#"{"ociVersion":"1.3.0"}"#;
+        let digest = config_digest_for(config);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        options
+            .open(slot.join(CONFIG_SNAPSHOT_NAME))
+            .and_then(|mut file| file.write_all(config))
+            .expect("configuration snapshot");
+        let target = ContainerTarget::exact(
+            a3s_oci_sdk::ContainerId::new("live-cgroup-controls").expect("container ID"),
+            a3s_oci_sdk::Generation(1),
+        );
+        let init = ProcessIdentity {
+            pid: launcher_pid,
+            start_time_ticks: process_observation(launcher_pid)
+                .expect("observe launcher")
+                .expect("launcher live")
+                .start_time_ticks,
+        };
+        write_atomic_record(
+            &slot.join(CONTAINER_RECORD_NAME),
+            &ContainerRecoveryRecord {
+                schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
+                target: target.clone(),
+                config_digest: digest.clone(),
+                owner,
+                launcher: init,
+                init,
+                session_supervisor: Some(ProcessIdentity {
+                    pid: supervisor_pid,
+                    start_time_ticks: supervisor_start,
+                }),
+                execs: Vec::new(),
+                cgroup: Some(RecoveryCgroupRecord {
+                    authority_root: cgroup_root.to_path_buf(),
+                    manager_root: manager_root.clone(),
+                    leaf: leaf.clone(),
+                    created: vec![leaf.clone()],
+                }),
+                intel_rdt: None,
+            },
+        )
+        .expect("container recovery record");
+
+        terminate_pid(host_pid);
+        let _ = wait_for_child(host_pid);
+
+        let supervisors = SessionSupervisorReattachCache::default();
+        let recovery = recover_stale_generation(
+            &parent,
+            &current_root,
+            &target,
+            &digest,
+            Some(launcher_pid),
+            &supervisors,
+        )
+        .await
+        .expect("live supervisor must reattach for cgroup controls")
+        .expect("recovery match");
+        let StaleGenerationRecovery::Live(live) = recovery else {
+            panic!("live session supervisor must recover as Live");
+        };
+
+        assert!(
+            !live.is_paused().expect("unpaused freezer observation"),
+            "fresh recovery leaf must start unfrozen"
+        );
+        live.pause()
+            .await
+            .expect("authentic pause must freeze the recovery cgroup leaf");
+        assert!(
+            live.is_paused().expect("paused freezer observation"),
+            "pause must observe kernel frozen=1"
+        );
+        let frozen_stats = live
+            .stats()
+            .await
+            .expect("stats must read authentic cgroup counters");
+        assert_eq!(frozen_stats.target, target);
+        assert!(
+            frozen_stats.process_count >= 1,
+            "frozen leaf must still report the supervised launcher membership"
+        );
+
+        live.resume()
+            .await
+            .expect("authentic resume must thaw the recovery cgroup leaf");
+        assert!(
+            !live.is_paused().expect("resumed freezer observation"),
+            "resume must observe kernel frozen=0"
+        );
+
+        live.kill_launcher().expect("kill supervised launcher");
+        let _ = live.wait_launcher().expect("wait supervised launcher");
+        let tombstone = live
+            .into_tombstone()
+            .expect("dead supervised children can become a stopped tombstone");
+        delete_stale_generation(&tombstone)
+            .await
+            .expect("stopped-only delete after live cgroup controls");
+        terminate_pid(supervisor_pid);
+        let _ = wait_for_child(supervisor_pid);
+        let _ = std::fs::remove_dir(&leaf);
+        let _ = std::fs::remove_dir(&manager_root);
+    }
+
+    #[tokio::test]
+    async fn live_session_fail_closes_pause_without_recovery_cgroup_leaf() {
+        use std::io::{Read, Write};
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::net::UnixStream;
+        use std::path::Path;
+
+        use super::super::pid_supervisor::{terminate_pid, wait_for_child};
+        use super::super::session_supervisor::HostSessionSupervisor;
+
+        let temporary = tempfile::tempdir().expect("temporary recovery parent");
+        let parent = temporary.path().join("executor");
+        std::fs::create_dir(&parent).expect("executor parent");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
+            .expect("protect executor parent");
+        let current_root = parent.join("current");
+        std::fs::create_dir(&current_root).expect("current root");
+        std::fs::set_permissions(&current_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect current root");
+
+        let (mut parent_ready, mut child_ready) =
+            UnixStream::pair().expect("missing-cgroup ready channel");
+        let host_pid = unsafe { libc::fork() };
+        assert!(host_pid >= 0, "fork fake host for missing-cgroup reopen");
+        if host_pid == 0 {
+            drop(parent_ready);
+            let mut supervisor = match HostSessionSupervisor::start_via_fork() {
+                Ok(supervisor) => supervisor,
+                Err(_) => unsafe { libc::_exit(191) },
+            };
+            let launcher_pid = match supervisor.spawn_launcher(
+                Path::new("/bin/sleep"),
+                &["30".into()],
+                None,
+                None,
+                None,
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(192) },
+            };
+            let identity = supervisor.identity().clone();
+            let mut payload = Vec::with_capacity(16);
+            payload.extend_from_slice(&identity.pid().to_be_bytes());
+            payload.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+            payload.extend_from_slice(&launcher_pid.to_be_bytes());
+            if child_ready.write_all(&payload).is_err() {
+                unsafe { libc::_exit(193) }
+            }
+            std::mem::forget(supervisor);
+            loop {
+                unsafe { libc::pause() };
+            }
+        }
+        drop(child_ready);
+        let mut payload = [0_u8; 16];
+        parent_ready
+            .read_exact(&mut payload)
+            .expect("read missing-cgroup supervisor evidence");
+        let supervisor_pid = i32::from_be_bytes(payload[0..4].try_into().expect("pid bytes"));
+        let supervisor_start = u64::from_be_bytes(payload[4..12].try_into().expect("start bytes"));
+        let launcher_pid = i32::from_be_bytes(payload[12..16].try_into().expect("launcher bytes"));
+
+        let owner = ProcessIdentity {
+            pid: 2_100_801,
+            start_time_ticks: 0x819,
+        };
+        let stale_root = parent.join(runtime_root_name(owner));
+        std::fs::create_dir(&stale_root).expect("stale root");
+        std::fs::set_permissions(&stale_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect stale root");
+        write_atomic_record(
+            &stale_root.join(OWNER_RECORD_NAME),
+            &ExecutorOwnerRecord {
+                schema_version: OWNER_SCHEMA_VERSION.to_string(),
+                owner,
+            },
+        )
+        .expect("owner record");
+        let slot = stale_root.join("c-0000000000000001");
+        std::fs::create_dir(&slot).expect("container slot");
+        std::fs::set_permissions(&slot, std::fs::Permissions::from_mode(0o700))
+            .expect("protect container slot");
+        let config = br#"{"ociVersion":"1.3.0"}"#;
+        let digest = config_digest_for(config);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        options
+            .open(slot.join(CONFIG_SNAPSHOT_NAME))
+            .and_then(|mut file| file.write_all(config))
+            .expect("configuration snapshot");
+        let target = ContainerTarget::exact(
+            a3s_oci_sdk::ContainerId::new("live-missing-cgroup").expect("container ID"),
+            a3s_oci_sdk::Generation(1),
+        );
+        let init = ProcessIdentity {
+            pid: launcher_pid,
+            start_time_ticks: process_observation(launcher_pid)
+                .expect("observe launcher")
+                .expect("launcher live")
+                .start_time_ticks,
+        };
+        write_atomic_record(
+            &slot.join(CONTAINER_RECORD_NAME),
+            &ContainerRecoveryRecord {
+                schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
+                target: target.clone(),
+                config_digest: digest.clone(),
+                owner,
+                launcher: init,
+                init,
+                session_supervisor: Some(ProcessIdentity {
+                    pid: supervisor_pid,
+                    start_time_ticks: supervisor_start,
+                }),
+                execs: Vec::new(),
+                cgroup: None,
+                intel_rdt: None,
+            },
+        )
+        .expect("container recovery record");
+
+        terminate_pid(host_pid);
+        let _ = wait_for_child(host_pid);
+
+        let supervisors = SessionSupervisorReattachCache::default();
+        let recovery = recover_stale_generation(
+            &parent,
+            &current_root,
+            &target,
+            &digest,
+            Some(launcher_pid),
+            &supervisors,
+        )
+        .await
+        .expect("live supervisor must reattach without inventing cgroup evidence")
+        .expect("recovery match");
+        let StaleGenerationRecovery::Live(live) = recovery else {
+            panic!("live session supervisor must recover as Live");
+        };
+
+        let pause_error = live
+            .pause()
+            .await
+            .expect_err("pause without recovery cgroup must fail closed");
+        assert_eq!(pause_error.code, ErrorCode::Unavailable);
+        let stats_error = live
+            .stats()
+            .await
+            .expect_err("stats without recovery cgroup must fail closed");
+        assert_eq!(stats_error.code, ErrorCode::Unavailable);
+
+        live.kill_launcher().expect("kill supervised launcher");
+        let _ = live.wait_launcher().expect("wait supervised launcher");
+        let tombstone = live
+            .into_tombstone()
+            .expect("dead supervised children can become a stopped tombstone");
+        delete_stale_generation(&tombstone)
+            .await
+            .expect("stopped-only delete after missing-cgroup fail-closed");
         terminate_pid(supervisor_pid);
         let _ = wait_for_child(supervisor_pid);
     }

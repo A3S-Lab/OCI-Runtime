@@ -32,6 +32,7 @@ use plan::{
     validate_pids_limit, validate_supported_resource_fields, ControlHeadroom,
 };
 use setting::{CgroupSetting, CgroupSettingReadback};
+pub(super) use stats::stats_from_leaf;
 
 const CGROUP_EVENTS: &str = "cgroup.events";
 const CGROUP_FREEZE: &str = "cgroup.freeze";
@@ -640,54 +641,82 @@ impl CgroupHandle {
     }
 
     pub(super) async fn set_frozen(&self, frozen: bool) -> Result<()> {
-        let freeze_path = self.leaf.join(CGROUP_FREEZE);
-        tokio::fs::write(&freeze_path, if frozen { b"1" } else { b"0" })
-            .await
-            .map_err(|error| {
-                cgroup_error(
-                    if error.kind() == std_io::ErrorKind::NotFound {
-                        ErrorCode::Unsupported
-                    } else {
-                        ErrorCode::PermissionDenied
-                    },
-                    format!(
-                        "failed to {} container cgroup {}: {error}",
-                        if frozen { "freeze" } else { "thaw" },
-                        self.leaf.display()
-                    ),
-                )
-            })?;
+        set_leaf_frozen(&self.leaf, frozen).await
+    }
+}
 
-        let deadline = tokio::time::Instant::now() + FREEZE_TIMEOUT;
-        loop {
-            let events_path = self.leaf.join(CGROUP_EVENTS);
-            let events = tokio::fs::read_to_string(&events_path)
-                .await
-                .map_err(|error| {
-                    cgroup_error(
-                        ErrorCode::FailedPrecondition,
-                        format!(
-                            "failed to verify container freezer state at {}: {error}",
-                            events_path.display()
-                        ),
-                    )
-                })?;
-            if cgroup_event_value(&events, "frozen") == Some(u64::from(frozen)) {
-                return Ok(());
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return Err(cgroup_error(
-                    ErrorCode::DeadlineExceeded,
-                    format!(
-                        "timed out waiting for container cgroup {} to become {}",
-                        self.leaf.display(),
-                        if frozen { "frozen" } else { "thawed" }
-                    ),
-                )
-                .retryable(true));
-            }
-            tokio::time::sleep(FREEZE_POLL_INTERVAL).await;
+/// Freeze or thaw one durable cgroup leaf and wait for kernel confirmation.
+///
+/// Used by live Host-reopen pause/resume when recovery retained the authentic
+/// leaf path without a full [`CgroupHandle`].
+pub(super) async fn set_leaf_frozen(leaf: &Path, frozen: bool) -> Result<()> {
+    let freeze_path = leaf.join(CGROUP_FREEZE);
+    tokio::fs::write(&freeze_path, if frozen { b"1" } else { b"0" })
+        .await
+        .map_err(|error| {
+            cgroup_error(
+                if error.kind() == std_io::ErrorKind::NotFound {
+                    ErrorCode::Unsupported
+                } else {
+                    ErrorCode::PermissionDenied
+                },
+                format!(
+                    "failed to {} container cgroup {}: {error}",
+                    if frozen { "freeze" } else { "thaw" },
+                    leaf.display()
+                ),
+            )
+        })?;
+
+    let deadline = tokio::time::Instant::now() + FREEZE_TIMEOUT;
+    loop {
+        if leaf_is_frozen(leaf)? == frozen {
+            return Ok(());
         }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(cgroup_error(
+                ErrorCode::DeadlineExceeded,
+                format!(
+                    "timed out waiting for container cgroup {} to become {}",
+                    leaf.display(),
+                    if frozen { "frozen" } else { "thawed" }
+                ),
+            )
+            .retryable(true));
+        }
+        tokio::time::sleep(FREEZE_POLL_INTERVAL).await;
+    }
+}
+
+/// Read the kernel freezer observation for one durable cgroup leaf.
+pub(super) fn leaf_is_frozen(leaf: &Path) -> Result<bool> {
+    let events_path = leaf.join(CGROUP_EVENTS);
+    let events = std::fs::read_to_string(&events_path).map_err(|error| {
+        cgroup_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to verify container freezer state at {}: {error}",
+                events_path.display()
+            ),
+        )
+    })?;
+    match cgroup_event_value(&events, "frozen") {
+        Some(1) => Ok(true),
+        Some(0) => Ok(false),
+        Some(other) => Err(cgroup_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "container cgroup {} reported unsupported frozen value {other}",
+                leaf.display()
+            ),
+        )),
+        None => Err(cgroup_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "container cgroup {} is missing a frozen event observation",
+                leaf.display()
+            ),
+        )),
     }
 }
 

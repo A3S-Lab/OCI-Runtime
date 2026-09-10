@@ -696,14 +696,45 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn pause(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
-        self.require_live(&request.target, "native-linux-pause")
-            .await?;
+        if let Some(live) = self.live_for(&request.target, "native-linux-pause").await? {
+            live.pause()
+                .await
+                .map_err(|error| error.for_operation("native-linux-pause"))?;
+            return observe_live_supervised_driver_state(&live);
+        }
+        if self
+            .recovered_for(&request.target, "native-linux-pause")
+            .await?
+            .is_some()
+        {
+            return Err(recovered_stopped_error(
+                &request.target,
+                "native-linux-pause",
+            ));
+        }
         self.client.pause(request).await
     }
 
     async fn resume(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
-        self.require_live(&request.target, "native-linux-resume")
-            .await?;
+        if let Some(live) = self
+            .live_for(&request.target, "native-linux-resume")
+            .await?
+        {
+            live.resume()
+                .await
+                .map_err(|error| error.for_operation("native-linux-resume"))?;
+            return observe_live_supervised_driver_state(&live);
+        }
+        if self
+            .recovered_for(&request.target, "native-linux-resume")
+            .await?
+            .is_some()
+        {
+            return Err(recovered_stopped_error(
+                &request.target,
+                "native-linux-resume",
+            ));
+        }
         self.client.resume(request).await
     }
 
@@ -730,7 +761,19 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn stats(&self, target: ContainerTarget) -> Result<ContainerStats> {
-        self.require_live(&target, "native-linux-stats").await?;
+        if let Some(live) = self.live_for(&target, "native-linux-stats").await? {
+            return live
+                .stats()
+                .await
+                .map_err(|error| error.for_operation("native-linux-stats"));
+        }
+        if self
+            .recovered_for(&target, "native-linux-stats")
+            .await?
+            .is_some()
+        {
+            return Err(recovered_stopped_error(&target, "native-linux-stats"));
+        }
         self.client.stats(target).await
     }
 
@@ -934,12 +977,23 @@ fn observe_live_supervised_driver_state_for_status(
     use a3s_oci_sdk::oci_spec::runtime::ContainerState;
     // Prefer authenticated /proc liveness. Never invent exit status here.
     if live.init_is_live()? {
-        return match durable_status {
+        let state = match durable_status {
             ContainerState::Created | ContainerState::Creating => {
-                DriverState::created(live.init_pid())
+                DriverState::created(live.init_pid())?
             }
-            _ => DriverState::running(live.init_pid()),
+            _ => DriverState::running(live.init_pid())?,
         };
+        // Authentic freezer observation from the durable cgroup leaf when
+        // present. Missing cgroup evidence keeps paused=false rather than
+        // inventing a frozen state (pause itself fail-closes Unavailable).
+        let paused = match live.is_paused() {
+            Ok(paused) => paused,
+            Err(error) if error.code == ErrorCode::Unavailable => false,
+            Err(error) => {
+                return Err(error.for_operation("native-linux-state"));
+            }
+        };
+        return state.with_paused(paused);
     }
     if live.launcher_is_live()? {
         return DriverState::created(live.launcher_pid());

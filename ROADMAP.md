@@ -2263,9 +2263,13 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   identities is retained: PID + start-time re-auth, then pidfd delivery,
   without restoring a fake `PreparedProcess`. Live `wait_process` for durable
   exec uses supervisor `MSG_WAIT` when a helper identity is recorded (v6); v5
-  exec records without helper fail closed. New `exec` still requires full
-  `PreparedProcess` restore and stays Unavailable. The real-host Box live-session
-  gate and default create Host-bound policy remain open.
+  exec records without helper fail closed. Authentic Host-reopen
+  `pause` / `resume` / `stats` use the durable recovery cgroup leaf (kernel
+  freezer + cgroup-v2 counters) without restoring `PreparedProcess`; missing
+  cgroup evidence fail-closes with `Unavailable`. New `exec` still requires
+  namespace/rootfs/`PreparedProcess` restore and stays Unavailable. The
+  real-host Box live-session gate and default create Host-bound policy remain
+  open.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,

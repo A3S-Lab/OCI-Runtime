@@ -1114,7 +1114,8 @@ impl LinuxExecutor {
     /// durable execs), and authenticated `signal_process` (pidfd after PID +
     /// start-time re-auth) can proceed without inventing exit evidence.
     /// Live `wait_process` uses supervisor `MSG_WAIT` when a helper identity is
-    /// recorded (v6); v5 exec records without helper fail closed. New `exec`
+    /// recorded (v6); v5 exec records without helper fail closed. Authentic
+    /// pause/resume/stats use the durable recovery cgroup leaf. New `exec`
     /// still requires full `PreparedProcess` restore and remains Unavailable.
     /// Generations that share
     /// one `sessionSupervisor` identity reuse one control connection through
