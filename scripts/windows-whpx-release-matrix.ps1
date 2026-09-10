@@ -97,7 +97,9 @@ function Resolve-FreshHostAttestation {
         if ($hasPath) {
             throw 'FreshHostAttestation is only valid with -HostClass fresh.'
         }
-        return $null
+        # Explicit empty result: `return $null` can still surface prior pipeline
+        # output under StrictMode callers; emit nothing and stop.
+        return
     }
 
     if (-not $hasPath) {
@@ -213,9 +215,14 @@ if ($systemImageSha256 -ne $systemImage.image.sha256 -or
 }
 $systemImageManifestSha256 = Get-Sha256 -Path $systemImageManifest
 $rootfsSha256 = Get-Sha256 -Path $rootfsArchive
-$freshHostAttestation = Resolve-FreshHostAttestation `
-    -HostClass $HostClass `
-    -AttestationPath $FreshHostAttestation
+$freshHostAttestation = $null
+$hasFreshHostAttestation = $false
+if ($HostClass -eq 'fresh') {
+    $freshHostAttestation = Resolve-FreshHostAttestation `
+        -HostClass $HostClass `
+        -AttestationPath $FreshHostAttestation
+    $hasFreshHostAttestation = $true
+}
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $runId = '{0}-{1}' -f (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'), $PID
@@ -226,8 +233,12 @@ if (Test-Path -LiteralPath $outputRoot) {
     throw "Refusing to reuse an existing WHPX release-matrix directory: $outputRoot"
 }
 New-Item -ItemType Directory -Path (Join-Path $outputRoot 'gates') | Out-Null
-if ($null -ne $freshHostAttestation) {
-    Copy-Item -LiteralPath $freshHostAttestation.path `
+if ($hasFreshHostAttestation) {
+    $attestationPath = [string](Get-OptionalProperty -Object $freshHostAttestation -Name 'path')
+    if ([string]::IsNullOrWhiteSpace($attestationPath)) {
+        throw 'Fresh-host attestation is missing a concrete path.'
+    }
+    Copy-Item -LiteralPath $attestationPath `
         -Destination (Join-Path $outputRoot 'fresh-host-attestation.json') -Force
 }
 
@@ -299,7 +310,7 @@ $summary = [ordered]@{
     schema_version = 'a3s.oci.windows-whpx-release-matrix.v1'
     status = 'available'
     host_class = $HostClass
-    promotes_readiness = ($HostClass -eq 'fresh' -and $null -ne $freshHostAttestation)
+    promotes_readiness = ($HostClass -eq 'fresh' -and $hasFreshHostAttestation)
     fresh_host_attestation = $freshHostAttestation
     started_at_utc = $startedAt.ToString('o')
     completed_at_utc = $completedAt.ToString('o')

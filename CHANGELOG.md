@@ -25,6 +25,25 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Treat incomplete first-owner Exec/SignalProcess reopen markers as optional
+  absence after Guest `guest-after-response-write` executor cleanup. An empty
+  shell redirect artifact was previously polled until the 15s timeout and
+  blocked the WHPX 180-path operation-reopen gate on source-matched
+  `b9d78ff` assets. Mismatched finished bytes still fail closed. Also harden
+  `windows-whpx-release-matrix.ps1` so `host_class=existing` never probes
+  fresh-host attestation paths under StrictMode.
+- Retained existing-host Windows WHPX release-matrix evidence (6/6 gates,
+  `promotes_readiness=false`) against a source-matched Alpine system image
+  (manifest `7e68a7dd…`, ext4 `e3f6dfa0…`, agent `23336c3a…`) in 2871.043s.
+  Matrix summary SHA-256
+  `4a89dc6b5ded75914ddacf27e9b1d56e3db7b20633a6ea1586bc404268235095`.
+  Gate digests: handle-reclamation `4d67f0f0…`, driver-smoke `50bc1887…`,
+  recovery-smoke `c6152df9…`, transport-fault-cleanup `3f5016c1…`, soak
+  `f6e621f1…`, operation-reopen `c0b0c3f9…`. Observation-only; fresh-host
+  promotion remains open.
+
 ### Changed
 
 - Close ROADMAP R6 process-session recovery and opt-in KVM Live Host reopen

@@ -151,7 +151,20 @@ pub(super) async fn verify_first_exec_marker(
             stage.as_str()
         ))
     } else if marker_exists {
-        wait_for_exact_marker(marker, expected, "first-owner KVM Exec").await
+        // Complete nonce-bound marker bytes are optional first-VM evidence.
+        // Guest-after-response-write executor cleanup can leave an empty or
+        // truncated redirect artifact; treat incompleteness as absence while
+        // finished unexpected bytes still fail closed.
+        let contents = tokio::fs::read(marker)
+            .await
+            .map_err(|error| format!("failed to read first-owner KVM Exec marker: {error}"))?;
+        match crate::marker::exact_marker_state(&contents, expected) {
+            crate::marker::ExactMarkerState::Complete
+            | crate::marker::ExactMarkerState::InProgress => Ok(()),
+            crate::marker::ExactMarkerState::Mismatch => {
+                Err("first-owner KVM Exec produced unexpected marker contents".to_string())
+            }
+        }
     } else {
         Ok(())
     }
