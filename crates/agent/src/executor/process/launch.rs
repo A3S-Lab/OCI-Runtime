@@ -93,6 +93,43 @@ pub(in crate::executor) struct SupervisedChildStdio {
     pub(in crate::executor) stderr: Option<OwnedFd>,
 }
 
+/// Remaining supervised-create Unsupported gates.
+///
+/// Rootless device mounts are deliberately absent: Host still sends prepared
+/// mount descriptors over the authenticated create-control socket after the
+/// supervisor-parented launcher connects (`send_device_mounts` / SCM_RIGHTS).
+/// Empty and nonempty frames share that path; spawn_launcher does not carry them.
+pub(super) fn supervised_create_unsupported_reason(
+    pinned_bundle: bool,
+    inherited_workload_descriptors: bool,
+    io: &ProcessIo,
+) -> Option<&'static str> {
+    if pinned_bundle {
+        return Some(
+            "session-supervisor create does not support descriptor-pinned utility-VM bundles yet",
+        );
+    }
+    if inherited_workload_descriptors {
+        return Some(
+            "session-supervisor create does not support inherited workload descriptors yet",
+        );
+    }
+    if matches!(io.stdin, IoMode::Terminal)
+        || matches!(io.stdout, IoMode::Terminal)
+        || matches!(io.stderr, IoMode::Terminal)
+        || io.terminal_size.is_some()
+    {
+        return Some("session-supervisor create does not support terminal process I/O yet");
+    }
+    if matches!(io.stdin, IoMode::Inherit)
+        || matches!(io.stdout, IoMode::Inherit)
+        || matches!(io.stderr, IoMode::Inherit)
+    {
+        return Some("session-supervisor create does not support inherited process I/O yet");
+    }
+    None
+}
+
 /// Prepare Host/child stdio pipe ends for supervised spawn.
 pub(in crate::executor) fn prepare_supervised_stdio(
     io: &ProcessIo,

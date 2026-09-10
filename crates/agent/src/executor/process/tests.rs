@@ -1,13 +1,17 @@
 use std::io::Write;
+use std::os::fd::OwnedFd;
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr, UnixStream};
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus as ProcessExitStatus;
 
+use a3s_oci_sdk::{IoMode, ProcessIo};
 use tokio::io::AsyncReadExt;
 
+use super::launch::{supervised_create_unsupported_reason, validate_rootless_device_mounts};
 use super::{append_cleanup_error, bind_control_listener, convert_exit_status, process_error};
 use crate::executor::control::READY_BYTE;
+use crate::OCI_LINUX_DEFAULT_DEVICE_NODES;
 
 #[tokio::test(flavor = "current_thread")]
 async fn abstract_control_listener_reports_the_kernel_peer_pid() {
@@ -65,4 +69,48 @@ fn failed_create_cleanup_is_returned_without_hiding_the_primary_rejection() {
     assert!(primary.message.contains("hostile create rejected"));
     assert!(primary.message.contains("cgroup remained populated"));
     assert!(primary.retryable);
+}
+
+#[test]
+fn supervised_create_allows_rootless_device_mounts_and_keeps_other_gates() {
+    let pipe_io = ProcessIo {
+        stdin: IoMode::Pipe,
+        stdout: IoMode::Pipe,
+        stderr: IoMode::Pipe,
+        terminal_size: None,
+    };
+    assert!(
+        supervised_create_unsupported_reason(false, false, &pipe_io).is_none(),
+        "pipe I/O with rootless device mounts must not be gated Unsupported"
+    );
+
+    let terminal_io = ProcessIo {
+        stdin: IoMode::Terminal,
+        stdout: IoMode::Terminal,
+        stderr: IoMode::Terminal,
+        terminal_size: None,
+    };
+    assert!(
+        supervised_create_unsupported_reason(false, false, &terminal_io)
+            .expect("terminal remains unsupported")
+            .contains("terminal")
+    );
+    assert!(
+        supervised_create_unsupported_reason(true, false, &pipe_io)
+            .expect("pinned bundle remains unsupported")
+            .contains("utility-VM")
+    );
+    assert!(
+        supervised_create_unsupported_reason(false, true, &pipe_io)
+            .expect("inherited workload descriptors remain unsupported")
+            .contains("inherited workload")
+    );
+
+    // Empty and nonempty prepared mounts remain subject only to count validation.
+    validate_rootless_device_mounts(&[], false, false).expect("privileged empty mounts");
+    let mounts = (0..OCI_LINUX_DEFAULT_DEVICE_NODES.len())
+        .map(|_| OwnedFd::from(std::fs::File::open("/dev/null").expect("fixture")))
+        .collect::<Vec<_>>();
+    validate_rootless_device_mounts(&mounts, true, true).expect("rootless nonempty mounts");
+    validate_rootless_device_mounts(&[], true, true).expect_err("missing mounts must fail closed");
 }

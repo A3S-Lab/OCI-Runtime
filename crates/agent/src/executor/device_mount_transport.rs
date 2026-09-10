@@ -14,7 +14,7 @@ union DeviceMountControlBuffer {
     bytes: [u8; DEVICE_MOUNT_CONTROL_BYTES],
 }
 
-pub(super) fn send_descriptor_frame(
+pub(in crate::executor) fn send_descriptor_frame(
     socket: RawFd,
     marker: u8,
     descriptors: &[RawFd],

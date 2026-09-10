@@ -1929,8 +1929,13 @@ authenticated supervisor identity into the recovery record (v6; v5 exec records
 normalize without helper). Default create
 (no env) keeps Host-bound PDEATHSIG and omits `sessionSupervisor` so existing
 stopped-only recovery gates stay green. Supervised create currently rejects
-terminal/inherit I/O, pinned utility-VM bundles, rootless device mounts, and
-inherited Box control descriptors.
+terminal/inherit I/O, pinned utility-VM bundles, and inherited Box control
+descriptors. Rootless device mounts are allowed on supervised create: after the
+supervisor-parented launcher connects to the Host create-control socket, Host
+authenticates the peer PID and sends prepared mount descriptors via SCM_RIGHTS
+(`send_device_mounts`) — the same Host→init control path as default create.
+Empty and nonempty frames share that path; mounts do not ride `spawn_launcher`
+FD lists.
 
 When the original Host control socketpair closes (owner death), the supervisor
 does **not** reap waitable children and does **not** start a replacement

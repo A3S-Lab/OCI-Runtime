@@ -2827,4 +2827,97 @@ mod tests {
             .expect_err("stale start-time must not authenticate for reattach");
         assert_eq!(error.code, ErrorCode::PermissionDenied);
     }
+
+    #[test]
+    fn host_sends_rootless_device_mounts_to_supervisor_parented_launcher() {
+        use std::os::fd::AsRawFd;
+        use std::process::Command as StdCommand;
+
+        // Prefer a tiny Python receiver so the launcher is a real supervisor
+        // child. Skip when python3 is absent (unit hosts without it).
+        if StdCommand::new("python3")
+            .arg("-c")
+            .arg("import socket")
+            .status()
+            .map(|status| !status.success())
+            .unwrap_or(true)
+        {
+            eprintln!("skipping: python3 unavailable for supervised device-mount receiver");
+            return;
+        }
+
+        const CONTROL_TARGET_FD: i32 = 200;
+        const DEVICE_MOUNTS_BYTE: u8 = 0xD1;
+        let expected = crate::OCI_LINUX_DEFAULT_DEVICE_NODES.len();
+        let script = format!(
+            r#"
+import array, socket, sys
+MARKER = {marker}
+EXPECTED = {expected}
+fd = {fd}
+sock = socket.socket(fileno=fd)
+msg, ancdata, flags, _addr = sock.recvmsg(1, socket.CMSG_SPACE(max(EXPECTED, 1) * 4))
+if not msg or msg[0] != MARKER:
+    sys.exit(11)
+received = []
+for level, typ, data in ancdata:
+    if level != socket.SOL_SOCKET or typ != socket.SCM_RIGHTS:
+        sys.exit(12)
+    fds = array.array("i")
+    fds.frombytes(data[: len(data) - (len(data) % fds.itemsize)])
+    received.extend(fds)
+sys.exit(0 if len(received) == EXPECTED else 14)
+"#,
+            marker = DEVICE_MOUNTS_BYTE,
+            expected = expected,
+            fd = CONTROL_TARGET_FD,
+        );
+        let directory = tempfile::tempdir().expect("receiver script directory");
+        let script_path = directory.path().join("receive_device_mounts.py");
+        std::fs::write(&script_path, script).expect("write receiver script");
+
+        let mut supervisor = match HostSessionSupervisor::start_via_fork() {
+            Ok(supervisor) => supervisor,
+            Err(error) => panic!("start supervisor: {error}"),
+        };
+        let (host_control, child_control) =
+            UnixStream::pair().expect("Host↔launcher device-mount control");
+        let launcher_pid = supervisor
+            .spawn_launcher_with_inherited(
+                Path::new("python3"),
+                &[script_path.as_os_str().to_os_string()],
+                None,
+                None,
+                None,
+                &[(child_control.as_raw_fd(), CONTROL_TARGET_FD)],
+            )
+            .expect("spawn supervisor-parented receiver");
+        drop(child_control);
+
+        let mounts = (0..expected)
+            .map(|_| OwnedFd::from(std::fs::File::open("/dev/null").expect("device fixture")))
+            .collect::<Vec<_>>();
+        let descriptors = mounts
+            .iter()
+            .map(AsRawFd::as_raw_fd)
+            .collect::<Vec<_>>();
+        // Mirror create: Host holds the control socket and sends mounts after
+        // the supervisor-parented launcher is live — not via spawn FD lists.
+        super::super::device_mount_transport::send_descriptor_frame(
+            host_control.as_raw_fd(),
+            DEVICE_MOUNTS_BYTE,
+            &descriptors,
+        )
+        .expect("send mounts to supervisor-parented launcher");
+        drop(mounts);
+        drop(host_control);
+
+        let status = supervisor
+            .wait_launcher(launcher_pid)
+            .expect("wait authentic receiver exit");
+        assert_eq!(
+            status, 0,
+            "receiver must exit 0 after authentic SCM_RIGHTS receive, not invented status"
+        );
+    }
 }
