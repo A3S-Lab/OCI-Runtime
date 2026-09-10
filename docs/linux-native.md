@@ -1143,10 +1143,50 @@ version 12). Available reports:
 | File reopen | 9/9 | `592cc7f64bed7e8ddf879b563f26dec5eb069a3c3f8573c88dc4a5a5637c59c7` |
 | Filesystem reopen | 9/9 | `36862d1deae603bc734ae449e053bb874fec59554e89ccdc7c1bac1c6241232d` |
 
-Create retained both `host-before-shutdown` and `host-after-shutdown`. This is
-existing-host observation only (`promotes_readiness=false`); it does not claim
-fresh-host promotion, AArch64, B2/default-registration cutover, or a fresh
-180/180 aggregate rerun of every operation-stage script.
+Create retained both `host-before-shutdown` and `host-after-shutdown`. That
+slice was existing-host observation only and did not yet claim a tip-source
+180/180 aggregate.
+
+Later on September 11, 2026, clean tip
+`05a3b2bddff0668703caafc48f38514a139ee81a` (docs merge of the a47b799 slice)
+rebuilt the same Alpine 3.22.5 x86_64 system image (manifest
+`0c7348f4ef9a6b7259c60e598649b2ab914f7337c303e45b9441970184d92d54`, agent
+`23336c3a…`) and reran every operation-stage reopen script on the same class
+of WSL2 `/dev/kvm` host (API version 12). All 20 scripts returned
+`available`. Create retained 11/11 including both Host-shutdown stages; the
+other 19 operations retained 9/9 each (171). Counting Create's nine
+Host/Guest stages with those 171 cases closes the tip-source **180/180**
+operation-stage aggregate. Aggregate summary SHA-256
+`e3c0f48ac002026ddd9ee793a30390e120422a7dfc3f49b5a84938fd0c87396d`
+(`a3s.oci.linux-kvm-operation-stage-aggregate.v1`, `host_class=existing`,
+`promotes_readiness=false`). Per-operation report digests:
+
+| Gate | Cases | Report SHA-256 |
+| --- | ---: | --- |
+| Create (incl. Host shutdown) | 11/11 | `dc4a2f49fdd29b6a756ff50d7064c42f04419f17d4f2556716857e746bb277f2` |
+| State | 9/9 | `85a8b660ef4cddad5f4b935f5575e0a90a185196b76ae0f9cf18393ab9fec6be` |
+| Start | 9/9 | `f89924ec847fecebf750bacabc857cd43b252737dd03dbab4c602b814a06a3d3` |
+| Kill | 9/9 | `d63f7940ab80c3cbb8ed2184af3901c5f5ef2576dd5a1a4a591e3905df7aa1c1` |
+| Delete | 9/9 | `417217172f5b780ee39c443e86ac26e083ff3f461cad5f418a6cbc86db120f73` |
+| Wait | 9/9 | `86e812744f286960171856173d15f366301b955b59fc53bc0e5da8436f20fd93` |
+| Exec | 9/9 | `330d6915a0cca6bc0d0596ab95ee9c5b14bef30dc2dec8e6be9a9b8ab3abd719` |
+| SignalProcess | 9/9 | `cbf085c7374582ff6b717b6c3b4eb192129a0a50c04dd31c45b67f9ee2a96dfa` |
+| WaitProcess | 9/9 | `f4e6c913762c468a960043cf8fd205da720fca29ff4826634a90c14e12f5d72f` |
+| Pause | 9/9 | `bbf34db9c0bd981c2bcbadd1cdbbdc8773950e3bcd77972ab5aedba99de9d76c` |
+| Resume | 9/9 | `0d9d515875d2da519312dd5ff122b6e658f6cc437daee39125c1939cbe6907ad` |
+| Processes | 9/9 | `8c3cec0f2ed64a3d4d33ad7b848cc4dd95fb8479d92cda8bd798c21baeb94057` |
+| Update | 9/9 | `ca3f763453c53cfcd8e24e9c78bf44cda05ae600b0e7f9688d61573e25d6f3de` |
+| Stats | 9/9 | `e53d3d877f208d611db09d755e0149db9c7a46ae9f7d6e0c821510b22ea355ea` |
+| ReadOutput | 9/9 | `ab1d28a3e477be5c15fa35ff195b79bcc2f436662217347e67364fe16f6bc1dd` |
+| WriteStdin | 9/9 | `126f0c9ff8f2874a198cc980261c997828f57e944fed9b9f0ace710e686af13e` |
+| CloseStdin | 9/9 | `8639824d4af25014d8406463c57d017b34ddce3aafff19d336c96465298871f9` |
+| Resize | 9/9 | `3ca1ab53d840883d01c3358660528bc34ad2fd81c524e015c93cb689a4f5a20e` |
+| File | 9/9 | `0df9e4a684d85a822cd3aae2d99759e676a0b8bf3b5dbb8f6c09c764e4d232f8` |
+| Filesystem | 9/9 | `e26db94a5984eba87957f075548676b71eee56f83c0dd63cf1ff5efc25651bbb` |
+
+This is existing-host observation only. It does not claim fresh-host
+promotion, AArch64, B2/default-registration cutover, or WHPX/KVM readiness
+promotion.
 
 ## Experimental CRIU checkpoint and restore gate
 
