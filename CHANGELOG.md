@@ -41,9 +41,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
   Host create+start → FileOp::Upload → Host SIGKILL → init survival →
   replacement Host Running reattach with continuous init identity → exact
   FileOp::Download (`retained_filesystem_proven`; `retained_exec_io_proven`
-  optional for v1). Greening pending a real-host run under
-  `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1` (distinct from stopped-only
-  `native-linux-recovery`). Does not flip default create / B2 / cutover flags.
+  optional for v1). **Existing-host WSL2 Native Live filesystem greened** with
+  report `/var/tmp/a3s-oci-native-live-fs-v1-20260910225133.json` SHA-256
+  `1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`
+  (`retained_filesystem_proven` / `file_upload_before_kill` /
+  `file_download_after_reattach` / `init_survived_host_sigkill` /
+  `replacement_state_running`; `retained_exec_io_proven` remains optional for
+  v1). Distinct from stopped-only `native-linux-recovery`. Does not flip
+  default create / B2 / cutover flags.
 
 - Opt-in durable KVM `session-owner` helper on `a3s-oci-krun-shim` plus
   `session-owner-probe` parentage probe. Host can set
@@ -91,7 +96,7 @@ All notable changes to A3S OCI Runtime are documented in this file.
   Live sibling (`retained_stream_handle_proven` /
   `kvm_microvm_live_claimed`) is greened separately on Box main, while Box
   filesystem Live sibling and `b2_process_session_recovery_closed` remain
-  open; Native Live filesystem evidence is still required for full W2. No
+  open; Native Live filesystem evidence is greened separately (see above). No
   cutover / HostRuntimeService registration.
 
 ### Changed
@@ -107,6 +112,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Native Live recovery harness prepares a **rootful** sleep bundle (strip
+  `uidMappings`/`gidMappings`, user/time/network namespaces, and Box
+  personality/capability/rlimit assertions) so create's rootfs device scan is
+  not mapped UID 100000 against a root-owned work tree (EACCES). Report JSON
+  uses snake_case like KVM Live (removed `rename_all = "camelCase"`). Download
+  evidence omits mutation context (read-only FileOp contract).
 - Guest `A3S_OCI_GUEST_HOST_RECONNECT=1` now reconnects after a clean Host EOF
   (`serve_agent_connection` → `Ok(())` at frame boundary). The previous loop only
   retried retryable Unavailable I/O errors, so Host SIGKILL after idle Start made

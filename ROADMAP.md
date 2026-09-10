@@ -2228,9 +2228,16 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   `a3s.oci.linux-native-live-recovery-smoke.v1` /
   `.github/scripts/linux-native-live-recovery.sh` is implemented under
   `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1` (distinct from stopped-only
-  `native-linux-recovery`) — TODO: green on a real host for full W2. Does not
-  register KVM with normal HostRuntimeService, flip default supervised create,
-  or cut over MicroVM product routing.
+  `native-linux-recovery`). **Existing-host WSL2 Native Live filesystem
+  greened** with report
+  `/var/tmp/a3s-oci-native-live-fs-v1-20260910225133.json` SHA-256
+  `1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`
+  (`retained_filesystem_proven` / `file_upload_before_kill` /
+  `file_download_after_reattach` / `init_survived_host_sigkill` /
+  `replacement_state_running`). That still does **not** close W2/B2 alone
+  (Box filesystem Live sibling and `b2_process_session_recovery_closed`
+  remain open). Does not register KVM with normal HostRuntimeService, flip
+  default supervised create, or cut over MicroVM product routing.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,

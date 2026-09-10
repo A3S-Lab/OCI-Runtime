@@ -2004,8 +2004,12 @@ container, FileOp::Upload a unique payload, SIGKILL the Host Service, require
 init survival, spawn a replacement Host on the same root, require Running with
 continuous init identity, then FileOp::Download exact match
 (`retained_filesystem_proven`). `retained_exec_io_proven` is optional for v1.
-Greening pending a real-host run. Distinct from stopped-only
-`native-linux-recovery`.
+The harness builds a **rootful** sleep bundle (no userns id maps) so create
+does not run as mapped UID against the private work tree. Report JSON is
+snake_case (aligned with KVM Live). **Existing-host WSL2 greened** with report
+`/var/tmp/a3s-oci-native-live-fs-v1-20260910225133.json` SHA-256
+`1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`. Distinct
+from stopped-only `native-linux-recovery`. Does not flip B2 / cutover.
 
 ```bash
 A3S_OCI_NATIVE_SESSION_SUPERVISOR=1 \
@@ -2013,6 +2017,7 @@ A3S_OCI_NATIVE_SESSION_SUPERVISOR=1 \
 # optional: A3S_OCI_NATIVE_LIVE_BUNDLE=/absolute/path/to/oci-bundle
 # optional: A3S_OCI_LINUX_NATIVE_LIVE_RECOVERY_REPORT=/absolute/path/to/report.json
 # Requires cleared supplementary groups (setpriv CAP_SETGID / sudo / CI matched-cred).
+# Rootful sleep bundle is prepared by default when A3S_OCI_NATIVE_LIVE_BUNDLE is unset.
 ```
 
 When the original Host control socketpair closes (owner death), the supervisor

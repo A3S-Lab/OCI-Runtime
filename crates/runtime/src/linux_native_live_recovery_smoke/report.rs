@@ -8,8 +8,11 @@ pub const LINUX_NATIVE_LIVE_RECOVERY_SMOKE_SCHEMA_VERSION: &str =
     "a3s.oci.linux-native-live-recovery-smoke.v1";
 
 /// Nested evidence for one Native Live Host reopen attempt.
+///
+/// JSON field names stay snake_case (same as KVM Live recovery) so the
+/// qualification wrapper jq can read `schema_version` /
+/// `session_supervisor_mode_opt_in` without camelCase aliases.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct LinuxNativeLiveRecoveryEvidence {
     pub session_supervisor_mode_opt_in: bool,
     pub file_upload_before_kill: bool,
@@ -56,7 +59,6 @@ impl LinuxNativeLiveRecoveryEvidence {
 
 /// Top-level Native Live recovery smoke report.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct LinuxNativeLiveRecoverySmokeReport {
     pub schema_version: String,
     pub status: CapabilityStatus,
@@ -168,5 +170,37 @@ mod tests {
         assert!(evidence.is_success());
         evidence.retained_exec_io_proven = true;
         assert!(evidence.is_success());
+    }
+
+    #[test]
+    fn report_json_uses_snake_case_keys() {
+        let mut report = LinuxNativeLiveRecoverySmokeReport::initial(
+            PathBuf::from("/tmp/native-live"),
+            "x86_64".to_string(),
+        );
+        report.status = CapabilityStatus::Available;
+        report.case_count = 1;
+        report.recovery = complete_filesystem_evidence();
+        let json = serde_json::to_value(&report).expect("serialize report");
+        assert_eq!(
+            json.get("schema_version").and_then(|value| value.as_str()),
+            Some(LINUX_NATIVE_LIVE_RECOVERY_SMOKE_SCHEMA_VERSION)
+        );
+        assert!(json.get("schemaVersion").is_none());
+        let recovery = json.get("recovery").expect("recovery object");
+        assert_eq!(
+            recovery
+                .get("session_supervisor_mode_opt_in")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert!(recovery.get("sessionSupervisorModeOptIn").is_none());
+        assert_eq!(
+            recovery
+                .get("retained_filesystem_proven")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert!(recovery.get("retainedFilesystemProven").is_none());
     }
 }

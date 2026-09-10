@@ -334,7 +334,8 @@ async fn prove_retained_filesystem_after_reattach(
             path,
             data: None,
             user: None,
-            context: Some(operation(&prepared.nonce, "file-download")?),
+            // Downloads are read-only: no mutation context (same as KVM Live).
+            context: None,
         }),
     )
     .await?;

@@ -104,19 +104,34 @@ else
   cp fixtures/native-linux/config.json "$bundle/config.json"
   cp "$(command -v busybox)" "$bundle/rootfs/bin/busybox"
   ln -s busybox "$bundle/rootfs/bin/sh"
+  # Rootful sleep bundle: strip Box userns id maps and mapped-root assertions so
+  # create's rootfs device scan runs as host root (not mapped UID 100000) and can
+  # traverse the harness work tree. Keep namespaces/mounts minimal for sleep 3600.
   jq \
-    '.linux.cgroupsPath = "a3s-oci-native-live"
+    'del(.hooks)
+     | del(.linux.uidMappings, .linux.gidMappings)
+     | del(.linux.personality, .linux.memoryPolicy, .linux.timeOffsets)
+     | del(.linux.sysctl)
+     | del(.process.oomScoreAdj, .process.ioPriority, .process.scheduler)
+     | del(.process.rlimits, .process.capabilities)
+     | .linux.namespaces |= map(select(
+         .type != "user" and .type != "time" and .type != "network"
+       ))
+     | .linux.cgroupsPath = "a3s-oci-native-live"
      | .process.args = ["/bin/sh", "-c", "exec /bin/busybox sleep 3600"]
-     | del(.hooks)' \
+     | .process.noNewPrivileges = true' \
     "$bundle/config.json" >"$bundle/config.json.tmp"
   mv "$bundle/config.json.tmp" "$bundle/config.json"
 fi
 
 evidence_parent="$work/evidence"
 mkdir "$evidence_parent"
-chmod 0700 "$work" "$evidence_parent"
+# Rootful create needs traversable parents; keep leaves private.
+chmod 0755 "$work"
+chmod 0700 "$evidence_parent"
 if [[ -z "${A3S_OCI_NATIVE_LIVE_BUNDLE:-}" ]]; then
-  chmod 0700 "$bundle"
+  chmod 0755 "$bundle"
+  chmod 0755 "$bundle/rootfs"
 fi
 
 cli="$(realpath -e "$cli")"
