@@ -170,6 +170,13 @@ pub fn spawn_via_session_owner_helper_with_env(
         let _ = fs::remove_file(path);
     }
 
+    let stderr_log = ready_file.with_extension("stderr.log");
+    let stderr_file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&stderr_log)?;
+
     let mut owner = Command::new(krun_shim);
     owner.arg("session-owner").arg("--ready-file").arg(ready_file);
     if let Some(path) = host_control {
@@ -179,7 +186,7 @@ pub fn spawn_via_session_owner_helper_with_env(
         .args(shim_argv)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::from(stderr_file));
     for (key, value) in envs {
         owner.env(key, value);
     }
@@ -205,9 +212,17 @@ pub fn spawn_via_session_owner_helper_with_env(
         }
         match spawned.try_wait()? {
             Some(status) => {
-                return Err(io::Error::other(format!(
-                    "durable session-owner helper exited before readiness: {status}"
-                )));
+                let detail = fs::read_to_string(&stderr_log)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                return Err(io::Error::other(if detail.is_empty() {
+                    format!("durable session-owner helper exited before readiness: {status}")
+                } else {
+                    format!(
+                        "durable session-owner helper exited before readiness: {status}: {detail}"
+                    )
+                }));
             }
             None if Instant::now() >= deadline => {
                 let _ = spawned.kill();

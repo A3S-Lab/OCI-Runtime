@@ -22,7 +22,10 @@ pub const KVM_LIVE_SESSION_BINDING_SCHEMA: &str = "a3s.oci.kvm-live-session-bind
 pub const KVM_LIVE_SESSION_BINDING_FILE: &str = ".a3s-oci-kvm-live-session-binding.json";
 
 /// Host-facing control socket owned by the durable session-owner bridge.
-pub const KVM_HOST_CONTROL_SOCKET_FILE: &str = ".a3s-oci-kvm-host-control.sock";
+///
+/// Lives beside the guest `agent.sock` under `/tmp/<pipe>/` so the bind path
+/// stays under Linux `SUN_LEN`. The binding JSON records the absolute path.
+pub const KVM_HOST_CONTROL_SOCKET_FILE: &str = "host-control.sock";
 
 /// Guest reconnect loop flag forwarded into the utility-VM agent.
 pub const GUEST_HOST_RECONNECT_ENV: &str = "A3S_OCI_GUEST_HOST_RECONNECT";
@@ -90,8 +93,14 @@ impl KvmLiveSessionBinding {
         runtime_share.join(KVM_LIVE_SESSION_BINDING_FILE)
     }
 
-    pub fn host_control_path(runtime_share: &Path) -> PathBuf {
-        runtime_share.join(KVM_HOST_CONTROL_SOCKET_FILE)
+    /// Host-control Unix socket under the private pipe directory (not the share).
+    ///
+    /// Runtime-share paths are often longer than `SUN_LEN`; the binding file still
+    /// lives under the share and stores this absolute socket path.
+    pub fn host_control_path_for_pipe(pipe_name: &str) -> PathBuf {
+        Path::new(crate::agent_socket::PRIVATE_TMP_ROOT)
+            .join(pipe_name)
+            .join(KVM_HOST_CONTROL_SOCKET_FILE)
     }
 
     /// Atomically publish a private binding file under `runtime_share`.
@@ -315,6 +324,23 @@ mod tests {
             pipe_name: "a3s-oci-pipe".into(),
             session_token_hex: "ab".repeat(32),
         }
+    }
+
+    #[test]
+    fn host_control_path_stays_under_sun_len_for_typical_pipe() {
+        let path = KvmLiveSessionBinding::host_control_path_for_pipe(
+            "a3s-oci-abcdefghijklmnopqrstuvwxyz012345",
+        );
+        assert!(
+            path.as_os_str().len() < 108,
+            "host-control path must fit Linux SUN_LEN: {} ({})",
+            path.display(),
+            path.as_os_str().len()
+        );
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some(KVM_HOST_CONTROL_SOCKET_FILE)
+        );
     }
 
     #[test]
