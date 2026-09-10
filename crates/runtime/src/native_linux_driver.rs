@@ -878,6 +878,10 @@ fn observe_live_supervised_state(
     record: &ContainerRecord,
     live: &LinuxLiveSupervisedSession,
 ) -> Result<crate::DriverRecovery> {
+    // Keep `observed` rather than `recreated_running_with_processes`. Dead
+    // durable execs are omitted from Live inventory without inventing exit
+    // status; Host exact-match exec rebind would Conflict on that omission.
+    // Driver `processes` reads authentic inventory from the live session.
     Ok(crate::DriverRecovery::observed(
         observe_live_supervised_driver_state_for_status(*record.state.status(), live)?,
     ))

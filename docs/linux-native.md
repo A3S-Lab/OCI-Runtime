@@ -1879,19 +1879,21 @@ owner `SIGKILL`, while the current Host-bound PDEATHSIG model still terminates.
 The production `HostSessionSupervisor` service (`session-supervise` on the
 agent binary) can parent workloads, omit Host-bound PDEATHSIG on itself, and
 keep running after the Host control channel closes. Native recovery schema
-`a3s.oci.native-linux-recovery.v4` can record an optional `sessionSupervisor`
-identity. Control-channel reattach after Host EOF is implemented. Host reopen
+`a3s.oci.native-linux-recovery.v5` records an optional `sessionSupervisor`
+identity plus durable authenticated exec entries (process ID, PID +
+start-time, terminal mode). Older v1–v4 records still normalize; v4 does not
+invent execs. Control-channel reattach after Host EOF is implemented. Host reopen
 through `recover_stale_generation` reattaches a live recorded supervisor and
 returns `StaleGenerationRecovery::Live(LinuxLiveSupervisedSession)` so
 wait/kill of the supervised launcher use authentic supervised status.
 Multi-container Hosts share one supervisor; reopen caches the reattached
 control connection in `SessionSupervisorReattachCache` so every generation
 that records the same `sessionSupervisor` identity reuses one control Arc
-instead of attempting a second accept. Partial process inventory restore is
-implemented: while the authenticated init identity is live, `processes`
-returns exactly that init record; after init exit the inventory is empty.
-Recovery v4 does not record exec processes, so reopen never invents exec
-entries. Host-reopen stdin restore is implemented: supervised create deposits a
+instead of attempting a second accept. Process inventory restore is
+implemented: while authenticated init / exec identities are live, `processes`
+returns those records; after an identity exits it is omitted without inventing
+exit status. Supervised exec skips Host-bound PDEATHSIG so payloads can survive
+Host death for Live reopen. Host-reopen stdin restore is implemented: supervised create deposits a
 duplicate Host stdin write end with the supervisor (`MSG_DEPOSIT_STDIN` /
 SCM_RIGHTS) so Host death does not EOF the child; reopen takes that deposit
 (`MSG_TAKE_STDIN`) for authentic `write_stdin` / `close_stdin`. Host-reopen
@@ -1910,7 +1912,7 @@ Qualification may enable supervised create with
 durable supervisor, spawns the container launcher as its real child
 (`Host → Supervisor → Launcher`), passes `expected_owner_pid` as the
 supervisor PID so `container-init` re-arms PDEATHSIG correctly, and writes the
-authenticated supervisor identity into the recovery v4 record. Default create
+authenticated supervisor identity into the recovery record (v5). Default create
 (no env) keeps Host-bound PDEATHSIG and omits `sessionSupervisor` so existing
 stopped-only recovery gates stay green. Supervised create currently rejects
 terminal/inherit I/O, pinned utility-VM bundles, rootless device mounts, and
@@ -1931,10 +1933,13 @@ wait/kill/delete of the recorded launcher, restored stdin when a deposit
 exists, and authentic capture relay when stdout/stderr were moved at create.
 When several containers share one supervisor,
 `SessionSupervisorReattachCache` ensures only one control reconnect happens
-for that PID + start-time identity. Partial init process inventory is restored
-from the authenticated recovery identity without inventing exit status or exec
-entries. Restoring full `PreparedProcess` onto the replacement Host remains a
-later slice.
+for that PID + start-time identity. Process inventory restores authenticated
+live init plus still-live durable exec identities from recovery v5 without
+inventing exit status for dead execs (omit them). Host reopen keeps
+`DriverRecovery::observed` rather than `recreated_running_with_processes`
+because omitting dead execs is incompatible with Host exact-match exec rebind
+without inventing terminal evidence. Restoring full `PreparedProcess` (signal /
+wait / new exec) onto the replacement Host remains a later slice.
 
 ### Hook owner-death crash boundary
 

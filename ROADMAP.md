@@ -2243,15 +2243,21 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   launcher/init exit.   Multi-container Host reopen reuses one reattached
   control connection via `SessionSupervisorReattachCache` (one supervisor
   identity → one control Arc across generations). Partial Host-reopen process
-  inventory now exposes the authenticated live init only (empty after init
-  exit; no invented exec entries or exit status). Host-reopen stdin restore is
+  inventory now exposes the authenticated live init plus still-live durable
+  exec identities from recovery
+  `a3s.oci.native-linux-recovery.v5` (empty after those identities exit; no
+  invented exit status). Supervised exec persists PID + start-time into the
+  recovery record and skips Host-bound PDEATHSIG so the payload can survive
+  Host death for Live reopen. Host reopen keeps `DriverRecovery::observed`
+  (not `recreated_running_with_processes`) because omitting dead execs must
+  not Conflict with Host exact-match rebind. Host-reopen stdin restore is
   retained: supervised create deposits a duplicate stdin write end via
   SCM_RIGHTS; reopen takes it for authentic write/close. Host-reopen exclusive
   stdout/stderr restore is retained: supervised create moves capture read ends
   to the supervisor (SCM_RIGHTS move, not `F_DUPFD`); the supervisor sole-drains
   into a bounded buffer; Host/live reopen poll authentic chunks via control IPC;
   missing deposit fail-closes with `Unavailable` (never invents an empty
-  stream). Full `PreparedProcess` restore, durable exec inventory, the real-host
+  stream). Full `PreparedProcess` restore (signal/wait/new exec), the real-host
   Box live-session gate, and default create Host-bound policy remain open.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.

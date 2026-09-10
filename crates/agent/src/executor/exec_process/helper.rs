@@ -37,6 +37,9 @@ struct HelperArguments {
     rootfs: File,
     init_pidfd: File,
     expected_parent: libc::pid_t,
+    /// When true, verify the Host parent but do not arm PDEATHSIG so a
+    /// supervised generation's exec can survive Host death for Live reopen.
+    survive_host_death: bool,
     workload_cgroup_procs: Option<File>,
     namespaces: Vec<HelperNamespace>,
 }
@@ -57,11 +60,11 @@ struct RawHelperNamespace {
 
 fn parse_helper_arguments(arguments: impl Iterator<Item = OsString>) -> Result<HelperArguments> {
     let arguments = arguments.collect::<Vec<_>>();
-    if arguments.len() < 6 {
+    if arguments.len() < 7 {
         return Err(exec_error(
             ErrorCode::InvalidArgument,
             "container-exec requires SNAPSHOT CONTROL ROOTFD INITPIDFD PARENTPID \
-             CGROUPFD [NAMESPACE...]",
+             SURVIVE CGROUPFD [NAMESPACE...]",
         ));
     }
     let snapshot = PathBuf::from(&arguments[0]);
@@ -69,11 +72,12 @@ fn parse_helper_arguments(arguments: impl Iterator<Item = OsString>) -> Result<H
     let rootfs = parse_descriptor(&arguments[2], "rootfs descriptor")?;
     let init_pidfd = parse_descriptor(&arguments[3], "init pidfd")?;
     let expected_parent = parse_positive_pid(&arguments[4], "expected parent PID")?;
-    let workload_cgroup_procs = if arguments[5] == OsStr::new("none") {
+    let survive_host_death = parse_survive_host_death(&arguments[5])?;
+    let workload_cgroup_procs = if arguments[6] == OsStr::new("none") {
         None
     } else {
         Some(parse_descriptor(
-            &arguments[5],
+            &arguments[6],
             "workload cgroup.procs descriptor",
         )?)
     };
@@ -93,7 +97,7 @@ fn parse_helper_arguments(arguments: impl Iterator<Item = OsString>) -> Result<H
     }
     let mut last_order = None;
     let mut namespaces = Vec::new();
-    for encoded in &arguments[6..] {
+    for encoded in &arguments[7..] {
         let encoded = encoded.to_str().ok_or_else(|| {
             exec_error(
                 ErrorCode::InvalidArgument,
@@ -163,6 +167,7 @@ fn parse_helper_arguments(arguments: impl Iterator<Item = OsString>) -> Result<H
         rootfs,
         init_pidfd,
         expected_parent,
+        survive_host_death,
         workload_cgroup_procs,
         namespaces,
     })
@@ -175,10 +180,11 @@ fn run_container_exec(arguments: HelperArguments) -> Result<()> {
         rootfs,
         init_pidfd,
         expected_parent,
+        survive_host_death,
         workload_cgroup_procs,
         namespaces,
     } = arguments;
-    verify_and_arm_parent(expected_parent)?;
+    verify_parent(expected_parent, survive_host_death)?;
     let control_address =
         StdSocketAddr::from_abstract_name(control_name.as_bytes()).map_err(|error| {
             exec_error(
@@ -512,13 +518,37 @@ fn read_process_plan(path: &Path) -> Result<ProcessPlan> {
     })
 }
 
-fn verify_and_arm_parent(expected_parent: libc::pid_t) -> Result<()> {
+fn parse_survive_host_death(value: &OsStr) -> Result<bool> {
+    match value.to_str() {
+        Some("0") => Ok(false),
+        Some("1") => Ok(true),
+        _ => Err(exec_error(
+            ErrorCode::InvalidArgument,
+            "container exec received invalid SURVIVE flag; expected 0 or 1",
+        )),
+    }
+}
+
+fn verify_parent(expected_parent: libc::pid_t, survive_host_death: bool) -> Result<()> {
     // SAFETY: `getppid` has no preconditions.
     if unsafe { libc::getppid() } != expected_parent {
         return Err(exec_error(
             ErrorCode::PermissionDenied,
             "container exec helper parent does not match its authenticated launcher",
         ));
+    }
+    if survive_host_death {
+        // Supervised Live reopen requires the exec helper (and payload) to
+        // survive Host death. Skip Host-bound PDEATHSIG; payload still arms
+        // against this helper, and the helper still monitors init via pidfd.
+        // SAFETY: rechecking closes the race between parent inspection and use.
+        if unsafe { libc::getppid() } != expected_parent {
+            return Err(exec_error(
+                ErrorCode::Unavailable,
+                "container exec launcher exited during helper bootstrap",
+            ));
+        }
+        return Ok(());
     }
     pid_supervisor::arm_parent_death_signal("exec helper")?;
     // SAFETY: rechecking closes the race between parent inspection and prctl.

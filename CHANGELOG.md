@@ -27,6 +27,20 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Native Linux Host-reopen **durable exec inventory** on the Live supervised
+  path. Recovery schema advances to `a3s.oci.native-linux-recovery.v5` with
+  authenticated exec entries (process ID, PID + start-time, terminal mode).
+  Older v1–v4 records still normalize (v4 without inventing execs). Supervised
+  exec persists identities into the recovery record and skips Host-bound
+  PDEATHSIG so payloads can survive Host death; default create/exec stay
+  Host-bound. `LinuxLiveSupervisedSession::process_inventory` returns live init
+  plus still-live durable execs only; dead execs are omitted without inventing
+  exit status. Host reopen keeps `DriverRecovery::observed` (not
+  `recreated_running_with_processes`) because omitting dead execs is
+  incompatible with Host exact-match rebind. `signal_process` / `wait_process` /
+  new `exec` remain Unavailable until `PreparedProcess` restore. First-
+  principles coverage: live exec appears after Host reopen; after exit,
+  inventory omits it without invented status. Default create stays Host-bound.
 - Native Linux Host-reopen **exclusive stdout/stderr restore** through
   session-supervisor IPC relay. Supervised create (opt-in) moves capture read
   ends to the supervisor via SCM_RIGHTS (`MSG_DEPOSIT_OUTPUT`, not `F_DUPFD`);
