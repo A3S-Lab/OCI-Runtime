@@ -877,11 +877,11 @@ fn run_session_supervise_service() -> Result<()> {
         let mut header = [0_u8; 1];
         match control.read_exact(&mut header) {
             Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
-                // Host Service died or closed its channel. Remain as the durable
-                // session authority. Do not reap waitable children here: exact
-                // exit status must stay available for MSG_WAIT after an
-                // authenticated replacement Host reattaches the control channel.
+            Err(error) if control_peer_gone(&error) => {
+                // Host Service died or closed its channel (EOF, reset, or broken
+                // pipe). Remain as the durable session authority. Do not reap
+                // waitable children here: exact exit status must stay available
+                // for MSG_WAIT after an authenticated replacement Host reattaches.
                 // Re-exec / a new supervisor would break PDEATHSIG parentage.
                 // Deposited stdin write ends and exclusive capture drains stay
                 // open across the control gap so Host death alone neither EOFs
@@ -896,7 +896,7 @@ fn run_session_supervise_service() -> Result<()> {
                 ));
             }
         }
-        match header[0] {
+        let published = match header[0] {
             MSG_SHUTDOWN => {
                 deposited_stdin.clear();
                 deposited_output.clear();
@@ -908,17 +908,20 @@ fn run_session_supervise_service() -> Result<()> {
                     let mut response = Vec::with_capacity(5);
                     response.push(MSG_SPAWNED);
                     response.extend_from_slice(&pid.to_be_bytes());
-                    control.write_all(&response).map_err(|error| {
-                        terminate_pid(pid);
-                        supervisor_error(
-                            ErrorCode::Internal,
-                            format!("failed to publish session-supervisor spawn result: {error}"),
-                        )
-                    })?;
+                    match write_control(
+                        &mut control,
+                        &response,
+                        "failed to publish session-supervisor spawn result",
+                    ) {
+                        Ok(false) => Ok(false),
+                        Ok(true) => Ok(true),
+                        Err(error) => {
+                            terminate_pid(pid);
+                            Err(error)
+                        }
+                    }
                 }
-                Err(error) => {
-                    write_error_response(&mut control, &error.message)?;
-                }
+                Err(error) => write_error_response(&mut control, &error.message),
             },
             MSG_WAIT => match handle_wait_request(&mut control) {
                 Ok((pid, status)) => {
@@ -928,92 +931,69 @@ fn run_session_supervise_service() -> Result<()> {
                     let mut response = Vec::with_capacity(5);
                     response.push(MSG_WAITED);
                     response.extend_from_slice(&status.to_be_bytes());
-                    control.write_all(&response).map_err(|error| {
-                        supervisor_error(
-                            ErrorCode::Internal,
-                            format!("failed to publish session-supervisor wait result: {error}"),
-                        )
-                    })?;
+                    write_control(
+                        &mut control,
+                        &response,
+                        "failed to publish session-supervisor wait result",
+                    )
                 }
-                Err(error) => {
-                    write_error_response(&mut control, &error.message)?;
-                }
+                Err(error) => write_error_response(&mut control, &error.message),
             },
-            MSG_DEPOSIT_STDIN => {
-                match handle_deposit_stdin(&mut control, &mut deposited_stdin) {
-                    Ok(()) => {
-                        control.write_all(&[MSG_DEPOSITED]).map_err(|error| {
-                        supervisor_error(
-                            ErrorCode::Internal,
-                            format!("failed to publish session-supervisor stdin deposit ack: {error}"),
-                        )
-                    })?;
-                    }
-                    Err(error) => {
-                        write_error_response(&mut control, &error.message)?;
-                    }
-                }
-            }
-            MSG_TAKE_STDIN => {
-                match handle_take_stdin(&mut control, &mut deposited_stdin) {
-                    Ok(fd) => {
-                        control.write_all(&[MSG_STDIN_TAKEN]).map_err(|error| {
-                        supervisor_error(
-                            ErrorCode::Internal,
-                            format!("failed to publish session-supervisor stdin take header: {error}"),
-                        )
-                    })?;
-                        send_with_fds(control.as_raw_fd(), &[0xFD], &[fd.as_raw_fd()])?;
-                        // SCM_RIGHTS duplicated into the replacement Host; drop the
-                        // supervisor copy so intentional Host close can deliver EOF.
-                        drop(fd);
-                    }
-                    Err(error) => {
-                        write_error_response(&mut control, &error.message)?;
+            MSG_DEPOSIT_STDIN => match handle_deposit_stdin(&mut control, &mut deposited_stdin) {
+                Ok(()) => write_control(
+                    &mut control,
+                    &[MSG_DEPOSITED],
+                    "failed to publish session-supervisor stdin deposit ack",
+                ),
+                Err(error) => write_error_response(&mut control, &error.message),
+            },
+            MSG_TAKE_STDIN => match handle_take_stdin(&mut control, &mut deposited_stdin) {
+                Ok(fd) => {
+                    match write_control(
+                        &mut control,
+                        &[MSG_STDIN_TAKEN],
+                        "failed to publish session-supervisor stdin take header",
+                    )? {
+                        false => Ok(false),
+                        true => {
+                            match send_with_fds(control.as_raw_fd(), &[0xFD], &[fd.as_raw_fd()]) {
+                                Ok(()) => {
+                                    // SCM_RIGHTS duplicated into the replacement Host; drop
+                                    // the supervisor copy so intentional Host close can EOF.
+                                    drop(fd);
+                                    Ok(true)
+                                }
+                                Err(error) if error_message_peer_gone(&error.message) => Ok(false),
+                                Err(error) => Err(error),
+                            }
+                        }
                     }
                 }
-            }
+                Err(error) => write_error_response(&mut control, &error.message),
+            },
             MSG_CLOSE_DEPOSITED_STDIN => {
                 match handle_close_deposited_stdin(&mut control, &mut deposited_stdin) {
-                    Ok(()) => {
-                        control.write_all(&[MSG_DEPOSIT_CLOSED]).map_err(|error| {
-                            supervisor_error(
-                                ErrorCode::Internal,
-                                format!(
-                                    "failed to publish session-supervisor stdin close ack: {error}"
-                                ),
-                            )
-                        })?;
-                    }
-                    Err(error) => {
-                        write_error_response(&mut control, &error.message)?;
-                    }
+                    Ok(()) => write_control(
+                        &mut control,
+                        &[MSG_DEPOSIT_CLOSED],
+                        "failed to publish session-supervisor stdin close ack",
+                    ),
+                    Err(error) => write_error_response(&mut control, &error.message),
                 }
             }
             MSG_DEPOSIT_OUTPUT => {
                 match handle_deposit_output(&mut control, &mut deposited_output) {
-                    Ok(()) => {
-                        control.write_all(&[MSG_OUTPUT_DEPOSITED]).map_err(|error| {
-                            supervisor_error(
-                                ErrorCode::Internal,
-                                format!(
-                                    "failed to publish session-supervisor output deposit ack: {error}"
-                                ),
-                            )
-                        })?;
-                    }
-                    Err(error) => {
-                        write_error_response(&mut control, &error.message)?;
-                    }
+                    Ok(()) => write_control(
+                        &mut control,
+                        &[MSG_OUTPUT_DEPOSITED],
+                        "failed to publish session-supervisor output deposit ack",
+                    ),
+                    Err(error) => write_error_response(&mut control, &error.message),
                 }
             }
             MSG_READ_OUTPUT => match handle_read_output(&mut control, &deposited_output) {
-                Ok(chunks) => {
-                    write_output_chunks_response(&mut control, &chunks)?;
-                }
-                Err(error) => {
-                    write_error_response(&mut control, &error.message)?;
-                }
+                Ok(chunks) => write_output_chunks_response(&mut control, &chunks),
+                Err(error) => write_error_response(&mut control, &error.message),
             },
             other => {
                 return Err(supervisor_error(
@@ -1021,7 +1001,44 @@ fn run_session_supervise_service() -> Result<()> {
                     format!("session supervisor received unknown request {other}"),
                 ));
             }
+        }?;
+        if !published {
+            control = accept_control_reattach(&identity)?;
         }
+    }
+}
+
+/// Host control death surfaces as EOF on read or EPIPE/reset on write.
+///
+/// Mid-response `BrokenPipe` (for example owner SIGKILL while a capture relay
+/// is publishing `MSG_OUTPUT_CHUNKS`) must enter reattach — not exit — or Live
+/// Host-reopen loses the durable supervisor.
+fn control_peer_gone(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::UnexpectedEof
+    )
+}
+
+fn error_message_peer_gone(message: &str) -> bool {
+    message.contains("Broken pipe")
+        || message.contains("Connection reset")
+        || message.contains("Connection aborted")
+        || message.contains("UnexpectedEof")
+}
+
+/// `Ok(true)` written; `Ok(false)` peer gone (caller must reattach).
+fn write_control(control: &mut UnixStream, bytes: &[u8], context: &str) -> Result<bool> {
+    match control.write_all(bytes) {
+        Ok(()) => Ok(true),
+        Err(error) if control_peer_gone(&error) => Ok(false),
+        Err(error) => Err(supervisor_error(
+            ErrorCode::Internal,
+            format!("{context}: {error}"),
+        )),
     }
 }
 
@@ -1573,7 +1590,7 @@ fn spawn_exclusive_output_reader(
     Ok(())
 }
 
-fn write_output_chunks_response(control: &mut UnixStream, chunks: &[OutputChunk]) -> Result<()> {
+fn write_output_chunks_response(control: &mut UnixStream, chunks: &[OutputChunk]) -> Result<bool> {
     let count = u32::try_from(chunks.len()).map_err(|_| {
         supervisor_error(
             ErrorCode::ResourceExhausted,
@@ -1599,12 +1616,11 @@ fn write_output_chunks_response(control: &mut UnixStream, chunks: &[OutputChunk]
         payload.extend_from_slice(&len.to_be_bytes());
         payload.extend_from_slice(&chunk.data);
     }
-    control.write_all(&payload).map_err(|error| {
-        supervisor_error(
-            ErrorCode::Internal,
-            format!("failed to publish session-supervisor output chunks: {error}"),
-        )
-    })
+    write_control(
+        control,
+        &payload,
+        "failed to publish session-supervisor output chunks",
+    )
 }
 
 fn read_output_chunks_response(control: &mut UnixStream) -> Result<Vec<OutputChunk>> {
@@ -1777,7 +1793,7 @@ fn read_supervisor_response(control: &mut UnixStream) -> Result<SupervisorRespon
     }
 }
 
-fn write_error_response(control: &mut UnixStream, message: &str) -> Result<()> {
+fn write_error_response(control: &mut UnixStream, message: &str) -> Result<bool> {
     let bytes = message.as_bytes();
     if bytes.len() > MAX_ARG_BYTES {
         return Err(supervisor_error(
@@ -1789,12 +1805,11 @@ fn write_error_response(control: &mut UnixStream, message: &str) -> Result<()> {
     payload.push(MSG_ERROR);
     payload.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
     payload.extend_from_slice(bytes);
-    control.write_all(&payload).map_err(|error| {
-        supervisor_error(
-            ErrorCode::Internal,
-            format!("failed to publish session-supervisor error: {error}"),
-        )
-    })
+    write_control(
+        control,
+        &payload,
+        "failed to publish session-supervisor error",
+    )
 }
 
 fn write_os_string(payload: &mut Vec<u8>, value: &OsStr) -> Result<()> {
@@ -2744,6 +2759,87 @@ mod tests {
         assert_eq!(
             status, 0,
             "cat must exit 0 after authentic EOF, not invented status"
+        );
+    }
+
+    #[test]
+    fn supervisor_reattaches_after_broken_pipe_during_output_publish() {
+        let (mut parent_ready, mut child_ready) =
+            UnixStream::pair().expect("broken-pipe reattach ready channel");
+        // SAFETY: parent reaps the fake Host; child owns the production supervisor.
+        let host_pid = unsafe { libc::fork() };
+        assert!(host_pid >= 0, "fork fake host for broken-pipe reattach");
+        if host_pid == 0 {
+            drop(parent_ready);
+            let mut supervisor = match HostSessionSupervisor::start_via_fork() {
+                Ok(supervisor) => supervisor,
+                Err(_) => unsafe { libc::_exit(171) },
+            };
+            let launcher_pid = match supervisor.spawn_launcher(
+                Path::new("/bin/sleep"),
+                &["30".into()],
+                None,
+                None,
+                None,
+            ) {
+                Ok(pid) => pid,
+                Err(_) => unsafe { libc::_exit(172) },
+            };
+            let mut fds = [0, 0];
+            if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+                unsafe { libc::_exit(173) }
+            }
+            let deposit_read = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+            // Keep write end open so capture wait does not observe EOF early.
+            let _deposit_write = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+            if supervisor
+                .deposit_output(launcher_pid, Some(deposit_read), None)
+                .is_err()
+            {
+                unsafe { libc::_exit(174) }
+            }
+            let identity = supervisor.identity().clone();
+            let mut payload = Vec::with_capacity(16);
+            payload.extend_from_slice(&identity.pid().to_be_bytes());
+            payload.extend_from_slice(&identity.start_time_ticks().to_be_bytes());
+            payload.extend_from_slice(&launcher_pid.to_be_bytes());
+            if child_ready.write_all(&payload).is_err() {
+                unsafe { libc::_exit(175) }
+            }
+            // Block in wait-capable read_output. Parent SIGKILLs this Host while
+            // the supervisor still holds the request; publishing the response then
+            // hits EPIPE and must enter reattach instead of exiting.
+            let _ = supervisor.read_output(launcher_pid, 0, 4096, Some(2_000));
+            std::mem::forget(supervisor);
+            unsafe { libc::_exit(176) }
+        }
+        drop(child_ready);
+        let mut payload = [0_u8; 16];
+        parent_ready
+            .read_exact(&mut payload)
+            .expect("read broken-pipe supervisor evidence");
+        let identity = SessionSupervisorIdentity {
+            schema_version: IDENTITY_SCHEMA_VERSION.to_string(),
+            pid: i32::from_be_bytes(payload[0..4].try_into().expect("pid bytes")),
+            start_time_ticks: u64::from_be_bytes(payload[4..12].try_into().expect("start bytes")),
+        };
+        let launcher_pid = i32::from_be_bytes(payload[12..16].try_into().expect("launcher bytes"));
+        std::thread::sleep(Duration::from_millis(100));
+        terminate_pid(host_pid);
+        let _ = wait_for_child(host_pid);
+        identity
+            .authenticate_live()
+            .expect("supervisor must stay live after Host EPIPE mid-output-publish");
+        let mut reattached = HostSessionSupervisor::reattach(&identity).expect(
+            "replacement Host must reattach after BrokenPipe during MSG_OUTPUT_CHUNKS publish",
+        );
+        terminate_pid(launcher_pid);
+        let _status = reattached
+            .wait_launcher(launcher_pid)
+            .expect("reattached Host must wait the supervised launcher");
+        assert!(
+            !process_is_live(launcher_pid),
+            "launcher must be reaped after authentic wait"
         );
     }
 
