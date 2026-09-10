@@ -138,9 +138,17 @@ pub(in crate::oci_smoke::utility_vm::reopen_replacement) async fn verify_first_e
     } else if marker_exists {
         // Exec success proves that the payload crossed execve, not that the
         // scheduler ran its first userspace instruction before owner-death
-        // cleanup. A marker is therefore optional in this first VM, but any
-        // observed bytes remain exact nonce-bound evidence.
-        wait_for_exact_marker(marker, expected, "first-owner Exec").await
+        // cleanup. A complete nonce-bound marker is optional first-VM evidence.
+        // Guest-after-response-write executor cleanup can leave an empty or
+        // truncated redirect artifact; treat incompleteness as absence rather
+        // than failing the optional check. Finished unexpected bytes still fail.
+        let contents = read_marker(marker).await?;
+        match exact_marker_state(&contents, expected) {
+            ExactMarkerState::Complete | ExactMarkerState::InProgress => Ok(()),
+            ExactMarkerState::Mismatch => {
+                Err("first-owner Exec produced unexpected marker contents".to_string())
+            }
+        }
     } else {
         Ok(())
     }

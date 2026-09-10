@@ -7,9 +7,7 @@ use a3s_oci_sdk::{
     ProcessIo, ProcessTarget, SignalProcessRequest, StartRequest, TerminalSize,
 };
 
-use super::super::super::exec::{
-    dispatch_may_have_reached, wait_for_exact_marker, EXEC_MARKER_NAME,
-};
+use super::super::super::exec::{dispatch_may_have_reached, EXEC_MARKER_NAME};
 pub(super) use super::super::super::workload_marker::{path_absent, reset_marker, runtime_marker};
 use super::super::super::QUALIFICATION_FAULT_OPERATION;
 pub(super) use crate::operation_journal_evidence::EmptyOperationJournalStatus as SignalProcessJournalStatus;
@@ -102,7 +100,18 @@ pub(super) async fn verify_first_signal_marker(
         ));
     }
     if marker_exists {
-        wait_for_exact_marker(marker, expected, "first-owner KVM SignalProcess").await
+        // Complete marker bytes are optional after dispatch; incompleteness is
+        // treated as absence while finished unexpected bytes still fail closed.
+        let contents = tokio::fs::read(marker).await.map_err(|error| {
+            format!("failed to read first-owner KVM SignalProcess marker: {error}")
+        })?;
+        match crate::marker::exact_marker_state(&contents, expected) {
+            crate::marker::ExactMarkerState::Complete
+            | crate::marker::ExactMarkerState::InProgress => Ok(()),
+            crate::marker::ExactMarkerState::Mismatch => Err(
+                "first-owner KVM SignalProcess produced unexpected marker contents".to_string(),
+            ),
+        }
     } else {
         Ok(())
     }

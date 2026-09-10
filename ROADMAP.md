@@ -1249,7 +1249,14 @@ enforce it. No property is silently ignored.
 - [ ] Repeat the retained real-host operation-stage and shutdown qualification
   on WHPX and the future KVM backend before promoting either driver's
   readiness. This is a per-driver release gate; it does not reopen the
-  protocol contract or the completed HVF matrix.
+  protocol contract or the completed HVF matrix. Existing-host WHPX evidence
+  on source-matched `b9d78ff` assets now retains the 11-stage transport-fault
+  cleanup gate plus the complete 180-path operation-reopen matrix (summary
+  SHA-256 `c0b0c3f91beea85118db6eb4c5a96d33ad4ead0199578c8d610887b336fed2fd`
+  inside release-matrix
+  `4a89dc6b5ded75914ddacf27e9b1d56e3db7b20633a6ea1586bc404268235095`); the
+  parent stays open until matching KVM fresh-host evidence lands and WHPX
+  fresh-host promotion closes.
 - [x] Implement all OCI hook phases with typed prestart, createRuntime,
   createContainer, startContainer, and poststart failure rollback, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.

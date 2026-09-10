@@ -6,9 +6,10 @@ use a3s_oci_sdk::{
     Error, ErrorCode, OperationId, ProcessId, ProcessIo, ProcessTarget, TerminalSize,
 };
 
-use super::super::exec::support::{dispatch_may_have_reached, wait_for_exact_marker};
+use super::super::exec::support::dispatch_may_have_reached;
 use super::super::{append_failure, QualificationHvfDriver, FAULT_OPERATION};
 use super::SIGNAL_MARKER_NAME;
+use crate::marker::{exact_marker_state, ExactMarkerState};
 use crate::transport_cleanup_report::is_retryable_disconnect_operation;
 use crate::OciVmOperationReopenReplacementReport;
 
@@ -70,9 +71,16 @@ pub(super) async fn verify_first_signal_marker(
     if marker_exists {
         // A successful signal syscall does not guarantee that the shell trap
         // is scheduled before a Guest transport fault terminates PID 1 and
-        // the VM. As with first-owner Exec evidence, absence is therefore
-        // allowed after dispatch, while any observed bytes remain exact.
-        wait_for_exact_marker(marker, expected, "first-owner SignalProcess").await
+        // the VM. As with first-owner Exec evidence, a complete marker is
+        // optional after dispatch; incompleteness is treated as absence, while
+        // finished unexpected bytes still fail closed.
+        let contents = super::super::super::read_marker(marker).await?;
+        match exact_marker_state(&contents, expected) {
+            ExactMarkerState::Complete | ExactMarkerState::InProgress => Ok(()),
+            ExactMarkerState::Mismatch => {
+                Err("first-owner SignalProcess produced unexpected marker contents".to_string())
+            }
+        }
     } else {
         Ok(())
     }

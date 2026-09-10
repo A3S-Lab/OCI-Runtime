@@ -408,6 +408,28 @@ repaired matrix summary SHA-256 is
 from `gates[]` while keeping the same gate digests and timings). This is
 still observation-only; only `-HostClass fresh` can close the promotion gate.
 
+On September 11, 2026, source-matched assets rebuilt from `b9d78ff` (agent
+`23336c3a1999df8b7a3b12a94986260e18e8f19ea5ca41b370715e8dfb17d2dc`, manifest
+`7e68a7dd3013a082c85eedf912f77c9856bb94b949accb21ab04eac38b58bd25`, ext4
+`e3f6dfa01837f7ace8c953e5ce4605bd7368aeeb61aaa0f7e78443d34525c9a4`) retained an
+available `a3s.oci.windows-whpx-release-matrix.v1` summary with
+`host_class=existing` and `promotes_readiness=false` under
+`target/windows-whpx-release-matrix/existing-b9d78ff-fix`. All six bound gates
+passed in 2871.043 seconds after fixing optional first-owner Exec/SignalProcess
+marker handling for `guest-after-response-write` executor-cleanup races. The
+matrix summary SHA-256 is
+`4a89dc6b5ded75914ddacf27e9b1d56e3db7b20633a6ea1586bc404268235095`. Gate
+summary digests: handle-reclamation
+`4d67f0f01cda016981e6e9d94f51c60d3c3b95f9d72c660b8fb22475939ebfbe`,
+driver-smoke `50bc1887a9be38b08b96ad4ce2de9b2b3087d35843bdf3c9f2968ff79dfdb269`,
+recovery-smoke `c6152df9a95bda5f596cf33edc9e1542c2e0b07dbb69a0ef91a243236760cd52`,
+transport-fault-cleanup
+`3f5016c1b30cb3d9e0bfb091e2ab095f2768ef50f8392a57b523774ad60170e7`, soak
+`f6e621f10b465c1220b9ee9e6a1475ccf59ec41abf818b49390c1b47db4f16f7`,
+operation-reopen
+`c0b0c3f91beea85118db6eb4c5a96d33ad4ead0199578c8d610887b336fed2fd`. This remains
+observation-only; fresh-host promotion is still open.
+
 The handle-reclamation gate captures shim exit codes through
 `System.Diagnostics.ProcessStartInfo` (same pattern as transport-fault and
 soak). PowerShell `Start-Process -RedirectStandard*` left `ExitCode` null
