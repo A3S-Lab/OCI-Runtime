@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 # Fail-closed unit checks for Linux KVM fresh-host attestation resolution.
+# Does not run the release matrix and does not promote readiness.
 source .github/scripts/lib/linux-kvm-fresh-host-attestation.sh
 
 work="$(mktemp -d /tmp/a3s-oci-kvm-attestation-test.XXXXXX)"
@@ -27,6 +28,31 @@ printf '%s\n' '{"schema_version":"wrong","operator_attests_fresh_provisioning":t
   > "$work/bad.json"
 if linux_kvm_resolve_fresh_host_attestation fresh "$work/bad.json" >/dev/null 2>&1; then
   printf 'fresh host_class unexpectedly accepted a wrong schema\n' >&2
+  exit 1
+fi
+
+# fresh rejects operator_attests_fresh_provisioning=false
+printf '%s\n' '{"schema_version":"a3s.oci.linux-kvm-fresh-host-attestation.v1","operator_attests_fresh_provisioning":false,"provisioned_at_utc":"2026-09-07T00:00:00Z"}' \
+  > "$work/false-attest.json"
+if linux_kvm_resolve_fresh_host_attestation fresh "$work/false-attest.json" >/dev/null 2>&1; then
+  printf 'fresh host_class unexpectedly accepted operator_attests_fresh_provisioning=false\n' >&2
+  exit 1
+fi
+
+# fresh rejects missing provisioned_at_utc
+printf '%s\n' '{"schema_version":"a3s.oci.linux-kvm-fresh-host-attestation.v1","operator_attests_fresh_provisioning":true}' \
+  > "$work/missing-utc.json"
+if linux_kvm_resolve_fresh_host_attestation fresh "$work/missing-utc.json" >/dev/null 2>&1; then
+  printf 'fresh host_class unexpectedly accepted a missing provisioned_at_utc\n' >&2
+  exit 1
+fi
+
+# fresh rejects symlink attestation path
+printf '%s\n' '{"schema_version":"a3s.oci.linux-kvm-fresh-host-attestation.v1","operator_attests_fresh_provisioning":true,"provisioned_at_utc":"2026-09-07T00:00:00Z"}' \
+  > "$work/link-target.json"
+ln -s "$work/link-target.json" "$work/link.json"
+if linux_kvm_resolve_fresh_host_attestation fresh "$work/link.json" >/dev/null 2>&1; then
+  printf 'fresh host_class unexpectedly accepted a symlink attestation path\n' >&2
   exit 1
 fi
 

@@ -63,6 +63,42 @@ try {
         throw 'fresh HostClass unexpectedly accepted operator_attests_fresh_provisioning=false'
     }
 
+    # fresh rejects missing provisioned_at_utc
+    $missingUtcPath = Join-Path $work 'missing-utc.json'
+    Set-Content -LiteralPath $missingUtcPath -Encoding utf8 -Value '{"schema_version":"a3s.oci.windows-whpx-fresh-host-attestation.v1","operator_attests_fresh_provisioning":true}'
+    $rejectedMissingUtc = $false
+    try {
+        Resolve-WhpxFreshHostAttestation -HostClass fresh -AttestationPath $missingUtcPath | Out-Null
+    } catch {
+        $rejectedMissingUtc = $true
+    }
+    if (-not $rejectedMissingUtc) {
+        throw 'fresh HostClass unexpectedly accepted a missing provisioned_at_utc'
+    }
+
+    # fresh rejects symlink attestation path when the host can create one
+    $linkTarget = Join-Path $work 'link-target.json'
+    Set-Content -LiteralPath $linkTarget -Encoding utf8 -Value '{"schema_version":"a3s.oci.windows-whpx-fresh-host-attestation.v1","operator_attests_fresh_provisioning":true,"provisioned_at_utc":"2026-09-07T00:00:00Z"}'
+    $linkPath = Join-Path $work 'link.json'
+    $symlinkCreated = $false
+    try {
+        New-Item -ItemType SymbolicLink -Path $linkPath -Target $linkTarget -ErrorAction Stop | Out-Null
+        $symlinkCreated = $true
+    } catch {
+        # Developer Mode / elevation may be required; keep the other fail-closed cases mandatory.
+    }
+    if ($symlinkCreated) {
+        $rejectedSymlink = $false
+        try {
+            Resolve-WhpxFreshHostAttestation -HostClass fresh -AttestationPath $linkPath | Out-Null
+        } catch {
+            $rejectedSymlink = $true
+        }
+        if (-not $rejectedSymlink) {
+            throw 'fresh HostClass unexpectedly accepted a symlink attestation path'
+        }
+    }
+
     # fresh with valid attestation succeeds
     $goodPath = Join-Path $work 'good.json'
     Set-Content -LiteralPath $goodPath -Encoding utf8 -Value '{"schema_version":"a3s.oci.windows-whpx-fresh-host-attestation.v1","operator_attests_fresh_provisioning":true,"provisioned_at_utc":"2026-09-07T00:00:00Z","hostname":"whpx-release-01"}'
