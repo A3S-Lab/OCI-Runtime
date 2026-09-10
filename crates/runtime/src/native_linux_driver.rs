@@ -812,6 +812,7 @@ impl RuntimeDriver for NativeLinuxDriver {
         {
             return live
                 .read_output(
+                    &request.target.process_id,
                     request.after_sequence,
                     request.max_bytes,
                     request.wait_timeout_ms,

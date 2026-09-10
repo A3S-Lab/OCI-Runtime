@@ -589,16 +589,33 @@ impl LinuxLiveSupervisedSession {
 
     /// Poll authentic captured chunks from the supervisor-owned exclusive drain.
     ///
-    /// When create moved capture read ends to the supervisor, this returns the
-    /// same sequence-bearing chunks as the live Host path. When no output
-    /// deposit exists, returns [`ErrorCode::Unavailable`] instead of inventing
-    /// an empty successful stream.
+    /// Init uses the create-time launcher deposit. Exec uses the recorded helper
+    /// PID from recovery / post-reopen spawn — never the create launcher, or
+    /// Host would drain the wrong buffer and observe exit without capture EOF.
+    /// When no output deposit exists, returns [`ErrorCode::Unavailable`] instead
+    /// of inventing an empty successful stream.
     pub fn read_output(
         &self,
+        process_id: &ProcessId,
         after_sequence: u64,
         max_bytes: u32,
         wait_timeout_ms: Option<u64>,
     ) -> Result<Vec<a3s_oci_sdk::OutputChunk>> {
+        let launcher_pid = if process_id.is_init() {
+            self.launcher_pid()
+        } else {
+            let exec = self.find_exec_record(process_id)?;
+            let helper = exec.helper.ok_or_else(|| {
+                recovery_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "process {} in container {} generation {:?} has no recorded capture wait target after Host reopen",
+                        process_id, self.target.id, self.target.generation
+                    ),
+                )
+            })?;
+            helper.pid()
+        };
         let mut guard = self.supervisor.lock().map_err(|_| {
             recovery_error(
                 ErrorCode::Internal,
@@ -606,12 +623,7 @@ impl LinuxLiveSupervisedSession {
             )
         })?;
         guard
-            .read_output(
-                self.launcher_pid(),
-                after_sequence,
-                max_bytes,
-                wait_timeout_ms,
-            )
+            .read_output(launcher_pid, after_sequence, max_bytes, wait_timeout_ms)
             .map_err(|error| {
                 // Preserve fail-closed codes from the relay (Unavailable for
                 // missing deposit, ResourceExhausted for stale cursors).
@@ -3476,7 +3488,7 @@ mod tests {
         );
 
         let read_error = live
-            .read_output(0, 4096, None)
+            .read_output(&ProcessId::init(), 0, 4096, None)
             .expect_err("read-output must fail closed without restored capture stdio");
         assert_eq!(
             read_error.code,
@@ -5048,7 +5060,7 @@ mod tests {
             "Host reopen must restore the deposited stdin write end"
         );
         let read_error = live
-            .read_output(0, 4096, None)
+            .read_output(&ProcessId::init(), 0, 4096, None)
             .expect_err("capture stdio must stay Unavailable");
         assert_eq!(read_error.code, ErrorCode::Unavailable);
 
@@ -5232,7 +5244,7 @@ mod tests {
         let mut saw_eof = false;
         for _ in 0..100 {
             let chunks = live
-                .read_output(after, 4096, Some(100))
+                .read_output(&ProcessId::init(), after, 4096, Some(100))
                 .expect("Host reopen must relay authentic capture chunks");
             if chunks.is_empty() {
                 if saw_eof {

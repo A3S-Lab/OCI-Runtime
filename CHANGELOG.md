@@ -27,6 +27,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Live Host-reopen `read_output` selects the capture deposit by process ID:
+  init uses the create launcher PID; exec uses the recorded helper PID. Always
+  reading the create launcher left post-reopen keyed captured exec waiting for
+  EOF on the wrong buffer after the helper had already exited.
 - Exec handshake opens the payload `pidfd` immediately after Ready and before
   releasing START, while the payload is still blocked on the start barrier.
   Opening after START let short captured commands exit and be reaped (ESRCH)
