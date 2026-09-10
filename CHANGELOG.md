@@ -27,6 +27,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Documented the Fresh-host promotion checklist in `ROADMAP.md` (with
+  pointers from `docs/windows-whpx.md` and `docs/linux-native.md`):
+  existing-host greening does not promote readiness; exact WHPX R2 and
+  Linux KVM R2L fresh-host commands and attestation schemas; this used
+  Windows + WSL machine cannot honestly attest fresh-host; ordered
+  remaining gates after fresh-host are W4 cutover, default supervised
+  create, HostRuntimeService KVM registration, and B2 harness
+  self-certify still forbidden as a single-report claim. No readiness,
+  cutover, or B2 flips.
 - Re-greened existing-host WSL2 x86_64 `/dev/kvm` containerd DedicatedVm
   lifecycle qualification on clean tip
   `97e830343ff2915f7d5e4630d6c2045af9660937` (after #295) against tip-source
