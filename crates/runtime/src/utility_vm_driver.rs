@@ -34,6 +34,11 @@ mod handoff;
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 pub(crate) mod kvm_network;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod kvm_live_reattach;
 pub(crate) mod layout;
 #[cfg(all(
     target_os = "linux",
@@ -348,6 +353,56 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
                 }
             }
             return Ok(crate::DriverRecovery::none());
+        }
+
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        if let Some(reattached) = kvm_live_reattach::try_reattach_live(
+            &self.runtime_share_root,
+            &target,
+            record,
+            guest_session,
+        )
+        .await?
+        {
+            {
+                let sessions = self.sessions.lock().await;
+                if let Some(attachment) = sessions.attachments.get(&target.id) {
+                    if attachment.target() != &target {
+                        return Err(Error::new(
+                            ErrorCode::Conflict,
+                            format!(
+                                "container {} is attached at generation {:?}, not durable generation {:?}",
+                                target.id,
+                                attachment.target().generation,
+                                target.generation
+                            ),
+                        )
+                        .for_operation("utility-vm-recover"));
+                    }
+                    if let UtilityVmAttachment::Live(container) = attachment {
+                        let guest = Arc::clone(&container.guest);
+                        drop(sessions);
+                        let observed = guest
+                            .client
+                            .state_with_digest(target.clone(), Some(&record.config_digest))
+                            .await?;
+                        return Ok(crate::DriverRecovery::observed(observed));
+                    }
+                }
+            }
+            let guest = Arc::clone(&reattached.guest);
+            {
+                let mut sessions = self.sessions.lock().await;
+                kvm_live_reattach::register_reattached(&mut sessions, reattached)?;
+            }
+            let observed = guest
+                .client
+                .state_with_digest(target, Some(&record.config_digest))
+                .await?;
+            return Ok(crate::DriverRecovery::observed(observed));
         }
 
         let attachment = {

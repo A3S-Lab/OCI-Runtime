@@ -4,7 +4,7 @@ use std::io;
 #[cfg(all(unix, not(target_os = "macos")))]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 #[cfg(windows)]
@@ -74,6 +74,12 @@ pub(crate) struct AgentVmSession {
     console: PathBuf,
     runtime_share_required: bool,
     expected_system_image_manifest_sha256: Option<String>,
+    /// Runtime share that holds the opt-in Live binding; cleared on intentional shutdown.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    live_binding_share: Option<PathBuf>,
 }
 
 /// Shareable guest client with single-owner, idempotent VM shutdown.
@@ -1039,40 +1045,6 @@ impl AgentVmSession {
         let console_identity = failed_launch_cleanup.console_identity();
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         let bootstrap_cleanup = BootstrapTokenCleanup::new(runtime_share_path, &endpoint);
-        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-        let listener = match WindowsAgentPipeListener::bind(endpoint.clone()) {
-            Ok(listener) => {
-                report.endpoint_bound = true;
-                listener
-            }
-            Err(error) => return Err(failed(report, error.to_string())),
-        };
-        #[cfg(unix)]
-        let listener = match UnixAgentSocketListener::bind(endpoint.clone()) {
-            Ok(listener) => {
-                report.endpoint_bound = true;
-                listener
-            }
-            Err(error) => return Err(failed(report, error.to_string())),
-        };
-        let token = match SessionToken::generate() {
-            Ok(token) => token,
-            Err(error) => return Err(failed(report, error.to_string())),
-        };
-
-        #[cfg(unix)]
-        if let Err(error) = listener.reverify() {
-            return Err(failed(report, error.to_string()));
-        }
-
-        let encoded_token = token.expose_hex();
-        let encoded_qualification = match guest_qualification
-            .map(AgentTransportQualificationRequest::to_json)
-            .transpose()
-        {
-            Ok(encoded) => encoded,
-            Err(error) => return Err(failed(report, error.to_string())),
-        };
         #[cfg(all(
             target_os = "linux",
             any(target_arch = "x86_64", target_arch = "aarch64")
@@ -1084,6 +1056,72 @@ impl AgentVmSession {
             any(target_arch = "x86_64", target_arch = "aarch64")
         )))]
         let durable_owner = false;
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        let listener = match WindowsAgentPipeListener::bind(endpoint.clone()) {
+            Ok(listener) => {
+                report.endpoint_bound = true;
+                listener
+            }
+            Err(error) => return Err(failed(report, error.to_string())),
+        };
+        #[cfg(unix)]
+        let (listener, durable_guest_socket, durable_host_control) = if durable_owner {
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            {
+                match prepare_durable_guest_socket_path(&endpoint) {
+                    Ok(socket_path) => {
+                        report.endpoint_bound = true;
+                        let host_control =
+                            crate::kvm_live_session_binding::KvmLiveSessionBinding::host_control_path(
+                                runtime_share_path,
+                            );
+                        (None, Some(socket_path), Some(host_control))
+                    }
+                    Err(error) => return Err(failed(report, error)),
+                }
+            }
+            #[cfg(not(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )))]
+            {
+                return Err(failed(
+                    report,
+                    "durable KVM session ownership is only supported on Linux",
+                ));
+            }
+        } else {
+            match UnixAgentSocketListener::bind(endpoint.clone()) {
+                Ok(listener) => {
+                    report.endpoint_bound = true;
+                    (Some(listener), None, None)
+                }
+                Err(error) => return Err(failed(report, error.to_string())),
+            }
+        };
+        let token = match SessionToken::generate() {
+            Ok(token) => token,
+            Err(error) => return Err(failed(report, error.to_string())),
+        };
+
+        #[cfg(unix)]
+        if let Some(listener) = listener.as_ref() {
+            if let Err(error) = listener.reverify() {
+                return Err(failed(report, error.to_string()));
+            }
+        }
+
+        let encoded_token = token.expose_hex();
+        let encoded_qualification = match guest_qualification
+            .map(AgentTransportQualificationRequest::to_json)
+            .transpose()
+        {
+            Ok(encoded) => encoded,
+            Err(error) => return Err(failed(report, error.to_string())),
+        };
         let mut command = Command::new(prepared_shim.command_path());
         command
             .arg("agent-vm-smoke")
@@ -1095,13 +1133,17 @@ impl AgentVmSession {
             .arg(endpoint.pipe_name());
         #[cfg(unix)]
         {
+            let socket_path = durable_guest_socket
+                .as_deref()
+                .or_else(|| listener.as_ref().map(|item| item.socket_path()))
+                .expect("unix agent socket path");
             command
                 .arg("--system-image-manifest")
                 .arg(system_image_manifest_path)
                 .arg("--runtime-share")
                 .arg(runtime_share_path)
                 .arg("--socket-path")
-                .arg(listener.socket_path());
+                .arg(socket_path);
             if !durable_owner {
                 command
                     .arg("--owner-pid")
@@ -1166,6 +1208,12 @@ impl AgentVmSession {
                 any(target_arch = "x86_64", target_arch = "aarch64")
             ))]
             {
+                let socket_path = durable_guest_socket
+                    .as_ref()
+                    .expect("durable guest socket path");
+                let host_control = durable_host_control
+                    .as_ref()
+                    .expect("durable host-control path");
                 match spawn_durable_linux_agent_vm(
                     prepared_shim.command_path(),
                     &rootfs,
@@ -1173,7 +1221,8 @@ impl AgentVmSession {
                     endpoint.pipe_name(),
                     system_image_manifest_path,
                     runtime_share_path,
-                    listener.socket_path(),
+                    socket_path,
+                    host_control,
                     console_identity,
                     recovery_report.as_deref(),
                     qualify_kvm_post_probe_failure,
@@ -1223,6 +1272,11 @@ impl AgentVmSession {
         // returns. Releasing the host copy avoids retaining an otherwise
         // unrelated pin for the lifetime of the VM session.
         drop(prepared_shim);
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        let durable_token_hex = durable_owner.then(|| encoded_token.as_str().to_string());
         drop(encoded_token);
         report.shim_spawned = true;
 
@@ -1241,46 +1295,57 @@ impl AgentVmSession {
             Connected(a3s_oci_sdk::Result<(PlatformAgentStream, u32)>),
             ShimExited(io::Result<ExitStatus>),
         }
-        let accept = accept_bridge(listener, shim_process_id);
-        tokio::pin!(accept);
-        let bridge_outcome = timeout(BRIDGE_TIMEOUT, async {
-            if let Some(host_bound) = running.host_bound_mut() {
-                tokio::select! {
-                    result = &mut accept => BridgeOutcome::Connected(result),
-                    status = host_bound.child_mut().wait() => BridgeOutcome::ShimExited(status),
-                }
-            } else {
-                #[cfg(all(
-                    target_os = "linux",
-                    any(target_arch = "x86_64", target_arch = "aarch64")
-                ))]
-                {
-                    loop {
-                        tokio::select! {
-                            result = &mut accept => break BridgeOutcome::Connected(result),
-                            _ = tokio::time::sleep(Duration::from_millis(50)) => {
-                                if let ManagedShim::Durable(owner) = &running {
-                                    if !owner.child_alive() {
-                                        break BridgeOutcome::ShimExited(Ok(
-                                            // Synthetic unsuccessful status: durable path has no Child wait.
-                                            ExitStatus::from_raw(1),
-                                        ));
-                                    }
-                                }
-                            }
+        #[cfg(unix)]
+        let bridge_outcome = if let Some(host_control) = durable_host_control.clone() {
+            timeout(BRIDGE_TIMEOUT, async {
+                loop {
+                    if let ManagedShim::Durable(owner) = &running {
+                        if !owner.child_alive() {
+                            return BridgeOutcome::ShimExited(Ok(ExitStatus::from_raw(1)));
                         }
                     }
+                    match connect_durable_host_control(&host_control, shim_process_id).await {
+                        Ok(connected) => return BridgeOutcome::Connected(Ok(connected)),
+                        Err(error) if error.retryable => {
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                        Err(error) => return BridgeOutcome::Connected(Err(error)),
+                    }
                 }
-                #[cfg(not(all(
-                    target_os = "linux",
-                    any(target_arch = "x86_64", target_arch = "aarch64")
-                )))]
-                {
+            })
+            .await
+        } else {
+            let listener = listener.expect("host-bound unix listener");
+            let accept = accept_bridge(listener, shim_process_id);
+            tokio::pin!(accept);
+            timeout(BRIDGE_TIMEOUT, async {
+                if let Some(host_bound) = running.host_bound_mut() {
+                    tokio::select! {
+                        result = &mut accept => BridgeOutcome::Connected(result),
+                        status = host_bound.child_mut().wait() => BridgeOutcome::ShimExited(status),
+                    }
+                } else {
                     BridgeOutcome::Connected(accept.await)
                 }
-            }
-        })
-        .await;
+            })
+            .await
+        };
+        #[cfg(not(unix))]
+        let bridge_outcome = {
+            let accept = accept_bridge(listener, shim_process_id);
+            tokio::pin!(accept);
+            timeout(BRIDGE_TIMEOUT, async {
+                if let Some(host_bound) = running.host_bound_mut() {
+                    tokio::select! {
+                        result = &mut accept => BridgeOutcome::Connected(result),
+                        status = host_bound.child_mut().wait() => BridgeOutcome::ShimExited(status),
+                    }
+                } else {
+                    BridgeOutcome::Connected(accept.await)
+                }
+            })
+            .await
+        };
         let stream = match bridge_outcome {
             Ok(BridgeOutcome::Connected(Ok((stream, bridge_process_id)))) => {
                 report.shim_client_verified = true;
@@ -1347,6 +1412,39 @@ impl AgentVmSession {
         report.guest_architecture = Some(client.hello().capabilities().architecture().to_string());
         report.advertised_operations = client.hello().capabilities().operations().to_vec();
 
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        if durable_owner {
+            if let (ManagedShim::Durable(owner), Some(host_control), Some(token_hex)) = (
+                &running,
+                durable_host_control.as_ref(),
+                durable_token_hex.as_deref(),
+            ) {
+                match publish_durable_live_binding(
+                    runtime_share_path,
+                    owner,
+                    shim_process_id,
+                    host_control,
+                    endpoint.pipe_name(),
+                    token_hex,
+                ) {
+                    Ok(()) => {}
+                    Err(error) => {
+                        drop(client);
+                        let completed = running.terminate_and_collect().await;
+                        apply_completed(&mut report, &completed);
+                        return Err(failed_with_output(
+                            report,
+                            &format!("failed to publish durable KVM Live binding: {error}"),
+                            &completed,
+                        ));
+                    }
+                }
+            }
+        }
+
         let session = Self {
             report,
             client,
@@ -1377,6 +1475,11 @@ impl AgentVmSession {
                 }
             },
             expected_system_image_manifest_sha256,
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            live_binding_share: durable_owner.then(|| runtime_share_path.to_path_buf()),
         };
         if let Some(reason) = session.contract_failure() {
             return Err(session.finish_with_failure(reason).await);
@@ -1426,9 +1529,36 @@ impl AgentVmSession {
             console,
             runtime_share_required,
             expected_system_image_manifest_sha256,
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            live_binding_share,
         } = self;
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        if let Some(share) = live_binding_share.as_ref() {
+            let _ = crate::kvm_live_session_binding::remove_binding(share);
+        }
         let close_error = client.close().await.err();
         drop(client);
+        // Durable Live reconnect keeps the Guest after Host EOF; intentional
+        // shutdown must kill the session-owner instead of waiting forever.
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        let completed = if live_binding_share.is_some() {
+            running.terminate_and_collect().await
+        } else {
+            running.wait_and_collect().await
+        };
+        #[cfg(not(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )))]
         let completed = running.wait_and_collect().await;
         apply_completed(&mut report, &completed);
         if completed.timed_out {
@@ -1438,12 +1568,40 @@ impl AgentVmSession {
                 &completed,
             );
         }
-        if !completed.status.as_ref().is_some_and(ExitStatus::success) {
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        let durable_terminated = live_binding_share.is_some();
+        #[cfg(not(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )))]
+        let durable_terminated = false;
+        if !durable_terminated && !completed.status.as_ref().is_some_and(ExitStatus::success) {
             return failed_with_output(
                 report,
                 "libkrun shim returned an unsuccessful status",
                 &completed,
             );
+        }
+        if durable_terminated {
+            if let Some(error) = close_error {
+                return failed_with_output(
+                    report,
+                    &format!("failed to close the shared guest-agent session: {error}"),
+                    &completed,
+                );
+            }
+            if let Some(reason) = forced_failure {
+                return failed_with_output(report, &reason, &completed);
+            }
+            report.console_created = tokio::fs::metadata(&console)
+                .await
+                .is_ok_and(|metadata| metadata.is_file());
+            report.status = CapabilityStatus::Available;
+            report.reason = None;
+            return report;
         }
         let shim_report = match parse_shim_report(
             &completed.stdout,
@@ -2576,6 +2734,7 @@ fn spawn_durable_linux_agent_vm(
     system_image_manifest: &Path,
     runtime_share: &Path,
     socket_path: &Path,
+    host_control: &Path,
     console_identity: (u64, u64),
     recovery_report: Option<&Path>,
     qualify_kvm_post_probe_failure: bool,
@@ -2622,7 +2781,13 @@ fn spawn_durable_linux_agent_vm(
         argv.push(OsString::from(digest));
     }
 
-    let mut envs = vec![(AGENT_SESSION_TOKEN_ENV, session_token)];
+    let mut envs = vec![
+        (AGENT_SESSION_TOKEN_ENV, session_token),
+        (
+            crate::kvm_live_session_binding::GUEST_HOST_RECONNECT_ENV,
+            "1",
+        ),
+    ];
     if let Some(encoded) = transport_qualification {
         envs.push((AGENT_TRANSPORT_QUALIFICATION_ENV, encoded));
     }
@@ -2630,8 +2795,100 @@ fn spawn_durable_linux_agent_vm(
         krun_shim,
         &argv,
         &ready_file,
+        Some(host_control),
         &envs,
     )
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn publish_durable_live_binding(
+    runtime_share: &Path,
+    owner: &crate::kvm_durable_session_owner::DurableSessionOwner,
+    shim_process_id: u32,
+    host_control: &Path,
+    pipe_name: &str,
+    session_token_hex: &str,
+) -> io::Result<()> {
+    use crate::kvm_live_session_binding::{
+        KvmLiveSessionBinding, KvmProcessIdentity, KVM_LIVE_SESSION_BINDING_SCHEMA,
+    };
+
+    let session_owner = KvmProcessIdentity::capture(
+        i32::try_from(owner.owner_pid().get()).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("session-owner pid does not fit i32: {error}"),
+            )
+        })?,
+        "durable session-owner",
+    )?;
+    let shim = KvmProcessIdentity::capture(
+        i32::try_from(shim_process_id).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("shim pid does not fit i32: {error}"),
+            )
+        })?,
+        "durable shim",
+    )?;
+    let binding = KvmLiveSessionBinding {
+        schema_version: KVM_LIVE_SESSION_BINDING_SCHEMA.to_string(),
+        container_id: None,
+        generation: None,
+        config_digest: None,
+        session_owner,
+        shim,
+        host_control_socket: host_control.display().to_string(),
+        pipe_name: pipe_name.to_string(),
+        session_token_hex: session_token_hex.to_string(),
+    };
+    binding.publish(runtime_share)?;
+    Ok(())
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn prepare_durable_guest_socket_path(endpoint: &AgentVsockEndpoint) -> Result<PathBuf, String> {
+    use std::fs::DirBuilder;
+    use std::os::unix::fs::DirBuilderExt;
+
+    let directory = Path::new(crate::agent_socket::PRIVATE_TMP_ROOT).join(endpoint.pipe_name());
+    let socket_path = directory.join("agent.sock");
+    let mut builder = DirBuilder::new();
+    builder.recursive(true);
+    builder.mode(0o700);
+    builder
+        .create(&directory)
+        .map_err(|error| format!("create durable guest socket directory: {error}"))?;
+    let _ = fs::set_permissions(&directory, fs::Permissions::from_mode(0o700));
+    let _ = fs::remove_file(&socket_path);
+    Ok(socket_path)
+}
+
+#[cfg(unix)]
+async fn connect_durable_host_control(
+    host_control: &Path,
+    shim_process_id: u32,
+) -> a3s_oci_sdk::Result<(PlatformAgentStream, u32)> {
+    use a3s_oci_sdk::{Error, ErrorCode};
+
+    match UnixStream::connect(host_control).await {
+        Ok(stream) => Ok((stream, shim_process_id)),
+        Err(error) => Err(Error::new(
+            ErrorCode::Unavailable,
+            format!(
+                "failed to connect durable KVM host-control {}: {error}",
+                host_control.display()
+            ),
+        )
+        .for_operation("connect-durable-kvm-host-control")
+        .retryable(true)),
+    }
 }
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]

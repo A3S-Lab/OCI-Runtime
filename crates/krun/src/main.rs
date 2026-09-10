@@ -8,7 +8,7 @@ use std::io;
     )
 ))]
 use std::num::NonZeroU32;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -107,6 +107,10 @@ enum Command {
     /// Default Host-bound ownership is unchanged. This helper setsid()'s, injects
     /// `--owner-pid` as its own PID, spawns the trailing shim argv as a new
     /// process group, and publishes the shim PID to `--ready-file`.
+    ///
+    /// When `--host-control` is set, this process also owns the guest agent
+    /// Unix socket (from shim `--socket-path`) and proxies Host↔guest so a
+    /// replacement Host can reconnect after the first Host dies.
     #[cfg(all(
         target_os = "linux",
         any(target_arch = "x86_64", target_arch = "aarch64")
@@ -115,6 +119,9 @@ enum Command {
         /// Host path that receives one line `<shim_pid>\n` after spawn.
         #[arg(long, value_name = "FILE")]
         ready_file: PathBuf,
+        /// Optional Host-facing control socket for Live reattach proxying.
+        #[arg(long, value_name = "FILE")]
+        host_control: Option<PathBuf>,
         /// Shim argv (for example `agent-vm-smoke ...`). Must not include
         /// `--owner-pid`; this process injects it.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -132,6 +139,20 @@ enum Command {
         /// How long to sleep after the parentage check succeeds.
         #[arg(long, default_value_t = 3_600_000, value_name = "MS")]
         sleep_ms: u64,
+    },
+    /// Qualification-only child: connect to the guest agent socket and echo
+    /// until EOF, then reconnect (simulates Guest Host-reconnect without KVM).
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    SessionOwnerBridgeEcho {
+        /// Injected by `session-owner`; must equal this process's getppid().
+        #[arg(long, value_name = "PID")]
+        owner_pid: NonZeroU32,
+        /// Guest agent Unix socket bound by `session-owner` bridge mode.
+        #[arg(long, value_name = "FILE")]
+        socket_path: PathBuf,
     },
     /// Boot the Linux agent at its fixed guest path and bridge its control vsock.
     AgentVmSmoke {
@@ -405,8 +426,9 @@ fn main() -> ExitCode {
         ))]
         Command::SessionOwner {
             ready_file,
+            host_control,
             shim_argv,
-        } => match run_session_owner(ready_file, shim_argv) {
+        } => match run_session_owner(ready_file, host_control, shim_argv) {
             Ok(code) => code,
             Err(error) => {
                 eprintln!("a3s-oci-krun-shim: session-owner failed: {error}");
@@ -424,6 +446,20 @@ fn main() -> ExitCode {
             Ok(code) => code,
             Err(error) => {
                 eprintln!("a3s-oci-krun-shim: session-owner-probe failed: {error}");
+                ExitCode::FAILURE
+            }
+        },
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        Command::SessionOwnerBridgeEcho {
+            owner_pid,
+            socket_path,
+        } => match run_session_owner_bridge_echo(owner_pid, socket_path) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("a3s-oci-krun-shim: session-owner-bridge-echo failed: {error}");
                 ExitCode::FAILURE
             }
         },
@@ -1125,11 +1161,14 @@ fn run_session_owner_probe(owner_pid: NonZeroU32, sleep_ms: u64) -> Result<ExitC
 ))]
 fn run_session_owner(
     ready_file: PathBuf,
+    host_control: Option<PathBuf>,
     shim_argv: Vec<std::ffi::OsString>,
 ) -> Result<ExitCode, String> {
     use std::fs;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
+    use std::thread;
+    use std::time::Duration;
 
     if shim_argv.is_empty() {
         return Err("session-owner requires a non-empty shim argv after the subcommand".into());
@@ -1146,6 +1185,31 @@ fn run_session_owner(
             io::Error::last_os_error()
         ));
     }
+
+    let guest_socket = host_control
+        .as_ref()
+        .map(|_| extract_shim_socket_path(&shim_argv))
+        .transpose()?;
+
+    let guest_listener = match guest_socket.as_ref() {
+        Some(path) => Some(bind_private_unix_listener(path)?),
+        None => None,
+    };
+    let host_listener = match host_control.as_ref() {
+        Some(path) => {
+            if let Some(parent) = path.parent() {
+                if !parent.as_os_str().is_empty() && !parent.exists() {
+                    return Err(format!(
+                        "session-owner host-control parent directory must exist: {}",
+                        parent.display()
+                    ));
+                }
+            }
+            let _ = fs::remove_file(path);
+            Some(bind_private_unix_listener(path)?)
+        }
+        None => None,
+    };
 
     let owner_pid = std::process::id();
     let owner_pid = NonZeroU32::new(owner_pid)
@@ -1173,11 +1237,285 @@ fn run_session_owner(
     fs::rename(&tmp, &ready_file)
         .map_err(|error| format!("publish session-owner ready file: {error}"))?;
 
-    match spawned.wait() {
-        Ok(status) if status.success() => Ok(ExitCode::SUCCESS),
-        Ok(status) => Ok(ExitCode::from(status.code().unwrap_or(1) as u8)),
-        Err(error) => Err(format!("wait for session-owner shim: {error}")),
+    let (Some(guest_listener), Some(host_listener)) = (guest_listener, host_listener) else {
+        return match spawned.wait() {
+            Ok(status) if status.success() => Ok(ExitCode::SUCCESS),
+            Ok(status) => Ok(ExitCode::from(status.code().unwrap_or(1) as u8)),
+            Err(error) => Err(format!("wait for session-owner shim: {error}")),
+        };
+    };
+
+    guest_listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("guest listener nonblocking: {error}"))?;
+    host_listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("host-control listener nonblocking: {error}"))?;
+
+    loop {
+        if let Some(status) = spawned
+            .try_wait()
+            .map_err(|error| format!("poll session-owner shim: {error}"))?
+        {
+            let _ = fs::remove_file(&ready_file);
+            if let Some(path) = host_control.as_ref() {
+                let _ = fs::remove_file(path);
+            }
+            if let Some(path) = guest_socket.as_ref() {
+                let _ = fs::remove_file(path);
+            }
+            return if status.success() {
+                Ok(ExitCode::SUCCESS)
+            } else {
+                Ok(ExitCode::from(status.code().unwrap_or(1) as u8))
+            };
+        }
+
+        let guest = match accept_nonblocking(&guest_listener) {
+            Ok(Some(stream)) => stream,
+            Ok(None) => {
+                thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            Err(error) => return Err(format!("accept guest agent bridge: {error}")),
+        };
+        guest
+            .set_nonblocking(false)
+            .map_err(|error| format!("guest stream blocking: {error}"))?;
+
+        let host = loop {
+            if let Some(status) = spawned
+                .try_wait()
+                .map_err(|error| format!("poll session-owner shim while waiting Host: {error}"))?
+            {
+                drop(guest);
+                return if status.success() {
+                    Ok(ExitCode::SUCCESS)
+                } else {
+                    Ok(ExitCode::from(status.code().unwrap_or(1) as u8))
+                };
+            }
+            match accept_nonblocking(&host_listener) {
+                Ok(Some(stream)) => {
+                    if let Err(error) = require_same_uid_peer(&stream) {
+                        eprintln!(
+                            "a3s-oci-krun-shim: session-owner rejected host-control peer: {error}"
+                        );
+                        continue;
+                    }
+                    break stream;
+                }
+                Ok(None) => thread::sleep(Duration::from_millis(20)),
+                Err(error) => return Err(format!("accept Host control bridge: {error}")),
+            }
+        };
+        host.set_nonblocking(false)
+            .map_err(|error| format!("host stream blocking: {error}"))?;
+
+        proxy_unix_streams(guest, host);
     }
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn extract_shim_socket_path(shim_argv: &[std::ffi::OsString]) -> Result<PathBuf, String> {
+    let mut iter = shim_argv.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--socket-path" {
+            let path = iter
+                .next()
+                .ok_or_else(|| "session-owner --socket-path is missing a value".to_string())?;
+            return Ok(PathBuf::from(path));
+        }
+    }
+    Err("session-owner bridge mode requires shim argv --socket-path".into())
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn bind_private_unix_listener(path: &Path) -> Result<std::os::unix::net::UnixListener, String> {
+    use std::fs;
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    use std::os::unix::net::UnixListener;
+
+    if let Some(parent) = path.parent() {
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        builder.mode(0o700);
+        builder.create(parent).map_err(|error| {
+            format!(
+                "create session-owner socket parent {}: {error}",
+                parent.display()
+            )
+        })?;
+        let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+    }
+    let _ = fs::remove_file(path);
+    let listener = UnixListener::bind(path)
+        .map_err(|error| format!("bind session-owner socket {}: {error}", path.display()))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("protect session-owner socket {}: {error}", path.display()))?;
+    Ok(listener)
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn accept_nonblocking(
+    listener: &std::os::unix::net::UnixListener,
+) -> io::Result<Option<std::os::unix::net::UnixStream>> {
+    match listener.accept() {
+        Ok((stream, _)) => Ok(Some(stream)),
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn require_same_uid_peer(stream: &std::os::unix::net::UnixStream) -> Result<(), String> {
+    use std::mem::MaybeUninit;
+    use std::os::unix::io::AsRawFd;
+
+    let expected_uid = unsafe { libc::geteuid() };
+    let mut cred = MaybeUninit::<libc::ucred>::uninit();
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            cred.as_mut_ptr().cast(),
+            &mut len,
+        )
+    };
+    if rc != 0 {
+        return Err(format!(
+            "SO_PEERCRED failed: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    let cred = unsafe { cred.assume_init() };
+    if cred.uid != expected_uid {
+        return Err(format!(
+            "host-control peer uid {} does not match session-owner uid {expected_uid}",
+            cred.uid
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn run_session_owner_bridge_echo(
+    owner_pid: NonZeroU32,
+    socket_path: PathBuf,
+) -> Result<ExitCode, String> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::{Duration, Instant};
+
+    // SAFETY: getppid has no failure mode.
+    let parent = unsafe { libc::getppid() };
+    let expected = libc::pid_t::try_from(owner_pid.get())
+        .map_err(|error| format!("owner_pid does not fit pid_t: {error}"))?;
+    if parent != expected {
+        return Err(format!(
+            "session-owner-bridge-echo parentage mismatch: getppid={parent} owner_pid={expected}"
+        ));
+    }
+
+    loop {
+        let mut stream = {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                match UnixStream::connect(&socket_path) {
+                    Ok(stream) => break stream,
+                    Err(error) if Instant::now() >= deadline => {
+                        return Err(format!(
+                            "timed out connecting bridge-echo to {}: {error}",
+                            socket_path.display()
+                        ));
+                    }
+                    Err(_) => std::thread::sleep(Duration::from_millis(20)),
+                }
+            }
+        };
+        let mut buffer = [0u8; 4096];
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => {
+                    stream
+                        .write_all(&buffer[..n])
+                        .map_err(|error| format!("bridge-echo write failed: {error}"))?;
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+        // Clean Host disconnect: reconnect like Guest Host-reconnect mode.
+    }
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn proxy_unix_streams(
+    left: std::os::unix::net::UnixStream,
+    right: std::os::unix::net::UnixStream,
+) {
+    use std::io::{Read, Write};
+    use std::thread;
+
+    let (mut left_read, mut left_write) = match left.try_clone() {
+        Ok(clone) => (left, clone),
+        Err(_) => return,
+    };
+    let (mut right_read, mut right_write) = match right.try_clone() {
+        Ok(clone) => (right, clone),
+        Err(_) => return,
+    };
+
+    let forward = thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        loop {
+            match left_read.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if right_write.write_all(&buffer[..n]).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = right_write.shutdown(std::net::Shutdown::Both);
+    });
+    let mut buffer = [0_u8; 8192];
+    loop {
+        match right_read.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(n) => {
+                if left_write.write_all(&buffer[..n]).is_err() {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let _ = left_write.shutdown(std::net::Shutdown::Both);
+    let _ = forward.join();
 }
 
 fn write_json(value: &impl Serialize) -> Result<(), serde_json::Error> {

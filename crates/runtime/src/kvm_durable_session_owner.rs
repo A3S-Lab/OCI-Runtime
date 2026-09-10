@@ -62,6 +62,14 @@ pub struct DurableSessionOwner {
 }
 
 impl DurableSessionOwner {
+    /// Reconstruct a durable owner handle from authenticated PIDs (Live reattach).
+    pub fn from_authenticated(owner_pid: NonZeroU32, child_pid: NonZeroU32) -> Self {
+        Self {
+            owner_pid,
+            child_pid,
+        }
+    }
+
     pub fn owner_pid(&self) -> NonZeroU32 {
         self.owner_pid
     }
@@ -125,15 +133,19 @@ pub fn spawn_via_session_owner_helper(
     shim_argv: &[std::ffi::OsString],
     ready_file: &std::path::Path,
 ) -> io::Result<DurableSessionOwner> {
-    spawn_via_session_owner_helper_with_env(krun_shim, shim_argv, ready_file, &[])
+    spawn_via_session_owner_helper_with_env(krun_shim, shim_argv, ready_file, None, &[])
 }
 
 /// Like [`spawn_via_session_owner_helper`], forwarding extra environment into the
 /// session-owner (and therefore the shim).
+///
+/// When `host_control` is set, the session-owner binds the shim `--socket-path`
+/// and proxies Host↔guest on that control socket for Live reattach.
 pub fn spawn_via_session_owner_helper_with_env(
     krun_shim: &std::path::Path,
     shim_argv: &[std::ffi::OsString],
     ready_file: &std::path::Path,
+    host_control: Option<&std::path::Path>,
     envs: &[(&str, &str)],
 ) -> io::Result<DurableSessionOwner> {
     use std::fs;
@@ -154,12 +166,16 @@ pub fn spawn_via_session_owner_helper_with_env(
     if ready_file.exists() {
         let _ = fs::remove_file(ready_file);
     }
+    if let Some(path) = host_control {
+        let _ = fs::remove_file(path);
+    }
 
     let mut owner = Command::new(krun_shim);
+    owner.arg("session-owner").arg("--ready-file").arg(ready_file);
+    if let Some(path) = host_control {
+        owner.arg("--host-control").arg(path);
+    }
     owner
-        .arg("session-owner")
-        .arg("--ready-file")
-        .arg(ready_file)
         .args(shim_argv)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -566,6 +582,83 @@ mod tests {
         assert!(owner.owner_alive());
 
         owner.shutdown().expect("shutdown helper-backed owner");
+    }
+
+    #[test]
+    fn session_owner_bridge_survives_host_disconnect_and_second_connect() {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixStream;
+
+        let shim = env::var("A3S_OCI_KRUN_SHIM")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                path.pop();
+                path.pop();
+                let candidate = path.join("target/debug/a3s-oci-krun-shim");
+                candidate.is_file().then_some(candidate)
+            });
+        let Some(shim) = shim else {
+            eprintln!("skipping: build a3s-oci-krun-shim or set A3S_OCI_KRUN_SHIM");
+            return;
+        };
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ready = temp.path().join("ready");
+        let host_control = temp.path().join("host-control.sock");
+        let guest_dir = temp.path().join("guest-endpoint");
+        fs::create_dir_all(&guest_dir).expect("guest dir");
+        let guest_socket = guest_dir.join("agent.sock");
+        let argv = [
+            std::ffi::OsString::from("session-owner-bridge-echo"),
+            std::ffi::OsString::from("--socket-path"),
+            guest_socket.as_os_str().to_owned(),
+        ];
+        let owner = spawn_via_session_owner_helper_with_env(
+            &shim,
+            &argv,
+            &ready,
+            Some(host_control.as_path()),
+            &[],
+        )
+        .expect("spawn session-owner bridge");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut first = loop {
+            match UnixStream::connect(&host_control) {
+                Ok(stream) => break stream,
+                Err(error) if Instant::now() >= deadline => {
+                    panic!("first host-control connect failed: {error}");
+                }
+                Err(_) => thread::sleep(Duration::from_millis(20)),
+            }
+        };
+        first.write_all(b"ping-1").expect("write first");
+        let mut buf = [0u8; 16];
+        let n = first.read(&mut buf).expect("read first");
+        assert_eq!(&buf[..n], b"ping-1");
+        drop(first);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut second = loop {
+            match UnixStream::connect(&host_control) {
+                Ok(stream) => break stream,
+                Err(error) if Instant::now() >= deadline => {
+                    panic!("second host-control connect failed: {error}");
+                }
+                Err(_) => thread::sleep(Duration::from_millis(20)),
+            }
+        };
+        second.write_all(b"ping-2").expect("write second");
+        let n = second.read(&mut buf).expect("read second");
+        assert_eq!(&buf[..n], b"ping-2");
+        drop(second);
+
+        assert!(owner.owner_alive());
+        assert!(owner.child_alive());
+        owner.shutdown().expect("shutdown bridge owner");
     }
 
     #[test]
