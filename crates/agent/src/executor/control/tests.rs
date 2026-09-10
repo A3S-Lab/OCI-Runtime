@@ -164,10 +164,7 @@ fn cross_process_device_mount_scm_rights_does_not_require_host_parentage() {
     let mounts = (0..super::super::device::ROOTLESS_DEVICE_MOUNT_COUNT)
         .map(|_| OwnedFd::from(std::fs::File::open("/dev/null").expect("device fixture")))
         .collect::<Vec<_>>();
-    let descriptors = mounts
-        .iter()
-        .map(AsRawFd::as_raw_fd)
-        .collect::<Vec<_>>();
+    let descriptors = mounts.iter().map(AsRawFd::as_raw_fd).collect::<Vec<_>>();
     super::super::device_mount_transport::send_descriptor_frame(
         parent_control.as_raw_fd(),
         0xD1,

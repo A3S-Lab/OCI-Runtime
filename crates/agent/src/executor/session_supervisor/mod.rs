@@ -347,7 +347,14 @@ impl HostSessionSupervisor {
         control_workload: Option<(RawFd, RawFd)>,
         stdio: Option<(Option<RawFd>, Option<RawFd>, Option<RawFd>)>,
     ) -> Result<i32> {
-        self.spawn_launcher_with_inherited(program, args, join_cgroup_procs, control_workload, stdio, &[])
+        self.spawn_launcher_with_inherited(
+            program,
+            args,
+            join_cgroup_procs,
+            control_workload,
+            stdio,
+            &[],
+        )
     }
 
     /// Like [`Self::spawn_launcher`], with optional inherited target FD installs.
@@ -2897,10 +2904,7 @@ sys.exit(0 if len(received) == EXPECTED else 14)
         let mounts = (0..expected)
             .map(|_| OwnedFd::from(std::fs::File::open("/dev/null").expect("device fixture")))
             .collect::<Vec<_>>();
-        let descriptors = mounts
-            .iter()
-            .map(AsRawFd::as_raw_fd)
-            .collect::<Vec<_>>();
+        let descriptors = mounts.iter().map(AsRawFd::as_raw_fd).collect::<Vec<_>>();
         // Mirror create: Host holds the control socket and sends mounts after
         // the supervisor-parented launcher is live — not via spawn FD lists.
         super::super::device_mount_transport::send_descriptor_frame(

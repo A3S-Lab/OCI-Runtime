@@ -95,16 +95,12 @@ fn supervised_create_allows_rootless_device_mounts_and_keeps_other_gates() {
             .expect("terminal remains unsupported")
             .contains("terminal")
     );
-    assert!(
-        supervised_create_unsupported_reason(true, false, &pipe_io)
-            .expect("pinned bundle remains unsupported")
-            .contains("utility-VM")
-    );
-    assert!(
-        supervised_create_unsupported_reason(false, true, &pipe_io)
-            .expect("inherited workload descriptors remain unsupported")
-            .contains("inherited workload")
-    );
+    assert!(supervised_create_unsupported_reason(true, false, &pipe_io)
+        .expect("pinned bundle remains unsupported")
+        .contains("utility-VM"));
+    assert!(supervised_create_unsupported_reason(false, true, &pipe_io)
+        .expect("inherited workload descriptors remain unsupported")
+        .contains("inherited workload"));
 
     // Empty and nonempty prepared mounts remain subject only to count validation.
     validate_rootless_device_mounts(&[], false, false).expect("privileged empty mounts");
