@@ -67,6 +67,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Guest `A3S_OCI_GUEST_HOST_RECONNECT=1` now reconnects after a clean Host EOF
+  (`serve_agent_connection` → `Ok(())` at frame boundary). The previous loop only
+  retried retryable Unavailable I/O errors, so Host SIGKILL after idle Start made
+  the Guest shut down, reaped the utility VM, and failed Live session-owner survival.
+  Rebuild the musl Guest Agent into the KVM system image after this contract change.
 - Durable KVM Live host-control socket now binds under `/tmp/<pipe>/host-control.sock`
   beside the guest agent socket instead of under the long runtime share path,
   which exceeded Linux `SUN_LEN` and made session-owner exit before readiness.
