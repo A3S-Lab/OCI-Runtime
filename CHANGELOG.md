@@ -25,6 +25,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Documented that pre-fresh WHPX/KVM promote-honesty tooling is tip-closed
+  (through merge #305) and that remaining readiness work before W4+ is
+  fresh-host hardware evidence only — not further re-assert PRs without a
+  new dishonest path. See ROADMAP § Fresh-host promotion checklist.
+
 ### Fixed
 
 - Fail-closed Linux KVM fresh release-matrix promotion so bound gate

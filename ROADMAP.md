@@ -193,6 +193,22 @@ architectures need `available` lifecycle (incl. Guest path-isolation),
 owner-death/restart, and 25-wave soak. See
 [`docs/linux-native.md`](docs/linux-native.md).
 
+### Pre-fresh promote-honesty tooling (closed on tip)
+
+As of tip merge [#305](https://github.com/A3S-Lab/OCI-Runtime/pull/305)
+(`3e2a9c1`), operator-reachable dishonest promote paths for fresh WHPX/KVM
+matrices are refuse-closed in library + unit tests (attestation fail-closed,
+skip-soak / reduced soak, thinned reopen, soak breadth, handle-reclamation
+depth, KVM bound gate depths). Existing-host greening still never sets
+`promotes_readiness=true`. Further defense-in-depth re-asserts without a new
+exploitable path are overfit — do not land them.
+
+**Remaining work before W4+ is hardware evidence only:** newly provisioned
+WHPX and Linux KVM (x86_64 + AArch64) hosts tip-matched to current `main`,
+attestation-bound release matrices with soak on and full profiles. Used
+developer hosts must keep `-HostClass existing` /
+`A3S_OCI_LINUX_KVM_HOST_CLASS=existing`.
+
 ### Ordered remaining gates after honest fresh-host
 
 1. **Fresh-host WHPX R2** and **fresh-host KVM R2L** (x86_64 + AArch64) with
