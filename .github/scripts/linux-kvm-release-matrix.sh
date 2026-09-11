@@ -188,6 +188,12 @@ if [[ "$skip_soak" != "1" ]]; then
 fi
 
 completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+bound_depths_ok=0
+if [[ "$host_class" == "fresh" ]]; then
+  # Fail closed: thinned bound gates must not produce a promote-capable report.
+  linux_kvm_assert_fresh_host_bound_gate_depths fresh "$gates_dir"
+  bound_depths_ok=1
+fi
 promotes="$(
   linux_kvm_compute_promotes_readiness \
     "$host_class" \
@@ -195,10 +201,23 @@ promotes="$(
     "$skip_soak" \
     "$soak_ran" \
     "$soak_requested_iterations" \
-    "$soak_completed_iterations"
+    "$soak_completed_iterations" \
+    "$bound_depths_ok"
 )"
 
 gates_json="$(jq --slurp --compact-output '.' "$gates_ndjson")"
+bound_gate_depths_json='[]'
+for entry in "${LINUX_KVM_PROMOTION_BOUND_GATE_CASES[@]}"; do
+  name="${entry%%:*}"
+  expected="${entry##*:}"
+  bound_gate_depths_json="$(
+    jq --compact-output --null-input \
+      --argjson current "$bound_gate_depths_json" \
+      --arg name "$name" \
+      --argjson expected_case_count "$expected" \
+      '$current + [{name: $name, expected_case_count: $expected_case_count}]'
+  )"
+done
 
 jq --null-input \
   --arg architecture "$(uname -m)" \
@@ -208,6 +227,8 @@ jq --null-input \
   --argjson included_soak "$([[ "$soak_ran" == "1" ]] && printf true || printf false)" \
   --argjson soak_requested_iterations "$soak_requested_iterations" \
   --argjson soak_completed_iterations "$soak_completed_iterations" \
+  --argjson bound_depths_ok "$([[ "$bound_depths_ok" == "1" ]] && printf true || printf false)" \
+  --argjson bound_gate_depths "$bound_gate_depths_json" \
   --arg started_at_utc "$started_at" \
   --arg completed_at_utc "$completed_at" \
   --arg commit "$(git rev-parse HEAD)" \
@@ -224,6 +245,8 @@ jq --null-input \
     included_soak: $included_soak,
     soak_requested_iterations: $soak_requested_iterations,
     soak_completed_iterations: $soak_completed_iterations,
+    bound_depths_ok: $bound_depths_ok,
+    bound_gate_depths: $bound_gate_depths,
     started_at_utc: $started_at_utc,
     completed_at_utc: $completed_at_utc,
     commit: $commit,
@@ -250,6 +273,7 @@ jq --exit-status \
     if .host_class == "fresh" then
       .promotes_readiness
       and .included_soak
+      and .bound_depths_ok
       and .gate_count == 6
       and any(.gates[]; .name == "soak")
       and .soak_requested_iterations == $promotion_soak_iterations
