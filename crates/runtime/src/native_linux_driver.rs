@@ -342,16 +342,7 @@ impl NativeLinuxDriver {
         if self.live_for(target, operation).await?.is_some() {
             // Permanent: Live reopen does not restore PreparedProcess. Do not use
             // Unavailable — Box retries that code.
-            let (code, detail) = match operation {
-                "native-linux-start" => (
-                    ErrorCode::FailedPrecondition,
-                    "container is already retained through a reattached live session",
-                ),
-                _ => (
-                    ErrorCode::Unsupported,
-                    "operation requires a restored PreparedProcess that Live reopen does not provide",
-                ),
-            };
+            let (code, detail) = live_process_session_refusal(operation);
             return Err(Error::new(
                 code,
                 format!(
@@ -370,6 +361,22 @@ impl NativeLinuxDriver {
 
     async fn require_live(&self, target: &ContainerTarget, operation: &'static str) -> Result<()> {
         self.require_live_process_session(target, operation).await
+    }
+}
+
+/// Classify permanent refusals when a Live session exists but PreparedProcess does not.
+///
+/// Box retries [`ErrorCode::Unavailable`]; these outcomes must not use that code.
+fn live_process_session_refusal(operation: &'static str) -> (ErrorCode, &'static str) {
+    match operation {
+        "native-linux-start" => (
+            ErrorCode::FailedPrecondition,
+            "container is already retained through a reattached live session",
+        ),
+        _ => (
+            ErrorCode::Unsupported,
+            "operation requires a restored PreparedProcess that Live reopen does not provide",
+        ),
     }
 }
 
@@ -1168,12 +1175,33 @@ async fn guest_path(bundle: &Path) -> Result<GuestPath> {
 #[cfg(test)]
 mod tests {
     use a3s_oci_sdk::{
-        AMD_SEV_SNP_LAUNCH_EXTENSION, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3,
+        AMD_SEV_SNP_LAUNCH_EXTENSION, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3, ErrorCode,
         INTEL_TDX_LAUNCH_EXTENSION, NETWORK_ENFORCEMENT_EXTENSION,
         NETWORK_ENFORCEMENT_EXTENSION_VERSION, TEE_LAUNCH_EXTENSION_VERSION,
     };
 
-    use super::native_attachment_capabilities;
+    use super::{live_process_session_refusal, native_attachment_capabilities};
+
+    #[test]
+    fn live_process_session_refusal_is_not_unavailable() {
+        let (start_code, start_detail) = live_process_session_refusal("native-linux-start");
+        assert_eq!(start_code, ErrorCode::FailedPrecondition);
+        assert!(start_detail.contains("already retained"));
+
+        for operation in [
+            "native-linux-resize",
+            "native-linux-checkpoint",
+            "native-linux-unknown",
+        ] {
+            let (code, detail) = live_process_session_refusal(operation);
+            assert_eq!(
+                code,
+                ErrorCode::Unsupported,
+                "{operation} must not be Unavailable (Box retries that code)"
+            );
+            assert!(detail.contains("PreparedProcess"));
+        }
+    }
 
     #[test]
     fn network_attachment_capability_requires_rootful_device_authority() {
