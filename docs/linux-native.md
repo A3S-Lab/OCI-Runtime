@@ -2055,8 +2055,11 @@ supervised create moves the capture **read** ends to the supervisor
 sole drain into a bounded per-launcher buffer mirroring Host `OutputBuffer`
 semantics, and Hosts consume sequence-bearing chunks via `MSG_READ_OUTPUT`.
 Missing deposit or lost cursor fail-closes with `Unavailable` /
-`ResourceExhausted` instead of inventing an empty stream. Terminal/inherit I/O
-remain Unsupported on supervised create. Authenticated Host-reopen
+`ResourceExhausted` instead of inventing an empty stream. Terminal I/O
+remains Unsupported on supervised create. Host `Inherit` stdio is supported:
+`prepare_supervised_stdio` duplicates Host fds 0/1/2 into the supervised
+install plan (Box Live sandbox create uses Null stdin + Inherit
+stdout/stderr with `a3s_box_control_v1`). Authenticated Host-reopen
 `signal_process` for durable init/exec identities is implemented: re-check
 PID + start-time, open a pidfd, deliver the signal — without restoring a fake
 `PreparedProcess`. Live `wait_process` for durable exec uses supervisor
@@ -2070,8 +2073,9 @@ spawn context from the durable `config.json` snapshot (namespace plan,
 capability ceiling, seccomp) plus live init namespace/root descriptors and the
 recovery cgroup leaf, then supervisor-parents the helper. Live Host and
 Host-reopen supervised exec deposit capture/pipe I/O the same way create does
-(exclusive `MSG_DEPOSIT_OUTPUT` / stdin dup deposit + relay). Terminal/inherit
-remain Unavailable. Host-reopen `file` / `filesystem` rebuild the same retained
+(exclusive `MSG_DEPOSIT_OUTPUT` / stdin dup deposit + relay). Terminal I/O
+remains Unavailable; Host `Inherit` uses the same supervised install path as
+create. Host-reopen `file` / `filesystem` rebuild the same retained
 execution context and call the existing descriptor-confined helpers;
 `NativeLinuxDriver` routes those operations through `live_for` (dead init →
 `Unavailable`, wrong generation → `Conflict`) instead of the old
@@ -2333,7 +2337,8 @@ following pass:
   optional multi-architecture/notification seccomp profiles, and wider sysctl
   kernel-compatibility and security-negative profiles;
 - live real-driver reattachment after runtime-process restart, plus generic SDK
-  inherited process-I/O modes beyond the fixed A3S Box init-control profile;
+  inherited descriptor schemas beyond the fixed A3S Box init-control profile
+  (Host `Inherit` process stdio on supervised create is already supported);
 - additional Hook crash points, process-group escape security negatives, and
   adversarial soak beyond the retained `startContainer` owner-death,
   six-phase failure/timeout, and descriptor-inheritance matrices,
