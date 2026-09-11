@@ -230,7 +230,14 @@ $gates.Add((Invoke-GateScript `
     -Name 'handle-reclamation' `
     -ScriptPath (Join-Path $PSScriptRoot 'windows-whpx-handle-reclamation.ps1') `
     -GateOutputDirectory (Join-Path $outputRoot 'gates\handle-reclamation') `
-    -ExpectedSummarySchema 'a3s.oci.windows-whpx-handle-reclamation-run.v1'))
+    -ExpectedSummarySchema 'a3s.oci.windows-whpx-handle-reclamation-run.v1' `
+    -ExtraArguments $(
+        if ($HostClass -eq 'fresh') {
+            @('-Iterations', "$script:WhpxPromotionHandleReclamationIterations")
+        } else {
+            @()
+        }
+    )))
 
 $gates.Add((Invoke-GateScript `
     -Name 'driver-smoke' `
@@ -274,6 +281,7 @@ if (-not $SkipOperationReopen) {
 
 $soakRequestedIterations = 0
 $soakCompletedIterations = 0
+$soakSummary = $null
 if (-not $SkipSoak) {
     $soakSummaryPath = Join-Path $outputRoot 'gates\soak\evidence\summary.json'
     Assert-RegularFile -Path $soakSummaryPath -Label 'WHPX soak summary' | Out-Null
@@ -282,7 +290,8 @@ if (-not $SkipSoak) {
     $soakCompletedIterations = [int](Get-OptionalProperty -Object $soakSummary -Name 'completed_iterations')
     Assert-WhpxFreshHostSoakProfile `
         -HostClass $HostClass `
-        -RequestedIterations $soakRequestedIterations
+        -RequestedIterations $soakRequestedIterations `
+        -SoakSummary $soakSummary
 }
 
 $operationReopenCaseCount = 0
@@ -296,6 +305,15 @@ if (-not $SkipOperationReopen) {
         -CaseCount $operationReopenCaseCount
 }
 
+$handleReclamationIterations = 0
+$handleSummaryPath = Join-Path $outputRoot 'gates\handle-reclamation\summary.json'
+Assert-RegularFile -Path $handleSummaryPath -Label 'WHPX handle-reclamation summary' | Out-Null
+$handleSummary = Get-Content -LiteralPath $handleSummaryPath -Raw | ConvertFrom-Json
+$handleReclamationIterations = [int](Get-OptionalProperty -Object $handleSummary -Name 'requested_iterations')
+Assert-WhpxFreshHostHandleReclamationProfile `
+    -HostClass $HostClass `
+    -RequestedIterations $handleReclamationIterations
+
 $completedAt = [DateTime]::UtcNow
 $promotesReadiness = Get-WhpxPromotesReadiness `
     -HostClass $HostClass `
@@ -305,7 +323,9 @@ $promotesReadiness = Get-WhpxPromotesReadiness `
     -GateCount $gates.Count `
     -SoakRequestedIterations $soakRequestedIterations `
     -SoakCompletedIterations $soakCompletedIterations `
-    -OperationReopenCaseCount $operationReopenCaseCount
+    -OperationReopenCaseCount $operationReopenCaseCount `
+    -HandleReclamationIterations $handleReclamationIterations `
+    -SoakSummary $soakSummary
 $summary = [ordered]@{
     schema_version = 'a3s.oci.windows-whpx-release-matrix.v1'
     status = 'available'
@@ -330,6 +350,7 @@ $summary = [ordered]@{
     soak_requested_iterations = $soakRequestedIterations
     soak_completed_iterations = $soakCompletedIterations
     operation_reopen_case_count = $operationReopenCaseCount
+    handle_reclamation_requested_iterations = $handleReclamationIterations
     gate_count = $gates.Count
     gates = $gates
 }
@@ -344,8 +365,14 @@ if ($HostClass -eq 'fresh') {
         $soakCompletedIterations -ne $script:WhpxPromotionSoakIterations) {
         throw 'HostClass=fresh requires full soak depth (requested_iterations=completed_iterations=25).'
     }
+    if ($null -eq $soakSummary -or -not (Test-WhpxSoakPromotionBreadth -SoakSummary $soakSummary)) {
+        throw 'HostClass=fresh requires the full default WHPX soak breadth.'
+    }
     if ($operationReopenCaseCount -ne $script:WhpxPromotionOperationReopenCases) {
         throw 'HostClass=fresh requires full operation-reopen depth (case_count=180).'
+    }
+    if ($handleReclamationIterations -ne $script:WhpxPromotionHandleReclamationIterations) {
+        throw 'HostClass=fresh requires full handle-reclamation depth (requested_iterations=8).'
     }
 }
 Write-Utf8Text -Path (Join-Path $outputRoot 'summary.json') `
