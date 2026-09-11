@@ -455,8 +455,13 @@ $summary = [ordered]@{
     system_image_manifest_sha256 = $systemImageManifestSha256
     system_image_sha256 = $systemImageSha256
     stages = $Stages
+    expected_case_count = $expectedStages.Count
     case_count = $results.Count
     cases = $results
+}
+if ($results.Count -ne $expectedStages.Count) {
+    throw ("Transport-fault gate expected {0} cases; got {1}" -f `
+        $expectedStages.Count, $results.Count)
 }
 Write-Utf8Text -Path (Join-Path $outputRoot 'summary.json') `
     -Text ($summary | ConvertTo-Json -Depth 16)

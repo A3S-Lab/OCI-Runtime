@@ -40,10 +40,22 @@ if (-not $rejectedReducedSoak) {
 }
 Assert-WhpxFreshHostSoakProfile -HostClass fresh -RequestedIterations 25
 
-if (Get-WhpxPromotesReadiness -HostClass existing -HasFreshHostAttestation $true -GateCount 6 -SoakRequestedIterations 25 -SoakCompletedIterations 25) {
+Assert-WhpxFreshHostOperationReopenProfile -HostClass existing -CaseCount 1
+$rejectedThinnedReopen = $false
+try {
+    Assert-WhpxFreshHostOperationReopenProfile -HostClass fresh -CaseCount 1
+} catch {
+    $rejectedThinnedReopen = $true
+}
+if (-not $rejectedThinnedReopen) {
+    throw 'fresh HostClass unexpectedly allowed thinned operation-reopen profile'
+}
+Assert-WhpxFreshHostOperationReopenProfile -HostClass fresh -CaseCount 180
+
+if (Get-WhpxPromotesReadiness -HostClass existing -HasFreshHostAttestation $true -GateCount 6 -SoakRequestedIterations 25 -SoakCompletedIterations 25 -OperationReopenCaseCount 180) {
     throw 'existing HostClass unexpectedly promoted readiness'
 }
-if (-not (Get-WhpxPromotesReadiness -HostClass fresh -HasFreshHostAttestation $true -GateCount 6 -SoakRequestedIterations 25 -SoakCompletedIterations 25)) {
+if (-not (Get-WhpxPromotesReadiness -HostClass fresh -HasFreshHostAttestation $true -GateCount 6 -SoakRequestedIterations 25 -SoakCompletedIterations 25 -OperationReopenCaseCount 180)) {
     throw 'fresh HostClass with full gates unexpectedly failed to promote'
 }
 if (Get-WhpxPromotesReadiness -HostClass fresh -HasFreshHostAttestation $true -SkipSoak -GateCount 5) {
@@ -52,13 +64,16 @@ if (Get-WhpxPromotesReadiness -HostClass fresh -HasFreshHostAttestation $true -S
 if (Get-WhpxPromotesReadiness -HostClass fresh -HasFreshHostAttestation $true -SkipOperationReopen -GateCount 5) {
     throw 'fresh HostClass with -SkipOperationReopen unexpectedly promoted readiness'
 }
-if (Get-WhpxPromotesReadiness -HostClass fresh -HasFreshHostAttestation $true -GateCount 5 -SoakRequestedIterations 25 -SoakCompletedIterations 25) {
+if (Get-WhpxPromotesReadiness -HostClass fresh -HasFreshHostAttestation $true -GateCount 5 -SoakRequestedIterations 25 -SoakCompletedIterations 25 -OperationReopenCaseCount 180) {
     throw 'fresh HostClass with incomplete gate_count unexpectedly promoted readiness'
 }
-if (Get-WhpxPromotesReadiness -HostClass fresh -HasFreshHostAttestation $true -GateCount 6 -SoakRequestedIterations 1 -SoakCompletedIterations 1) {
+if (Get-WhpxPromotesReadiness -HostClass fresh -HasFreshHostAttestation $true -GateCount 6 -SoakRequestedIterations 1 -SoakCompletedIterations 1 -OperationReopenCaseCount 180) {
     throw 'fresh HostClass with reduced soak depth unexpectedly promoted readiness'
 }
-if (Get-WhpxPromotesReadiness -HostClass fresh -HasFreshHostAttestation $false -GateCount 6 -SoakRequestedIterations 25 -SoakCompletedIterations 25) {
+if (Get-WhpxPromotesReadiness -HostClass fresh -HasFreshHostAttestation $true -GateCount 6 -SoakRequestedIterations 25 -SoakCompletedIterations 25 -OperationReopenCaseCount 20) {
+    throw 'fresh HostClass with thinned operation-reopen unexpectedly promoted readiness'
+}
+if (Get-WhpxPromotesReadiness -HostClass fresh -HasFreshHostAttestation $false -GateCount 6 -SoakRequestedIterations 25 -SoakCompletedIterations 25 -OperationReopenCaseCount 180) {
     throw 'fresh HostClass without attestation unexpectedly promoted readiness'
 }
 
