@@ -434,13 +434,14 @@ impl SessionSupervisorReattachCache {
 /// [`Self::stats`] / [`Self::update`] use the durable recovery cgroup leaf
 /// (kernel freezer, cgroup-v2 counters, and supported resource fields) without
 /// restoring a fake [`PreparedProcess`]. Missing cgroup evidence fail-closes
-/// with [`ErrorCode::Unavailable`]. Device-policy updates remain Unavailable
-/// because recovery does not retain device-authority state. New `exec`
+/// with [`ErrorCode::Unavailable`]. Device-policy updates remain
+/// [`ErrorCode::Unsupported`] (permanent: leaf has no device-authority state;
+/// callers must not retry). New `exec`
 /// rebuilds the minimum authentic spawn context from the durable config
 /// snapshot plus live init namespace/root descriptors (and the recovery cgroup
 /// leaf when present), then supervisor-parents the helper with the same
 /// capture/pipe deposit path as supervised create. Terminal/inherit remain
-/// Unavailable. Missing config or live init fail-closes without inventing exit
+/// [`ErrorCode::Unsupported`] on Host-reopen exec (not retryable). Missing config or live init fail-closes without inventing exit
 /// status.
 #[derive(Debug)]
 pub struct LinuxLiveSupervisedSession {
@@ -758,7 +759,7 @@ impl LinuxLiveSupervisedSession {
     ///
     /// Mirrors [`PreparedProcess`] resource update against the recorded leaf
     /// without restoring process-session state. Device-policy fields fail
-    /// closed because recovery does not retain device-authority state.
+    /// closed with [`ErrorCode::Unsupported`] (no retained device authority).
     pub async fn update(&self, resources: &LinuxResources) -> Result<()> {
         if !self.init_is_live()? {
             return Err(recovery_error(
@@ -812,7 +813,7 @@ impl LinuxLiveSupervisedSession {
     /// live init namespace/root descriptors and the recovery cgroup leaf.
     /// Null/capture/pipe I/O is accepted: capture and pipe deposit into the
     /// session supervisor the same way supervised create does. Terminal and
-    /// inherit remain Unavailable. Successful spawn persists a v6 exec identity
+    /// inherit remain [`ErrorCode::Unsupported`]. Successful spawn persists a v6 exec identity
     /// (payload + helper) so inventory / signal / wait continue without
     /// inventing exit status.
     pub async fn exec(
@@ -1486,10 +1487,10 @@ fn require_supervised_exec_process_io(io: &ProcessIo) -> Result<()> {
             IoMode::Null | IoMode::Capture | IoMode::Pipe => {}
             IoMode::Terminal | IoMode::Inherit => {
                 return Err(recovery_error(
-                    ErrorCode::Unavailable,
+                    ErrorCode::Unsupported,
                     format!(
                         "Host-reopen exec does not support {mode:?} {stream}; \
-                         use Null/Capture/Pipe (terminal/inherit remain Unavailable)"
+                         use Null/Capture/Pipe (terminal/inherit are not supported on Live reopen)"
                     ),
                 ));
             }
@@ -1497,7 +1498,7 @@ fn require_supervised_exec_process_io(io: &ProcessIo) -> Result<()> {
     }
     if io.terminal_size.is_some() {
         return Err(recovery_error(
-            ErrorCode::Unavailable,
+            ErrorCode::Unsupported,
             "Host-reopen exec does not support terminal process I/O",
         ));
     }
@@ -5112,7 +5113,7 @@ mod tests {
         };
         let error =
             require_supervised_exec_process_io(&terminal).expect_err("terminal must fail closed");
-        assert_eq!(error.code, ErrorCode::Unavailable);
+        assert_eq!(error.code, ErrorCode::Unsupported);
 
         let inherit = ProcessIo {
             stdin: IoMode::Inherit,
@@ -5122,7 +5123,7 @@ mod tests {
         };
         let error =
             require_supervised_exec_process_io(&inherit).expect_err("inherit must fail closed");
-        assert_eq!(error.code, ErrorCode::Unavailable);
+        assert_eq!(error.code, ErrorCode::Unsupported);
     }
 
     #[tokio::test]

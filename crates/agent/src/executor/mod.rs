@@ -1117,7 +1117,7 @@ impl LinuxExecutor {
     /// recorded (v6); v5 exec records without helper fail closed. Authentic
     /// pause/resume/stats use the durable recovery cgroup leaf. New `exec`
     /// rebuilds the minimum authentic spawn context from recovery config plus
-    /// live init (Null/Capture/Pipe; terminal/inherit remain Unavailable).
+    /// live init (Null/Capture/Pipe; terminal/inherit remain Unsupported).
     /// Generations that share
     /// one `sessionSupervisor` identity reuse one control connection through
     /// [`SessionSupervisorReattachCache`].

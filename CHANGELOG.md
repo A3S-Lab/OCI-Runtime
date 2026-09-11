@@ -40,11 +40,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
   `status=available`); `promotes_readiness=false`.
 - Host-reopen live `update` applies supported OCI Linux resource fields to the
   durable recovery cgroup leaf (same leaf as pause/resume/stats) without
-  restoring `PreparedProcess`. Device-policy updates remain Unavailable.
+  restoring `PreparedProcess`. Device-policy updates remain Unsupported.
   Covered by live recovery cgroup unit tests with kernel read-back.
 
 ### Fixed
 
+- Permanent Live Host-reopen refusals no longer use `Unavailable` (which Box
+  retries): Terminal/`Inherit` on Host-reopen exec, device-policy
+  `update_from_leaf`, and Live `resize`/`checkpoint` without
+  `PreparedProcess` are `Unsupported`; Live `start` on an already-retained
+  session is `FailedPrecondition`. Missing deposits / missing cgroup leaves
+  stay `Unavailable`.
 - Supervised launcher `join_current_process` now surfaces cgroup `ENOENT` as a
   cgroup-namespace reachability failure instead of a bare "No such file or
   directory" that looks like a missing executable (nsdelegate containment).

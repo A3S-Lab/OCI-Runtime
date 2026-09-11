@@ -340,10 +340,22 @@ impl NativeLinuxDriver {
         operation: &'static str,
     ) -> Result<()> {
         if self.live_for(target, operation).await?.is_some() {
+            // Permanent: Live reopen does not restore PreparedProcess. Do not use
+            // Unavailable — Box retries that code.
+            let (code, detail) = match operation {
+                "native-linux-start" => (
+                    ErrorCode::FailedPrecondition,
+                    "container is already retained through a reattached live session",
+                ),
+                _ => (
+                    ErrorCode::Unsupported,
+                    "operation requires a restored PreparedProcess that Live reopen does not provide",
+                ),
+            };
             return Err(Error::new(
-                ErrorCode::Unavailable,
+                code,
                 format!(
-                    "container {} generation {:?} is retained through a reattached session supervisor without a restored PreparedProcess; {operation} requires full process-session restore",
+                    "container {} generation {:?} is retained through a reattached session supervisor without a restored PreparedProcess; {detail} ({operation})",
                     target.id, target.generation
                 ),
             )

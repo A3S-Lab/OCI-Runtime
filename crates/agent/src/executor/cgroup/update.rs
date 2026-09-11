@@ -126,7 +126,7 @@ pub(in crate::executor) async fn update_from_leaf(
 ) -> Result<()> {
     if resources.devices().is_some() {
         return Err(update_error(
-            ErrorCode::Unavailable,
+            ErrorCode::Unsupported,
             format!(
                 "Host-reopen resource update cannot change device policy on {}; durable recovery retained the cgroup leaf without device-authority state",
                 leaf.display()
@@ -866,7 +866,7 @@ mod tests {
         let error = update_from_leaf(directory.path(), &resources)
             .await
             .expect_err("device policy must fail closed without device authority");
-        assert_eq!(error.code, ErrorCode::Unavailable);
+        assert_eq!(error.code, ErrorCode::Unsupported);
         assert!(error.message.contains("device"));
     }
 
