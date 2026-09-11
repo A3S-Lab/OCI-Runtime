@@ -808,11 +808,37 @@ compatibility-drift, lifecycle, recovery, and create-reopen all `available`
 tip series greened existing-host KVM Live recovery with
 `new_exec_io_after_reattach_proven` and SDK local-connect EACCES/EPERM →
 `PermissionDenied` honesty (#329/#330). Existing-host WHPX driver and recovery
-smokes on tip remain `probe-only` observation. Fresh-host WHPX R2 and KVM R2L
-(x86_64 + AArch64) attestation-bound matrices remain the only path to promote
-readiness; W4 Box cutover, default supervised create, and HostRuntimeService
-KVM registration stay blocked until then. Used Windows + WSL hosts must not
-attest fresh provisioning.
+smokes on tip remain `probe-only` observation. Current `main` tip
+`30c118e` records that observation in this README; it does not change
+readiness.
+
+### Remaining before W4+
+
+Canonical detail lives in
+[`ROADMAP.md` Fresh-host promotion checklist](ROADMAP.md#fresh-host-promotion-checklist).
+Existing-host greens never set `promotes_readiness=true`.
+
+| Item | Status on this used Windows + WSL host |
+| --- | --- |
+| Fresh WHPX R2 (`promotes_readiness=true`) | **Blocked** — needs a newly provisioned WHPX Windows host |
+| Fresh KVM R2L x86_64 | **Blocked** — needs a newly provisioned Linux KVM host (WSL reinstall is not fresh) |
+| Fresh KVM R2L AArch64 | **Blocked** — needs an AArch64 KVM host |
+| Flip WHPX/KVM `probe-only` → `experimental` | **Blocked** — requires the fresh matrices above |
+
+| Item | Status after honest fresh-host |
+| --- | --- |
+| W4 Box cutover (`microvm` / `sandbox` via SDK, no silent fallback) | Open; must not land prematurely |
+| Default supervised create | Open; `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1` stays opt-in |
+| `HostRuntimeService` public KVM registration | Open; public candidate stays `probe-only` until fresh matrices pass |
+
+| Item | Policy |
+| --- | --- |
+| B2 single-report self-certify | Forbidden by design (`b2_process_session_recovery_closed=false`) |
+| Attest `operator_attests_fresh_provisioning=true` on this host | Forbidden |
+| Rewrite existing-host green as promote | Forbidden |
+
+This host may still run `host_class=existing` observation (including soak). That
+evidence does not unlock W4+.
 
 
 ## Architecture

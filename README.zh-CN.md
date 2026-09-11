@@ -785,10 +785,35 @@ lifecycle、recovery 与 create-reopen 均为 `available`
 同 tip 系列还绿了 existing-host KVM Live recovery 的
 `new_exec_io_after_reattach_proven`，以及 SDK local-connect EACCES/EPERM →
 `PermissionDenied` 诚实性（#329/#330）。tip 上 existing-host WHPX driver 与
-recovery smoke 仍为 `probe-only` 观测。唯一可 promote readiness 的路径仍是
-fresh-host WHPX R2 与 KVM R2L（x86_64 + AArch64）attestation-bound matrix；
-在此之前 W4 Box cutover、默认 supervised create 与 HostRuntimeService KVM
-注册保持阻塞。已使用的 Windows + WSL 主机不得 attest fresh provisioning。
+recovery smoke 仍为 `probe-only` 观测。当前 `main` tip `30c118e` 仅在本
+README 记录该观测，不改变 readiness。
+
+### W4+ 之前仍开放 / 本机无法完成
+
+权威清单见
+[`ROADMAP.md` Fresh-host promotion checklist](ROADMAP.md#fresh-host-promotion-checklist)。
+existing-host 绿从不设置 `promotes_readiness=true`。
+
+| 项 | 本机（已使用 Windows + WSL）状态 |
+| --- | --- |
+| Fresh WHPX R2（`promotes_readiness=true`） | **阻塞** — 需要新装 WHPX Windows 主机 |
+| Fresh KVM R2L x86_64 | **阻塞** — 需要新装 Linux KVM 主机（重装 WSL 不算 fresh） |
+| Fresh KVM R2L AArch64 | **阻塞** — 需要 AArch64 KVM 主机 |
+| WHPX/KVM `probe-only` → `experimental` | **阻塞** — 依赖上述 fresh 矩阵 |
+
+| 项 | 诚实 fresh-host 之后 |
+| --- | --- |
+| W4 Box cutover（`microvm` / `sandbox` 走 SDK，无 silent fallback） | 开放；禁止过早合入 |
+| 默认 supervised create | 开放；`A3S_OCI_NATIVE_SESSION_SUPERVISOR=1` 仍为 opt-in |
+| `HostRuntimeService` 公开注册 KVM | 开放；fresh 矩阵通过前公开候选保持 `probe-only` |
+
+| 项 | 策略 |
+| --- | --- |
+| B2 单报告 self-certify | 设计禁止（`b2_process_session_recovery_closed=false`） |
+| 在本机签 `operator_attests_fresh_provisioning=true` | 禁止 |
+| 把 existing-host 绿写成 promote | 禁止 |
+
+本机仍可跑 `host_class=existing` 观测（含 soak）；该证据不解锁 W4+。
 
 
 ## 架构
