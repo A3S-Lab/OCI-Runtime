@@ -72,7 +72,9 @@ fn failed_create_cleanup_is_returned_without_hiding_the_primary_rejection() {
 }
 
 #[test]
-fn supervised_create_allows_rootless_device_mounts_and_keeps_other_gates() {
+fn supervised_create_allows_box_control_and_keeps_other_gates() {
+    use a3s_oci_agent_protocol::AgentInheritedDescriptorSchema;
+
     let pipe_io = ProcessIo {
         stdin: IoMode::Pipe,
         stdout: IoMode::Pipe,
@@ -80,8 +82,17 @@ fn supervised_create_allows_rootless_device_mounts_and_keeps_other_gates() {
         terminal_size: None,
     };
     assert!(
-        supervised_create_unsupported_reason(false, false, &pipe_io).is_none(),
+        supervised_create_unsupported_reason(false, None, &pipe_io).is_none(),
         "pipe I/O with rootless device mounts must not be gated Unsupported"
+    );
+    assert!(
+        supervised_create_unsupported_reason(
+            false,
+            Some(&AgentInheritedDescriptorSchema::a3s_box_control_v1()),
+            &pipe_io
+        )
+        .is_none(),
+        "a3s_box_control_v1 must be allowed on supervised create"
     );
 
     let terminal_io = ProcessIo {
@@ -91,16 +102,21 @@ fn supervised_create_allows_rootless_device_mounts_and_keeps_other_gates() {
         terminal_size: None,
     };
     assert!(
-        supervised_create_unsupported_reason(false, false, &terminal_io)
+        supervised_create_unsupported_reason(false, None, &terminal_io)
             .expect("terminal remains unsupported")
             .contains("terminal")
     );
-    assert!(supervised_create_unsupported_reason(true, false, &pipe_io)
+    assert!(supervised_create_unsupported_reason(true, None, &pipe_io)
         .expect("pinned bundle remains unsupported")
         .contains("utility-VM"));
-    assert!(supervised_create_unsupported_reason(false, true, &pipe_io)
-        .expect("inherited workload descriptors remain unsupported")
-        .contains("inherited workload"));
+
+    let mut unknown = AgentInheritedDescriptorSchema::a3s_box_control_v1();
+    unknown.profile = "unknown-inherited-schema".into();
+    assert!(
+        supervised_create_unsupported_reason(false, Some(&unknown), &pipe_io)
+            .expect("unknown inherited schemas remain unsupported")
+            .contains("inherited workload")
+    );
 
     // Empty and nonempty prepared mounts remain subject only to count validation.
     validate_rootless_device_mounts(&[], false, false).expect("privileged empty mounts");

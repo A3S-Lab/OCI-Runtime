@@ -78,6 +78,15 @@ impl InheritedDescriptorPlan {
         self.schema.as_ref()
     }
 
+    /// Source/target pairs for session-supervisor SCM_RIGHTS spawn installs.
+    #[must_use]
+    pub(super) fn supervisor_inherited_pairs(&self) -> Vec<(RawFd, i32)> {
+        self.descriptors
+            .iter()
+            .map(|descriptor| (descriptor.source.as_raw_fd(), descriptor.target))
+            .collect()
+    }
+
     pub(super) fn install_in_child(&self) -> io::Result<()> {
         for descriptor in &self.descriptors {
             if unsafe { libc::dup2(descriptor.source.as_raw_fd(), descriptor.target) } < 0 {
@@ -423,6 +432,13 @@ mod tests {
                 (AgentInheritedDescriptorRole::InitLog, 5),
             ]
         );
+        let pairs = plan.supervisor_inherited_pairs();
+        assert_eq!(pairs.len(), 3);
+        assert_eq!(
+            pairs.iter().map(|(_, target)| *target).collect::<Vec<_>>(),
+            vec![3, 4, 5]
+        );
+        assert!(pairs.iter().all(|(source, target)| *source > *target));
     }
 
     #[test]

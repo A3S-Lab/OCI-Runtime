@@ -6,7 +6,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus as ProcessExitStatus;
 use std::sync::Arc;
 
-use a3s_oci_agent_protocol::AgentVsockEndpoint;
+use a3s_oci_agent_protocol::{AgentInheritedDescriptorSchema, AgentVsockEndpoint};
 use a3s_oci_sdk::{Error, ErrorCode, IoMode, ProcessIo, Result};
 use tokio::net::UnixListener;
 use tokio::process::Child;
@@ -208,9 +208,13 @@ pub(in crate::executor) struct SupervisedChildStdio {
 /// mount descriptors over the authenticated create-control socket after the
 /// supervisor-parented launcher connects (`send_device_mounts` / SCM_RIGHTS).
 /// Empty and nonempty frames share that path; spawn_launcher does not carry them.
+///
+/// The A3S Box control schema (`a3s_box_control_v1`, targets 3/4/5) is allowed
+/// and installed via session-supervisor `spawn_launcher_with_inherited`.
+/// Unknown inherited schemas remain fail-closed.
 pub(super) fn supervised_create_unsupported_reason(
     pinned_bundle: bool,
-    inherited_workload_descriptors: bool,
+    inherited_schema: Option<&AgentInheritedDescriptorSchema>,
     io: &ProcessIo,
 ) -> Option<&'static str> {
     if pinned_bundle {
@@ -218,10 +222,12 @@ pub(super) fn supervised_create_unsupported_reason(
             "session-supervisor create does not support descriptor-pinned utility-VM bundles yet",
         );
     }
-    if inherited_workload_descriptors {
-        return Some(
-            "session-supervisor create does not support inherited workload descriptors yet",
-        );
+    if let Some(schema) = inherited_schema {
+        if schema != &AgentInheritedDescriptorSchema::a3s_box_control_v1() {
+            return Some(
+                "session-supervisor create does not support inherited workload descriptors yet",
+            );
+        }
     }
     if matches!(io.stdin, IoMode::Terminal)
         || matches!(io.stdout, IoMode::Terminal)
