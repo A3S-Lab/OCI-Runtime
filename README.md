@@ -56,6 +56,15 @@ The provider-neutral Rust contracts are also available independently as
 > remain `probe-only`. Experimental means the reviewed development profile may
 > launch; it does not imply production certification.
 
+> [!NOTE]
+> **This runtime does not depend on KVM.** Linux KVM is an optional
+> `dedicated-vm` utility-VM driver (peer to Windows WHPX and macOS HVF). Host
+> discovery and Native Linux execution must work when `/dev/kvm` is missing or
+> inaccessible. Box Sandbox production routing is Native Linux; MicroVM /
+> DedicatedVm isolation is the path that uses KVM/WHPX/HVF. Fresh-host KVM
+> matrices promote that optional driver from `probe-only` — they are not a
+> prerequisite for developing or running the Native Linux plane.
+
 ## Inspect before you launch
 
 The first successful action is intentionally read-only:

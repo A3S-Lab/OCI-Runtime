@@ -55,6 +55,14 @@ bundle、隔离要求和带版本的附件清单。
 > 仍为 `probe-only`。实验性表示经审查的开发配置可以
 > 启动，并不意味着已通过生产认证。
 
+> [!NOTE]
+> **本运行时不依赖 KVM。** Linux KVM 只是可选的 `dedicated-vm`
+> 辅助虚拟机驱动（与 Windows WHPX、macOS HVF 对等）。当 `/dev/kvm`
+> 缺失或不可访问时，主机 discovery 与 Native Linux 执行仍须可用。
+> Box Sandbox 生产路由是 Native Linux；需要更强隔离时才走
+> MicroVM / DedicatedVm（KVM/WHPX/HVF）。fresh-host KVM 矩阵用于把该
+> **可选**驱动从 `probe-only` 晋升，不是开发或运行 Native Linux 平面的前置条件。
+
 ## 启动前先检查
 
 设计上，第一步成功执行的操作是只读检查：
