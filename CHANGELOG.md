@@ -45,6 +45,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Live Host-reopen `file` / `filesystem` refuse a dead recorded init with
+  `FailedPrecondition`, matching pause/resume/exec on the same identity.
+  Must not be `Unavailable` — the recorded generation cannot recover and
+  Box retries that code. Covered by
+  `live_session_file_fail_closes_when_init_is_dead`.
 - Post-`pidfd_open` start-time drift (PID reuse TOCTOU) is
   `FailedPrecondition`, matching the pre-open `is_live` refusal. It must not
   be `Unavailable` — Box retries that code and the recorded identity cannot
