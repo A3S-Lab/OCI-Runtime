@@ -86,6 +86,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- SDK local IPC connect (`UnixStream` / Windows named pipe) fails closed with
+  `PermissionDenied` on EACCES/EPERM against mode-0600 host/runtime sockets,
+  matching KVM host-control honesty (#326/#327). Box retries `Unavailable` by
+  code; misclassifying permanent access denial burned watchdog attempts.
+  Missing/refused endpoints stay retryable `Unavailable`. Covered by
+  `transport::connect_honesty_tests`.
+
 - KVM Live Host reattach treats a binding whose session-owner or shim
   identity is dead or start-time-drifted as stopped recovery (`Ok(None)`),
   not Box-retryable `Unavailable`. Same honesty class as Native permanent
