@@ -17,6 +17,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- KVM Live reattach preserves permanent guest-hello rejects
+  (`PermissionDenied` wrong token, `FailedPrecondition` protocol mismatch)
+  instead of rewriting them as Box-retryable `Unavailable`. Transient guest
+  close / negotiate races remain retryable.
+
 - KVM Live reattach treats non-positive session-owner/shim PIDs in a binding
   as [`FailedPrecondition`] (corrupt identity), not Box-retryable
   [`Unavailable`]. Dead/drifted identities still fall through to stopped
