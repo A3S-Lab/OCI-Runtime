@@ -89,6 +89,13 @@ fn null_io() -> ProcessIo {
     }
 }
 
+/// Planner clears `detached_bind` / follow-up `remount_bind` unless the
+/// durable owner is host effective root (`geteuid() == 0`). Tests must assert
+/// both contracts — privileged CI/root and non-root developer hosts.
+fn host_effective_root() -> bool {
+    unsafe { libc::geteuid() == 0 }
+}
+
 fn with_bind_source(config: &str) -> String {
     config.replace(
         r#""type": "tmpfs",
@@ -412,13 +419,21 @@ fn parses_bind_remount_and_propagation_options_without_silent_loss() {
         InitPlan::from_bundle(&bundle(&config), &null_io()).expect("supported bind mount profile");
     let mount = &plan.mounts[0];
     assert!(mount.bind);
-    assert!(mount.remount_bind);
+    assert_eq!(mount.remount_bind, host_effective_root());
     assert_eq!(mount.source.as_deref(), Some(Path::new("rootfs/proc")));
     assert_ne!(mount.flags & libc::MS_BIND, 0);
     assert_ne!(mount.flags & libc::MS_REC, 0);
     assert_ne!(mount.flags & libc::MS_RDONLY, 0);
     assert_eq!(mount.propagation, Some(libc::MS_PRIVATE | libc::MS_REC));
     assert!(!mount.detached_bind);
+    if !host_effective_root() {
+        let attributes = mount
+            .recursive_attributes
+            .as_ref()
+            .expect("non-root bind folds VFS attrs into mount_setattr");
+        assert_ne!(attributes.attr_set & mount::MOUNT_ATTR_RDONLY, 0);
+        assert_ne!(attributes.attr_set & mount::MOUNT_ATTR_NOSUID, 0);
+    }
 }
 
 #[test]
@@ -432,7 +447,14 @@ fn prepares_readonly_binds_before_entering_a_new_user_namespace() {
         ));
         let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
             .expect("read-only bind in a new user namespace");
-        assert!(plan.mounts[1].detached_bind, "options: {options}");
+        // Detached open_tree needs host CAP_SYS_ADMIN; non-root owners keep
+        // ordinary MS_BIND and apply attrs via mount_setattr instead.
+        assert_eq!(
+            plan.mounts[1].detached_bind,
+            host_effective_root(),
+            "options: {options}"
+        );
+        assert!(!plan.mounts[1].remount_bind, "options: {options}");
     }
 }
 
@@ -445,7 +467,9 @@ fn keeps_legacy_remount_for_unrepresentable_bind_attributes() {
     let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
         .expect("legacy-compatible read-only bind plan");
 
-    assert!(plan.mounts[1].remount_bind);
+    // `sync` is not representable as a detached open_tree attr, so root keeps
+    // the legacy remount path; non-root cannot remount host binds (EPERM).
+    assert_eq!(plan.mounts[1].remount_bind, host_effective_root());
     assert!(!plan.mounts[1].detached_bind);
 }
 
