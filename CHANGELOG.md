@@ -33,14 +33,20 @@ All notable changes to A3S OCI Runtime are documented in this file.
   `a3s.oci.linux-native-live-recovery-smoke.v3`; wrapper
   `.github/scripts/linux-native-live-recovery.sh`. Opt-in supervised create
   only; does not flip defaults, B2, cutover, or fresh-host promotion.
+- Host-reopen live `update` applies supported OCI Linux resource fields to the
+  durable recovery cgroup leaf (same leaf as pause/resume/stats) without
+  restoring `PreparedProcess`. Device-policy updates remain Unavailable.
+  Covered by live recovery cgroup unit tests with kernel read-back.
 
 ### Fixed
 
 - Opt-in supervised Native create (`A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`) now
-  accepts the A3S Box control inherited-descriptor schema
-  (`a3s_box_control_v1`, FDs 3/4/5) and installs it through
-  `spawn_launcher_with_inherited`. Unknown inherited schemas and default
-  Host-bound create remain unchanged. Covered by process gate unit tests.
+  accepts Host `Inherit` stdio by duplicating Host fds 0/1/2 into the
+  session-supervisor install plan (Box Live Null+Inherit+Inherit) and accepts
+  the A3S Box control inherited-descriptor schema
+  (`a3s_box_control_v1`, FDs 3/4/5) via `spawn_launcher_with_inherited`.
+  Unknown inherited schemas, Terminal I/O, and default Host-bound create
+  remain unchanged.
 - Corrected a typo in the agent recovery reopen unit test (`superviso` →
   `supervisor`) so `cargo test -p a3s-oci-agent --lib` compiles again.
 - Corrected a typo in the CLI stack-bound dispatch unit test (`worke` →

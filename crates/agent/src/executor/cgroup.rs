@@ -33,6 +33,7 @@ use plan::{
 };
 use setting::{CgroupSetting, CgroupSettingReadback};
 pub(super) use stats::stats_from_leaf;
+pub(super) use update::update_from_leaf;
 
 const CGROUP_EVENTS: &str = "cgroup.events";
 const CGROUP_FREEZE: &str = "cgroup.freeze";

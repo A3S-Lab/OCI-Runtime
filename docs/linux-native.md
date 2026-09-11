@@ -2065,17 +2065,20 @@ PID + start-time, open a pidfd, deliver the signal — without restoring a fake
 `PreparedProcess`. Live `wait_process` for durable exec uses supervisor
 `MSG_WAIT` when a helper identity is recorded (recovery v6); v5 exec records
 without helper fail closed with `Unavailable`. Authentic Host-reopen
-`pause` / `resume` / `stats` use the durable recovery cgroup leaf (kernel
-`cgroup.freeze` / `cgroup.events` and normalized cgroup-v2 counters) without
-restoring `PreparedProcess`; missing cgroup evidence fail-closes with
-`Unavailable`. New `exec` after Host reopen rebuilds the minimum authentic
+`pause` / `resume` / `stats` / `update` use the durable recovery cgroup leaf
+(kernel `cgroup.freeze` / `cgroup.events`, normalized cgroup-v2 counters, and
+supported resource fields) without restoring `PreparedProcess`; missing cgroup
+evidence fail-closes with `Unavailable`. Device-policy resource updates remain
+`Unavailable` because recovery does not retain device-authority state. New
+`exec` after Host reopen rebuilds the minimum authentic
 spawn context from the durable `config.json` snapshot (namespace plan,
 capability ceiling, seccomp) plus live init namespace/root descriptors and the
 recovery cgroup leaf, then supervisor-parents the helper. Live Host and
 Host-reopen supervised exec deposit capture/pipe I/O the same way create does
-(exclusive `MSG_DEPOSIT_OUTPUT` / stdin dup deposit + relay). Terminal I/O
-remains Unavailable; Host `Inherit` uses the same supervised install path as
-create. Host-reopen `file` / `filesystem` rebuild the same retained
+(exclusive `MSG_DEPOSIT_OUTPUT` / stdin dup deposit + relay). Terminal and
+`Inherit` remain Unavailable on Host-reopen exec (create-time Host `Inherit`
+stdio is installed via `prepare_supervised_stdio`). Host-reopen `file` /
+`filesystem` rebuild the same retained
 execution context and call the existing descriptor-confined helpers;
 `NativeLinuxDriver` routes those operations through `live_for` (dead init →
 `Unavailable`, wrong generation → `Conflict`) instead of the old
@@ -2093,9 +2096,10 @@ before claiming the executor-state `lock_owned` journal guard so the
 non-reentrant tokio mutex cannot self-deadlock (keyed capture would otherwise
 stay `prepared` with no helper). Default create
 (no env) keeps Host-bound PDEATHSIG and omits `sessionSupervisor` so existing
-stopped-only recovery gates stay green. Supervised create currently rejects
-terminal/inherit I/O, pinned utility-VM bundles, and inherited Box control
-descriptors. Rootless device mounts are allowed on supervised create: after the
+stopped-only recovery gates stay green. Supervised create accepts Host
+`Inherit` stdio and the fixed A3S Box control schema (`a3s_box_control_v1`);
+it still rejects terminal I/O, pinned utility-VM bundles, and unknown
+inherited-descriptor schemas. Rootless device mounts are allowed on supervised create: after the
 supervisor-parented launcher connects to the Host create-control socket, Host
 authenticates the peer PID and sends prepared mount descriptors via SCM_RIGHTS
 (`send_device_mounts`) — the same Host→init control path as default create.
@@ -2175,10 +2179,10 @@ without inventing terminal evidence. Authenticated `signal_process` for those
 durable identities is restored via pidfd after PID + start-time re-auth.
 Live `wait_process` for durable exec uses supervisor `MSG_WAIT` on the recorded
 helper child when present; v5 exec records without helper fail closed.
-Authentic `pause` / `resume` / `stats` read and write the durable recovery
-cgroup leaf. New `exec` rebuilds authentic spawn context from recovery config
-plus live init and supervisor-parents the helper (Null I/O only; capture/pipe
-remain Unavailable rather than inventing streams).
+Authentic `pause` / `resume` / `stats` / `update` read and write the durable
+recovery cgroup leaf. New `exec` rebuilds authentic spawn context from recovery
+config plus live init and supervisor-parents the helper (Null/Capture/Pipe I/O;
+Terminal/`Inherit` remain Unavailable rather than inventing streams).
 
 ### Hook owner-death crash boundary
 
