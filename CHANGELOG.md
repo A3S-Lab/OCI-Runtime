@@ -50,7 +50,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   `update_from_leaf`, and Live `resize`/`checkpoint` without
   `PreparedProcess` are `Unsupported`; Live `start` on an already-retained
   session is `FailedPrecondition`. Missing deposits / missing cgroup leaves
-  stay `Unavailable`.
+  stay `Unavailable`. Driver classification is covered by
+  `live_process_session_refusal` unit tests.
 - Supervised launcher `join_current_process` now surfaces cgroup `ENOENT` as a
   cgroup-namespace reachability failure instead of a bare "No such file or
   directory" that looks like a missing executable (nsdelegate containment).
@@ -365,7 +366,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   supervised output relay. Without deposit, keyed captured exec fail-closed at
   `attach_supervised` (or left helpers orphaned); Live session qualification
   could not prove captured exec on a supervised generation. Host-reopen exec
-  admits the same Null/Capture/Pipe set (terminal/inherit stay Unavailable).
+  admits the same Null/Capture/Pipe set (terminal/inherit later classified
+  `Unsupported` so Box does not retry).
 - Supervised exec no longer self-deadlocks the executor state mutex: resolving
   the session supervisor happened after `lock_owned()` while
   `supervised_exec_session_supervisor` locked the same tokio mutex again,
@@ -397,8 +399,9 @@ All notable changes to A3S OCI Runtime are documented in this file.
   (`send_device_mounts`) — the same Host→init control path as default create.
   Empty and nonempty frames share that path; mounts do not ride
   `spawn_launcher` FD lists. Remaining supervised Unsupported gates
-  (terminal/inherit I/O, pinned utility-VM bundles, inherited workload
-  descriptors) stay fail-closed. First-principles coverage: supervised create
+  (Terminal I/O, pinned utility-VM bundles, unknown inherited schemas)
+  stay fail-closed; Host `Inherit` stdio and `a3s_box_control_v1` are
+  accepted on supervised create. First-principles coverage: supervised create
   preflight allows mounts while keeping other gates; empty and nonempty control
   frames; cross-process SCM_RIGHTS without Host parentage; Host→supervisor-child
   delivery. Default create stays Host-bound
@@ -409,14 +412,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
   descriptors from the live init (`/proc/<init>/ns/*`, `/proc/<init>/root`),
   reopens the recovery cgroup leaf `cgroup.procs` when present, and spawns a
   supervisor-parented exec helper via `ExecProcess::spawn_with_context` —
-  without restoring a fake `PreparedProcess`. Only Null process I/O is accepted
-  in this slice; capture/pipe/terminal/inherit fail closed with `Unavailable`.
-  Successful Null spawns persist recovery v6 exec identities so inventory /
-  signal / wait keep working. `NativeLinuxDriver` routes Live reopen through
-  that path. First-principles coverage: capture I/O Unavailable after reopen;
-  Null I/O contract unit test; non-agent helper fails closed without inventing
-  success. Default create stays Host-bound. Capture/pipe stream restore for
-  post-reopen exec remains open.
+  without restoring a fake `PreparedProcess`. Null/Capture/Pipe I/O are
+  accepted; Terminal/`Inherit` fail closed with `Unsupported` (not
+  `Unavailable`). Successful spawns persist recovery v6 exec identities so
+  inventory / signal / wait keep working. `NativeLinuxDriver` routes Live
+  reopen through that path. First-principles coverage for the spawn contract
+  and fail-closed Terminal/`Inherit`. Default create stays Host-bound.
 - Native Linux Host-reopen **authentic pause / resume / stats** on the Live
   supervised path from the durable recovery cgroup leaf. `LinuxLiveSupervisedSession`
   writes kernel `cgroup.freeze` and waits for `cgroup.events` confirmation, and
