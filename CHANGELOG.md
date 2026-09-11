@@ -45,6 +45,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- KVM Live Host reattach treats a binding whose session-owner or shim
+  identity is dead or start-time-drifted as stopped recovery (`Ok(None)`),
+  not Box-retryable `Unavailable`. Same honesty class as Native permanent
+  identity refusals. Covered by
+  `dead_or_drifted_auth_miss_falls_through_to_stopped_not_unavailable`.
 - Live Host-reopen `file` / `filesystem` refuse a dead recorded init with
   `FailedPrecondition`, matching pause/resume/exec on the same identity.
   Must not be `Unavailable` — the recorded generation cannot recover and
