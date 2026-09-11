@@ -128,12 +128,13 @@ impl TransportConnector for LocalIpcEndpoint {
                 let stream = tokio::net::UnixStream::connect(path)
                     .await
                     .map_err(|error| {
-                        super::transport_error(
+                        super::connect_io_error(
                             "sdk-connect",
                             format!(
                                 "failed to connect SDK Unix socket {}: {error}",
                                 path.display()
                             ),
+                            &error,
                         )
                     })?;
                 Ok(Box::new(stream))
@@ -143,9 +144,10 @@ impl TransportConnector for LocalIpcEndpoint {
                 let pipe = tokio::net::windows::named_pipe::ClientOptions::new()
                     .open(name)
                     .map_err(|error| {
-                        super::transport_error(
+                        super::connect_io_error(
                             "sdk-connect",
                             format!("failed to connect SDK named pipe {name}: {error}"),
+                            &error,
                         )
                     })?;
                 Ok(Box::new(pipe))
