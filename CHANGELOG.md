@@ -17,6 +17,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- KVM Live reattach fails closed immediately with `PermissionDenied` when
+  connecting to the mode-0600 host-control socket is rejected (EACCES/EPERM),
+  instead of burning the connect deadline and returning Box-retryable
+  `Unavailable`. Missing/refused sockets still retry until timeout.
+
 - KVM Live reattach preserves permanent guest-hello rejects
   (`PermissionDenied` wrong token, `FailedPrecondition` protocol mismatch)
   instead of rewriting them as Box-retryable `Unavailable`. Transient guest
