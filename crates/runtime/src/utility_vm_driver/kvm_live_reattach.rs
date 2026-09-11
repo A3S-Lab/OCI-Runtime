@@ -234,6 +234,9 @@ async fn connect_host_control(host_control: &Path) -> Result<UnixStream> {
     loop {
         match UnixStream::connect(host_control).await {
             Ok(stream) => return Ok(stream),
+            Err(error) if host_control_connect_error_is_permanent(&error) => {
+                return Err(remap_host_control_connect_error(host_control, error));
+            }
             Err(error) if tokio::time::Instant::now() >= deadline => {
                 return Err(Error::new(
                     ErrorCode::Unavailable,
@@ -248,6 +251,24 @@ async fn connect_host_control(host_control: &Path) -> Result<UnixStream> {
             Err(_) => tokio::time::sleep(HOST_CONTROL_CONNECT_RETRY).await,
         }
     }
+}
+
+/// Pathname host-control sockets are mode 0600. EACCES/EPERM is permanent for
+/// this Host identity and must not burn the connect deadline as Unavailable.
+fn host_control_connect_error_is_permanent(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::PermissionDenied
+}
+
+fn remap_host_control_connect_error(host_control: &Path, error: io::Error) -> Error {
+    Error::new(
+        ErrorCode::PermissionDenied,
+        format!(
+            "permission denied connecting to KVM host-control {}: {error}",
+            host_control.display()
+        ),
+    )
+    .for_operation("utility-vm-kvm-live-reattach")
+    .retryable(false)
 }
 
 struct ReattachedKvmOwner {
@@ -459,5 +480,29 @@ mod tests {
         let remapped = remap_live_agent_hello_error(closed);
         assert_eq!(remapped.code, ErrorCode::Unavailable);
         assert!(remapped.retryable);
+    }
+
+    #[test]
+    fn host_control_permission_denied_is_permanent_not_unavailable() {
+        let error = io::Error::new(io::ErrorKind::PermissionDenied, "EACCES");
+        assert!(host_control_connect_error_is_permanent(&error));
+        let remapped = remap_host_control_connect_error(
+            Path::new("/tmp/a3s-oci-test-host-control.sock"),
+            error,
+        );
+        assert_eq!(remapped.code, ErrorCode::PermissionDenied);
+        assert!(!remapped.retryable);
+    }
+
+    #[test]
+    fn host_control_not_found_stays_retryable_until_timeout() {
+        let error = io::Error::new(io::ErrorKind::NotFound, "ENOENT");
+        assert!(!host_control_connect_error_is_permanent(&error));
+    }
+
+    #[test]
+    fn host_control_connection_refused_stays_retryable_until_timeout() {
+        let error = io::Error::new(io::ErrorKind::ConnectionRefused, "ECONNREFUSED");
+        assert!(!host_control_connect_error_is_permanent(&error));
     }
 }
