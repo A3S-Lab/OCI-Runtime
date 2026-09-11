@@ -33,6 +33,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
   `a3s.oci.linux-native-live-recovery-smoke.v3`; wrapper
   `.github/scripts/linux-native-live-recovery.sh`. Opt-in supervised create
   only; does not flip defaults, B2, cutover, or fresh-host promotion.
+  **Existing-host WSL2 greened** on tip
+  `6cc7da3c91bb09a6dbb59527b256b7ce95e86adf` (report
+  `/var/tmp/a3s-oci-native-live-v3-20260911121600.json`, SHA-256
+  `e46c6a5325039fb07c6b7cdddd3e742bae4e185f139a9c28a8686434c809ccdf`,
+  `status=available`); `promotes_readiness=false`.
 - Host-reopen live `update` applies supported OCI Linux resource fields to the
   durable recovery cgroup leaf (same leaf as pause/resume/stats) without
   restoring `PreparedProcess`. Device-policy updates remain Unavailable.
@@ -40,6 +45,9 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Supervised launcher `join_current_process` now surfaces cgroup `ENOENT` as a
+  cgroup-namespace reachability failure instead of a bare "No such file or
+  directory" that looks like a missing executable (nsdelegate containment).
 - Opt-in supervised Native create (`A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`) now
   accepts Host `Inherit` stdio by duplicating Host fds 0/1/2 into the
   session-supervisor install plan (Box Live Null+Inherit+Inherit) and accepts

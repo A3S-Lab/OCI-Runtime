@@ -2389,9 +2389,14 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   (`retained_exec_io_proven` / `retained_filesystem_proven` /
   `exec_io_before_kill` / `write_stdin_after_reattach` /
   `read_output_after_reattach` / `init_survived_host_sigkill` /
-  `replacement_state_running`). Does not register KVM with normal
-  HostRuntimeService, flip default supervised create, or cut over MicroVM
-  product routing.
+  `replacement_state_running`). **Existing-host WSL2 Native Live v3
+  greened** on tip `6cc7da3c91bb09a6dbb59527b256b7ce95e86adf` with report
+  `/var/tmp/a3s-oci-native-live-v3-20260911121600.json` SHA-256
+  `e46c6a5325039fb07c6b7cdddd3e742bae4e185f139a9c28a8686434c809ccdf`
+  (`status=available`, `new_exec_io_after_reattach_proven` plus the v2
+  continuity flags). Existing-host only (`promotes_readiness=false`). Does
+  not register KVM with normal HostRuntimeService, flip default supervised
+  create, or cut over MicroVM product routing.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [x] Qualify the Box R17 resource profile against `control-workload-v1`,

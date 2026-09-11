@@ -2140,8 +2140,20 @@ v1 filesystem-only greening used revision
 (`retained_exec_io_proven` / `exec_io_before_kill` /
 `write_stdin_after_reattach` / `read_output_after_reattach` /
 `retained_filesystem_proven` / `init_survived_host_sigkill` /
-`replacement_state_running`). Distinct from stopped-only
-`native-linux-recovery`. Does not flip B2 / cutover.
+`replacement_state_running`). **Existing-host WSL2 greened v3** (retained
+exec I/O + new post-reattach exec I/O + filesystem) on tip
+`6cc7da3c91bb09a6dbb59527b256b7ce95e86adf` with report
+`/var/tmp/a3s-oci-native-live-v3-20260911121600.json` SHA-256
+`e46c6a5325039fb07c6b7cdddd3e742bae4e185f139a9c28a8686434c809ccdf`
+(`status=available`, `new_exec_io_after_reattach_proven` /
+`retained_exec_io_proven` / `retained_filesystem_proven` /
+`init_survived_host_sigkill` / `replacement_state_running`). Existing-host
+only (`promotes_readiness=false`). Rootful supervised create requires a
+reachable cgroup hierarchy in the Host Service cgroup namespace
+(`nsdelegate` migrations return ENOENT when source/destination are not
+reachable — for example `docker … nsenter` into the host without `-C`).
+Distinct from stopped-only `native-linux-recovery`. Does not flip B2 /
+cutover.
 
 ```bash
 A3S_OCI_NATIVE_SESSION_SUPERVISOR=1 \
@@ -2150,6 +2162,9 @@ A3S_OCI_NATIVE_SESSION_SUPERVISOR=1 \
 # optional: A3S_OCI_LINUX_NATIVE_LIVE_RECOVERY_REPORT=/absolute/path/to/report.json
 # Requires cleared supplementary groups (setpriv CAP_SETGID / sudo / CI matched-cred).
 # Rootful sleep bundle is prepared by default when A3S_OCI_NATIVE_LIVE_BUNDLE is unset.
+# Host Service must run in a cgroup namespace that can reach the created leaf
+# (nsdelegate: migration ENOENT if source/destination are unreachable — e.g.
+# docker nsenter into the host without entering the host cgroup namespace via -C).
 ```
 
 When the original Host control socketpair closes (owner death), the supervisor
