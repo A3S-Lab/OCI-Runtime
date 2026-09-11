@@ -27,6 +27,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Opt-in supervised Native create (`A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`) now
+  accepts the A3S Box control inherited-descriptor schema
+  (`a3s_box_control_v1`, FDs 3/4/5) and installs it through
+  `spawn_launcher_with_inherited`. Unknown inherited schemas and default
+  Host-bound create remain unchanged. Covered by process gate unit tests.
 - Corrected a typo in the agent recovery reopen unit test (`superviso` →
   `supervisor`) so `cargo test -p a3s-oci-agent --lib` compiles again.
 - Corrected a typo in the CLI stack-bound dispatch unit test (`worke` →

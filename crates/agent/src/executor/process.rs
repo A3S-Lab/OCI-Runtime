@@ -118,7 +118,7 @@ impl PreparedProcess {
             // mount frame never needs to ride spawn_launcher FD lists.
             if let Some(reason) = supervised_create_unsupported_reason(
                 pinned_bundle.is_some(),
-                inherited_descriptors.schema().is_some(),
+                inherited_descriptors.schema(),
                 io,
             ) {
                 return Err(process_error(ErrorCode::Unsupported, reason));
@@ -228,12 +228,14 @@ impl PreparedProcess {
                         return Err(cleanup_unstarted_cgroup(&mut cgroup, error));
                     }
                 };
-                guard.spawn_launcher(
+                let inherited_pairs = inherited_descriptors.supervisor_inherited_pairs();
+                guard.spawn_launcher_with_inherited(
                     init_executable,
                     &init_args,
                     init_cgroup_procs,
                     control_workload_descriptors,
                     stdio,
+                    &inherited_pairs,
                 )
             };
             // Child-side pipe ends must outlive SCM_RIGHTS + supervised spawn.
