@@ -45,6 +45,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Mount planner unit tests now assert both host-euid contracts for bind
+  `remount_bind` / `detached_bind`: privileged root keeps the open_tree /
+  remount plan; non-root owners fold VFS attributes into `mount_setattr`
+  instead (matching `host_effective_root` in the planner). Non-root
+  developer hosts no longer fail three mount_tests that assumed euid 0.
 - Permanent Live Host-reopen refusals no longer use `Unavailable` (which Box
   retries): Terminal/`Inherit` on Host-reopen exec, device-policy
   `update_from_leaf`, and Live `resize`/`checkpoint` without
