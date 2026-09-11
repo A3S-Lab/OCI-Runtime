@@ -187,7 +187,8 @@ A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
 Attestation schema `a3s.oci.linux-kvm-fresh-host-attestation.v1` must set
 `operator_attests_fresh_provisioning=true` and `provisioned_at_utc`. Leave soak
 enabled for promotion (`A3S_OCI_LINUX_KVM_SKIP_SOAK=1` is refused for
-`host_class=fresh`, and `A3S_OCI_LINUX_KVM_SOAK_ITERATIONS` must be 25). Both
+`host_class=fresh`, `A3S_OCI_LINUX_KVM_SOAK_ITERATIONS` must be 25, and bound
+gate summaries must retain full case depths). Both
 architectures need `available` lifecycle (incl. Guest path-isolation),
 owner-death/restart, and 25-wave soak. See
 [`docs/linux-native.md`](docs/linux-native.md).

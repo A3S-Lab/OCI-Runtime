@@ -5,6 +5,16 @@
 
 LINUX_KVM_PROMOTION_SOAK_ITERATIONS=25
 
+# Bound gate depths re-asserted by the release matrix for fresh promotion.
+# Format: gate_name:expected_case_count
+LINUX_KVM_PROMOTION_BOUND_GATE_CASES=(
+  'agent-entry:1'
+  'compatibility-drift:14'
+  'lifecycle:17'
+  'recovery:1'
+  'create-reopen:11'
+)
+
 linux_kvm_assert_fresh_host_skip_policy() {
   local host_class="${1:-}"
   local skip_soak="${2:-0}"
@@ -48,9 +58,51 @@ linux_kvm_assert_fresh_host_soak_profile() {
   return 0
 }
 
+# Re-assert bound gate case_count values from gate summary JSON files.
+# Args: host_class, gates_directory
+linux_kvm_assert_fresh_host_bound_gate_depths() {
+  local host_class="${1:-}"
+  local gates_dir="${2:-}"
+  local entry name expected actual path
+
+  case "$host_class" in
+    existing)
+      return 0
+      ;;
+    fresh) ;;
+    *)
+      printf 'invalid Linux KVM host_class: %s\n' "$host_class" >&2
+      return 2
+      ;;
+  esac
+
+  if [[ -z "$gates_dir" || ! -d "$gates_dir" ]]; then
+    printf 'fresh host_class requires a gates directory for bound-depth checks\n' >&2
+    return 2
+  fi
+
+  for entry in "${LINUX_KVM_PROMOTION_BOUND_GATE_CASES[@]}"; do
+    name="${entry%%:*}"
+    expected="${entry##*:}"
+    path="$gates_dir/$name.json"
+    if [[ ! -f "$path" ]]; then
+      printf 'fresh host_class missing bound gate summary: %s\n' "$path" >&2
+      return 2
+    fi
+    actual="$(jq --raw-output '.case_count // empty' "$path")"
+    if [[ "$actual" != "$expected" ]]; then
+      printf '%s\n' \
+        "fresh host_class requires gate $name case_count=$expected (found ${actual:-missing})" >&2
+      return 2
+    fi
+  done
+  return 0
+}
+
 # Emit true/false.
 # Args: host_class, attestation JSON-or-null, skip_soak (0|1), soak_ran (0|1),
-#       soak_requested_iterations, soak_completed_iterations.
+#       soak_requested_iterations, soak_completed_iterations,
+#       bound_depths_ok (0|1).
 linux_kvm_compute_promotes_readiness() {
   local host_class="${1:-}"
   local fresh_host_attestation="${2:-null}"
@@ -58,6 +110,7 @@ linux_kvm_compute_promotes_readiness() {
   local soak_ran="${4:-0}"
   local soak_requested="${5:-0}"
   local soak_completed="${6:-0}"
+  local bound_depths_ok="${7:-0}"
 
   if [[ "$host_class" != "fresh" ]]; then
     printf '%s\n' 'false'
@@ -73,6 +126,10 @@ linux_kvm_compute_promotes_readiness() {
   fi
   if [[ "$soak_requested" != "$LINUX_KVM_PROMOTION_SOAK_ITERATIONS" ||
         "$soak_completed" != "$LINUX_KVM_PROMOTION_SOAK_ITERATIONS" ]]; then
+    printf '%s\n' 'false'
+    return 0
+  fi
+  if [[ "$bound_depths_ok" != "1" ]]; then
     printf '%s\n' 'false'
     return 0
   fi

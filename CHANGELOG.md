@@ -27,6 +27,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Fail-closed Linux KVM fresh release-matrix promotion so bound gate
+  summaries must re-assert their full depths (agent-entry 1, compatibility-
+  drift 14, lifecycle 17, recovery 1, create-reopen 11) before
+  `promotes_readiness=true`, mirroring WHPX breadth checks. Covered by
+  `linux-kvm-release-matrix-promotion-test.sh`.
 - Fail-closed fresh WHPX release-matrix promotion so a soak that keeps
   `requested_iterations=25` but skips parallel/fault/workload/negative/
   owner-kill breadth (or uses `DurationSeconds`) cannot set
