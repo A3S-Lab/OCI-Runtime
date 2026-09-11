@@ -17,6 +17,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Linux KVM Live recovery smoke now distinguishes Guest-cascade death after Host
+  SIGKILL (Guest recovery report present — typically stale system image / missing
+  Host-EOF reconnect) from a true session-owner/shim ownership failure (no Guest
+  recovery report). The liveness gate is unchanged; only the failure reason is
+  honest.
+
 - Made the SDK crate self-contained by packaging the exact checked-in OCI
   Runtime and Image specification snapshots consumed by its embedded schemas,
   conformance inventory, and tests. The incomplete 0.3.0 attempt published

@@ -75,7 +75,8 @@ pub async fn run(config: LinuxKvmLiveRecoverySmokeConfig) -> LinuxKvmLiveRecover
     };
     report.evidence_root = prepared.evidence_root.clone();
     report.artifacts = prepared.artifacts.clone();
-    if let Err(reason) = persist_report(&report.evidence_root, &report, "KVM Live recovery report") {
+    if let Err(reason) = persist_report(&report.evidence_root, &report, "KVM Live recovery report")
+    {
         report.reason = Some(reason);
         return report;
     }
@@ -100,7 +101,8 @@ pub async fn run(config: LinuxKvmLiveRecoverySmokeConfig) -> LinuxKvmLiveRecover
         report.case_count = 0;
         report.reason = Some("Linux KVM Live recovery report failed its final audit".to_string());
     }
-    if let Err(reason) = persist_report(&report.evidence_root, &report, "KVM Live recovery report") {
+    if let Err(reason) = persist_report(&report.evidence_root, &report, "KVM Live recovery report")
+    {
         report.status = a3s_oci_core::CapabilityStatus::Unavailable;
         report.case_count = 0;
         report.reason = Some(reason);
@@ -146,18 +148,22 @@ async fn run_live_recovery(
 
     // Opposite of stopped-only: Guest / session-owner must still be live.
     sleep(Duration::from_millis(200)).await;
-    evidence.live_vm_processes_reaped =
-        !host::processes_still_live(&evidence.live_vm_processes)?;
+    evidence.live_vm_processes_reaped = !host::processes_still_live(&evidence.live_vm_processes)?;
     evidence.guest_survived_host_sigkill = host::processes_still_live(&evidence.live_vm_processes)?;
     if evidence.live_vm_processes_reaped || !evidence.guest_survived_host_sigkill {
+        let target = evidence.target.as_ref().ok_or_else(|| {
+            "Live survival failure requires a retained container target".to_string()
+        })?;
+        let guest_recovery_report_present = sigkill_recovery_report_present(&runtime_root, target)?;
         return Err(
-            "Live session-owner/shim were reaped after Host SIGKILL (expected survival)".to_string(),
+            host_sigkill_survival_failure_reason(guest_recovery_report_present).to_string(),
         );
     }
 
     let binding = load_live_binding(&runtime_root, evidence)?;
-    authenticate_live(&binding)
-        .map_err(|error| format!("Live binding failed authentication after Host SIGKILL: {error}"))?;
+    authenticate_live(&binding).map_err(|error| {
+        format!("Live binding failed authentication after Host SIGKILL: {error}")
+    })?;
     evidence.live_binding_authenticated_after_kill = true;
     retain_binding_identities(evidence, &binding)?;
     if durable_endpoint_dir(&binding) != durable_endpoint {
@@ -178,9 +184,14 @@ async fn run_live_recovery(
         DURABLE_SPAWN,
     )
     .await?;
-    let replacement_result =
-        run_replacement(prepared, &runtime_root, &durable_endpoint, &mut replacement, evidence)
-            .await;
+    let replacement_result = run_replacement(
+        prepared,
+        &runtime_root,
+        &durable_endpoint,
+        &mut replacement,
+        evidence,
+    )
+    .await;
     if replacement_result.is_err() {
         emergency_reap_survivors(evidence).await;
         replacement.emergency_stop().await;
@@ -418,7 +429,9 @@ async fn run_replacement(
         && evidence.init_identity_unchanged
         && evidence.no_invented_exit_status;
     if !evidence.service_restart_recovered {
-        return Err("replacement Host Service did not shut down cleanly after Live reopen".to_string());
+        return Err(
+            "replacement Host Service did not shut down cleanly after Live reopen".to_string(),
+        );
     }
     Ok(())
 }
@@ -593,9 +606,7 @@ async fn prove_retained_filesystem_after_reattach(
         && evidence.replacement_state_running
         && evidence.init_identity_unchanged;
     if !evidence.retained_filesystem_proven {
-        return Err(
-            "Live retained filesystem evidence failed its completeness audit".to_string(),
-        );
+        return Err("Live retained filesystem evidence failed its completeness audit".to_string());
     }
     Ok(())
 }
@@ -713,7 +724,8 @@ async fn wait_for_durable_endpoint_removed(endpoint: &Path) -> Result<bool, Stri
     let deadline = Instant::now() + LIVE_TIMEOUT;
     loop {
         let agent = endpoint.join("agent.sock");
-        let host_control = endpoint.join(crate::kvm_live_session_binding::KVM_HOST_CONTROL_SOCKET_FILE);
+        let host_control =
+            endpoint.join(crate::kvm_live_session_binding::KVM_HOST_CONTROL_SOCKET_FILE);
         if !endpoint.exists() && !agent.exists() && !host_control.exists() {
             return Ok(true);
         }
@@ -731,6 +743,19 @@ async fn wait_for_durable_endpoint_removed(endpoint: &Path) -> Result<bool, Stri
     }
 }
 
+/// Classify why Live survivors were gone after Host SIGKILL.
+///
+/// A Guest recovery report means the Guest agent shut down (typically missing
+/// Host-EOF reconnect / stale system image) and session-owner/shim exited as a
+/// cascade. No report means the Host-side ownership boundary itself failed.
+fn host_sigkill_survival_failure_reason(guest_recovery_report_present: bool) -> &'static str {
+    if guest_recovery_report_present {
+        "Guest agent shut down after Host SIGKILL (recovery report present; Host-EOF reconnect did not keep Guest alive); session-owner/shim exited as cascade"
+    } else {
+        "Live session-owner/shim were reaped after Host SIGKILL without a Guest recovery report (expected survival)"
+    }
+}
+
 fn sigkill_recovery_report_present(
     runtime_root: &Path,
     target: &ContainerTarget,
@@ -744,7 +769,10 @@ fn sigkill_recovery_report_present(
     match std::fs::symlink_metadata(&path) {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(format!("failed to inspect recovery report {}: {error}", path.display())),
+        Err(error) => Err(format!(
+            "failed to inspect recovery report {}: {error}",
+            path.display()
+        )),
     }
 }
 
@@ -757,11 +785,7 @@ fn retain_binding_identities(
         binding.session_owner.start_time_ticks,
         "session-owner",
     )?;
-    let shim = identity_from_binding(
-        binding.shim.pid,
-        binding.shim.start_time_ticks,
-        "shim",
-    )?;
+    let shim = identity_from_binding(binding.shim.pid, binding.shim.start_time_ticks, "shim")?;
     if let Some(previous) = evidence.session_owner_identity.as_ref() {
         if previous.pid != owner.pid || previous.start_time_ticks != owner.start_time_ticks {
             return Err("Live binding session-owner identity drifted".to_string());
@@ -836,7 +860,9 @@ fn load_live_binding(
             || shim.pid as i32 != binding.shim.pid
             || shim.start_time_ticks != binding.shim.start_time_ticks
         {
-            return Err("Live binding identities do not match retained session-owner/shim".to_string());
+            return Err(
+                "Live binding identities do not match retained session-owner/shim".to_string(),
+            );
         }
     }
     Ok(binding)
@@ -892,12 +918,7 @@ fn walk_for_binding(root: &Path, found: &mut Vec<PathBuf>) -> Result<(), String>
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(format!(
-                "failed to enumerate {}: {error}",
-                root.display()
-            ))
-        }
+        Err(error) => return Err(format!("failed to enumerate {}: {error}", root.display())),
     };
     for entry in entries {
         let entry = entry.map_err(|error| format!("failed to inspect share entry: {error}"))?;
@@ -932,4 +953,24 @@ async fn emergency_reap_survivors(evidence: &super::report::LinuxKvmLiveRecovery
         }
     }
     let _ = host::wait_for_processes_reaped(&evidence.live_vm_processes).await;
+}
+
+#[cfg(test)]
+mod host_sigkill_survival_failure_reason_tests {
+    use super::host_sigkill_survival_failure_reason;
+
+    #[test]
+    fn recovery_report_present_diagnoses_guest_cascade() {
+        let reason = host_sigkill_survival_failure_reason(true);
+        assert!(reason.contains("recovery report present"));
+        assert!(reason.contains("cascade"));
+        assert!(reason.contains("Host-EOF reconnect"));
+    }
+
+    #[test]
+    fn missing_recovery_report_keeps_session_owner_diagnosis() {
+        let reason = host_sigkill_survival_failure_reason(false);
+        assert!(reason.contains("without a Guest recovery report"));
+        assert!(!reason.contains("cascade"));
+    }
 }
