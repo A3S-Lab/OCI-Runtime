@@ -25,6 +25,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Corrected a typo in the CLI stack-bound dispatch unit test (`worke` →
+  `worker`) so `cargo test -p a3s-oci-cli` compiles again.
+
 ### Changed
 
 - Documented that pre-fresh WHPX/KVM promote-honesty tooling is tip-closed
