@@ -25,6 +25,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Native Linux Live recovery smoke v3 proves a **new** post-reattach exec with
+  Pipe stdin + Capture stdout (in addition to retained exec I/O and filesystem
+  continuity). Schema
+  `a3s.oci.linux-native-live-recovery-smoke.v3`; wrapper
+  `.github/scripts/linux-native-live-recovery.sh`. Opt-in supervised create
+  only; does not flip defaults, B2, cutover, or fresh-host promotion.
+
 ### Fixed
 
 - Opt-in supervised Native create (`A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`) now

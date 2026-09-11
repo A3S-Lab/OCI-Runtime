@@ -5,7 +5,8 @@
 # A3S_OCI_NATIVE_SESSION_SUPERVISOR=1. Proves create+start → retained exec I/O
 # (Pipe stdin + Capture stdout) → FileOp upload → Host SIGKILL → init survival
 # → replacement Host Running reattach → same-process write_stdin/read_output →
-# FileOp download under schema a3s.oci.linux-native-live-recovery-smoke.v2.
+# new post-reattach Pipe+Capture exec → FileOp download under schema
+# a3s.oci.linux-native-live-recovery-smoke.v3.
 set -Eeuo pipefail
 
 if [[ "$(uname -s)" != "Linux" ]]; then
@@ -177,7 +178,7 @@ test -s "$runtime_report"
 jq --exit-status \
   --arg architecture "$architecture" \
   --arg source_revision "$source_revision" \
-  '.schema_version == "a3s.oci.linux-native-live-recovery-smoke.v2"
+  '.schema_version == "a3s.oci.linux-native-live-recovery-smoke.v3"
    and .architecture == $architecture
    and .status == "available"
    and .case_count == 1
@@ -187,6 +188,8 @@ jq --exit-status \
    and .recovery.write_stdin_after_reattach
    and .recovery.read_output_after_reattach
    and .recovery.retained_exec_io_proven
+   and (.recovery.new_exec_process_id | type == "string" and length > 0)
+   and .recovery.new_exec_io_after_reattach_proven
    and .recovery.file_upload_before_kill
    and .recovery.host_sigkill_delivered
    and .recovery.init_survived_host_sigkill
@@ -197,5 +200,5 @@ jq --exit-status \
    and (.recovery.reason == null)' "$runtime_report" >/dev/null
 
 cp "$runtime_report" "$report_path"
-printf 'Native Linux Live recovery harness succeeded (filesystem + retained exec I/O)\n' >&2
+printf 'Native Linux Live recovery harness succeeded (filesystem + retained + new exec I/O)\n' >&2
 exit 0
