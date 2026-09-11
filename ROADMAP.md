@@ -2303,13 +2303,13 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   `pause` / `resume` / `stats` / `update` use the durable recovery cgroup leaf
   (kernel freezer, cgroup-v2 counters, and supported resource fields) without
   restoring `PreparedProcess`; missing cgroup evidence fail-closes with
-  `Unavailable`. Device-policy resource updates remain `Unavailable` (no
-  retained device authority). New `exec` after Host reopen rebuilds the
+  `Unavailable`. Device-policy resource updates remain `Unsupported` (no
+  retained device authority; not retryable). New `exec` after Host reopen rebuilds the
   minimum authentic spawn context from the durable config snapshot plus live
   init namespace/root descriptors and the recovery cgroup leaf, then
   supervisor-parents the helper (`ExecProcess::spawn_with_context`).
   Null/Capture/Pipe I/O are accepted on Host-reopen exec; Terminal/`Inherit`
-  remain Unavailable there. Supervised create accepts Host `Inherit` stdio and
+  remain `Unsupported` there. Supervised create accepts Host `Inherit` stdio and
   `a3s_box_control_v1`. Default create stays Host-bound. Opt-in supervised
   create accepts rootless device mounts over
   the Host create-control SCM_RIGHTS path (same as default create; mounts do not

@@ -2069,14 +2069,15 @@ without helper fail closed with `Unavailable`. Authentic Host-reopen
 (kernel `cgroup.freeze` / `cgroup.events`, normalized cgroup-v2 counters, and
 supported resource fields) without restoring `PreparedProcess`; missing cgroup
 evidence fail-closes with `Unavailable`. Device-policy resource updates remain
-`Unavailable` because recovery does not retain device-authority state. New
+`Unsupported` because recovery does not retain device-authority state (not
+retryable). New
 `exec` after Host reopen rebuilds the minimum authentic
 spawn context from the durable `config.json` snapshot (namespace plan,
 capability ceiling, seccomp) plus live init namespace/root descriptors and the
 recovery cgroup leaf, then supervisor-parents the helper. Live Host and
 Host-reopen supervised exec deposit capture/pipe I/O the same way create does
 (exclusive `MSG_DEPOSIT_OUTPUT` / stdin dup deposit + relay). Terminal and
-`Inherit` remain Unavailable on Host-reopen exec (create-time Host `Inherit`
+`Inherit` remain `Unsupported` on Host-reopen exec (create-time Host `Inherit`
 stdio is installed via `prepare_supervised_stdio`). Host-reopen `file` /
 `filesystem` rebuild the same retained
 execution context and call the existing descriptor-confined helpers;
@@ -2197,7 +2198,7 @@ helper child when present; v5 exec records without helper fail closed.
 Authentic `pause` / `resume` / `stats` / `update` read and write the durable
 recovery cgroup leaf. New `exec` rebuilds authentic spawn context from recovery
 config plus live init and supervisor-parents the helper (Null/Capture/Pipe I/O;
-Terminal/`Inherit` remain Unavailable rather than inventing streams).
+Terminal/`Inherit` remain `Unsupported` rather than inventing streams).
 
 ### Hook owner-death crash boundary
 
