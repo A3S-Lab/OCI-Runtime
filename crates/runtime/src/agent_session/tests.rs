@@ -11,7 +11,10 @@ use super::{
     validate_vm_attachment_manifest_digest, BoundedOutput, ShutdownCompletion,
 };
 #[cfg(unix)]
-use super::{canonical_file, prepare_shim};
+use super::{
+    canonical_file, durable_host_control_connect_error_is_permanent, prepare_shim,
+    remap_durable_host_control_connect_error,
+};
 
 fn valid_output(platform: &str) -> BoundedOutput {
     BoundedOutput {
@@ -490,4 +493,38 @@ async fn retains_the_windows_shim_entry_until_spawn_resolves_it() {
 
     drop(prepared);
     std::fs::rename(&replacement, &shim).expect("replacement is possible after the pin drops");
+}
+
+#[cfg(unix)]
+mod durable_host_control_connect_honesty {
+    use super::{
+        durable_host_control_connect_error_is_permanent, remap_durable_host_control_connect_error,
+    };
+    use a3s_oci_sdk::ErrorCode;
+    use std::io;
+    use std::path::Path;
+
+    #[test]
+    fn permission_denied_is_permanent_not_unavailable() {
+        let error = io::Error::new(io::ErrorKind::PermissionDenied, "EACCES");
+        assert!(durable_host_control_connect_error_is_permanent(&error));
+        let remapped = remap_durable_host_control_connect_error(
+            Path::new("/tmp/a3s-oci-test-host-control.sock"),
+            error,
+        );
+        assert_eq!(remapped.code, ErrorCode::PermissionDenied);
+        assert!(!remapped.retryable);
+    }
+
+    #[test]
+    fn not_found_stays_retryable_unavailable_path() {
+        let error = io::Error::new(io::ErrorKind::NotFound, "ENOENT");
+        assert!(!durable_host_control_connect_error_is_permanent(&error));
+    }
+
+    #[test]
+    fn connection_refused_stays_retryable_unavailable_path() {
+        let error = io::Error::new(io::ErrorKind::ConnectionRefused, "ECONNREFUSED");
+        assert!(!durable_host_control_connect_error_is_permanent(&error));
+    }
 }

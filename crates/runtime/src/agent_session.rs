@@ -5,12 +5,12 @@ use std::io;
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
-#[cfg(unix)]
-use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
@@ -2875,12 +2875,13 @@ async fn connect_durable_host_control(
     host_control: &Path,
     shim_process_id: u32,
 ) -> a3s_oci_sdk::Result<(PlatformAgentStream, u32)> {
-    use a3s_oci_sdk::{Error, ErrorCode};
-
     match UnixStream::connect(host_control).await {
         Ok(stream) => Ok((stream, shim_process_id)),
-        Err(error) => Err(Error::new(
-            ErrorCode::Unavailable,
+        Err(error) if durable_host_control_connect_error_is_permanent(&error) => Err(
+            remap_durable_host_control_connect_error(host_control, error),
+        ),
+        Err(error) => Err(a3s_oci_sdk::Error::new(
+            a3s_oci_sdk::ErrorCode::Unavailable,
             format!(
                 "failed to connect durable KVM host-control {}: {error}",
                 host_control.display()
@@ -2889,6 +2890,29 @@ async fn connect_durable_host_control(
         .for_operation("connect-durable-kvm-host-control")
         .retryable(true)),
     }
+}
+
+/// Pathname host-control sockets are mode 0600. EACCES/EPERM is permanent for
+/// this Host identity (same honesty class as Live reattach #326).
+#[cfg(unix)]
+fn durable_host_control_connect_error_is_permanent(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::PermissionDenied
+}
+
+#[cfg(unix)]
+fn remap_durable_host_control_connect_error(
+    host_control: &Path,
+    error: std::io::Error,
+) -> a3s_oci_sdk::Error {
+    a3s_oci_sdk::Error::new(
+        a3s_oci_sdk::ErrorCode::PermissionDenied,
+        format!(
+            "permission denied connecting to durable KVM host-control {}: {error}",
+            host_control.display()
+        ),
+    )
+    .for_operation("connect-durable-kvm-host-control")
+    .retryable(false)
 }
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
