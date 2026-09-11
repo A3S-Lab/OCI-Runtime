@@ -27,6 +27,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Fail-closed fresh WHPX release-matrix promotion so a soak that keeps
+  `requested_iterations=25` but skips parallel/fault/workload/negative/
+  owner-kill breadth (or uses `DurationSeconds`) cannot set
+  `promotes_readiness=true`. Also require handle-reclamation
+  `requested_iterations=8` for fresh. Covered by promotion unit tests.
 - Fail-closed the WHPX operation/reopen gate so a thinned `-Operations` /
   `-Stages` profile cannot report `status=available` (requires the full
   20×9=180 path set, with `expected_case_count`). Transport-fault cleanup
