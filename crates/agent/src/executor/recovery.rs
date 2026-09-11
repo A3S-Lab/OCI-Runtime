@@ -5306,7 +5306,7 @@ mod tests {
                 Err(_) => unsafe { libc::_exit(163) },
             };
             drop(child_stdout);
-            if superviso
+            if supervisor
                 .deposit_output(launcher_pid, Some(host_stdout), None)
                 .is_err()
             {
