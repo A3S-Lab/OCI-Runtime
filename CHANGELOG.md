@@ -17,6 +17,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Durable KVM first-bring-up host-control connect fails closed with
+  `PermissionDenied` on EACCES/EPERM (mode-0600 pathname socket), matching
+  Live reattach honesty (#326), instead of retryable `Unavailable` that
+  burned the bridge deadline.
+
 - KVM Live reattach fails closed immediately with `PermissionDenied` when
   connecting to the mode-0600 host-control socket is rejected (EACCES/EPERM),
   instead of burning the connect deadline and returning Box-retryable
