@@ -53,6 +53,21 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Linux KVM Live recovery smoke v3 now also proves a **new** post-reattach
+  Pipe+Capture exec (`new_exec_io_after_reattach_proven`), matching Native Live
+  v3 spawn coverage through the reattached Guest agent (retained exec I/O alone
+  does not prove spawn). Schema remains
+  `a3s.oci.linux-kvm-live-recovery-smoke.v3`; wrapper
+  `.github/scripts/linux-kvm-live-recovery.sh`. Observation-only;
+  `promotes_readiness=false`. **Existing-host WSL2 `/dev/kvm` greened** on
+  `53ccc419858d987f1f80419ab83d63408ff53b43` (matrix report
+  `/tmp/a3s-oci-obs/kvm-live-recovery-new-exec-20260911174642.json`, SHA-256
+  `cc118bdcdae8b255b5bdce9863f27d13f1f1ab3582c4575d2aea6152671c852d`,
+  `status=available`; continuous init PID 358;
+  `new_exec_io_after_reattach_proven` / `retained_filesystem_proven` /
+  `retained_exec_io_proven` / `guest_survived_host_sigkill` /
+  `service_restart_recovered`).
+
 - Native Linux Live recovery smoke v3 proves a **new** post-reattach exec with
   Pipe stdin + Capture stdout (in addition to retained exec I/O and filesystem
   continuity). Schema

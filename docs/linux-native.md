@@ -388,7 +388,8 @@ Host Service, require Guest/session-owner survival
 (`live_vm_processes_reaped` must stay false), then prove a replacement Host
 reattaches **Running** with continuous init identity, retained exec I/O on the
 same process ID (`retained_exec_io_proven`: Pipe stdin + Capture stdout before
-Host SIGKILL and after reattach), exact FileOp::Download match
+Host SIGKILL and after reattach), a **new** post-reattach Pipe+Capture exec
+(`new_exec_io_after_reattach_proven`), exact FileOp::Download match
 (`retained_filesystem_proven`), and no invented exit:
 
 ```bash
@@ -408,14 +409,24 @@ greened Live filesystem continuity** on revision
 continuous init PID 361; `retained_filesystem_proven` /
 `file_upload_before_kill` / `file_download_after_reattach` /
 `retained_exec_io_proven` / `guest_survived_host_sigkill` /
-`service_restart_recovered`). Does **not** alone flip Box harness
-`b2_process_session_recovery_closed` (reports never self-certify B2/R6
-close). Box process Live sibling (`retained_stream_handle_proven` /
-`kvm_microvm_live_claimed`) and Box filesystem Live sibling (Native Live
-v4 + KVM Live v2) are greened on Box main `5f74b5c2…` and, with this OCI
-matrix, close the R6 process-session recovery parent. Native Live filesystem
-evidence is still required for full W2 and is greened separately. No
-cutover / HostRuntimeService registration.
+`service_restart_recovered`). **v3 also requires**
+`new_exec_io_after_reattach_proven` (Native Live v3 spawn parity).
+**Existing-host WSL2 `/dev/kvm` greened new-exec + filesystem Live reopen** on
+revision `53ccc419858d987f1f80419ab83d63408ff53b43` with matrix report
+`/tmp/a3s-oci-obs/kvm-live-recovery-new-exec-20260911174642.json` SHA-256
+`cc118bdcdae8b255b5bdce9863f27d13f1f1ab3582c4575d2aea6152671c852d`
+(system-image manifest
+`7bd6f0590f41c79172ca5868ed1003ad821173be1b1f0d53fb5f46a4402cd181`;
+continuous init PID 358; `new_exec_io_after_reattach_proven` /
+`retained_filesystem_proven` / `retained_exec_io_proven` /
+`guest_survived_host_sigkill` / `service_restart_recovered`). Does **not**
+alone flip Box harness `b2_process_session_recovery_closed` (reports never
+self-certify B2/R6 close). Box process Live sibling
+(`retained_stream_handle_proven` / `kvm_microvm_live_claimed`) and Box
+filesystem Live sibling (Native Live v4 + KVM Live v2) are greened on Box main
+`5f74b5c2…` and, with this OCI matrix, close the R6 process-session recovery
+parent. Native Live filesystem evidence is still required for full W2 and is
+greened separately. No cutover / HostRuntimeService registration.
 
 A third qualification-only Host Service serves the A3S Box product-lifecycle
 scope `box-product-lifecycle-only-v1` without promoting the public KVM

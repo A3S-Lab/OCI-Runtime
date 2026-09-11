@@ -2362,6 +2362,17 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   `805d4afea01b1c3a9ed7343b2406edfc6c7e43912e35134ec72661c29fe56449`; continuous
   init PID 361; `retained_filesystem_proven` / `file_upload_before_kill` /
   `file_download_after_reattach` / `retained_exec_io_proven` /
+  `guest_survived_host_sigkill` / `service_restart_recovered`). **v3 also
+  requires** `new_exec_io_after_reattach_proven` (Native Live v3 spawn parity
+  through the reattached Guest agent). **Existing-host WSL2 `/dev/kvm`
+  greened new-exec + filesystem Live reopen** on revision
+  `53ccc419858d987f1f80419ab83d63408ff53b43` with matrix report
+  `/tmp/a3s-oci-obs/kvm-live-recovery-new-exec-20260911174642.json` SHA-256
+  `cc118bdcdae8b255b5bdce9863f27d13f1f1ab3582c4575d2aea6152671c852d`
+  (system-image manifest
+  `7bd6f0590f41c79172ca5868ed1003ad821173be1b1f0d53fb5f46a4402cd181`; continuous
+  init PID 358; `new_exec_io_after_reattach_proven` /
+  `retained_filesystem_proven` / `retained_exec_io_proven` /
   `guest_survived_host_sigkill` / `service_restart_recovered`). Box process
   Live sibling (`retained_stream_handle_proven` / `kvm_microvm_live_claimed`)
   and Box filesystem Live sibling (Native Live v4 + KVM Live v2) are greened
