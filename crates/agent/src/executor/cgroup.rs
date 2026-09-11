@@ -762,7 +762,17 @@ pub(super) fn join_current_process(descriptor: RawFd) -> std_io::Result<()> {
     if written == payload.len() as isize {
         Ok(())
     } else if written < 0 {
-        Err(std_io::Error::last_os_error())
+        let error = std_io::Error::last_os_error();
+        // With nsdelegate, migration returns ENOENT when source or destination
+        // is not reachable in the writer's cgroup namespace (not "missing binary").
+        if error.raw_os_error() == Some(libc::ENOENT) {
+            Err(std_io::Error::new(
+                error.kind(),
+                "failed to join cgroup via cgroup.procs (ENOENT: cgroup unreachable in this cgroup namespace, or leaf removed)",
+            ))
+        } else {
+            Err(error)
+        }
     } else {
         Err(std_io::Error::new(
             std_io::ErrorKind::WriteZero,

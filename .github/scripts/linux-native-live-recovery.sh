@@ -7,6 +7,10 @@
 # → replacement Host Running reattach → same-process write_stdin/read_output →
 # new post-reattach Pipe+Capture exec → FileOp download under schema
 # a3s.oci.linux-native-live-recovery-smoke.v3.
+#
+# Rootful Host Service must observe a reachable cgroup hierarchy (nsdelegate
+# returns ENOENT when source/destination are not in the writer's cgroup
+# namespace). When entering the host via docker nsenter, include -C.
 set -Eeuo pipefail
 
 if [[ "$(uname -s)" != "Linux" ]]; then
