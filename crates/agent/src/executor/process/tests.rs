@@ -8,7 +8,9 @@ use std::process::ExitStatus as ProcessExitStatus;
 use a3s_oci_sdk::{IoMode, ProcessIo};
 use tokio::io::AsyncReadExt;
 
-use super::launch::{supervised_create_unsupported_reason, validate_rootless_device_mounts};
+use super::launch::{
+    prepare_supervised_stdio, supervised_create_unsupported_reason, validate_rootless_device_mounts,
+};
 use super::{append_cleanup_error, bind_control_listener, convert_exit_status, process_error};
 use crate::executor::control::READY_BYTE;
 use crate::OCI_LINUX_DEFAULT_DEVICE_NODES;
@@ -77,13 +79,13 @@ fn supervised_create_allows_box_control_and_keeps_other_gates() {
 
     let pipe_io = ProcessIo {
         stdin: IoMode::Pipe,
-        stdout: IoMode::Pipe,
-        stderr: IoMode::Pipe,
+        stdout: IoMode::Capture,
+        stderr: IoMode::Capture,
         terminal_size: None,
     };
     assert!(
         supervised_create_unsupported_reason(false, None, &pipe_io).is_none(),
-        "pipe I/O with rootless device mounts must not be gated Unsupported"
+        "pipe/capture I/O with rootless device mounts must not be gated Unsupported"
     );
     assert!(
         supervised_create_unsupported_reason(
@@ -93,6 +95,22 @@ fn supervised_create_allows_box_control_and_keeps_other_gates() {
         )
         .is_none(),
         "a3s_box_control_v1 must be allowed on supervised create"
+    );
+
+    let box_live_io = ProcessIo {
+        stdin: IoMode::Null,
+        stdout: IoMode::Inherit,
+        stderr: IoMode::Inherit,
+        terminal_size: None,
+    };
+    assert!(
+        supervised_create_unsupported_reason(
+            false,
+            Some(&AgentInheritedDescriptorSchema::a3s_box_control_v1()),
+            &box_live_io
+        )
+        .is_none(),
+        "Box Live Null+Inherit+Inherit with a3s_box_control_v1 must pass the supervised create gate"
     );
 
     let terminal_io = ProcessIo {
@@ -125,4 +143,27 @@ fn supervised_create_allows_box_control_and_keeps_other_gates() {
         .collect::<Vec<_>>();
     validate_rootless_device_mounts(&mounts, true, true).expect("rootless nonempty mounts");
     validate_rootless_device_mounts(&[], true, true).expect_err("missing mounts must fail closed");
+}
+
+#[test]
+fn prepare_supervised_stdio_dups_host_fds_for_inherit() {
+    let io = ProcessIo {
+        stdin: IoMode::Null,
+        stdout: IoMode::Inherit,
+        stderr: IoMode::Inherit,
+        terminal_size: None,
+    };
+    let (host, child) = prepare_supervised_stdio(&io).expect("inherit prepare");
+    assert!(host.stdin.is_none());
+    assert!(host.stdout.is_none());
+    assert!(host.stderr.is_none());
+    assert!(child.stdin.is_none());
+    assert!(
+        child.stdout.is_some(),
+        "Inherit stdout must supply a child install FD"
+    );
+    assert!(
+        child.stderr.is_some(),
+        "Inherit stderr must supply a child install FD"
+    );
 }

@@ -220,8 +220,9 @@ impl ProcessIoHandle {
     ///
     /// Capture stdout/stderr read ends must already have been moved to the
     /// session supervisor via `HostSessionSupervisor::deposit_output`. This
-    /// path never starts Host-local competing readers. Terminal and inherit
-    /// modes are rejected by `prepare_supervised_stdio` before this runs.
+    /// path never starts Host-local competing readers. Terminal modes are
+    /// rejected by `prepare_supervised_stdio` before this runs. `Inherit`
+    /// streams carry no Host-side pipe or capture relay.
     pub(super) fn attach_supervised(
         io: &ProcessIo,
         stdin: Option<OwnedFd>,
@@ -237,28 +238,19 @@ impl ProcessIoHandle {
                 "session-supervisor create does not support terminal process I/O yet",
             ));
         }
-        if matches!(io.stdin, IoMode::Inherit)
-            || matches!(io.stdout, IoMode::Inherit)
-            || matches!(io.stderr, IoMode::Inherit)
-        {
-            return Err(io_error(
-                ErrorCode::Unsupported,
-                "session-supervisor create does not support inherited process I/O yet",
-            ));
-        }
 
         let stdin = match (io.stdin, stdin) {
             (IoMode::Pipe, Some(fd)) => Some(ProcessStdin::OwnedPipe(owned_fd_to_async_reader(
                 fd, "stdin",
             )?)),
-            (IoMode::Null, None) => None,
+            (IoMode::Null | IoMode::Inherit, None) => None,
             (IoMode::Pipe, None) => {
                 return Err(io_error(
                     ErrorCode::Internal,
                     "supervised spawn did not retain the configured stdin pipe",
                 ));
             }
-            (IoMode::Null, Some(_)) => {
+            (IoMode::Null | IoMode::Inherit, Some(_)) => {
                 return Err(io_error(
                     ErrorCode::Internal,
                     "supervised spawn retained an unexpected stdin pipe",

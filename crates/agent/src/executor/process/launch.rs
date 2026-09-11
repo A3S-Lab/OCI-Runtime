@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr as StdSocketAddr, UnixListener as StdUnixListener};
 use std::os::unix::process::ExitStatusExt;
@@ -212,6 +212,9 @@ pub(in crate::executor) struct SupervisedChildStdio {
 /// The A3S Box control schema (`a3s_box_control_v1`, targets 3/4/5) is allowed
 /// and installed via session-supervisor `spawn_launcher_with_inherited`.
 /// Unknown inherited schemas remain fail-closed.
+///
+/// Host stdio `Inherit` is allowed: `prepare_supervised_stdio` duplicates the
+/// Host's 0/1/2 into the supervised child install plan (Box Live sandbox create).
 pub(super) fn supervised_create_unsupported_reason(
     pinned_bundle: bool,
     inherited_schema: Option<&AgentInheritedDescriptorSchema>,
@@ -236,16 +239,14 @@ pub(super) fn supervised_create_unsupported_reason(
     {
         return Some("session-supervisor create does not support terminal process I/O yet");
     }
-    if matches!(io.stdin, IoMode::Inherit)
-        || matches!(io.stdout, IoMode::Inherit)
-        || matches!(io.stderr, IoMode::Inherit)
-    {
-        return Some("session-supervisor create does not support inherited process I/O yet");
-    }
     None
 }
 
 /// Prepare Host/child stdio pipe ends for supervised spawn.
+///
+/// `Inherit` streams duplicate the Host process stdio descriptors (0/1/2) so
+/// the session supervisor can install them onto the launcher; the Host retains
+/// no pipe ends for those streams.
 pub(in crate::executor) fn prepare_supervised_stdio(
     io: &ProcessIo,
 ) -> Result<(SupervisedIoPipes, SupervisedChildStdio)> {
@@ -257,15 +258,6 @@ pub(in crate::executor) fn prepare_supervised_stdio(
         return Err(process_error(
             ErrorCode::Unsupported,
             "session-supervisor create does not support terminal process I/O yet",
-        ));
-    }
-    if matches!(io.stdin, IoMode::Inherit)
-        || matches!(io.stdout, IoMode::Inherit)
-        || matches!(io.stderr, IoMode::Inherit)
-    {
-        return Err(process_error(
-            ErrorCode::Unsupported,
-            "session-supervisor create does not support inherited process I/O yet",
         ));
     }
 
@@ -280,23 +272,76 @@ pub(in crate::executor) fn prepare_supervised_stdio(
         stderr: None,
     };
 
-    if matches!(io.stdin, IoMode::Pipe) {
-        let (read, write) = create_pipe()?;
-        child.stdin = Some(read);
-        host.stdin = Some(write);
+    match io.stdin {
+        IoMode::Pipe => {
+            let (read, write) = create_pipe()?;
+            child.stdin = Some(read);
+            host.stdin = Some(write);
+        }
+        IoMode::Inherit => {
+            child.stdin = Some(duplicate_host_stdio(libc::STDIN_FILENO, "stdin")?);
+        }
+        IoMode::Null => {}
+        other => {
+            return Err(process_error(
+                ErrorCode::Unsupported,
+                format!("session-supervisor create does not support stdin mode {other:?}"),
+            ));
+        }
     }
-    if matches!(io.stdout, IoMode::Capture) {
-        let (read, write) = create_pipe()?;
-        host.stdout = Some(read);
-        child.stdout = Some(write);
+    match io.stdout {
+        IoMode::Capture => {
+            let (read, write) = create_pipe()?;
+            host.stdout = Some(read);
+            child.stdout = Some(write);
+        }
+        IoMode::Inherit => {
+            child.stdout = Some(duplicate_host_stdio(libc::STDOUT_FILENO, "stdout")?);
+        }
+        IoMode::Null => {}
+        other => {
+            return Err(process_error(
+                ErrorCode::Unsupported,
+                format!("session-supervisor create does not support stdout mode {other:?}"),
+            ));
+        }
     }
-    if matches!(io.stderr, IoMode::Capture) {
-        let (read, write) = create_pipe()?;
-        host.stderr = Some(read);
-        child.stderr = Some(write);
+    match io.stderr {
+        IoMode::Capture => {
+            let (read, write) = create_pipe()?;
+            host.stderr = Some(read);
+            child.stderr = Some(write);
+        }
+        IoMode::Inherit => {
+            child.stderr = Some(duplicate_host_stdio(libc::STDERR_FILENO, "stderr")?);
+        }
+        IoMode::Null => {}
+        other => {
+            return Err(process_error(
+                ErrorCode::Unsupported,
+                format!("session-supervisor create does not support stderr mode {other:?}"),
+            ));
+        }
     }
 
     Ok((host, child))
+}
+
+fn duplicate_host_stdio(source: RawFd, stream: &str) -> Result<OwnedFd> {
+    // SAFETY: source is a live Host stdio descriptor for this process.
+    // F_DUPFD_CLOEXEC returns a distinct owned descriptor.
+    let duplicated = unsafe { libc::fcntl(source, libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicated < 0 {
+        return Err(process_error(
+            ErrorCode::Internal,
+            format!(
+                "failed to duplicate Host {stream} for supervised inherit I/O: {}",
+                std::io::Error::last_os_error()
+            ),
+        ));
+    }
+    // SAFETY: successful F_DUPFD_CLOEXEC returned a new owned fd.
+    Ok(unsafe { OwnedFd::from_raw_fd(duplicated) })
 }
 
 fn create_pipe() -> Result<(OwnedFd, OwnedFd)> {
