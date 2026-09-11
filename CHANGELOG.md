@@ -27,6 +27,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Corrected a typo in the agent recovery reopen unit test (`superviso` →
+  `supervisor`) so `cargo test -p a3s-oci-agent --lib` compiles again.
 - Corrected a typo in the CLI stack-bound dispatch unit test (`worke` →
   `worker`) so `cargo test -p a3s-oci-cli` compiles again.
 
