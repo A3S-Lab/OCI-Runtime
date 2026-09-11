@@ -125,9 +125,13 @@ impl ProcessIdentity {
     ///
     /// Refuses when the recorded identity is not live. After `pidfd_open`, a
     /// start-time drift means PID reuse — fail closed without signaling the
-    /// wrong process. A disappeared `/proc` entry after open means the target
-    /// exited; the pidfd is retained so `pidfd_send_signal` can report
-    /// [`SignalOutcome::Exited`] without inventing success.
+    /// wrong process. That outcome is permanent for the recorded identity
+    /// ([`ErrorCode::FailedPrecondition`]), not [`ErrorCode::Unavailable`]:
+    /// Box retries `Unavailable`, and a later call hits the pre-open
+    /// `is_live` check with the same permanent refusal. A disappeared
+    /// `/proc` entry after open means the target exited; the pidfd is
+    /// retained so `pidfd_send_signal` can report [`SignalOutcome::Exited`]
+    /// without inventing success.
     fn open_authenticated_pidfd(self, role: &str) -> Result<PidFd> {
         if !self.is_live()? {
             return Err(recovery_error(
@@ -156,7 +160,7 @@ impl ProcessIdentity {
             }
             Some(observation) if observation.start_time_ticks != self.start_time_ticks => {
                 Err(recovery_error(
-                    ErrorCode::Unavailable,
+                    ErrorCode::FailedPrecondition,
                     format!(
                         "{role} PID {} start-time drifted after pidfd open (recorded {}, observed {}); refusing to signal a reused PID",
                         self.pid, self.start_time_ticks, observation.start_time_ticks
@@ -3112,6 +3116,27 @@ mod tests {
             !stale.is_live().expect("inspect reused numeric PID"),
             "a reused numeric PID must not match the authenticated start time"
         );
+    }
+
+    #[test]
+    fn open_authenticated_pidfd_refuses_stale_start_time_as_failed_precondition() {
+        let identity = ProcessIdentity::current().expect("current process identity");
+        let stale = ProcessIdentity {
+            pid: identity.pid,
+            start_time_ticks: identity.start_time_ticks.saturating_add(1),
+        };
+        let error = stale
+            .open_authenticated_pidfd("unit-test")
+            .expect_err("stale start-time must refuse before signaling");
+        assert_eq!(
+            error.code,
+            ErrorCode::FailedPrecondition,
+            "PID reuse must not be Unavailable (Box retries that code)"
+        );
+        let live = identity
+            .open_authenticated_pidfd("unit-test")
+            .expect("live identity opens an authenticated pidfd");
+        drop(live);
     }
 
     #[test]
