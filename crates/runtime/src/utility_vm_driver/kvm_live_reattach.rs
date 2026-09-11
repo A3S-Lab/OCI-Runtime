@@ -23,8 +23,7 @@ use std::time::Duration;
 
 use a3s_oci_agent_protocol::{AgentClient, GuestAgentService, SessionToken};
 use a3s_oci_sdk::{
-    async_trait, ContainerRecord, ContainerTarget, Error, ErrorCode, GuestSessionAttachment,
-    Result,
+    async_trait, ContainerRecord, ContainerTarget, Error, ErrorCode, GuestSessionAttachment, Result,
 };
 use tokio::net::UnixStream;
 use tokio::time::timeout;
@@ -37,7 +36,8 @@ use crate::kvm_live_session_binding::{
 
 use super::layout::existing_runtime_share_paths;
 use super::sessions::{
-    ReusableGuestSession, UtilityVmAttachment, UtilityVmContainer, UtilityVmGuest, UtilityVmRegistry,
+    ReusableGuestSession, UtilityVmAttachment, UtilityVmContainer, UtilityVmGuest,
+    UtilityVmRegistry,
 };
 use super::{LaunchedUtilityVm, UtilityVmOwner};
 
@@ -99,17 +99,24 @@ pub(super) async fn try_reattach_live(
     }
     match authenticate_live(&binding) {
         Ok(()) => {}
-        Err(error) if auth_miss_falls_through_to_stopped(&error) => {
-            return Ok(None);
-        }
-        Err(error) => {
-            return Err(Error::new(
-                ErrorCode::Unavailable,
-                format!("KVM Live binding is not authenticated: {error}"),
-            )
-            .for_operation("utility-vm-kvm-live-reattach")
-            .retryable(true));
-        }
+        Err(error) => match classify_live_auth_error(&error) {
+            LiveAuthDisposition::FallThroughToStopped => return Ok(None),
+            LiveAuthDisposition::FailedPrecondition => {
+                return Err(Error::new(
+                    ErrorCode::FailedPrecondition,
+                    format!("KVM Live binding is not authenticated: {error}"),
+                )
+                .for_operation("utility-vm-kvm-live-reattach"));
+            }
+            LiveAuthDisposition::Unavailable => {
+                return Err(Error::new(
+                    ErrorCode::Unavailable,
+                    format!("KVM Live binding is not authenticated: {error}"),
+                )
+                .for_operation("utility-vm-kvm-live-reattach")
+                .retryable(true));
+            }
+        },
     }
 
     let token = SessionToken::from_hex(&binding.session_token_hex).map_err(|error| {
@@ -158,7 +165,8 @@ pub(super) async fn try_reattach_live(
         .for_operation("utility-vm-kvm-live-reattach")
     })?;
     let durable = DurableSessionOwner::from_authenticated(owner_pid, shim_pid);
-    let guest_endpoint_dir = PathBuf::from(crate::agent_socket::PRIVATE_TMP_ROOT).join(&binding.pipe_name);
+    let guest_endpoint_dir =
+        PathBuf::from(crate::agent_socket::PRIVATE_TMP_ROOT).join(&binding.pipe_name);
     let service: Arc<dyn GuestAgentService> = Arc::new(client);
     let launched = LaunchedUtilityVm {
         client: AgentDriverClient::new(service, "KVM guest agent", "kvm"),
@@ -280,11 +288,33 @@ impl UtilityVmOwner for ReattachedKvmOwner {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveAuthDisposition {
+    /// Dead or start-time-mismatched identities: fall through to stopped.
+    FallThroughToStopped,
+    /// Corrupt binding identity (e.g. non-positive PID): permanent, not retryable.
+    FailedPrecondition,
+    /// Transient observation / auth races: Box-retryable Unavailable.
+    Unavailable,
+}
+
+/// Classify Live binding authentication failures for Host reattach.
+///
 /// Dead or start-time-mismatched session-owner/shim identities are permanent
-/// for the recorded binding. Fall through to stopped recovery instead of
-/// returning Box-retryable [`ErrorCode::Unavailable`].
+/// for the recorded binding and fall through to stopped recovery instead of
+/// returning Box-retryable [`ErrorCode::Unavailable`]. Non-positive PIDs are
+/// corrupt binding data ([`ErrorCode::FailedPrecondition`]), not a retryable
+/// transport miss.
+fn classify_live_auth_error(error: &io::Error) -> LiveAuthDisposition {
+    match error.kind() {
+        io::ErrorKind::NotFound => LiveAuthDisposition::FallThroughToStopped,
+        io::ErrorKind::InvalidInput => LiveAuthDisposition::FailedPrecondition,
+        _ => LiveAuthDisposition::Unavailable,
+    }
+}
+
 fn auth_miss_falls_through_to_stopped(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::NotFound
+    classify_live_auth_error(error) == LiveAuthDisposition::FallThroughToStopped
 }
 
 #[cfg(test)]
@@ -334,6 +364,40 @@ mod tests {
         assert!(
             auth_miss_falls_through_to_stopped(&dead_error),
             "dead session-owner/shim must fall through to stopped recovery, not Unavailable"
+        );
+    }
+
+    #[test]
+    fn non_positive_pid_auth_miss_is_failed_precondition_not_unavailable() {
+        let zero = KvmProcessIdentity {
+            pid: 0,
+            start_time_ticks: 1,
+        };
+        let zero_error = sample_binding(zero, zero)
+            .authenticate_live()
+            .expect_err("pid 0 must fail closed");
+        assert_eq!(zero_error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            classify_live_auth_error(&zero_error),
+            LiveAuthDisposition::FailedPrecondition,
+            "corrupt non-positive PID must not be Box-retryable Unavailable"
+        );
+        assert!(
+            !auth_miss_falls_through_to_stopped(&zero_error),
+            "corrupt PID must not fall through as a missing identity"
+        );
+
+        let negative = KvmProcessIdentity {
+            pid: -1,
+            start_time_ticks: 1,
+        };
+        let negative_error = sample_binding(negative, negative)
+            .authenticate_live()
+            .expect_err("negative pid must fail closed");
+        assert_eq!(negative_error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            classify_live_auth_error(&negative_error),
+            LiveAuthDisposition::FailedPrecondition
         );
     }
 }
