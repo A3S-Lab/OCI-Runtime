@@ -45,6 +45,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Post-`pidfd_open` start-time drift (PID reuse TOCTOU) is
+  `FailedPrecondition`, matching the pre-open `is_live` refusal. It must not
+  be `Unavailable` — Box retries that code and the recorded identity cannot
+  recover. Covered by
+  `open_authenticated_pidfd_refuses_stale_start_time_as_failed_precondition`.
 - Mount planner unit tests now assert both host-euid contracts for bind
   `remount_bind` / `detached_bind`: privileged root keeps the open_tree /
   remount plan; non-root owners fold VFS attributes into `mount_setattr`
