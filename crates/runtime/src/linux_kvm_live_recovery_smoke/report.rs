@@ -12,9 +12,11 @@ pub const LINUX_KVM_LIVE_RECOVERY_SMOKE_SCHEMA_VERSION: &str =
 
 /// Live Host reopen evidence: Guest survives Host SIGKILL and reattaches Running.
 ///
-/// v3 keeps v2 retained exec I/O and also proves filesystem continuity
+/// v3 keeps v2 retained exec I/O, proves filesystem continuity
 /// (FileOp::Upload before Host SIGKILL, FileOp::Download after reattach on the
-/// same Running generation). Does **not** flip Box harness
+/// same Running generation), and proves a **new** post-reattach Pipe+Capture
+/// exec (`new_exec_io_after_reattach_proven`) — matching Native Live v3 spawn
+/// coverage through the reattached Guest agent. Does **not** flip Box harness
 /// `b2_process_session_recovery_closed` (reports never self-certify B2/R6
 /// close).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +50,11 @@ pub struct LinuxKvmLiveRecoveryEvidence {
     pub read_output_after_reattach: bool,
     /// Aggregate: before-kill I/O + after-reattach write + read on same exec.
     pub retained_exec_io_proven: bool,
+    /// New exec process ID spawned by the replacement Host after reattach.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_exec_process_id: Option<String>,
+    /// Replacement Host proved Pipe+Capture I/O on a newly spawned exec.
+    pub new_exec_io_after_reattach_proven: bool,
     /// First Host uploaded a unique payload under a known container path.
     pub file_upload_before_kill: bool,
     /// Replacement Host downloaded the same path after Running reattach.
@@ -112,6 +119,11 @@ impl LinuxKvmLiveRecoveryEvidence {
             && self.write_stdin_after_reattach
             && self.read_output_after_reattach
             && self.retained_exec_io_proven
+            && self
+                .new_exec_process_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
+            && self.new_exec_io_after_reattach_proven
             && self.file_upload_before_kill
             && self.file_download_after_reattach
             && self.retained_filesystem_proven
@@ -256,6 +268,8 @@ mod tests {
                 write_stdin_after_reattach: true,
                 read_output_after_reattach: true,
                 retained_exec_io_proven: true,
+                new_exec_process_id: Some("live-new-exec".to_string()),
+                new_exec_io_after_reattach_proven: true,
                 file_upload_before_kill: true,
                 file_download_after_reattach: true,
                 retained_filesystem_proven: true,
@@ -315,6 +329,14 @@ mod tests {
         no_io.recovery.retained_exec_io_proven = false;
         no_io.recovery.write_stdin_after_reattach = false;
         assert!(!no_io.is_success());
+
+        let mut no_new_exec = report.clone();
+        no_new_exec.recovery.new_exec_io_after_reattach_proven = false;
+        assert!(!no_new_exec.is_success());
+
+        let mut missing_new_id = report.clone();
+        missing_new_id.recovery.new_exec_process_id = None;
+        assert!(!missing_new_id.is_success());
 
         let mut no_fs = report;
         no_fs.recovery.retained_filesystem_proven = false;

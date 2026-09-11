@@ -220,6 +220,8 @@ jq --exit-status \
    and .recovery.write_stdin_after_reattach
    and .recovery.read_output_after_reattach
    and .recovery.retained_exec_io_proven
+   and (.recovery.new_exec_process_id | type == "string" and length > 0)
+   and .recovery.new_exec_io_after_reattach_proven
    and .recovery.file_upload_before_kill
    and .recovery.file_download_after_reattach
    and .recovery.retained_filesystem_proven
