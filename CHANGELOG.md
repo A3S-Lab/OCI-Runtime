@@ -48,6 +48,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 - Supervised launcher `join_current_process` now surfaces cgroup `ENOENT` as a
   cgroup-namespace reachability failure instead of a bare "No such file or
   directory" that looks like a missing executable (nsdelegate containment).
+  Error classification still maps that failure to `FailedPrecondition` after
+  the clarifying wrap drops `raw_os_error()` (kind + errno classifiers).
+- Corrected container-exec helper unit tests that still omitted the
+  `SURVIVE` argument after Live reopen wiring, so they never reached the
+  duplicate descriptor / namespace fail-closed assertions.
 - Opt-in supervised Native create (`A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`) now
   accepts Host `Inherit` stdio by duplicating Host fds 0/1/2 into the
   session-supervisor install plan (Box Live Null+Inherit+Inherit) and accepts

@@ -641,13 +641,7 @@ fn last_exec_os_error(operation: &str) -> Error {
 }
 
 fn cgroup_join_error_code(source: &io::Error) -> ErrorCode {
-    match source.raw_os_error() {
-        Some(libc::EACCES | libc::EPERM) => ErrorCode::PermissionDenied,
-        Some(libc::EBUSY | libc::EINVAL | libc::ENOENT | libc::ESRCH) => {
-            ErrorCode::FailedPrecondition
-        }
-        _ => ErrorCode::Internal,
-    }
+    cgroup::cgroup_join_error_code(source)
 }
 
 #[cfg(test)]
@@ -672,20 +666,28 @@ mod tests {
 
     #[test]
     fn helper_rejects_duplicate_root_and_init_descriptors() {
-        let error = parse(&["snapshot", "control", "3", "3", "42", "none"])
+        let error = parse(&["snapshot", "control", "3", "3", "42", "0", "none"])
             .expect_err("duplicate retained descriptors must fail closed");
         assert_eq!(error.code, ErrorCode::InvalidArgument);
-        assert!(error.message.contains("must be distinct"));
+        assert!(
+            error.message.contains("must be distinct"),
+            "unexpected message: {}",
+            error.message
+        );
     }
 
     #[test]
     fn helper_rejects_a_cgroup_descriptor_that_aliases_an_authenticated_prefix() {
-        let error = parse(&["snapshot", "control", "3", "4", "42", "3"])
+        let error = parse(&["snapshot", "control", "3", "4", "42", "0", "3"])
             .expect_err("duplicate cgroup descriptor must fail closed");
         assert_eq!(error.code, ErrorCode::InvalidArgument);
-        assert!(error
-            .message
-            .contains("cgroup.procs descriptor must be distinct"));
+        assert!(
+            error
+                .message
+                .contains("cgroup.procs descriptor must be distinct"),
+            "unexpected message: {}",
+            error.message
+        );
     }
 
     #[test]
@@ -697,6 +699,7 @@ mod tests {
                 "3",
                 "4",
                 "42",
+                "0",
                 "none",
                 "mnt:131072:5",
                 "user:268435456:6",
@@ -707,11 +710,21 @@ mod tests {
                 "3",
                 "4",
                 "42",
+                "0",
                 "none",
                 "user:268435456:5",
                 "user:268435456:6",
             ],
-            vec!["snapshot", "control", "3", "4", "42", "none", "unknown:1:5"],
+            vec![
+                "snapshot",
+                "control",
+                "3",
+                "4",
+                "42",
+                "0",
+                "none",
+                "unknown:1:5",
+            ],
         ] {
             let error = parse(&arguments).expect_err("invalid namespace layout must fail closed");
             assert_eq!(error.code, ErrorCode::InvalidArgument);
