@@ -2300,14 +2300,18 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   without restoring a fake `PreparedProcess`. Live `wait_process` for durable
   exec uses supervisor `MSG_WAIT` when a helper identity is recorded (v6); v5
   exec records without helper fail closed. Authentic Host-reopen
-  `pause` / `resume` / `stats` use the durable recovery cgroup leaf (kernel
-  freezer + cgroup-v2 counters) without restoring `PreparedProcess`; missing
-  cgroup evidence fail-closes with `Unavailable`. New `exec` after Host reopen
-  rebuilds the minimum authentic spawn context from the durable config snapshot
-  plus live init namespace/root descriptors and the recovery cgroup leaf, then
-  supervisor-parents the helper (`ExecProcess::spawn_with_context`). Null I/O
-  only in this slice; capture/pipe/terminal remain Unavailable. Default create
-  stays Host-bound. Opt-in supervised create accepts rootless device mounts over
+  `pause` / `resume` / `stats` / `update` use the durable recovery cgroup leaf
+  (kernel freezer, cgroup-v2 counters, and supported resource fields) without
+  restoring `PreparedProcess`; missing cgroup evidence fail-closes with
+  `Unavailable`. Device-policy resource updates remain `Unavailable` (no
+  retained device authority). New `exec` after Host reopen rebuilds the
+  minimum authentic spawn context from the durable config snapshot plus live
+  init namespace/root descriptors and the recovery cgroup leaf, then
+  supervisor-parents the helper (`ExecProcess::spawn_with_context`).
+  Null/Capture/Pipe I/O are accepted on Host-reopen exec; Terminal/`Inherit`
+  remain Unavailable there. Supervised create accepts Host `Inherit` stdio and
+  `a3s_box_control_v1`. Default create stays Host-bound. Opt-in supervised
+  create accepts rootless device mounts over
   the Host create-control SCM_RIGHTS path (same as default create; mounts do not
   ride `spawn_launcher`). Existing-host WSL2 Box live-session v3 evidence on
   OCI `7001ce5a4c32cd6e2bbb9a833fc45fd05d2318c9` proves retained streaming
