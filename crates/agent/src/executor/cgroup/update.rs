@@ -114,6 +114,53 @@ impl CgroupHandle {
     }
 }
 
+/// Apply supported OCI Linux resource fields to one durable recovery leaf.
+///
+/// Used by live Host-reopen `update` when recovery retained the authentic leaf
+/// without a full [`CgroupHandle`]. Device-policy updates require the original
+/// session device authority and fail closed here instead of pretending to apply
+/// them. The temporary handle never owns cleanup of the durable leaf.
+pub(in crate::executor) async fn update_from_leaf(
+    leaf: &Path,
+    resources: &LinuxResources,
+) -> Result<()> {
+    if resources.devices().is_some() {
+        return Err(update_error(
+            ErrorCode::Unavailable,
+            format!(
+                "Host-reopen resource update cannot change device policy on {}; durable recovery retained the cgroup leaf without device-authority state",
+                leaf.display()
+            ),
+        ));
+    }
+    let init_procs = tokio::fs::OpenOptions::new()
+        .write(true)
+        .open(leaf.join("cgroup.procs"))
+        .await
+        .map_err(|error| {
+            update_error(
+                ErrorCode::Unavailable,
+                format!(
+                    "failed to open durable recovery cgroup leaf {} for resource update: {error}",
+                    leaf.display()
+                ),
+            )
+        })?
+        .into_std()
+        .await;
+    let mut handle = CgroupHandle {
+        created: Vec::new(),
+        leaf: leaf.to_path_buf(),
+        init_procs,
+        control_workload: None,
+        devices: crate::executor::device::DevicePlan::default(),
+        device_filter_path: leaf.to_path_buf(),
+        device_filter: None,
+        delegated_device_filter: None,
+    };
+    handle.update(resources).await
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct CgroupUpdatePlan {
     memory_limit: Option<i64>,
@@ -762,11 +809,66 @@ mod tests {
 
     use super::{
         apply_prepared_update_settings, apply_update_settings, prepare_update_settings,
-        rollback_update, update_error, AppliedUpdateSetting, CgroupUpdatePlan,
+        rollback_update, update_error, update_from_leaf, AppliedUpdateSetting, CgroupUpdatePlan,
     };
     use crate::executor::cgroup::{
         CgroupHandle, CgroupSetting, ControlHeadroom, ControlWorkloadCgroup,
     };
+
+    #[tokio::test]
+    async fn update_from_leaf_applies_memory_and_pids_with_readback() {
+        let directory = tempfile::tempdir().expect("temporary cgroup leaf");
+        for (name, value) in [
+            ("cgroup.procs", ""),
+            ("memory.max", "max\n"),
+            ("memory.low", "0\n"),
+            ("memory.swap.max", "max\n"),
+            ("memory.oom.group", "0\n"),
+            ("cpu.max", "max 100000\n"),
+            ("cpu.weight", "100\n"),
+            ("pids.max", "max\n"),
+        ] {
+            std::fs::write(directory.path().join(name), value).expect("write cgroup fixture");
+        }
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "memory": {"limit": 67_108_864},
+            "pids": {"limit": 128}
+        }))
+        .expect("leaf update resources");
+
+        update_from_leaf(directory.path(), &resources)
+            .await
+            .expect("update_from_leaf must apply supported fields");
+
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("memory.max"))
+                .expect("read memory.max")
+                .trim(),
+            "67108864"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("pids.max"))
+                .expect("read pids.max")
+                .trim(),
+            "128"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_from_leaf_rejects_device_policy_fields() {
+        let directory = tempfile::tempdir().expect("temporary cgroup leaf");
+        std::fs::write(directory.path().join("cgroup.procs"), "").expect("cgroup.procs");
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "devices": [{"allow": false, "access": "rwm"}]
+        }))
+        .expect("device policy update");
+
+        let error = update_from_leaf(directory.path(), &resources)
+            .await
+            .expect_err("device policy must fail closed without device authority");
+        assert_eq!(error.code, ErrorCode::Unavailable);
+        assert!(error.message.contains("device"));
+    }
 
     #[tokio::test]
     async fn resolves_partial_updates_against_current_cgroup_values() {

@@ -783,8 +783,25 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn update(&self, request: DriverUpdateRequest) -> Result<DriverState> {
-        self.require_live(&request.target, "native-linux-update")
-            .await?;
+        if let Some(live) = self
+            .live_for(&request.target, "native-linux-update")
+            .await?
+        {
+            live.update(&request.resources)
+                .await
+                .map_err(|error| error.for_operation("native-linux-update"))?;
+            return observe_live_supervised_driver_state(&live);
+        }
+        if self
+            .recovered_for(&request.target, "native-linux-update")
+            .await?
+            .is_some()
+        {
+            return Err(recovered_stopped_error(
+                &request.target,
+                "native-linux-update",
+            ));
+        }
         self.client.update(request).await
     }
 

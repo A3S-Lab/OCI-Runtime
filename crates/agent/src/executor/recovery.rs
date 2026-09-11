@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT;
-use a3s_oci_sdk::oci_spec::runtime::Process;
+use a3s_oci_sdk::oci_spec::runtime::{LinuxResources, Process};
 use a3s_oci_sdk::{
     ContainerStats, ContainerTarget, Error, ErrorCode, FileRequest, FileResponse, FilesystemRequest,
     FilesystemResponse, IoMode, OciBundle, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
@@ -22,7 +22,8 @@ use tokio::time::{sleep, Instant};
 
 use super::capability::CapabilityPlan;
 use super::cgroup::{
-    leaf_is_frozen, open_cgroup_procs, set_leaf_frozen, stats_from_leaf, CgroupManager,
+    leaf_is_frozen, open_cgroup_procs, set_leaf_frozen, stats_from_leaf, update_from_leaf,
+    CgroupManager,
 };
 use super::device::{cleanup_device_target_manifest, load_device_target_manifest};
 use super::exec_process::{ExecProcess, ExecSpawnContext};
@@ -430,9 +431,11 @@ impl SessionSupervisorReattachCache {
 /// waits require a recorded helper identity and use authentic superviso
 /// `MSG_WAIT`. v5 exec records without helper fail closed with
 /// [`ErrorCode::Unavailable`]. Authentic [`Self::pause`] / [`Self::resume`] /
-/// [`Self::stats`] use the durable recovery cgroup leaf (kernel freezer and
-/// cgroup-v2 counters) without restoring a fake [`PreparedProcess`]. Missing
-/// cgroup evidence fail-closes with [`ErrorCode::Unavailable`]. New `exec`
+/// [`Self::stats`] / [`Self::update`] use the durable recovery cgroup leaf
+/// (kernel freezer, cgroup-v2 counters, and supported resource fields) without
+/// restoring a fake [`PreparedProcess`]. Missing cgroup evidence fail-closes
+/// with [`ErrorCode::Unavailable`]. Device-policy updates remain Unavailable
+/// because recovery does not retain device-authority state. New `exec`
 /// rebuilds the minimum authentic spawn context from the durable config
 /// snapshot plus live init namespace/root descriptors (and the recovery cgroup
 /// leaf when present), then supervisor-parents the helper with the same
@@ -751,6 +754,24 @@ impl LinuxLiveSupervisedSession {
         stats_from_leaf(self.recovery_cgroup_leaf()?, self.target.clone()).await
     }
 
+    /// Apply supported OCI Linux resource fields to the durable recovery leaf.
+    ///
+    /// Mirrors [`PreparedProcess`] resource update against the recorded leaf
+    /// without restoring process-session state. Device-policy fields fail
+    /// closed because recovery does not retain device-authority state.
+    pub async fn update(&self, resources: &LinuxResources) -> Result<()> {
+        if !self.init_is_live()? {
+            return Err(recovery_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "container {} generation {:?} cannot update resources without a live init identity",
+                    self.target.id, self.target.generation
+                ),
+            ));
+        }
+        update_from_leaf(self.recovery_cgroup_leaf()?, resources).await
+    }
+
     /// Exact-generation file transfer after Host reopen.
     ///
     /// Rebuilds [`RetainedExecutionContext`] the same way post-reopen exec does
@@ -943,7 +964,7 @@ impl LinuxLiveSupervisedSession {
             recovery_error(
                 ErrorCode::Unavailable,
                 format!(
-                    "container {} generation {:?} has no durable cgroup leaf after Host reopen; pause/resume/stats require recorded cgroup evidence",
+                    "container {} generation {:?} has no durable cgroup leaf after Host reopen; pause/resume/stats/update require recorded cgroup evidence",
                     self.target.id, self.target.generation
                 ),
             )
@@ -4403,7 +4424,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn live_session_pauses_resumes_and_reads_stats_from_recovery_cgroup_leaf() {
+    async fn live_session_pauses_resumes_updates_and_reads_stats_from_recovery_cgroup_leaf() {
         use std::io::{Read, Write};
         use std::os::unix::fs::PermissionsExt;
         use std::os::unix::net::UnixStream;
@@ -4638,6 +4659,35 @@ mod tests {
             "resume must observe kernel frozen=0"
         );
 
+        let resources: a3s_oci_sdk::oci_spec::runtime::LinuxResources =
+            serde_json::from_value(serde_json::json!({
+                "memory": {"limit": 67_108_864},
+                "pids": {"limit": 128}
+            }))
+            .expect("live update resources");
+        live.update(&resources)
+            .await
+            .expect("authentic update must write the recovery cgroup leaf");
+        let memory_max = std::fs::read_to_string(leaf.join("memory.max"))
+            .expect("read memory.max after live update");
+        assert_eq!(
+            memory_max.trim(),
+            "67108864",
+            "live update must read back the written memory.max"
+        );
+        let pids_max =
+            std::fs::read_to_string(leaf.join("pids.max")).expect("read pids.max after live update");
+        assert_eq!(
+            pids_max.trim(),
+            "128",
+            "live update must read back the written pids.max"
+        );
+        let updated_stats = live
+            .stats()
+            .await
+            .expect("stats after update must remain authentic");
+        assert_eq!(updated_stats.memory.limit_bytes, Some(67_108_864));
+
         live.kill_launcher().expect("kill supervised launcher");
         let _ = live.wait_launcher().expect("wait supervised launcher");
         let tombstone = live
@@ -4802,6 +4852,11 @@ mod tests {
             .await
             .expect_err("stats without recovery cgroup must fail closed");
         assert_eq!(stats_error.code, ErrorCode::Unavailable);
+        let update_error = live
+            .update(&a3s_oci_sdk::oci_spec::runtime::LinuxResources::default())
+            .await
+            .expect_err("update without recovery cgroup must fail closed");
+        assert_eq!(update_error.code, ErrorCode::Unavailable);
 
         live.kill_launcher().expect("kill supervised launcher");
         let _ = live.wait_launcher().expect("wait supervised launcher");
