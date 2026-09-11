@@ -1713,7 +1713,7 @@ mod tests {
             })
             .expect("spawn bounded command-dispatch worker");
 
-        worke
+        worker
             .join()
             .expect("command dispatch must not overflow a bounded stack");
     }
