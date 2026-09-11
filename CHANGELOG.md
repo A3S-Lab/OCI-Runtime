@@ -17,6 +17,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- KVM Live reattach treats non-positive session-owner/shim PIDs in a binding
+  as [`FailedPrecondition`] (corrupt identity), not Box-retryable
+  [`Unavailable`]. Dead/drifted identities still fall through to stopped
+  recovery (`NotFound`).
+
 - Linux KVM Live recovery smoke now distinguishes Guest-cascade death after Host
   SIGKILL (Guest recovery report present — typically stale system image / missing
   Host-EOF reconnect) from a true session-owner/shim ownership failure (no Guest
