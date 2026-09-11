@@ -2107,7 +2107,7 @@ supervisor mutex held across `MSG_WAIT` and deadlock timeout cleanup. Once the
 launcher is terminal, Host performs the authentic `wait_launcher` reap.
 
 Native Live Host reopen evidence harness
-(`a3s.oci.linux-native-live-recovery-smoke.v2`, CLI
+(`a3s.oci.linux-native-live-recovery-smoke.v3`, CLI
 `linux-native-live-recovery-smoke`,
 `.github/scripts/linux-native-live-recovery.sh`) is implemented under
 `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1`: create+start a long-running native
@@ -2115,9 +2115,11 @@ container, prove retained exec I/O (Pipe stdin + Capture stdout
 `exec_io_before_kill`), FileOp::Upload a unique payload, SIGKILL the Host
 Service, require init survival, spawn a replacement Host on the same root,
 require Running with continuous init identity and the same exec process ID,
-post-reattach write_stdin/read_output (`retained_exec_io_proven`), then
-FileOp::Download exact match (`retained_filesystem_proven`). v2 requires both
-filesystem and exec I/O continuity. The harness builds a **rootful** sleep
+post-reattach write_stdin/read_output (`retained_exec_io_proven`), spawn a
+**new** Pipe+Capture exec (`new_exec_io_after_reattach_proven`), then
+FileOp::Download exact match (`retained_filesystem_proven`). v3 requires
+filesystem continuity, retained exec I/O, and new post-reattach exec I/O.
+The harness builds a **rootful** sleep
 bundle (no userns id maps) so create does not run as mapped UID against the
 private work tree. Report JSON is snake_case (aligned with KVM Live). Prior
 v1 filesystem-only greening used revision
