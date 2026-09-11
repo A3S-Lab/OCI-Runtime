@@ -3,12 +3,19 @@
 //! When `A3S_OCI_KVM_SESSION_OWNER=1` and a live authenticated binding exists
 //! under the container runtime share, a replacement Host reconnects to the
 //! surviving Guest incarnation instead of seeding `RecoveredStopped`.
+//!
+//! A binding whose session-owner or shim identity is no longer live
+//! ([`io::ErrorKind::NotFound`] from [`authenticate_live`]) returns
+//! [`Ok(None)`] so recovery falls through to stopped — that outcome is
+//! permanent for the recorded identity and must not be
+//! [`ErrorCode::Unavailable`] (Box retries that code).
 
 #![cfg(all(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 
+use std::io;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -39,8 +46,9 @@ const HOST_CONTROL_CONNECT_RETRY: Duration = Duration::from_millis(50);
 
 /// Attempt Live reattach for one durable container record.
 ///
-/// Returns `Ok(None)` when durable mode is off or no live binding is present so
-/// the caller can keep the stopped-only recovery path.
+/// Returns `Ok(None)` when durable mode is off, no live binding is present, or
+/// the recorded session-owner/shim identity is no longer live, so the caller
+/// can keep the stopped-only recovery path.
 pub(super) async fn try_reattach_live(
     runtime_share_root: &Path,
     target: &ContainerTarget,
@@ -89,14 +97,20 @@ pub(super) async fn try_reattach_live(
             return Ok(None);
         }
     }
-    authenticate_live(&binding).map_err(|error| {
-        Error::new(
-            ErrorCode::Unavailable,
-            format!("KVM Live binding is not authenticated: {error}"),
-        )
-        .for_operation("utility-vm-kvm-live-reattach")
-        .retryable(true)
-    })?;
+    match authenticate_live(&binding) {
+        Ok(()) => {}
+        Err(error) if auth_miss_falls_through_to_stopped(&error) => {
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(Error::new(
+                ErrorCode::Unavailable,
+                format!("KVM Live binding is not authenticated: {error}"),
+            )
+            .for_operation("utility-vm-kvm-live-reattach")
+            .retryable(true));
+        }
+    }
 
     let token = SessionToken::from_hex(&binding.session_token_hex).map_err(|error| {
         Error::new(
@@ -263,5 +277,63 @@ impl UtilityVmOwner for ReattachedKvmOwner {
         let _ = std::fs::remove_file(&agent_socket);
         let _ = std::fs::remove_dir(&self.guest_endpoint_dir);
         Ok(())
+    }
+}
+
+/// Dead or start-time-mismatched session-owner/shim identities are permanent
+/// for the recorded binding. Fall through to stopped recovery instead of
+/// returning Box-retryable [`ErrorCode::Unavailable`].
+fn auth_miss_falls_through_to_stopped(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::NotFound
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kvm_live_session_binding::{KvmLiveSessionBinding, KvmProcessIdentity};
+
+    fn sample_binding(
+        owner: KvmProcessIdentity,
+        shim: KvmProcessIdentity,
+    ) -> KvmLiveSessionBinding {
+        KvmLiveSessionBinding {
+            schema_version: crate::kvm_live_session_binding::KVM_LIVE_SESSION_BINDING_SCHEMA
+                .to_string(),
+            container_id: Some("ctr".to_string()),
+            generation: Some(1),
+            config_digest: Some("digest".to_string()),
+            session_token_hex: "00".repeat(32),
+            host_control_socket: "/tmp/a3s-oci-test-host-control.sock".to_string(),
+            pipe_name: "a3s-oci-test-pipe".to_string(),
+            session_owner: owner,
+            shim,
+        }
+    }
+
+    #[test]
+    fn dead_or_drifted_auth_miss_falls_through_to_stopped_not_unavailable() {
+        let owner = KvmProcessIdentity::capture(std::process::id() as i32, "test-owner")
+            .expect("capture self");
+        let mut drifted = owner;
+        drifted.start_time_ticks = owner.start_time_ticks.saturating_add(1);
+        let drift_error = sample_binding(drifted, owner)
+            .authenticate_live()
+            .expect_err("start-time drift must fail closed");
+        assert!(
+            auth_miss_falls_through_to_stopped(&drift_error),
+            "PID reuse must fall through to stopped recovery, not Unavailable"
+        );
+
+        let dead = KvmProcessIdentity {
+            pid: i32::MAX - 7,
+            start_time_ticks: 1,
+        };
+        let dead_error = sample_binding(dead, dead)
+            .authenticate_live()
+            .expect_err("dead pid must fail closed");
+        assert!(
+            auth_miss_falls_through_to_stopped(&dead_error),
+            "dead session-owner/shim must fall through to stopped recovery, not Unavailable"
+        );
     }
 }
