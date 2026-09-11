@@ -762,22 +762,29 @@ pub(super) fn join_current_process(descriptor: RawFd) -> std_io::Result<()> {
     if written == payload.len() as isize {
         Ok(())
     } else if written < 0 {
-        let error = std_io::Error::last_os_error();
-        // With nsdelegate, migration returns ENOENT when source or destination
-        // is not reachable in the writer's cgroup namespace (not "missing binary").
-        if error.raw_os_error() == Some(libc::ENOENT) {
-            Err(std_io::Error::new(
-                error.kind(),
-                "failed to join cgroup via cgroup.procs (ENOENT: cgroup unreachable in this cgroup namespace, or leaf removed)",
-            ))
-        } else {
-            Err(error)
-        }
+        Err(clarify_cgroup_procs_write_error(std_io::Error::last_os_error()))
     } else {
         Err(std_io::Error::new(
             std_io::ErrorKind::WriteZero,
             "partial write to cgroup.procs",
         ))
+    }
+}
+
+/// Clarify nsdelegate ENOENT without losing `ErrorKind::NotFound` for classifiers.
+///
+/// Wrapping drops `raw_os_error()`, so callers must classify via kind as well as
+/// errno (see [`cgroup_move_error_code`] / exec-helper join mapping).
+fn clarify_cgroup_procs_write_error(error: std_io::Error) -> std_io::Error {
+    // With nsdelegate, migration returns ENOENT when source or destination is
+    // not reachable in the writer's cgroup namespace (not "missing binary").
+    if error.raw_os_error() == Some(libc::ENOENT) {
+        std_io::Error::new(
+            std_io::ErrorKind::NotFound,
+            "failed to join cgroup via cgroup.procs (ENOENT: cgroup unreachable in this cgroup namespace, or leaf removed)",
+        )
+    } else {
+        error
     }
 }
 
@@ -815,6 +822,28 @@ fn cgroup_move_error_code(error: &std_io::Error) -> ErrorCode {
         Some(libc::EACCES | libc::EPERM) => ErrorCode::PermissionDenied,
         Some(libc::ENOENT | libc::ESRCH | libc::EINVAL) => ErrorCode::FailedPrecondition,
         Some(libc::ENOMEM | libc::ENOSPC) => ErrorCode::ResourceExhausted,
+        // Clarified messages keep ErrorKind but drop raw_os_error().
+        None => match error.kind() {
+            std_io::ErrorKind::PermissionDenied => ErrorCode::PermissionDenied,
+            std_io::ErrorKind::NotFound => ErrorCode::FailedPrecondition,
+            _ => ErrorCode::Internal,
+        },
+        _ => ErrorCode::Internal,
+    }
+}
+
+/// Classify cgroup.procs join failures for exec-helper / launcher paths.
+pub(super) fn cgroup_join_error_code(error: &std_io::Error) -> ErrorCode {
+    match error.raw_os_error() {
+        Some(libc::EACCES | libc::EPERM) => ErrorCode::PermissionDenied,
+        Some(libc::EBUSY | libc::EINVAL | libc::ENOENT | libc::ESRCH) => {
+            ErrorCode::FailedPrecondition
+        }
+        None => match error.kind() {
+            std_io::ErrorKind::PermissionDenied => ErrorCode::PermissionDenied,
+            std_io::ErrorKind::NotFound => ErrorCode::FailedPrecondition,
+            _ => ErrorCode::Internal,
+        },
         _ => ErrorCode::Internal,
     }
 }
@@ -1292,8 +1321,9 @@ mod tests {
     use a3s_oci_sdk::ErrorCode;
 
     use super::{
-        apply_settings, cgroup_event_value, cgroup_move_error_code, cleanup_directories_checked,
-        enable_controllers, install_control_workload_descriptors_from_pre_exec, open_cgroup_procs,
+        apply_settings, cgroup_event_value, cgroup_join_error_code, cgroup_move_error_code,
+        clarify_cgroup_procs_write_error, cleanup_directories_checked, enable_controllers,
+        install_control_workload_descriptors_from_pre_exec, open_cgroup_procs,
         open_control_workload_membership, prepare_parent_cpuset, unified::UnifiedPlan,
         CgroupSetting,
     };
@@ -1303,6 +1333,7 @@ mod tests {
         for (errno, expected) in [
             (libc::EPERM, ErrorCode::PermissionDenied),
             (libc::EACCES, ErrorCode::PermissionDenied),
+            (libc::ENOENT, ErrorCode::FailedPrecondition),
             (libc::ESRCH, ErrorCode::FailedPrecondition),
             (libc::EINVAL, ErrorCode::FailedPrecondition),
             (libc::ENOSPC, ErrorCode::ResourceExhausted),
@@ -1310,6 +1341,44 @@ mod tests {
         ] {
             assert_eq!(
                 cgroup_move_error_code(&std::io::Error::from_raw_os_error(errno)),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn clarified_cgroup_join_enoent_keeps_failed_precondition_classification() {
+        let clarified =
+            clarify_cgroup_procs_write_error(std::io::Error::from_raw_os_error(libc::ENOENT));
+        assert!(
+            clarified.raw_os_error().is_none(),
+            "message wrap intentionally drops raw_os_error"
+        );
+        assert_eq!(clarified.kind(), std::io::ErrorKind::NotFound);
+        assert!(
+            clarified.to_string().contains("cgroup unreachable"),
+            "operator message must not look like a missing executable: {clarified}"
+        );
+        assert_eq!(
+            cgroup_move_error_code(&clarified),
+            ErrorCode::FailedPrecondition
+        );
+        assert_eq!(
+            cgroup_join_error_code(&clarified),
+            ErrorCode::FailedPrecondition
+        );
+    }
+
+    #[test]
+    fn classifies_cgroup_join_failures_by_errno_and_kind() {
+        for (errno, expected) in [
+            (libc::EPERM, ErrorCode::PermissionDenied),
+            (libc::EBUSY, ErrorCode::FailedPrecondition),
+            (libc::ENOENT, ErrorCode::FailedPrecondition),
+            (libc::EIO, ErrorCode::Internal),
+        ] {
+            assert_eq!(
+                cgroup_join_error_code(&std::io::Error::from_raw_os_error(errno)),
                 expected
             );
         }
