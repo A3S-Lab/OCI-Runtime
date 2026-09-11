@@ -285,6 +285,17 @@ if (-not $SkipSoak) {
         -RequestedIterations $soakRequestedIterations
 }
 
+$operationReopenCaseCount = 0
+if (-not $SkipOperationReopen) {
+    $reopenSummaryPath = Join-Path $outputRoot 'gates\operation-reopen\summary.json'
+    Assert-RegularFile -Path $reopenSummaryPath -Label 'WHPX operation-reopen summary' | Out-Null
+    $reopenSummary = Get-Content -LiteralPath $reopenSummaryPath -Raw | ConvertFrom-Json
+    $operationReopenCaseCount = [int](Get-OptionalProperty -Object $reopenSummary -Name 'case_count')
+    Assert-WhpxFreshHostOperationReopenProfile `
+        -HostClass $HostClass `
+        -CaseCount $operationReopenCaseCount
+}
+
 $completedAt = [DateTime]::UtcNow
 $promotesReadiness = Get-WhpxPromotesReadiness `
     -HostClass $HostClass `
@@ -293,7 +304,8 @@ $promotesReadiness = Get-WhpxPromotesReadiness `
     -SkipOperationReopen:$SkipOperationReopen `
     -GateCount $gates.Count `
     -SoakRequestedIterations $soakRequestedIterations `
-    -SoakCompletedIterations $soakCompletedIterations
+    -SoakCompletedIterations $soakCompletedIterations `
+    -OperationReopenCaseCount $operationReopenCaseCount
 $summary = [ordered]@{
     schema_version = 'a3s.oci.windows-whpx-release-matrix.v1'
     status = 'available'
@@ -317,6 +329,7 @@ $summary = [ordered]@{
     included_soak = (-not $SkipSoak)
     soak_requested_iterations = $soakRequestedIterations
     soak_completed_iterations = $soakCompletedIterations
+    operation_reopen_case_count = $operationReopenCaseCount
     gate_count = $gates.Count
     gates = $gates
 }
@@ -330,6 +343,9 @@ if ($HostClass -eq 'fresh') {
     if ($soakRequestedIterations -ne $script:WhpxPromotionSoakIterations -or
         $soakCompletedIterations -ne $script:WhpxPromotionSoakIterations) {
         throw 'HostClass=fresh requires full soak depth (requested_iterations=completed_iterations=25).'
+    }
+    if ($operationReopenCaseCount -ne $script:WhpxPromotionOperationReopenCases) {
+        throw 'HostClass=fresh requires full operation-reopen depth (case_count=180).'
     }
 }
 Write-Utf8Text -Path (Join-Path $outputRoot 'summary.json') `

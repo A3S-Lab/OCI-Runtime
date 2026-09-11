@@ -33,6 +33,12 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 }
 
 $expectedRootfsSha256 = '4b4daa9fe2fc696c4919c4412a4c3d3e770d8fb70292a004a2c72f5096175282'
+$expectedOperations = @(
+    'Create', 'State', 'Start', 'Kill', 'Delete', 'Wait', 'Exec',
+    'SignalProcess', 'WaitProcess', 'Pause', 'Resume', 'Processes',
+    'Update', 'Stats', 'ReadOutput', 'WriteStdin', 'CloseStdin',
+    'Resize', 'File', 'Filesystem'
+)
 $expectedStages = @(
     'host-before-request-write',
     'host-after-request-write',
@@ -44,6 +50,7 @@ $expectedStages = @(
     'guest-before-response-write',
     'guest-after-response-write'
 )
+$expectedCaseCount = $expectedOperations.Count * $expectedStages.Count
 $operationCliNames = @{
     Create = 'create'
     State = 'state'
@@ -262,9 +269,27 @@ foreach ($operation in $Operations) {
         throw "Unsupported operation name: $operation"
     }
 }
+if (@($Operations).Count -ne $expectedOperations.Count) {
+    throw ("Operation/reopen gate requires all {0} operations; got {1}" -f `
+        $expectedOperations.Count, @($Operations).Count)
+}
+foreach ($expected in $expectedOperations) {
+    if ($Operations -notcontains $expected) {
+        throw "Operation/reopen gate is missing required operation: $expected"
+    }
+}
 foreach ($stage in $Stages) {
     if ($expectedStages -notcontains $stage) {
         throw "Unsupported fault stage: $stage"
+    }
+}
+if (@($Stages).Count -ne $expectedStages.Count) {
+    throw ("Operation/reopen gate requires all {0} stages; got {1}" -f `
+        $expectedStages.Count, @($Stages).Count)
+}
+foreach ($expected in $expectedStages) {
+    if ($Stages -notcontains $expected) {
+        throw "Operation/reopen gate is missing required stage: $expected"
     }
 }
 
@@ -392,8 +417,13 @@ $summary = [ordered]@{
     system_image_sha256 = $systemImageSha256
     operations = @($Operations | ForEach-Object { $operationCliNames[$_] })
     stages = $Stages
+    expected_case_count = $expectedCaseCount
     case_count = $results.Count
     cases = $results
+}
+if ($results.Count -ne $expectedCaseCount) {
+    throw ("Operation/reopen gate expected {0} cases; got {1}" -f `
+        $expectedCaseCount, $results.Count)
 }
 Write-Utf8Text -Path (Join-Path $outputRoot 'summary.json') `
     -Text ($summary | ConvertTo-Json -Depth 16)

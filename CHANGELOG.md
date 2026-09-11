@@ -27,6 +27,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Fail-closed the WHPX operation/reopen gate so a thinned `-Operations` /
+  `-Stages` profile cannot report `status=available` (requires the full
+  20×9=180 path set, with `expected_case_count`). Transport-fault cleanup
+  now also asserts `case_count` equals the full stage set. Fresh WHPX
+  release-matrix promotion additionally requires
+  `operation_reopen_case_count=180`.
 - Fail-closed Linux KVM and WHPX release matrices so `host_class=fresh` /
   `-HostClass fresh` cannot set `promotes_readiness=true` with a reduced soak
   depth (`A3S_OCI_LINUX_KVM_SOAK_ITERATIONS!=25` or soak

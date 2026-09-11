@@ -2,6 +2,7 @@
 # Fresh hosts may promote only with the full six-gate bound set and full soak depth.
 
 $script:WhpxPromotionSoakIterations = 25
+$script:WhpxPromotionOperationReopenCases = 180
 
 function Assert-WhpxFreshHostSkipPolicy {
     param(
@@ -25,6 +26,17 @@ function Assert-WhpxFreshHostSoakProfile {
     }
 }
 
+function Assert-WhpxFreshHostOperationReopenProfile {
+    param(
+        [Parameter(Mandatory)] [ValidateSet('existing', 'fresh')] [string]$HostClass,
+        [Parameter(Mandatory)] [int]$CaseCount
+    )
+    if ($HostClass -eq 'fresh' -and
+        $CaseCount -ne $script:WhpxPromotionOperationReopenCases) {
+        throw ("HostClass=fresh requires operation-reopen case_count={0} (refusing thinned reopen profile)." -f $script:WhpxPromotionOperationReopenCases)
+    }
+}
+
 function Get-WhpxPromotesReadiness {
     param(
         [Parameter(Mandatory)] [ValidateSet('existing', 'fresh')] [string]$HostClass,
@@ -33,7 +45,8 @@ function Get-WhpxPromotesReadiness {
         [switch]$SkipOperationReopen,
         [Parameter(Mandatory)] [int]$GateCount,
         [int]$SoakRequestedIterations = 0,
-        [int]$SoakCompletedIterations = 0
+        [int]$SoakCompletedIterations = 0,
+        [int]$OperationReopenCaseCount = 0
     )
     if ($HostClass -ne 'fresh') {
         return $false
@@ -49,6 +62,9 @@ function Get-WhpxPromotesReadiness {
     }
     if ($SoakRequestedIterations -ne $script:WhpxPromotionSoakIterations -or
         $SoakCompletedIterations -ne $script:WhpxPromotionSoakIterations) {
+        return $false
+    }
+    if ($OperationReopenCaseCount -ne $script:WhpxPromotionOperationReopenCases) {
         return $false
     }
     return $true

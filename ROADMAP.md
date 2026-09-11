@@ -163,7 +163,8 @@ without attestation is rejected; `existing` never sets
 rejected (fail-closed; see
 `scripts/windows-whpx-fresh-host-attestation-test.ps1`). Fresh plus
 `-SkipSoak` / `-SkipOperationReopen` is rejected before promotion, and soak
-depth must be the full 25 iterations.
+depth must be the full 25 iterations, and operation-reopen must retain
+the full 180-path case set.
 The matrix must keep all six bound gates available (handle-reclamation, driver smoke, recovery
 smoke, 11-stage transport-fault cleanup, soak, 180-path operation-reopen). See
 [`docs/windows-whpx.md`](docs/windows-whpx.md).
