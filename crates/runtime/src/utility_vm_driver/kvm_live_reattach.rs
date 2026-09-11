@@ -9,6 +9,10 @@
 //! [`Ok(None)`] so recovery falls through to stopped — that outcome is
 //! permanent for the recorded identity and must not be
 //! [`ErrorCode::Unavailable`] (Box retries that code).
+//!
+//! Guest hello rejects with [`ErrorCode::PermissionDenied`] (wrong token) or
+//! [`ErrorCode::FailedPrecondition`] (protocol mismatch) are likewise permanent
+//! for the recorded binding and must not be rewritten as retryable Unavailable.
 
 #![cfg(all(
     target_os = "linux",
@@ -141,14 +145,7 @@ pub(super) async fn try_reattach_live(
         .for_operation("utility-vm-kvm-live-reattach")
         .retryable(true)
     })?
-    .map_err(|error| {
-        Error::new(
-            ErrorCode::Unavailable,
-            format!("failed to authenticate reattached KVM guest agent: {error}"),
-        )
-        .for_operation("utility-vm-kvm-live-reattach")
-        .retryable(true)
-    })?;
+    .map_err(remap_live_agent_hello_error)?;
 
     let owner_pid = NonZeroU32::new(binding.session_owner.pid as u32).ok_or_else(|| {
         Error::new(
@@ -288,6 +285,32 @@ impl UtilityVmOwner for ReattachedKvmOwner {
     }
 }
 
+/// Preserve permanent guest-hello rejects; wrap only transient negotiate misses.
+///
+/// Wrong session token ([`ErrorCode::PermissionDenied`]) and protocol mismatch
+/// ([`ErrorCode::FailedPrecondition`]) are durable for the recorded binding.
+/// Guest closed before hello / other transport races stay retryable Unavailable.
+fn remap_live_agent_hello_error(error: Error) -> Error {
+    if live_agent_hello_error_is_permanent(&error) {
+        return error
+            .for_operation("utility-vm-kvm-live-reattach")
+            .retryable(false);
+    }
+    Error::new(
+        ErrorCode::Unavailable,
+        format!("failed to authenticate reattached KVM guest agent: {error}"),
+    )
+    .for_operation("utility-vm-kvm-live-reattach")
+    .retryable(true)
+}
+
+fn live_agent_hello_error_is_permanent(error: &Error) -> bool {
+    matches!(
+        error.code,
+        ErrorCode::PermissionDenied | ErrorCode::FailedPrecondition
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LiveAuthDisposition {
     /// Dead or start-time-mismatched identities: fall through to stopped.
@@ -399,5 +422,42 @@ mod tests {
             classify_live_auth_error(&negative_error),
             LiveAuthDisposition::FailedPrecondition
         );
+    }
+
+    #[test]
+    fn wrong_token_hello_reject_stays_permission_denied_not_unavailable() {
+        let rejected = Error::new(
+            ErrorCode::PermissionDenied,
+            "agent session authentication failed",
+        );
+        assert!(live_agent_hello_error_is_permanent(&rejected));
+        let remapped = remap_live_agent_hello_error(rejected);
+        assert_eq!(remapped.code, ErrorCode::PermissionDenied);
+        assert!(!remapped.retryable);
+    }
+
+    #[test]
+    fn protocol_mismatch_hello_reject_stays_failed_precondition_not_unavailable() {
+        let rejected = Error::new(
+            ErrorCode::FailedPrecondition,
+            "no overlapping agent protocol version",
+        );
+        assert!(live_agent_hello_error_is_permanent(&rejected));
+        let remapped = remap_live_agent_hello_error(rejected);
+        assert_eq!(remapped.code, ErrorCode::FailedPrecondition);
+        assert!(!remapped.retryable);
+    }
+
+    #[test]
+    fn guest_closed_before_hello_stays_retryable_unavailable() {
+        let closed = Error::new(
+            ErrorCode::Unavailable,
+            "guest closed the stream before protocol negotiation",
+        )
+        .retryable(true);
+        assert!(!live_agent_hello_error_is_permanent(&closed));
+        let remapped = remap_live_agent_hello_error(closed);
+        assert_eq!(remapped.code, ErrorCode::Unavailable);
+        assert!(remapped.retryable);
     }
 }
