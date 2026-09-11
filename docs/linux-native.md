@@ -2082,7 +2082,7 @@ stdio is installed via `prepare_supervised_stdio`). Host-reopen `file` /
 `filesystem` rebuild the same retained
 execution context and call the existing descriptor-confined helpers;
 `NativeLinuxDriver` routes those operations through `live_for` (dead init →
-`Unavailable`, wrong generation → `Conflict`) instead of the old
+`FailedPrecondition`, wrong generation → `Conflict`) instead of the old
 `require_live` process-session fail-closed gate. Default create stays
 Host-bound.
 

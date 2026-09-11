@@ -1257,7 +1257,7 @@ impl LinuxLiveSupervisedSession {
         }
         if !self.init_is_live()? {
             return Err(recovery_error(
-                ErrorCode::Unavailable,
+                ErrorCode::FailedPrecondition,
                 format!(
                     "container {} generation {:?} cannot {operation} without a live init identity",
                     self.target.id, self.target.generation
@@ -6147,7 +6147,7 @@ mod tests {
         }
         assert!(
             !live.init_is_live().expect("init observation"),
-            "init must exit before Unavailable assertion"
+            "init must exit before FailedPrecondition assertion"
         );
 
         let error = live
@@ -6164,7 +6164,11 @@ mod tests {
             )
             .await
             .expect_err("dead init must fail closed");
-        assert_eq!(error.code, ErrorCode::Unavailable);
+        assert_eq!(
+            error.code,
+            ErrorCode::FailedPrecondition,
+            "dead init must not be Unavailable (Box retries that code)"
+        );
 
         cleanup_live_filesystem_session(live, supervisor_pid, supervisors).await;
     }
