@@ -2367,13 +2367,16 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   **product path** (Host-reopen `file`/`filesystem` via rebuilt
   `RetainedExecutionContext` + `live_for`) and first-principles unit tests are
   landed; Host-reopen evidence harness
-  `a3s.oci.linux-native-live-recovery-smoke.v2` /
+  `a3s.oci.linux-native-live-recovery-smoke.v3` /
   `.github/scripts/linux-native-live-recovery.sh` is implemented under
   `A3S_OCI_NATIVE_SESSION_SUPERVISOR=1` (distinct from stopped-only
-  `native-linux-recovery`). v2 requires retained exec I/O (Pipe stdin +
+  `native-linux-recovery`). v3 requires retained exec I/O (Pipe stdin +
   Capture stdout on the same process ID before Host SIGKILL and after
-  reattach) **and** filesystem continuity. Prior v1 filesystem-only greening
-  used revision `695bf4f73af986b8131f496de85753e491734836` (report SHA-256
+  reattach), a **new** post-reattach Pipe+Capture exec
+  (`new_exec_io_after_reattach_proven`), **and** filesystem continuity. Prior
+  v2 greening used tip `771f8d8` / earlier revisions; v1 filesystem-only
+  greening used revision `695bf4f73af986b8131f496de85753e491734836` (report
+  SHA-256
   `1b635b199b43b3666773d16a8d9718270f0efd809782326d75d7eec525f3612f`).
   **Existing-host WSL2 Native Live v2 greened** on revision
   `f047d862bd0a000392cf9bd013854590c1e4a7c7` with report

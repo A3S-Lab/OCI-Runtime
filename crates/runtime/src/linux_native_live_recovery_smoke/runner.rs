@@ -274,6 +274,7 @@ async fn run_replacement(
     }
 
     prove_retained_exec_io_after_reattach(prepared, &client, target, evidence).await?;
+    prove_new_exec_io_after_reattach(prepared, &client, target, evidence).await?;
     prove_retained_filesystem_after_reattach(prepared, &client, target, evidence).await?;
 
     call(
@@ -400,6 +401,61 @@ async fn prove_retained_exec_io_after_reattach(
             .is_some_and(|id| !id.is_empty());
     if !evidence.retained_exec_io_proven {
         return Err("Live retained exec I/O evidence failed its completeness audit".to_string());
+    }
+    Ok(())
+}
+
+async fn prove_new_exec_io_after_reattach(
+    prepared: &PreparedRun,
+    client: &RuntimeClient,
+    target: &ContainerTarget,
+    evidence: &mut super::report::LinuxNativeLiveRecoveryEvidence,
+) -> Result<(), String> {
+    let process_id = ProcessId::new(format!("live-new-{}", prepared.nonce))
+        .map_err(|error| format!("failed to construct Live new-exec process ID: {error}"))?;
+    let process = retained_echo_process()?;
+    let io = ProcessIo {
+        stdin: IoMode::Pipe,
+        stdout: IoMode::Capture,
+        stderr: IoMode::Capture,
+        terminal_size: None,
+    };
+    let process_target = ProcessTarget {
+        container: target.clone(),
+        process_id: process_id.clone(),
+    };
+    call(
+        "Live new exec after Host reattach",
+        client.exec(ExecRequest {
+            context: operation(&prepared.nonce, "exec-new")?,
+            container: target.clone(),
+            process_id: process_id.clone(),
+            process,
+            io,
+        }),
+    )
+    .await?;
+    evidence.new_exec_process_id = Some(process_id.as_str().to_string());
+
+    wait_for_captured_needle(client, &process_target, b"live-io-ready\n", 0).await?;
+    let payload = format!("new-{}\n", prepared.nonce);
+    call(
+        "Live new write_stdin after Host reattach",
+        client.write_stdin(WriteStdinRequest {
+            context: operation(&prepared.nonce, "stdin-new")?,
+            process: process_target.clone(),
+            data: payload.into_bytes(),
+        }),
+    )
+    .await?;
+    let expected = format!("echo:new-{}\n", prepared.nonce);
+    wait_for_captured_needle(client, &process_target, expected.as_bytes(), 0).await?;
+    evidence.new_exec_io_after_reattach_proven = evidence
+        .new_exec_process_id
+        .as_deref()
+        .is_some_and(|id| !id.is_empty());
+    if !evidence.new_exec_io_after_reattach_proven {
+        return Err("Live new exec I/O evidence failed its completeness audit".to_string());
     }
     Ok(())
 }

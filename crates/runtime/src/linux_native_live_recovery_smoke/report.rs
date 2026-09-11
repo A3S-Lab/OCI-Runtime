@@ -5,11 +5,12 @@ use serde::{Deserialize, Serialize};
 
 /// Schema for the Native Linux Live Host reopen evidence gate.
 ///
-/// v2 requires retained exec I/O (Pipe stdin + Capture stdout) across Host
-/// SIGKILL in addition to filesystem continuity. Does **not** flip default
-/// create / B2 / cutover flags (reports never self-certify B2/R6 close).
+/// v3 requires retained exec I/O across Host SIGKILL, filesystem continuity,
+/// and a **new** post-reattach exec with Pipe stdin + Capture stdout. Does
+/// **not** flip default create / B2 / cutover flags (reports never self-certify
+/// B2/R6 close).
 pub const LINUX_NATIVE_LIVE_RECOVERY_SMOKE_SCHEMA_VERSION: &str =
-    "a3s.oci.linux-native-live-recovery-smoke.v2";
+    "a3s.oci.linux-native-live-recovery-smoke.v3";
 
 /// Nested evidence for one Native Live Host reopen attempt.
 ///
@@ -28,6 +29,11 @@ pub struct LinuxNativeLiveRecoveryEvidence {
     pub write_stdin_after_reattach: bool,
     /// Replacement Host read_output observed the post-reattach echo.
     pub read_output_after_reattach: bool,
+    /// New exec process ID spawned on the replacement Host after reattach.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_exec_process_id: Option<String>,
+    /// Replacement Host proved Pipe+Capture I/O on a new exec process ID.
+    pub new_exec_io_after_reattach_proven: bool,
     pub file_upload_before_kill: bool,
     pub host_sigkill_delivered: bool,
     pub init_survived_host_sigkill: bool,
@@ -48,6 +54,8 @@ impl LinuxNativeLiveRecoveryEvidence {
             exec_io_before_kill: false,
             write_stdin_after_reattach: false,
             read_output_after_reattach: false,
+            new_exec_process_id: None,
+            new_exec_io_after_reattach_proven: false,
             file_upload_before_kill: false,
             host_sigkill_delivered: false,
             init_survived_host_sigkill: false,
@@ -61,7 +69,8 @@ impl LinuxNativeLiveRecoveryEvidence {
 
     /// Whether every Live continuity field is authentically set.
     ///
-    /// v2 requires both filesystem continuity and retained exec I/O.
+    /// v3 requires filesystem continuity, retained exec I/O, and a new
+    /// post-reattach Pipe+Capture exec.
     #[must_use]
     pub fn is_success(&self) -> bool {
         self.session_supervisor_mode_opt_in
@@ -73,6 +82,11 @@ impl LinuxNativeLiveRecoveryEvidence {
             && self.write_stdin_after_reattach
             && self.read_output_after_reattach
             && self.retained_exec_io_proven
+            && self
+                .new_exec_process_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
+            && self.new_exec_io_after_reattach_proven
             && self.file_upload_before_kill
             && self.host_sigkill_delivered
             && self.init_survived_host_sigkill
@@ -131,6 +145,8 @@ mod tests {
             exec_io_before_kill: true,
             write_stdin_after_reattach: true,
             read_output_after_reattach: true,
+            new_exec_process_id: Some("live-new-exec-test".to_string()),
+            new_exec_io_after_reattach_proven: true,
             file_upload_before_kill: true,
             host_sigkill_delivered: true,
             init_survived_host_sigkill: true,
@@ -188,6 +204,14 @@ mod tests {
         let mut missing_process_id = evidence.clone();
         missing_process_id.retained_exec_process_id = None;
         assert!(!missing_process_id.is_success());
+
+        let mut missing_new_exec = evidence.clone();
+        missing_new_exec.new_exec_io_after_reattach_proven = false;
+        assert!(!missing_new_exec.is_success());
+
+        let mut missing_new_id = evidence.clone();
+        missing_new_id.new_exec_process_id = None;
+        assert!(!missing_new_id.is_success());
 
         let mut missing_running = evidence.clone();
         missing_running.replacement_state_running = false;
@@ -276,6 +300,18 @@ mod tests {
                 .get("retained_exec_process_id")
                 .and_then(|value| value.as_str()),
             Some("live-io-test")
+        );
+        assert_eq!(
+            recovery
+                .get("new_exec_io_after_reattach_proven")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            recovery
+                .get("new_exec_process_id")
+                .and_then(|value| value.as_str()),
+            Some("live-new-exec-test")
         );
     }
 }
