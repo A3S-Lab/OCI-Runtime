@@ -51,6 +51,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+- Documented the current feature and evidence layers in
+  `docs/feature-coverage.md`. The inventory does not add line-coverage
+  percentages and does not promote readiness. The latest published workspace
+  archive remains `v0.3.6`.
+
 ## [0.3.6] - 2026-09-12
 
 Published runtime archive of current `main`. `v0.3.5` already published GitHub

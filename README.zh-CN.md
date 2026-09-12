@@ -808,6 +808,7 @@ existing-host 绿从不设置 `promotes_readiness=true`。
 | Fresh KVM R2L x86_64 | **阻塞** — 需要新装 Linux KVM 主机（重装 WSL 不算 fresh） |
 | Fresh KVM R2L AArch64 | **阻塞** — 需要 AArch64 KVM 主机 |
 | WHPX/KVM `probe-only` → `experimental` | **阻塞** — 依赖上述 fresh 矩阵 |
+| 与当前 `main` 对齐的 promote | **硬件阻塞** — 检出当前 `main`。最新已发布归档是 [`v0.3.6`](https://github.com/A3S-Lab/OCI-Runtime/releases/tag/v0.3.6)（`b34c81c`），只是 `v0.3.5`（`139850c`）之上的文档和版本字符串归档。不晋升 readiness |
 
 | 项 | 诚实 fresh-host 之后 |
 | --- | --- |
@@ -1654,6 +1655,7 @@ crates/cli/             capability inspection and real-host qualification gates
 - [客户机代理协议](docs/agent-protocol.md)
 - [OCI 1.3 conformance 契约](docs/oci-conformance.md)
 - [规范覆盖](docs/normative-coverage.md)
+- [功能覆盖](docs/feature-coverage.md)
 - [语义校验](docs/semantic-validation.md)
 - [Native Linux 开发](docs/linux-native.md)
 - [macOS HVF 开发](docs/macos-hvf.md)
