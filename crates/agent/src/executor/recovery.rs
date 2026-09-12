@@ -5823,6 +5823,20 @@ mod tests {
             path.pop();
         }
         let candidate = path.join("a3s-oci-agent");
+        if candidate.is_file() {
+            return candidate;
+        }
+        // Lib unit tests do not always link the package binary first. Build it
+        // once into this profile's target directory so Live reopen fixtures can
+        // spawn a real agent beside the test executable.
+        let status = std::process::Command::new(env!("CARGO"))
+            .args(["build", "-p", "a3s-oci-agent", "--bin", "a3s-oci-agent"])
+            .status()
+            .expect("spawn cargo to build a3s-oci-agent for Live reopen fixtures");
+        assert!(
+            status.success(),
+            "cargo build -p a3s-oci-agent --bin a3s-oci-agent failed with {status}"
+        );
         assert!(
             candidate.is_file(),
             "a3s-oci-agent must be built beside the test profile at {}",
