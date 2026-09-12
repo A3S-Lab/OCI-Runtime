@@ -51,19 +51,35 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
-## [0.3.3] - 2026-09-12
+## [0.3.4] - 2026-09-12
 
-Published runtime archive. `v0.3.0` failed release tests, `v0.3.1` failed
-release documentation checks, and `v0.3.2` failed static guest-agent packaging
-because musl targets were installed on stable while the pinned toolchain is
-1.98.1. None of those tags published GitHub Release assets.
+Published runtime archive. `v0.3.0` through `v0.3.3` failed release
+verification before any GitHub Release assets were published. `v0.3.3` reached
+Linux packaging and failed while building pinned CRIU because `libnet.h` was
+not installed.
 This tag does not promote driver readiness. WHPX and the Linux KVM public
 candidate remain `probe-only`. macOS HVF remains `experimental`. Fresh-host
 promotion, W4 Box cutover, default supervised create, and HostRuntimeService
 KVM registration stay open. The immutable system-image compatibility level
 remains `a3s-oci-runtime-0.2.0-agent-protocol-v10`. Published Rust SDK crates
-stay at 0.3.1; `v0.3.3` is the workspace binary release, not a crates.io SDK
+stay at 0.3.1; `v0.3.4` is the workspace binary release, not a crates.io SDK
 tag.
+
+### Fixed
+
+- Linux release packaging installs `libnet1-dev` before building pinned CRIU
+  4.2.1, so `soccr` can find `libnet.h` on both x86_64 and AArch64 runners.
+
+## [0.3.3] - 2026-09-12
+
+Tagged runtime archive. Pinned CRIU packaging failed before any GitHub Release
+assets were published; `v0.3.4` is the published archive of this line.
+This tag does not promote driver readiness. WHPX and the Linux KVM public
+candidate remain `probe-only`. macOS HVF remains `experimental`. Fresh-host
+promotion, W4 Box cutover, default supervised create, and HostRuntimeService
+KVM registration stay open. The immutable system-image compatibility level
+remains `a3s-oci-runtime-0.2.0-agent-protocol-v10`. Published Rust SDK crates
+stay at 0.3.1; this tag is not a crates.io SDK tag.
 
 ### Fixed
 
@@ -74,7 +90,7 @@ tag.
 ## [0.3.2] - 2026-09-12
 
 Tagged runtime archive. Static guest-agent packaging failed before any GitHub
-Release assets were published; `v0.3.3` is the published archive of this line.
+Release assets were published; `v0.3.4` is the published archive of this line.
 This tag does not promote driver readiness. WHPX and the Linux KVM public
 candidate remain `probe-only`. macOS HVF remains `experimental`. Fresh-host
 promotion, W4 Box cutover, default supervised create, and HostRuntimeService
@@ -90,7 +106,7 @@ stay at 0.3.1; this tag is not a crates.io SDK tag.
 ## [0.3.1] - 2026-09-12
 
 Tagged runtime archive. Release documentation checks failed before any GitHub
-Release assets were published; `v0.3.3` is the published archive of this line.
+Release assets were published; `v0.3.4` is the published archive of this line.
 This tag does not promote driver readiness. WHPX and the Linux KVM public
 candidate remain `probe-only`. macOS HVF remains `experimental`. Fresh-host
 promotion, W4 Box cutover, default supervised create, and HostRuntimeService
@@ -107,7 +123,7 @@ stay at 0.3.1; this tag is not a crates.io SDK tag.
 ## [0.3.0] - 2026-09-12
 
 Tagged runtime archive. Release verification failed before any GitHub Release
-assets were published; `v0.3.3` is the published archive of this line. This
+assets were published; `v0.3.4` is the published archive of this line. This
 tag does not promote driver readiness. WHPX and the Linux KVM public candidate
 remain `probe-only`. macOS HVF remains `experimental`. Fresh-host promotion,
 W4 Box cutover, default supervised create, and HostRuntimeService KVM
@@ -2577,6 +2593,7 @@ registration stay open. The immutable system-image compatibility level remains
 - Documentation and conformance evidence now distinguish runtime namespace and
   mount enforcement from A3S Box product-level network and volume management.
 
+[0.3.4]: https://github.com/A3S-Lab/OCI-Runtime/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/A3S-Lab/OCI-Runtime/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/A3S-Lab/OCI-Runtime/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/A3S-Lab/OCI-Runtime/compare/v0.3.0...v0.3.1
