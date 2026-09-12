@@ -207,11 +207,12 @@ exploitable path are overfit — do not land them.
 WHPX and Linux KVM (x86_64 + AArch64) hosts tip-matched to current `main`,
 attestation-bound release matrices with soak on and full profiles. Used
 developer hosts must keep `-HostClass existing` /
-`A3S_OCI_LINUX_KVM_HOST_CLASS=existing`. Tip `fb390b69…` (Merge #333) also
-fails CI `cargo fmt --all --check` on ubuntu/macOS/windows under floating
-`dtolnay/rust-toolchain@stable`; tip-matched promote needs a fmt-clean tip
-and a pinned toolchain (repo `rust-toolchain.toml` channel `1.98.1` matching
-local rustfmt). Promote-honesty shell gates still pass locally
+`A3S_OCI_LINUX_KVM_HOST_CLASS=existing`. Tip `b4ef871` (Merge #334) is the
+fmt-and-clippy-clean `main` for tip-matched promote: CI pins rustc `1.98.1`
+(`rust-toolchain.toml` plus the release toolchain action SHA) and
+`cargo fmt --all --check` / `cargo clippy --workspace --all-targets -- -D warnings`
+passed on ubuntu, macOS, and Windows. That merge does not promote readiness.
+Promote-honesty shell gates still pass locally
 (`.github/scripts/linux-kvm-release-matrix-promotion-test.sh`,
 `.github/scripts/linux-kvm-fresh-host-attestation-test.sh`).
 

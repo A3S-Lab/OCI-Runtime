@@ -856,7 +856,7 @@ Existing-host greens never set `promotes_readiness=true`.
 | Fresh KVM R2L x86_64 | **Blocked** — needs a newly provisioned Linux KVM host (WSL reinstall is not fresh) |
 | Fresh KVM R2L AArch64 | **Blocked** — needs an AArch64 KVM host |
 | Flip WHPX/KVM `probe-only` → `experimental` | **Blocked** — requires the fresh matrices above |
-| Tip-matched promote on current `main` | **Blocked locally** — tip `fb390b69…` fails CI `cargo fmt --check` under floating `@stable`; uncommitted tree is fmt-clean with pinned `rust-toolchain.toml` (`1.98.1`) + CI action pin. No reachable self-hosted WHPX/KVM runners from this environment |
+| Tip-matched promote on current `main` | **Hardware-blocked** — tip `b4ef871` (Merge #334) is fmt-and-clippy-clean on pinned rustc `1.98.1`. No reachable self-hosted WHPX/KVM runners from this environment. Does not promote readiness |
 
 | Item | Status after honest fresh-host |
 | --- | --- |
