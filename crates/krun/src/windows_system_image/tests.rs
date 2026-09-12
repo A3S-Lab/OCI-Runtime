@@ -29,7 +29,7 @@ fn valid_manifest() -> serde_json::Value {
                 "archive_sha256": "4b4daa9fe2fc696c4919c4412a4c3d3e770d8fb70292a004a2c72f5096175282"
             },
             "agent": {
-                "version": "0.2.0",
+                "version": env!("CARGO_PKG_VERSION"),
                 "size": 1,
                 "sha256": "3".repeat(64)
             },

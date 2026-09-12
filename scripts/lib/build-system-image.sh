@@ -2,6 +2,8 @@
 
 # Shared deterministic ext4 system-image builder. Platform wrappers must set
 # every A3S_SYSTEM_IMAGE_* variable below before calling this function.
+# Resolved when this file is sourced, not when the function later runs.
+A3S_SYSTEM_IMAGE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 a3s_build_system_image() {
   local alpine_archive=""
   local agent=""
@@ -88,6 +90,15 @@ a3s_build_system_image() {
   local image_size=67108864
   local filesystem_label="a3s-oci-system"
   local compatibility_level="a3s-oci-runtime-0.2.0-agent-protocol-v10"
+  local cargo_toml="$A3S_SYSTEM_IMAGE_LIB_DIR/../../Cargo.toml"
+  local agent_version
+  agent_version="$(
+    sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\([^"]*\)"/\1/p' "$cargo_toml"
+  )"
+  if [[ ! "$agent_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "refusing to build a system image without a workspace package version" >&2
+    return 2
+  fi
 
   local actual_alpine_sha256
   local actual_alpine_size
@@ -197,6 +208,7 @@ a3s_build_system_image() {
     --arg alpine_url "$A3S_SYSTEM_IMAGE_ALPINE_URL" \
     --arg alpine_sha256 "$A3S_SYSTEM_IMAGE_ALPINE_SHA256" \
     --arg agent_sha256 "$agent_sha256" \
+    --arg agent_version "$agent_version" \
     --arg e2fsprogs_version "$e2fsprogs_version" \
     --argjson image_size "$image_size" \
     --argjson archive_size "$archive_size" \
@@ -228,7 +240,7 @@ a3s_build_system_image() {
           archive_sha256: $alpine_sha256
         },
         agent: {
-          version: "0.2.0",
+          version: $agent_version,
           size: $agent_size,
           sha256: $agent_sha256
         },
