@@ -107,6 +107,7 @@ jobs:
             libcap-dev \
             libdrm-dev \
             libgnutls28-dev \
+            libnet1-dev \
             libnftables-dev \
             libnl-3-dev \
             libnl-route-3-dev \
