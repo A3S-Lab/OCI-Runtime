@@ -499,6 +499,7 @@ pub fn run_transport_qualification_with_security(
 
 /// Opt-in utility-VM Host reopen: after a clean Host EOF, reconnect vsock and
 /// serve again with the same executor so Live containers survive Host death.
+#[cfg(target_os = "linux")]
 const GUEST_HOST_RECONNECT_ENV: &str = "A3S_OCI_GUEST_HOST_RECONNECT";
 
 #[cfg(target_os = "linux")]

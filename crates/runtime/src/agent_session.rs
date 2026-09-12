@@ -2773,6 +2773,7 @@ const fn expected_guest_architecture(platform: HostPlatform) -> &'static str {
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
+#[allow(clippy::too_many_arguments)]
 fn spawn_durable_linux_agent_vm(
     krun_shim: &Path,
     rootfs: &Path,

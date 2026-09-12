@@ -945,7 +945,7 @@ impl LinuxLiveSupervisedSession {
             .push(RecoveryExecRecord {
                 process_id: process_id.clone(),
                 identity,
-                helper: Some(helper.clone()),
+                helper: Some(helper),
                 terminal,
             });
         // Move the helper stdin deposit into the Live map before dropping the
@@ -1609,6 +1609,7 @@ pub(super) async fn write_owner_record(runtime_root: &Path, owner: ProcessIdenti
     write_atomic_record(&runtime_root.join(OWNER_RECORD_NAME), &record)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn write_container_record(
     runtime_directory: &Path,
     config_snapshot: &Path,

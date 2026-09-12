@@ -44,7 +44,9 @@ use output_buffer::{SyncOutputBuffer, OUTPUT_READER_CHUNK_BYTES};
 
 const IDENTITY_SCHEMA_VERSION: &str = "a3s.oci.native-linux-session-supervisor-identity.v1";
 const MAX_STAT_BYTES: usize = 4096;
+#[cfg(test)]
 const READY_BYTE: u8 = b'R';
+#[cfg(test)]
 const WORKLOAD_BYTE: u8 = b'W';
 const SUPERVISE_CONTROL_FD: RawFd = 3;
 const MSG_READY: u8 = 1;
@@ -323,6 +325,7 @@ impl HostSessionSupervisor {
     }
 
     /// Spawn `/bin/sleep` under the supervisor for first-principles lifetime tests.
+    #[cfg(test)]
     pub(crate) fn spawn_sleep_workload(&mut self, seconds: u64) -> Result<i32> {
         self.spawn_launcher(
             Path::new("/bin/sleep"),
@@ -342,6 +345,7 @@ impl HostSessionSupervisor {
     /// sent via SCM_RIGHTS and installed onto `target_fd` in the child before
     /// exec (clearing `FD_CLOEXEC`). Used by supervised `container-exec` so
     /// argv-embedded FD numbers remain valid under supervisor parentage.
+    #[cfg(test)]
     pub(crate) fn spawn_launcher(
         &mut self,
         program: &Path,
@@ -814,10 +818,9 @@ impl Drop for HostSessionSupervisor {
 }
 
 fn finish_start(mut control: UnixStream, pid: i32) -> Result<HostSessionSupervisor> {
-    let pidfd = PidFd::open(pid).map_err(|error| {
+    let pidfd = PidFd::open(pid).inspect_err(|_| {
         terminate_pid(pid);
         let _ = wait_for_child(pid);
-        error
     })?;
     let identity = match read_ready_identity(&mut control) {
         Ok(identity) => identity,
@@ -2000,7 +2003,7 @@ fn receive_fds(socket: RawFd, expected: usize) -> Result<Vec<OwnedFd>> {
     };
     let descriptor_bytes = expected * std::mem::size_of::<RawFd>();
     let expected_len = unsafe { libc::CMSG_LEN(descriptor_bytes as u32) } as usize;
-    if level != libc::SOL_SOCKET || kind != libc::SCM_RIGHTS || len as usize != expected_len {
+    if level != libc::SOL_SOCKET || kind != libc::SCM_RIGHTS || len != expected_len {
         return Err(supervisor_error(
             ErrorCode::Internal,
             "session supervisor spawn descriptor frame is not SCM_RIGHTS",
@@ -2046,6 +2049,7 @@ impl ProcessObservation {
     }
 }
 
+#[cfg(test)]
 fn run_owner_child(ready: &mut UnixStream) -> Result<()> {
     // Supervisor must intentionally omit PDEATHSIG against the owner so it can
     // outlive Host Service death. Workload arms PDEATHSIG against supervisor.
@@ -2069,6 +2073,7 @@ fn run_owner_child(ready: &mut UnixStream) -> Result<()> {
     }
 }
 
+#[cfg(test)]
 fn run_supervisor_child(ready: &mut UnixStream) -> Result<()> {
     // Become a subreaper so workload orphans stay under this authenticated
     // supervisor if intermediate helpers exit.
@@ -2210,6 +2215,7 @@ fn process_observation(pid: i32) -> Result<Option<ProcessObservation>> {
     }))
 }
 
+#[cfg(test)]
 fn process_is_live(pid: i32) -> bool {
     process_observation(pid)
         .ok()
@@ -2217,6 +2223,7 @@ fn process_is_live(pid: i32) -> bool {
         .is_some_and(|observation| !observation.is_terminated())
 }
 
+#[cfg(test)]
 fn wait_until_dead(pid: i32, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {

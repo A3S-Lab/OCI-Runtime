@@ -78,6 +78,7 @@ impl HostServiceProcess {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_with_options(
         kind: HostServiceKind,
         executable: &Path,

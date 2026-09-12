@@ -357,6 +357,7 @@ fn classify_live_auth_error(error: &io::Error) -> LiveAuthDisposition {
     }
 }
 
+#[cfg(test)]
 fn auth_miss_falls_through_to_stopped(error: &io::Error) -> bool {
     classify_live_auth_error(error) == LiveAuthDisposition::FallThroughToStopped
 }
