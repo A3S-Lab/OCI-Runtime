@@ -546,9 +546,8 @@ fn run_linux(
 
         let (serve_result, qualification_fault) = if let Some(request) = qualification {
             let stream = connect_guest_vsock_stream().await?;
-            let fault = Arc::new(
-                transport_qualification::GuestTransportQualificationFault::new(request),
-            );
+            let fault =
+                Arc::new(transport_qualification::GuestTransportQualificationFault::new(request));
             let protocol_fault: Arc<dyn AgentTransportFaultInjector> = fault.clone();
             let result = a3s_oci_agent_protocol::serve_agent_connection_with_fault_injector(
                 stream,
@@ -674,8 +673,8 @@ mod guest_host_reconnect_tests {
 
     #[test]
     fn non_retryable_failure_does_not_reconnect() {
-        let error = Error::new(ErrorCode::InvalidArgument, "bad frame")
-            .for_operation("decode-agent-frame");
+        let error =
+            Error::new(ErrorCode::InvalidArgument, "bad frame").for_operation("decode-agent-frame");
         assert!(!should_reconnect_after_host_session(&Err(error)));
     }
 }

@@ -1334,9 +1334,13 @@ following:
    `init_rlimits_verified`, exact configured `oom_score_adj`
    value of 100, IPC `kernel.shm_rmid_forced=1`, network
    `net.ipv4.ip_forward=1`, best-effort I/O priority 4, `SCHED_BATCH` with nice
-   6, the exact `LINUX32` execution domain as `init_personality_verified`,
-   and an exact `MPOL_BIND` node-0 NUMA policy with
-   `MPOL_F_STATIC_NODES` as `init_memory_policy_verified`,
+   6, the exact configured execution domain (`LINUX32` on x86_64 fixtures;
+   `LINUX` on aarch64 fixtures) as `init_personality_verified`,
+   and — when the fixture configures `linux.memoryPolicy` — an exact
+   `MPOL_BIND` node-0 NUMA policy with `MPOL_F_STATIC_NODES` as
+   `init_memory_policy_verified` with `init_memory_policy_configured=true`
+   (aarch64 observation fixtures omit `memoryPolicy`, so
+   `init_memory_policy_configured=false` and the verified bit stays false),
    reads capability masks `CapInh=0x400`, `CapPrm=0x401`, `CapEff=0x401`,
    `CapBnd=0x401`, and `CapAmb=0x400` as
    `init_capabilities_verified`, and reads `NoNewPrivs=1` as
@@ -1975,6 +1979,37 @@ reattachment remain separate promotion work.
 containers, SHA-256
 `2614c462ea4c1dfd7aa40df0d6e9f54332f7c7b517186198fe11530f0a2e6cc1`. Does not
 promote readiness, fresh-host, cutover, or B2.
+
+**Tip-source refresh (OrbStack aarch64 Ubuntu 24.04, observation-only):** tip
+`fb390b69a2d61b5fd1f7ecdcd79724dc94c876ca` on machine `a3s-oci-dev` (no
+`/dev/kvm`) greened the full `.github/scripts/native-linux-smoke.sh` harness
+(EXIT=0) with arch-honest fixture
+`fixtures/native-linux/config.aarch64.json` (`LINUX` personality; no
+`MPOL_BIND`, because this kernel returns `EINVAL`/`ENOSYS` for `LINUX32` and
+has no NUMA nodes). A later honesty refresh on the same tip records
+`init_memory_policy_configured=false` and `init_memory_policy_verified=false`
+so the report no longer claims NUMA policy inheritance when the fixture omits
+`linux.memoryPolicy`; `init_personality_verified` remains true for the
+configured `LINUX` domain (evidence under
+`.a3s-evidence/native-orb-honesty/`, harness EXIT=0, soak iterations=1 for
+the honesty re-verify). The earlier breadth pass under
+`.a3s-evidence/native-orb-fb390b6/reports/` includes
+`a3s.oci.native-linux-smoke.v20` and `a3s.oci.native-linux-soak.v2` both
+`available` (soak 25), plus rootless, multi-container, recovery,
+hook-owner-death, fault-cleanup, and network-enforcement. Primary smoke report
+SHA-256
+`db10b295a3f716f862431967d66914516cf8a0acb97bee6775a8208665e659f0`;
+soak report SHA-256
+`2ca7e173f80870f31fab938c0481caa9c1c23202d0c9a036eaf3fe0fc79fdcf5`.
+Honesty primary smoke SHA-256
+`d3931259f710d5d4763cd4898d313d029d30c3e094f0c95e3b2e63d722bef54d`.
+`libkrun-kvm` correctly stayed `unavailable` (`/dev/kvm is absent`).
+containerd observation was blocked: `containerd`/`ctr` are not installed, so
+neither the Native Linux ignored gate
+`real_containerd_runtime_v2_qualification` nor the KVM-backed slice
+(`.github/scripts/linux-kvm-containerd-lifecycle.sh`, which also needs a real
+`/dev/kvm` host) was run. Readiness remains `probe-only`; this does not
+promote fresh-host, WHPX/KVM, or W4.
 
 ## Abrupt owner-death recovery gate
 

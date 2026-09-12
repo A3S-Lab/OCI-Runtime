@@ -379,9 +379,7 @@ pub(crate) async fn wait_for_processes_reaped(
 }
 
 /// True when every retained process identity is still live with the same start-time.
-pub(crate) fn processes_still_live(
-    processes: &[LinuxProcessIdentity],
-) -> Result<bool, String> {
+pub(crate) fn processes_still_live(processes: &[LinuxProcessIdentity]) -> Result<bool, String> {
     if processes.is_empty() {
         return Ok(false);
     }

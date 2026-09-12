@@ -3,9 +3,17 @@ use std::fs;
 use std::io;
 #[cfg(all(unix, not(target_os = "macos")))]
 use std::os::fd::AsRawFd;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 use std::os::unix::process::ExitStatusExt;
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
@@ -1065,7 +1073,18 @@ impl AgentVmSession {
             Err(error) => return Err(failed(report, error.to_string())),
         };
         #[cfg(unix)]
-        let (listener, durable_guest_socket, durable_host_control) = if durable_owner {
+        #[cfg_attr(
+            not(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )),
+            allow(unused_variables)
+        )]
+        let (listener, durable_guest_socket, durable_host_control): (
+            Option<UnixAgentSocketListener>,
+            Option<PathBuf>,
+            Option<PathBuf>,
+        ) = if durable_owner {
             #[cfg(all(
                 target_os = "linux",
                 any(target_arch = "x86_64", target_arch = "aarch64")
@@ -1295,7 +1314,12 @@ impl AgentVmSession {
             Connected(a3s_oci_sdk::Result<(PlatformAgentStream, u32)>),
             ShimExited(io::Result<ExitStatus>),
         }
-        #[cfg(unix)]
+        // Durable host-control connect is Linux/KVM-only. Other Unix hosts
+        // (macOS HVF) always use the Host-bound listener accept path.
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
         let bridge_outcome = if let Some(host_control) = durable_host_control.clone() {
             timeout(BRIDGE_TIMEOUT, async {
                 loop {
@@ -1315,6 +1339,29 @@ impl AgentVmSession {
             })
             .await
         } else {
+            let listener = listener.expect("host-bound unix listener");
+            let accept = accept_bridge(listener, shim_process_id);
+            tokio::pin!(accept);
+            timeout(BRIDGE_TIMEOUT, async {
+                if let Some(host_bound) = running.host_bound_mut() {
+                    tokio::select! {
+                        result = &mut accept => BridgeOutcome::Connected(result),
+                        status = host_bound.child_mut().wait() => BridgeOutcome::ShimExited(status),
+                    }
+                } else {
+                    BridgeOutcome::Connected(accept.await)
+                }
+            })
+            .await
+        };
+        #[cfg(all(
+            unix,
+            not(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))
+        ))]
+        let bridge_outcome = {
             let listener = listener.expect("host-bound unix listener");
             let accept = accept_bridge(listener, shim_process_id);
             tokio::pin!(accept);
@@ -2870,7 +2917,10 @@ fn prepare_durable_guest_socket_path(endpoint: &AgentVsockEndpoint) -> Result<Pa
     Ok(socket_path)
 }
 
-#[cfg(unix)]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 async fn connect_durable_host_control(
     host_control: &Path,
     shim_process_id: u32,
@@ -2894,12 +2944,18 @@ async fn connect_durable_host_control(
 
 /// Pathname host-control sockets are mode 0600. EACCES/EPERM is permanent for
 /// this Host identity (same honesty class as Live reattach #326).
-#[cfg(unix)]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 fn durable_host_control_connect_error_is_permanent(error: &std::io::Error) -> bool {
     error.kind() == std::io::ErrorKind::PermissionDenied
 }
 
-#[cfg(unix)]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 fn remap_durable_host_control_connect_error(
     host_control: &Path,
     error: std::io::Error,

@@ -312,7 +312,10 @@ mod tests {
         path
     }
 
-    fn sample_binding(owner: KvmProcessIdentity, shim: KvmProcessIdentity) -> KvmLiveSessionBinding {
+    fn sample_binding(
+        owner: KvmProcessIdentity,
+        shim: KvmProcessIdentity,
+    ) -> KvmLiveSessionBinding {
         KvmLiveSessionBinding {
             schema_version: KVM_LIVE_SESSION_BINDING_SCHEMA.to_string(),
             container_id: Some("ctr".into()),

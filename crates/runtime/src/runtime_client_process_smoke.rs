@@ -23,13 +23,21 @@ pub(crate) async fn exercise_process_io(
         nonce,
         "io",
         "exec-io",
-        "test \"$(ulimit -n)\" = 48; \
+        "set -eu; \
+         test \"$(ulimit -n)\" = 48; \
          test \"$(/bin/busybox cat /proc/self/oom_score_adj)\" = 200; \
          test \"$(/bin/busybox ionice -p $$)\" = \"best-effort: prio 5\"; \
-         /bin/busybox awk '$1 == \"policy\" && $3 == 3 { ok = 1 } END { exit !ok }' \
-           /proc/self/sched; \
-         /bin/busybox awk '$1 == \"prio\" && $3 == 127 { ok = 1 } END { exit !ok }' \
-           /proc/self/sched; \
+         if [ -r /proc/self/sched ]; then \
+           /bin/busybox awk '$1 == \"policy\" && $3 == 3 { ok = 1 } END { exit !ok }' \
+             /proc/self/sched; \
+           /bin/busybox awk '$1 == \"prio\" && $3 == 127 { ok = 1 } END { exit !ok }' \
+             /proc/self/sched; \
+         else \
+           /bin/busybox awk '{ \
+             sub(/^[^)]*) /, \"\"); \
+             exit !($17 == 7 && $39 == 3) \
+           }' /proc/self/stat; \
+         fi; \
          /bin/busybox awk '$1 == \"CapInh:\" && $2 == \"0000000000000400\" { inh = 1 } \
            $1 == \"CapPrm:\" && $2 == \"0000000000000400\" { prm = 1 } \
            $1 == \"CapEff:\" && $2 == \"0000000000000400\" { eff = 1 } \

@@ -762,7 +762,9 @@ pub(super) fn join_current_process(descriptor: RawFd) -> std_io::Result<()> {
     if written == payload.len() as isize {
         Ok(())
     } else if written < 0 {
-        Err(clarify_cgroup_procs_write_error(std_io::Error::last_os_error()))
+        Err(clarify_cgroup_procs_write_error(
+            std_io::Error::last_os_error(),
+        ))
     } else {
         Err(std_io::Error::new(
             std_io::ErrorKind::WriteZero,

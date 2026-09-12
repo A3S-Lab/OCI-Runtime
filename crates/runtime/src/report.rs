@@ -19,6 +19,10 @@ pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.
 pub const NATIVE_LINUX_ROOTLESS_SMOKE_SCHEMA_VERSION: &str =
     "a3s.oci.native-linux-rootless-smoke.v4";
 
+fn default_true() -> bool {
+    true
+}
+
 /// Result of querying WHPX and creating then deleting a partition object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WhpxSmokeReport {
@@ -396,7 +400,14 @@ pub struct NativeLinuxSmokeReport {
     pub init_scheduler_verified: bool,
     /// Whether init read back its exact OCI Linux execution personality.
     pub init_personality_verified: bool,
-    /// Whether init inherited its exact OCI Linux NUMA memory policy.
+    /// Whether the smoke fixture configured optional `linux.memoryPolicy`.
+    ///
+    /// Defaults to `true` when deserializing older v20 reports that omit the
+    /// field so historical x86_64 evidence still requires policy verification.
+    #[serde(default = "default_true")]
+    pub init_memory_policy_configured: bool,
+    /// Whether init inherited its exact configured OCI Linux NUMA memory
+    /// policy. Remains `false` when the fixture omits `memoryPolicy`.
     pub init_memory_policy_verified: bool,
     /// Whether init read back all five exact OCI capability sets.
     pub init_capabilities_verified: bool,
@@ -501,6 +512,7 @@ impl NativeLinuxSmokeReport {
             init_io_priority_verified: false,
             init_scheduler_verified: false,
             init_personality_verified: false,
+            init_memory_policy_configured: true,
             init_memory_policy_verified: false,
             init_capabilities_verified: false,
             init_no_new_privileges_verified: false,
@@ -609,7 +621,7 @@ impl NativeLinuxSmokeReport {
             && self.init_io_priority_verified
             && self.init_scheduler_verified
             && self.init_personality_verified
-            && self.init_memory_policy_verified
+            && (!self.init_memory_policy_configured || self.init_memory_policy_verified)
             && self.init_capabilities_verified
             && self.init_no_new_privileges_verified
             && self.processes_verified
@@ -1049,7 +1061,10 @@ mod tests {
     use a3s_oci_agent_protocol::{AgentOperation, AGENT_PROTOCOL_VERSION_MAX};
     use a3s_oci_core::{CapabilityStatus, HostPlatform};
 
-    use super::{AgentVmSmokeReport, MacosHostCleanupEvidence};
+    use super::{
+        AgentVmSmokeReport, MacosHostCleanupEvidence, NativeLinuxSmokeReport,
+        NATIVE_LINUX_SMOKE_SCHEMA_VERSION,
+    };
 
     fn complete_macos_session() -> AgentVmSmokeReport {
         let mut report = AgentVmSmokeReport::initial(HostPlatform::Macos);
@@ -1136,5 +1151,155 @@ mod tests {
         ] {
             assert!(!incomplete.is_success(), "{incomplete:?}");
         }
+    }
+
+    #[test]
+    fn native_linux_smoke_accepts_omitted_memory_policy_when_not_configured() {
+        let report: NativeLinuxSmokeReport = serde_json::from_str(
+            r#"{
+              "schema_version":"a3s.oci.native-linux-smoke.v20",
+              "platform":"linux",
+              "status":"available",
+              "kvm_device_present":false,
+              "bundle_loaded":true,
+              "control_descriptors_prepared":true,
+              "service_operations":["features","create","state","start","kill","delete","exec","wait","list","pause","resume","update","processes","stats","events","read-output","write-stdin","close-stdin","resize","signal-process","wait-process","file","filesystem"],
+              "dedicated_vm_rejected_before_create":true,
+              "create_returned_created":true,
+              "create_replayed":true,
+              "create_without_control_descriptors_rejected":true,
+              "list_visible_after_create":true,
+              "events_verified":true,
+              "hook_phases":["prestart","createRuntime","createContainer","startContainer","poststart","poststop"],
+              "hooks_verified":true,
+              "created_pid":1,
+              "marker_absent_after_create":true,
+              "start_released":true,
+              "running_observed":true,
+              "init_rlimits_verified":true,
+              "init_oom_score_adj_verified":true,
+              "init_io_priority_verified":true,
+              "init_scheduler_verified":true,
+              "init_personality_verified":true,
+              "init_memory_policy_configured":false,
+              "init_memory_policy_verified":false,
+              "init_capabilities_verified":true,
+              "init_no_new_privileges_verified":true,
+              "processes_verified":true,
+              "process_io_verified":true,
+              "exec_rlimits_verified":true,
+              "exec_oom_score_adj_verified":true,
+              "exec_io_priority_verified":true,
+              "exec_scheduler_verified":true,
+              "exec_capabilities_verified":true,
+              "exec_no_new_privileges_verified":true,
+              "exec_cpu_affinity_verified":true,
+              "terminal_io_verified":true,
+              "file_transfer_verified":true,
+              "filesystem_operations_verified":true,
+              "resources_updated":true,
+              "stats_verified":true,
+              "pause_froze_workload":true,
+              "resume_advanced_workload":true,
+              "kill_delivered":true,
+              "kill_replayed":true,
+              "wait_timeout_enforced":true,
+              "wait_exit_status":{"signal":9,"oom_killed":false},
+              "wait_replayed":true,
+              "stopped_observed":true,
+              "marker_verified":true,
+              "control_listener_connectivity_verified":true,
+              "control_init_log_verified":true,
+              "delete_succeeded":true,
+              "delete_replayed":true,
+              "state_missing_after_delete":true,
+              "list_empty_after_delete":true,
+              "control_descriptors_closed_after_delete":true,
+              "marker_removed":true,
+              "executor_runtime_clean":true,
+              "session_root_clean":true
+            }"#,
+        )
+        .expect("aarch64-style native smoke report must deserialize");
+        assert_eq!(report.schema_version, NATIVE_LINUX_SMOKE_SCHEMA_VERSION);
+        assert!(!report.init_memory_policy_configured);
+        assert!(!report.init_memory_policy_verified);
+        assert!(report.lifecycle_succeeded());
+        assert!(report.is_success());
+
+        let mut configured = report.clone();
+        configured.init_memory_policy_configured = true;
+        assert!(!configured.lifecycle_succeeded());
+        configured.init_memory_policy_verified = true;
+        assert!(configured.lifecycle_succeeded());
+    }
+
+    #[test]
+    fn native_linux_smoke_missing_memory_policy_configured_defaults_to_required() {
+        let report: NativeLinuxSmokeReport = serde_json::from_str(
+            r#"{
+              "schema_version":"a3s.oci.native-linux-smoke.v20",
+              "platform":"linux",
+              "status":"unavailable",
+              "kvm_device_present":false,
+              "bundle_loaded":false,
+              "control_descriptors_prepared":false,
+              "service_operations":[],
+              "dedicated_vm_rejected_before_create":false,
+              "create_returned_created":false,
+              "create_replayed":false,
+              "create_without_control_descriptors_rejected":false,
+              "list_visible_after_create":false,
+              "events_verified":false,
+              "hook_phases":[],
+              "hooks_verified":false,
+              "marker_absent_after_create":false,
+              "start_released":false,
+              "running_observed":false,
+              "init_rlimits_verified":false,
+              "init_oom_score_adj_verified":false,
+              "init_io_priority_verified":false,
+              "init_scheduler_verified":false,
+              "init_personality_verified":false,
+              "init_memory_policy_verified":false,
+              "init_capabilities_verified":false,
+              "init_no_new_privileges_verified":false,
+              "processes_verified":false,
+              "process_io_verified":false,
+              "exec_rlimits_verified":false,
+              "exec_oom_score_adj_verified":false,
+              "exec_io_priority_verified":false,
+              "exec_scheduler_verified":false,
+              "exec_capabilities_verified":false,
+              "exec_no_new_privileges_verified":false,
+              "exec_cpu_affinity_verified":false,
+              "terminal_io_verified":false,
+              "file_transfer_verified":false,
+              "filesystem_operations_verified":false,
+              "resources_updated":false,
+              "stats_verified":false,
+              "pause_froze_workload":false,
+              "resume_advanced_workload":false,
+              "kill_delivered":false,
+              "kill_replayed":false,
+              "wait_timeout_enforced":false,
+              "wait_replayed":false,
+              "stopped_observed":false,
+              "marker_verified":false,
+              "control_listener_connectivity_verified":false,
+              "control_init_log_verified":false,
+              "delete_succeeded":false,
+              "delete_replayed":false,
+              "state_missing_after_delete":false,
+              "list_empty_after_delete":false,
+              "control_descriptors_closed_after_delete":false,
+              "marker_removed":false,
+              "executor_runtime_clean":false,
+              "session_root_clean":false
+            }"#,
+        )
+        .expect("legacy native smoke report must deserialize");
+        assert!(report.init_memory_policy_configured);
+        assert!(!report.init_memory_policy_verified);
     }
 }

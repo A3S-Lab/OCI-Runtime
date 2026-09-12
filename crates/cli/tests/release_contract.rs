@@ -309,6 +309,24 @@ fn native_package_qualification_retains_oar01_real_host_evidence() {
 }
 
 #[test]
+fn native_linux_smoke_memory_policy_gate_is_fixture_conditional() {
+    for required in [
+        "init_memory_policy_configured",
+        "has(\"init_memory_policy_configured\")",
+        "config.aarch64.json",
+    ] {
+        assert!(
+            NATIVE_LINUX_SMOKE.contains(required),
+            "Native smoke lost fixture-conditional memory-policy honesty: {required}"
+        );
+    }
+    assert!(
+        !NATIVE_LINUX_SMOKE.contains("and .init_memory_policy_verified\n"),
+        "Native smoke must not require init_memory_policy_verified unconditionally"
+    );
+}
+
+#[test]
 fn native_package_qualification_pins_upstream_oci_bundle_validation() {
     for required in [
         "a3s.oci.upstream-runtime-tools-lock.v2",

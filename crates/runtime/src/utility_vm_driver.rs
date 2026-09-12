@@ -33,12 +33,12 @@ mod handoff;
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-pub(crate) mod kvm_network;
+mod kvm_live_reattach;
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-mod kvm_live_reattach;
+pub(crate) mod kvm_network;
 pub(crate) mod layout;
 #[cfg(all(
     target_os = "linux",

@@ -1477,10 +1477,7 @@ fn run_session_owner_bridge_echo(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-fn proxy_unix_streams(
-    left: std::os::unix::net::UnixStream,
-    right: std::os::unix::net::UnixStream,
-) {
+fn proxy_unix_streams(left: std::os::unix::net::UnixStream, right: std::os::unix::net::UnixStream) {
     use std::io::{Read, Write};
     use std::thread;
 

@@ -946,10 +946,7 @@ impl RuntimeDriver for NativeLinuxDriver {
 
     async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
         let target = request.target.clone();
-        if let Some(live) = self
-            .live_for(&target, "native-linux-filesystem")
-            .await?
-        {
+        if let Some(live) = self.live_for(&target, "native-linux-filesystem").await? {
             let (init_executable, pinned) = self
                 .executor
                 .duplicate_init_executable()
@@ -966,10 +963,7 @@ impl RuntimeDriver for NativeLinuxDriver {
             .await?
             .is_some()
         {
-            return Err(recovered_stopped_error(
-                &target,
-                "native-linux-filesystem",
-            ));
+            return Err(recovered_stopped_error(&target, "native-linux-filesystem"));
         }
         self.client.filesystem(request).await
     }
@@ -1175,7 +1169,7 @@ async fn guest_path(bundle: &Path) -> Result<GuestPath> {
 #[cfg(test)]
 mod tests {
     use a3s_oci_sdk::{
-        AMD_SEV_SNP_LAUNCH_EXTENSION, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3, ErrorCode,
+        ErrorCode, AMD_SEV_SNP_LAUNCH_EXTENSION, ATTACHMENT_SCHEMA_V2, ATTACHMENT_SCHEMA_V3,
         INTEL_TDX_LAUNCH_EXTENSION, NETWORK_ENFORCEMENT_EXTENSION,
         NETWORK_ENFORCEMENT_EXTENSION_VERSION, TEE_LAUNCH_EXTENSION_VERSION,
     };

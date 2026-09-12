@@ -821,6 +821,29 @@ smokes on tip remain `probe-only` observation. Current `main` tip
 `30c118e` records that observation in this README; it does not change
 readiness.
 
+On September 12, 2026, tip `fb390b69a2d61b5fd1f7ecdcd79724dc94c876ca`
+retained Apple Silicon HVF public host-service observation on this Mac:
+`macos-hvf-host-service-smoke` `status=available` with soak `25/25`
+(report SHA-256
+`72c86839d29a62779f544b17e174126d44d2e922f6ea492ea0caa2c55a2f3d99`).
+Detail and asset digests live in [`docs/macos-hvf.md`](docs/macos-hvf.md).
+HVF readiness remains `experimental`; this does not promote WHPX/KVM or open
+W4.
+
+On September 12, 2026, the same tip retained OrbStack aarch64 Native Linux
+observation (no `/dev/kvm`): full `native-linux-smoke.sh` EXIT=0 with
+`fixtures/native-linux/config.aarch64.json`, smoke and soak both `available`
+(25-iteration soak). Digests live under
+`.a3s-evidence/native-orb-fb390b6/` (and Orb
+`/var/tmp/a3s-oci-native-orb-fb390b6/`) and in
+[`docs/linux-native.md`](docs/linux-native.md). A follow-up honesty refresh
+on the same tip adds `init_memory_policy_configured` so aarch64 reports
+record `configured=false` / `verified=false` when the fixture omits
+`linux.memoryPolicy` (EXIT=0 evidence under
+`.a3s-evidence/native-orb-honesty/`; soak iterations=1 for that re-verify).
+Native readiness remains `probe-only`. containerd observation stays blocked
+(`containerd`/`ctr` absent; KVM containerd slice also needs `/dev/kvm`).
+
 ### Remaining before W4+
 
 Canonical detail lives in
@@ -833,6 +856,7 @@ Existing-host greens never set `promotes_readiness=true`.
 | Fresh KVM R2L x86_64 | **Blocked** — needs a newly provisioned Linux KVM host (WSL reinstall is not fresh) |
 | Fresh KVM R2L AArch64 | **Blocked** — needs an AArch64 KVM host |
 | Flip WHPX/KVM `probe-only` → `experimental` | **Blocked** — requires the fresh matrices above |
+| Tip-matched promote on current `main` | **Blocked locally** — tip `fb390b69…` fails CI `cargo fmt --check` under floating `@stable`; uncommitted tree is fmt-clean with pinned `rust-toolchain.toml` (`1.98.1`) + CI action pin. No reachable self-hosted WHPX/KVM runners from this environment |
 
 | Item | Status after honest fresh-host |
 | --- | --- |

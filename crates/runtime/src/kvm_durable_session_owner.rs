@@ -178,7 +178,10 @@ pub fn spawn_via_session_owner_helper_with_env(
         .open(&stderr_log)?;
 
     let mut owner = Command::new(krun_shim);
-    owner.arg("session-owner").arg("--ready-file").arg(ready_file);
+    owner
+        .arg("session-owner")
+        .arg("--ready-file")
+        .arg(ready_file);
     if let Some(path) = host_control {
         owner.arg("--host-control").arg(path);
     }
@@ -463,14 +466,26 @@ mod tests {
         assert_eq!(owner_mode_from_value(None), KvmOwnerMode::HostBound);
         assert_eq!(owner_mode_from_value(Some("")), KvmOwnerMode::HostBound);
         assert_eq!(owner_mode_from_value(Some("0")), KvmOwnerMode::HostBound);
-        assert_eq!(owner_mode_from_value(Some("false")), KvmOwnerMode::HostBound);
+        assert_eq!(
+            owner_mode_from_value(Some("false")),
+            KvmOwnerMode::HostBound
+        );
     }
 
     #[test]
     fn owner_mode_opt_in_is_durable() {
-        assert_eq!(owner_mode_from_value(Some("1")), KvmOwnerMode::DurableSession);
-        assert_eq!(owner_mode_from_value(Some("true")), KvmOwnerMode::DurableSession);
-        assert_eq!(owner_mode_from_value(Some("YES")), KvmOwnerMode::DurableSession);
+        assert_eq!(
+            owner_mode_from_value(Some("1")),
+            KvmOwnerMode::DurableSession
+        );
+        assert_eq!(
+            owner_mode_from_value(Some("true")),
+            KvmOwnerMode::DurableSession
+        );
+        assert_eq!(
+            owner_mode_from_value(Some("YES")),
+            KvmOwnerMode::DurableSession
+        );
     }
 
     #[test]

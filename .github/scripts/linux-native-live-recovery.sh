@@ -107,7 +107,7 @@ else
   fi
   bundle="$work/bundle"
   mkdir -p "$bundle/rootfs/bin" "$bundle/rootfs/dev" "$bundle/rootfs/proc"
-  cp fixtures/native-linux/config.json "$bundle/config.json"
+  cp "$native_linux_fixture" "$bundle/config.json"
   cp "$(command -v busybox)" "$bundle/rootfs/bin/busybox"
   ln -s busybox "$bundle/rootfs/bin/sh"
   # Rootful sleep bundle: strip Box userns id maps and mapped-root assertions so

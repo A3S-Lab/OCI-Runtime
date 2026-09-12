@@ -215,7 +215,8 @@ async fn exercise_client(
     report.init_io_priority_verified = true;
     report.init_scheduler_verified = true;
     report.init_personality_verified = true;
-    report.init_memory_policy_verified = true;
+    report.init_memory_policy_configured = linux_memory_policy_configured(bundle)?;
+    report.init_memory_policy_verified = report.init_memory_policy_configured;
     report.init_capabilities_verified = true;
     report.init_no_new_privileges_verified = true;
     control_descriptors.verify_listeners().await?;
@@ -343,6 +344,15 @@ fn configured_init_io(bundle: &OciBundle) -> ProcessIo {
         stderr: mode,
         terminal_size: None,
     }
+}
+
+fn linux_memory_policy_configured(bundle: &OciBundle) -> Result<bool, String> {
+    let config: serde_json::Value = serde_json::from_str(bundle.config_json())
+        .map_err(|error| format!("failed to parse native smoke bundle config: {error}"))?;
+    Ok(config
+        .get("linux")
+        .and_then(|linux| linux.get("memoryPolicy"))
+        .is_some())
 }
 
 pub(crate) async fn verify_runtime_events(

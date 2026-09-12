@@ -10,9 +10,9 @@ use std::time::Duration;
 use a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT;
 use a3s_oci_sdk::oci_spec::runtime::{LinuxResources, Process};
 use a3s_oci_sdk::{
-    ContainerStats, ContainerTarget, Error, ErrorCode, FileRequest, FileResponse, FilesystemRequest,
-    FilesystemResponse, IoMode, OciBundle, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
-    Result, ValidateRequest, CONTROL_CGROUP_NAME, WORKLOAD_CGROUP_NAME,
+    ContainerStats, ContainerTarget, Error, ErrorCode, FileRequest, FileResponse,
+    FilesystemRequest, FilesystemResponse, IoMode, OciBundle, ProcessId, ProcessIo, ProcessRecord,
+    ProcessTarget, Result, ValidateRequest, CONTROL_CGROUP_NAME, WORKLOAD_CGROUP_NAME,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -784,11 +784,7 @@ impl LinuxLiveSupervisedSession {
     /// calls the existing descriptor-confined filesystem helper. Fail-closes
     /// when init is gone. Wrong generation fail-closes with Conflict. Does not
     /// invent payload bytes.
-    pub async fn file(
-        &self,
-        init_executable: &Path,
-        request: FileRequest,
-    ) -> Result<FileResponse> {
+    pub async fn file(&self, init_executable: &Path, request: FileRequest) -> Result<FileResponse> {
         request.validate()?;
         self.require_live_filesystem_target(&request.target, "file")?;
         let execution_context = self.rebuild_retained_execution_context().await?;
@@ -2729,7 +2725,7 @@ fn ensure_private_directory(path: &Path, mode: u32) -> Result<()> {
     let uid = durable_owner_uid(path)?;
     if !metadata.is_dir()
         || metadata.file_type().is_symlink()
-        || metadata.uid() != uid
+        || !durable_owner_matches(path, metadata.uid())?
         || metadata.mode() & 0o777 != mode
     {
         return Err(recovery_error(
@@ -2777,6 +2773,34 @@ fn durable_owner_uid_for(path: &Path, share_root: &Path) -> Result<u32> {
     }
     // SAFETY: geteuid has no preconditions or failure result.
     Ok(unsafe { libc::geteuid() })
+}
+
+/// Whether `observed_uid` is an acceptable durable owner for `path`.
+///
+/// Linux virtiofs presents remapped Host Service UIDs to the Guest, so durable
+/// files under the runtime share match the share-root owner. macOS libkrun
+/// virtiofs remaps ownership on the Host while preserving Guest-visible UIDs
+/// via `user.containers.override_stat`, so the same files match `geteuid()`
+/// inside the Guest. Accept either view under the runtime share; elsewhere
+/// require the effective UID only.
+fn durable_owner_matches(path: &Path, observed_uid: u32) -> Result<bool> {
+    durable_owner_matches_for(
+        path,
+        Path::new(AGENT_RUNTIME_SHARE_GUEST_ROOT),
+        observed_uid,
+    )
+}
+
+fn durable_owner_matches_for(path: &Path, share_root: &Path, observed_uid: u32) -> Result<bool> {
+    let expected = durable_owner_uid_for(path, share_root)?;
+    if observed_uid == expected {
+        return Ok(true);
+    }
+    if path == share_root || path.starts_with(share_root) {
+        // SAFETY: geteuid has no preconditions or failure result.
+        return Ok(observed_uid == unsafe { libc::geteuid() });
+    }
+    Ok(false)
 }
 
 fn reject_symlinks_below(path: &Path) -> Result<()> {
@@ -2997,7 +3021,7 @@ fn read_bounded_plain_file(path: &Path, limit: u64) -> Result<Vec<u8>> {
     let uid = durable_owner_uid(path)?;
     if !metadata.is_file()
         || metadata.file_type().is_symlink()
-        || metadata.uid() != uid
+        || !durable_owner_matches(path, metadata.uid())?
         || metadata.mode() & 0o777 != 0o600
         || metadata.len() > limit
     {
@@ -4701,8 +4725,8 @@ mod tests {
             "67108864",
             "live update must read back the written memory.max"
         );
-        let pids_max =
-            std::fs::read_to_string(leaf.join("pids.max")).expect("read pids.max after live update");
+        let pids_max = std::fs::read_to_string(leaf.join("pids.max"))
+            .expect("read pids.max after live update");
         assert_eq!(
             pids_max.trim(),
             "128",
@@ -6409,5 +6433,29 @@ mod tests {
             .expect("share metadata")
             .uid();
         assert_eq!(uid, share_uid);
+    }
+
+    #[test]
+    fn durable_owner_matches_accepts_guest_euid_under_runtime_share() {
+        let temporary = tempfile::tempdir().expect("temporary share");
+        let share_root = temporary.path().join("run-a3s-oci-runtime");
+        std::fs::create_dir(&share_root).expect("create share root");
+        std::fs::set_permissions(&share_root, std::fs::Permissions::from_mode(0o700))
+            .expect("protect share root");
+        let nested = share_root.join("run").join("a3s-oci-agent-1").join("c-1");
+        std::fs::create_dir_all(&nested).expect("create nested runtime path");
+        let path = nested.join("device-targets.json");
+        std::fs::write(&path, "{}").expect("write device targets");
+        let share_uid = std::fs::symlink_metadata(&share_root)
+            .expect("share metadata")
+            .uid();
+        // SAFETY: geteuid has no preconditions or failure result.
+        let euid = unsafe { libc::geteuid() };
+        assert!(durable_owner_matches_for(&path, &share_root, share_uid).expect("share uid"));
+        assert!(durable_owner_matches_for(&path, &share_root, euid).expect("guest euid"));
+        let foreign = share_uid.wrapping_add(1).max(1);
+        if foreign != euid {
+            assert!(!durable_owner_matches_for(&path, &share_root, foreign).expect("foreign"));
+        }
     }
 }
