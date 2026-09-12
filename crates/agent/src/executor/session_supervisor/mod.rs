@@ -2003,7 +2003,9 @@ fn receive_fds(socket: RawFd, expected: usize) -> Result<Vec<OwnedFd>> {
     };
     let descriptor_bytes = expected * std::mem::size_of::<RawFd>();
     let expected_len = unsafe { libc::CMSG_LEN(descriptor_bytes as u32) } as usize;
-    if level != libc::SOL_SOCKET || kind != libc::SCM_RIGHTS || len != expected_len {
+    // cmsg_len is u32 on some Linux targets and usize on others.
+    let observed_len = usize::try_from(len).unwrap_or(usize::MAX);
+    if level != libc::SOL_SOCKET || kind != libc::SCM_RIGHTS || observed_len != expected_len {
         return Err(supervisor_error(
             ErrorCode::Internal,
             "session supervisor spawn descriptor frame is not SCM_RIGHTS",
