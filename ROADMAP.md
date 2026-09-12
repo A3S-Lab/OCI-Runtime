@@ -208,13 +208,19 @@ WHPX and Linux KVM (x86_64 + AArch64) hosts tip-matched to current `main`,
 attestation-bound release matrices with soak on and full profiles. Used
 developer hosts must keep `-HostClass existing` /
 `A3S_OCI_LINUX_KVM_HOST_CLASS=existing`. Fresh-host matrices check out current
-`main`; do not pin an older hygiene commit. The published workspace archive is
-`v0.3.5` (`139850c`). CI pins rustc `1.98.1` and
+`main`; do not pin an older hygiene commit. The latest published workspace
+archive is [`v0.3.6`](https://github.com/A3S-Lab/OCI-Runtime/releases/tag/v0.3.6)
+(`b34c81c`), a docs and version-string archive on `v0.3.5` (`139850c`). CI
+pins rustc `1.98.1` and
 [run 34680331496](https://github.com/A3S-Lab/OCI-Runtime/actions/runs/34680331496)
 passed `cargo fmt --all --check` and
 `cargo clippy --workspace --all-targets -- -D warnings` on ubuntu, macOS, and
-Windows for that archive commit. Later docs-only commits do not change those
-binaries. The archive does not promote readiness.
+Windows for that `v0.3.5` archive commit. The `v0.3.6` release
+[run 34684646135](https://github.com/A3S-Lab/OCI-Runtime/actions/runs/34684646135)
+published assets and does not promote readiness. Later docs-only commits do
+not change driver behavior aside from the workspace version string. The
+archive does not promote readiness. Feature layers and open gates are in
+[`docs/feature-coverage.md`](docs/feature-coverage.md).
 Promote-honesty shell gates still pass locally
 (`.github/scripts/linux-kvm-release-matrix-promotion-test.sh`,
 `.github/scripts/linux-kvm-fresh-host-attestation-test.sh`).

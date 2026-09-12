@@ -856,7 +856,7 @@ Existing-host greens never set `promotes_readiness=true`.
 | Fresh KVM R2L x86_64 | **Blocked** — needs a newly provisioned Linux KVM host (WSL reinstall is not fresh) |
 | Fresh KVM R2L AArch64 | **Blocked** — needs an AArch64 KVM host |
 | Flip WHPX/KVM `probe-only` → `experimental` | **Blocked** — requires the fresh matrices above |
-| Tip-matched promote on current `main` | **Hardware-blocked** — check out current `main`. Archive `v0.3.5` (`139850c`) is fmt-and-clippy-clean on pinned rustc `1.98.1` ([CI 34680331496](https://github.com/A3S-Lab/OCI-Runtime/actions/runs/34680331496)). No reachable self-hosted WHPX/KVM runners from this environment. Does not promote readiness |
+| Tip-matched promote on current `main` | **Hardware-blocked** — check out current `main`. Latest published archive is [`v0.3.6`](https://github.com/A3S-Lab/OCI-Runtime/releases/tag/v0.3.6) (`b34c81c`), a docs and version-string archive on `v0.3.5` (`139850c`). That earlier archive is fmt-and-clippy-clean on pinned rustc `1.98.1` ([CI 34680331496](https://github.com/A3S-Lab/OCI-Runtime/actions/runs/34680331496)). No reachable self-hosted WHPX/KVM runners from this environment. Does not promote readiness |
 
 | Item | Status after honest fresh-host |
 | --- | --- |
@@ -1761,6 +1761,7 @@ crates/cli/             capability inspection and real-host qualification gates
 - [Guest-agent protocol](docs/agent-protocol.md)
 - [OCI 1.3 conformance contract](docs/oci-conformance.md)
 - [Normative coverage](docs/normative-coverage.md)
+- [Feature coverage](docs/feature-coverage.md)
 - [Semantic validation](docs/semantic-validation.md)
 - [Native Linux development](docs/linux-native.md)
 - [macOS HVF development](docs/macos-hvf.md)
