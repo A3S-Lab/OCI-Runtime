@@ -115,6 +115,7 @@ jobs:
             libprotobuf-dev \
             libselinux1-dev \
             pkg-config \
+            uuid-dev \
             protobuf-c-compiler \
             protobuf-compiler \
             python3-protobuf
