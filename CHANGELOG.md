@@ -51,6 +51,25 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-09-12
+
+Published runtime archive of current `main`. `v0.3.5` already published GitHub
+Release assets. This tag only records that fresh-host matrices check out
+current `main` instead of a frozen hygiene commit. Packaging and driver
+behavior are unchanged from `v0.3.5` aside from the workspace version string.
+This tag does not promote driver readiness. WHPX and the Linux KVM public
+candidate remain `probe-only`. macOS HVF remains `experimental`. Fresh-host
+promotion, W4 Box cutover, default supervised create, and HostRuntimeService
+KVM registration stay open. The immutable system-image compatibility level
+remains `a3s-oci-runtime-0.2.0-agent-protocol-v10`. Published Rust SDK crates
+stay at 0.3.1; `v0.3.6` is the workspace binary release, not a crates.io SDK
+tag.
+
+### Changed
+
+- Fresh-host promote instructions say to check out current `main`. Do not pin
+  an older hygiene commit as the promote tip.
+
 ## [0.3.5] - 2026-09-12
 
 Published runtime archive. `v0.3.0` through `v0.3.4` failed release
@@ -75,7 +94,7 @@ tag.
 ## [0.3.4] - 2026-09-12
 
 Tagged runtime archive. Pinned CRIU packaging failed before any GitHub Release
-assets were published; `v0.3.5` is the published archive of this line.
+assets were published; `v0.3.6` is the published archive of this line.
 This tag does not promote driver readiness. WHPX and the Linux KVM public
 candidate remain `probe-only`. macOS HVF remains `experimental`. Fresh-host
 promotion, W4 Box cutover, default supervised create, and HostRuntimeService
@@ -91,7 +110,7 @@ stay at 0.3.1; this tag is not a crates.io SDK tag.
 ## [0.3.3] - 2026-09-12
 
 Tagged runtime archive. Pinned CRIU packaging failed before any GitHub Release
-assets were published; `v0.3.5` is the published archive of this line.
+assets were published; `v0.3.6` is the published archive of this line.
 This tag does not promote driver readiness. WHPX and the Linux KVM public
 candidate remain `probe-only`. macOS HVF remains `experimental`. Fresh-host
 promotion, W4 Box cutover, default supervised create, and HostRuntimeService
@@ -108,7 +127,7 @@ stay at 0.3.1; this tag is not a crates.io SDK tag.
 ## [0.3.2] - 2026-09-12
 
 Tagged runtime archive. Static guest-agent packaging failed before any GitHub
-Release assets were published; `v0.3.5` is the published archive of this line.
+Release assets were published; `v0.3.6` is the published archive of this line.
 This tag does not promote driver readiness. WHPX and the Linux KVM public
 candidate remain `probe-only`. macOS HVF remains `experimental`. Fresh-host
 promotion, W4 Box cutover, default supervised create, and HostRuntimeService
@@ -124,7 +143,7 @@ stay at 0.3.1; this tag is not a crates.io SDK tag.
 ## [0.3.1] - 2026-09-12
 
 Tagged runtime archive. Release documentation checks failed before any GitHub
-Release assets were published; `v0.3.5` is the published archive of this line.
+Release assets were published; `v0.3.6` is the published archive of this line.
 This tag does not promote driver readiness. WHPX and the Linux KVM public
 candidate remain `probe-only`. macOS HVF remains `experimental`. Fresh-host
 promotion, W4 Box cutover, default supervised create, and HostRuntimeService
@@ -141,7 +160,7 @@ stay at 0.3.1; this tag is not a crates.io SDK tag.
 ## [0.3.0] - 2026-09-12
 
 Tagged runtime archive. Release verification failed before any GitHub Release
-assets were published; `v0.3.5` is the published archive of this line. This
+assets were published; `v0.3.6` is the published archive of this line. This
 tag does not promote driver readiness. WHPX and the Linux KVM public candidate
 remain `probe-only`. macOS HVF remains `experimental`. Fresh-host promotion,
 W4 Box cutover, default supervised create, and HostRuntimeService KVM
@@ -2611,6 +2630,7 @@ registration stay open. The immutable system-image compatibility level remains
 - Documentation and conformance evidence now distinguish runtime namespace and
   mount enforcement from A3S Box product-level network and volume management.
 
+[0.3.6]: https://github.com/A3S-Lab/OCI-Runtime/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/A3S-Lab/OCI-Runtime/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/A3S-Lab/OCI-Runtime/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/A3S-Lab/OCI-Runtime/compare/v0.3.2...v0.3.3
