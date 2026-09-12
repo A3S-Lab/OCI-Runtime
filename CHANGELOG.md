@@ -51,16 +51,33 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-12
+
+Published runtime archive. `v0.3.0` failed release tests and `v0.3.1` failed
+release documentation checks; neither tag published GitHub Release assets.
+This tag does not promote driver readiness. WHPX and the Linux KVM public
+candidate remain `probe-only`. macOS HVF remains `experimental`. Fresh-host
+promotion, W4 Box cutover, default supervised create, and HostRuntimeService
+KVM registration stay open. The immutable system-image compatibility level
+remains `a3s-oci-runtime-0.2.0-agent-protocol-v10`. Published Rust SDK crates
+stay at 0.3.1; `v0.3.2` is the workspace binary release, not a crates.io SDK
+tag.
+
+### Fixed
+
+- Public agent recovery docs no longer link to private executor types, so
+  `cargo doc --workspace --no-deps` passes with warnings denied.
+
 ## [0.3.1] - 2026-09-12
 
-Published runtime archive. The `v0.3.0` tag remains on main, but its release
-verification failed before any GitHub Release assets were published. This tag
-does not promote driver readiness. WHPX and the Linux KVM public candidate
-remain `probe-only`. macOS HVF remains `experimental`. Fresh-host promotion,
-W4 Box cutover, default supervised create, and HostRuntimeService KVM
-registration stay open. The immutable system-image compatibility level remains
-`a3s-oci-runtime-0.2.0-agent-protocol-v10`. Published Rust SDK crates stay at
-0.3.1; `v0.3.1` is the workspace binary release, not a crates.io SDK tag.
+Tagged runtime archive. Release documentation checks failed before any GitHub
+Release assets were published; `v0.3.2` is the published archive of this line.
+This tag does not promote driver readiness. WHPX and the Linux KVM public
+candidate remain `probe-only`. macOS HVF remains `experimental`. Fresh-host
+promotion, W4 Box cutover, default supervised create, and HostRuntimeService
+KVM registration stay open. The immutable system-image compatibility level
+remains `a3s-oci-runtime-0.2.0-agent-protocol-v10`. Published Rust SDK crates
+stay at 0.3.1; this tag is not a crates.io SDK tag.
 
 ### Fixed
 
@@ -71,7 +88,7 @@ registration stay open. The immutable system-image compatibility level remains
 ## [0.3.0] - 2026-09-12
 
 Tagged runtime archive. Release verification failed before any GitHub Release
-assets were published; `v0.3.1` is the published archive of this line. This
+assets were published; `v0.3.2` is the published archive of this line. This
 tag does not promote driver readiness. WHPX and the Linux KVM public candidate
 remain `probe-only`. macOS HVF remains `experimental`. Fresh-host promotion,
 W4 Box cutover, default supervised create, and HostRuntimeService KVM
@@ -2541,6 +2558,7 @@ registration stay open. The immutable system-image compatibility level remains
 - Documentation and conformance evidence now distinguish runtime namespace and
   mount enforcement from A3S Box product-level network and volume management.
 
+[0.3.2]: https://github.com/A3S-Lab/OCI-Runtime/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/A3S-Lab/OCI-Runtime/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/A3S-Lab/OCI-Runtime/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/A3S-Lab/OCI-Runtime/releases/tag/v0.2.0

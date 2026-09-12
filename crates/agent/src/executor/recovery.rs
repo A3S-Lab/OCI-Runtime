@@ -437,7 +437,7 @@ impl SessionSupervisorReattachCache {
 /// [`ErrorCode::Unavailable`]. Authentic [`Self::pause`] / [`Self::resume`] /
 /// [`Self::stats`] / [`Self::update`] use the durable recovery cgroup leaf
 /// (kernel freezer, cgroup-v2 counters, and supported resource fields) without
-/// restoring a fake [`PreparedProcess`]. Missing cgroup evidence fail-closes
+/// restoring a fake `PreparedProcess`. Missing cgroup evidence fail-closes
 /// with [`ErrorCode::Unavailable`]. Device-policy updates remain
 /// [`ErrorCode::Unsupported`] (permanent: leaf has no device-authority state;
 /// callers must not retry). New `exec`
@@ -725,7 +725,7 @@ impl LinuxLiveSupervisedSession {
     ///
     /// Requires a live init identity and a recorded cgroup leaf. Writes
     /// `cgroup.freeze` and waits for kernel confirmation — the same evidence
-    /// path as [`PreparedProcess`] pause, without restoring process-session
+    /// path as `PreparedProcess` pause, without restoring process-session
     /// state.
     pub async fn pause(&self) -> Result<()> {
         if !self.init_is_live()? {
@@ -761,7 +761,7 @@ impl LinuxLiveSupervisedSession {
 
     /// Apply supported OCI Linux resource fields to the durable recovery leaf.
     ///
-    /// Mirrors [`PreparedProcess`] resource update against the recorded leaf
+    /// Mirrors `PreparedProcess` resource update against the recorded leaf
     /// without restoring process-session state. Device-policy fields fail
     /// closed with [`ErrorCode::Unsupported`] (no retained device authority).
     pub async fn update(&self, resources: &LinuxResources) -> Result<()> {
@@ -779,7 +779,7 @@ impl LinuxLiveSupervisedSession {
 
     /// Exact-generation file transfer after Host reopen.
     ///
-    /// Rebuilds [`RetainedExecutionContext`] the same way post-reopen exec does
+    /// Rebuilds `RetainedExecutionContext` the same way post-reopen exec does
     /// (durable `config.json` + live init namespace/root descriptors), then
     /// calls the existing descriptor-confined filesystem helper. Fail-closes
     /// when init is gone. Wrong generation fail-closes with Conflict. Does not
@@ -1073,7 +1073,7 @@ impl LinuxLiveSupervisedSession {
 
     /// Deliver `SIGKILL` to the recorded launcher without inventing exit status.
     ///
-    /// Call [`wait_launcher`] afterward for the authentic supervised status.
+    /// Call [`Self::wait_launcher`] afterward for the authentic supervised status.
     pub fn kill_launcher(&self) -> Result<()> {
         if self.launcher_is_live()? {
             terminate_pid(self.launcher_pid());
@@ -1093,7 +1093,7 @@ impl LinuxLiveSupervisedSession {
     ///
     /// Re-authenticates the recorded PID + start-time, opens a pidfd, and
     /// delivers `signal` through that pidfd. Does not restore a fake
-    /// [`PreparedProcess`]. Unknown process IDs fail with [`ErrorCode::NotFound`].
+    /// `PreparedProcess`. Unknown process IDs fail with [`ErrorCode::NotFound`].
     /// Dead or start-time-mismatched identities fail closed without inventing
     /// delivery success. Exit status is never synthesized here — callers that
     /// need wait evidence must use a path that holds authentic wait ownership.
