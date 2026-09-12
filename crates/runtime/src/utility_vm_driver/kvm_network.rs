@@ -194,36 +194,82 @@ async fn persist_manifest(
 ) -> Result<()> {
     let final_path = runtime_share.join(AGENT_VM_ATTACHMENT_MANIFEST_FILE_NAME);
     let pending_path = runtime_share.join(PENDING_MANIFEST_FILE_NAME);
-    if path_metadata(&final_path).await?.is_some() {
-        let retained = read_manifest(&final_path).await?;
-        if retained != *manifest {
-            return Err(attachment_error(
-                ErrorCode::Conflict,
-                "existing KVM attachment transport manifest differs from this Create",
-            ));
-        }
-        remove_matching_pending(&pending_path, manifest).await?;
-        sync_directory(runtime_share).await?;
-        return Ok(());
-    }
-
     let encoded = manifest.to_bytes()?;
+    // Adoption stays inside the attempt loop so a winner that publishes and
+    // deletes pending is adopted instead of racing that cleanup.
     for attempt in 0..PUBLISH_ATTEMPTS {
-        match create_or_reuse_pending(runtime_share, &pending_path, &encoded, manifest).await {
-            Err(error) if error.retryable && attempt + 1 < PUBLISH_ATTEMPTS => continue,
-            Err(error) => return Err(error),
-            Ok(()) => {}
+        if adopt_published_manifest(runtime_share, &final_path, &pending_path, manifest).await? {
+            return Ok(());
         }
-        match publish_manifest(runtime_share, &pending_path, &final_path, manifest).await {
-            Err(error) if error.retryable && attempt + 1 < PUBLISH_ATTEMPTS => continue,
-            result => return result,
+        if let Err(error) =
+            create_or_reuse_pending(runtime_share, &pending_path, &encoded, manifest).await
+        {
+            match classify_concurrent_loss(
+                error,
+                attempt,
+                adopt_published_manifest(runtime_share, &final_path, &pending_path, manifest)
+                    .await?,
+            )? {
+                ConcurrentPublication::Retry => continue,
+                ConcurrentPublication::Adopted => return Ok(()),
+            }
         }
+        if let Err(error) =
+            publish_manifest(runtime_share, &pending_path, &final_path, manifest).await
+        {
+            match classify_concurrent_loss(
+                error,
+                attempt,
+                adopt_published_manifest(runtime_share, &final_path, &pending_path, manifest)
+                    .await?,
+            )? {
+                ConcurrentPublication::Retry => continue,
+                ConcurrentPublication::Adopted => return Ok(()),
+            }
+        }
+        return Ok(());
     }
     Err(attachment_error(
         ErrorCode::Unavailable,
         "KVM attachment transport manifest publication kept losing its concurrent owner",
     )
     .retryable(true))
+}
+
+async fn adopt_published_manifest(
+    runtime_share: &Path,
+    final_path: &Path,
+    pending_path: &Path,
+    manifest: &AgentVmAttachmentManifest,
+) -> Result<bool> {
+    let Some(retained) = read_manifest_if_present(final_path).await? else {
+        return Ok(false);
+    };
+    if retained != *manifest {
+        return Err(manifest_conflict());
+    }
+    remove_matching_pending(pending_path, manifest).await?;
+    sync_directory(runtime_share).await?;
+    Ok(true)
+}
+
+enum ConcurrentPublication {
+    Retry,
+    Adopted,
+}
+
+fn classify_concurrent_loss(
+    error: Error,
+    attempt: usize,
+    adopted: bool,
+) -> Result<ConcurrentPublication> {
+    if adopted {
+        return Ok(ConcurrentPublication::Adopted);
+    }
+    if error.retryable && attempt + 1 < PUBLISH_ATTEMPTS {
+        return Ok(ConcurrentPublication::Retry);
+    }
+    Err(error)
 }
 
 async fn create_or_reuse_pending(

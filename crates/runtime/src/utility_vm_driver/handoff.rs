@@ -582,19 +582,6 @@ async fn ensure_marker(
         target: target.clone(),
         config_digest: config_digest.to_string(),
     };
-    if path_metadata(&marker_path).await?.is_some() {
-        let retained = read_marker(&marker_path).await?;
-        if retained != expected {
-            return Err(handoff_error(
-                ErrorCode::Conflict,
-                "existing utility-VM bundle-handoff marker differs from this create",
-            ));
-        }
-        remove_matching_pending(&pending, &expected).await?;
-        sync_directory(runtime_share).await?;
-        return Ok(());
-    }
-
     let encoded = serde_json::to_vec(&expected).map_err(|error| {
         handoff_error(
             ErrorCode::Internal,
@@ -607,22 +594,80 @@ async fn ensure_marker(
             "utility-VM bundle-handoff marker exceeds its fixed bound",
         ));
     }
+    // Adoption stays inside the attempt loop so a winner that publishes and
+    // deletes pending is adopted instead of racing that cleanup.
     for attempt in 0..PUBLISH_ATTEMPTS {
-        match create_or_reuse_pending(runtime_share, &pending, &encoded, &expected).await {
-            Err(error) if error.retryable && attempt + 1 < PUBLISH_ATTEMPTS => continue,
-            Err(error) => return Err(error),
-            Ok(()) => {}
+        if adopt_published_marker(runtime_share, &marker_path, &pending, &expected).await? {
+            return Ok(());
         }
-        match publish_marker(runtime_share, &pending, &marker_path, &expected).await {
-            Err(error) if error.retryable && attempt + 1 < PUBLISH_ATTEMPTS => continue,
-            result => return result,
+        if let Err(error) =
+            create_or_reuse_pending(runtime_share, &pending, &encoded, &expected).await
+        {
+            match classify_concurrent_loss(
+                error,
+                attempt,
+                adopt_published_marker(runtime_share, &marker_path, &pending, &expected).await?,
+            )? {
+                ConcurrentPublication::Retry => continue,
+                ConcurrentPublication::Adopted => return Ok(()),
+            }
         }
+        if let Err(error) = publish_marker(runtime_share, &pending, &marker_path, &expected).await {
+            match classify_concurrent_loss(
+                error,
+                attempt,
+                adopt_published_marker(runtime_share, &marker_path, &pending, &expected).await?,
+            )? {
+                ConcurrentPublication::Retry => continue,
+                ConcurrentPublication::Adopted => return Ok(()),
+            }
+        }
+        return Ok(());
     }
     Err(handoff_error(
         ErrorCode::Unavailable,
         "utility-VM bundle-handoff marker publication kept losing its concurrent owner",
     )
     .retryable(true))
+}
+
+async fn adopt_published_marker(
+    runtime_share: &Path,
+    marker_path: &Path,
+    pending: &Path,
+    expected: &BundleHandoffMarker,
+) -> Result<bool> {
+    let Some(retained) = read_if_present(marker_path).await? else {
+        return Ok(false);
+    };
+    if retained != *expected {
+        return Err(handoff_error(
+            ErrorCode::Conflict,
+            "existing utility-VM bundle-handoff marker differs from this create",
+        ));
+    }
+    remove_matching_pending(pending, expected).await?;
+    sync_directory(runtime_share).await?;
+    Ok(true)
+}
+
+enum ConcurrentPublication {
+    Retry,
+    Adopted,
+}
+
+fn classify_concurrent_loss(
+    error: Error,
+    attempt: usize,
+    adopted: bool,
+) -> Result<ConcurrentPublication> {
+    if adopted {
+        return Ok(ConcurrentPublication::Adopted);
+    }
+    if error.retryable && attempt + 1 < PUBLISH_ATTEMPTS {
+        return Ok(ConcurrentPublication::Retry);
+    }
+    Err(error)
 }
 
 async fn create_or_reuse_pending(
