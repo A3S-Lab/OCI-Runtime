@@ -207,14 +207,14 @@ exploitable path are overfit — do not land them.
 WHPX and Linux KVM (x86_64 + AArch64) hosts tip-matched to current `main`,
 attestation-bound release matrices with soak on and full profiles. Used
 developer hosts must keep `-HostClass existing` /
-`A3S_OCI_LINUX_KVM_HOST_CLASS=existing`. Tip `139850c` (Merge #341, workspace
-archive `v0.3.5`) is the fmt-and-clippy-clean `main` for tip-matched promote:
-CI pins rustc `1.98.1` and
+`A3S_OCI_LINUX_KVM_HOST_CLASS=existing`. Fresh-host matrices check out current
+`main`; do not pin an older hygiene commit. The published workspace archive is
+`v0.3.5` (`139850c`). CI pins rustc `1.98.1` and
 [run 34680331496](https://github.com/A3S-Lab/OCI-Runtime/actions/runs/34680331496)
 passed `cargo fmt --all --check` and
 `cargo clippy --workspace --all-targets -- -D warnings` on ubuntu, macOS, and
-Windows. That tag publishes the workspace archive and does not promote
-readiness.
+Windows for that archive commit. Later docs-only commits do not change those
+binaries. The archive does not promote readiness.
 Promote-honesty shell gates still pass locally
 (`.github/scripts/linux-kvm-release-matrix-promotion-test.sh`,
 `.github/scripts/linux-kvm-fresh-host-attestation-test.sh`).
