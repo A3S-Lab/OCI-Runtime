@@ -51,6 +51,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-12
+
+Runtime archive release. This tag does not promote driver readiness. WHPX
+and the Linux KVM public candidate remain `probe-only`. macOS HVF remains
+`experimental`. Fresh-host promotion, W4 Box cutover, default supervised
+create, and HostRuntimeService KVM registration stay open. The immutable
+system-image compatibility level remains
+`a3s-oci-runtime-0.2.0-agent-protocol-v10`. Published Rust SDK crates stay at
+0.3.1; `v0.3.0` is the workspace binary release, not a crates.io SDK tag.
+
 ### Added
 
 - Linux KVM Live recovery smoke v3 now also proves a **new** post-reattach
@@ -2513,4 +2523,5 @@ All notable changes to A3S OCI Runtime are documented in this file.
 - Documentation and conformance evidence now distinguish runtime namespace and
   mount enforcement from A3S Box product-level network and volume management.
 
+[0.3.0]: https://github.com/A3S-Lab/OCI-Runtime/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/A3S-Lab/OCI-Runtime/releases/tag/v0.2.0
