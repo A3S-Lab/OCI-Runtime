@@ -31,6 +31,16 @@ soak_iterations="${A3S_OCI_NATIVE_SOAK_ITERATIONS:-25}"
 native_focus="${A3S_OCI_NATIVE_FOCUS:-}"
 native_runtime_binary="${A3S_OCI_NATIVE_RUNTIME_BINARY:-}"
 native_agent_binary="${A3S_OCI_NATIVE_AGENT_BINARY:-}"
+# Arch-honest OCI fixture: x86_64 keeps LINUX32 + MPOL_BIND; aarch64 uses LINUX
+# without NUMA bind (kernel returns EINVAL/ENOSYS for those controls).
+case "$(uname -m)" in
+  aarch64 | arm64)
+    native_linux_fixture="${A3S_OCI_NATIVE_LINUX_FIXTURE:-fixtures/native-linux/config.aarch64.json}"
+    ;;
+  *)
+    native_linux_fixture="${A3S_OCI_NATIVE_LINUX_FIXTURE:-fixtures/native-linux/config.json}"
+    ;;
+esac
 soak_concurrent_containers=4
 soak_operation_timeout_ms=30000
 unprivileged_userns_original=""
@@ -464,7 +474,7 @@ for candidate in \
   "$terminal_bundle" \
   "$recovery_bundle" \
   "$hook_recovery_bundle"; do
-  cp fixtures/native-linux/config.json "$candidate/config.json"
+  cp "$native_linux_fixture" "$candidate/config.json"
   cp "$(command -v busybox)" "$candidate/rootfs/bin/busybox"
   ln -s busybox "$candidate/rootfs/bin/sh"
 done
@@ -475,7 +485,7 @@ prepare_hook_owner_death_bundle "$hook_recovery_bundle"
 for slot in 0 1 2 3; do
   candidate="$qualification_root/soak-bundle-$slot"
   mkdir -p "$candidate/rootfs/bin" "$candidate/rootfs/dev" "$candidate/rootfs/proc"
-  cp fixtures/native-linux/config.json "$candidate/config.json"
+  cp "$native_linux_fixture" "$candidate/config.json"
   cp "$(command -v busybox)" "$candidate/rootfs/bin/busybox"
   ln -s busybox "$candidate/rootfs/bin/sh"
   jq --arg cgroup "a3s-oci-soak-$slot" \
@@ -484,7 +494,7 @@ for slot in 0 1 2 3; do
   mv "$candidate/config.json.tmp" "$candidate/config.json"
   soak_bundles+=("$candidate")
 done
-cp fixtures/native-linux/config.json "$rootless_bundle/config.json"
+cp "$native_linux_fixture" "$rootless_bundle/config.json"
 cp "$(command -v busybox)" "$rootless_bundle/rootfs/bin/busybox"
 ln -s busybox "$rootless_bundle/rootfs/bin/sh"
 jq --arg cgroup "$absolute_cgroup_path" '.linux.cgroupsPath = $cgroup' \
@@ -1167,7 +1177,12 @@ verify_single_container_report() {
      and .init_io_priority_verified
      and .init_scheduler_verified
      and .init_personality_verified
-     and .init_memory_policy_verified
+     and ((if has("init_memory_policy_configured")
+           then .init_memory_policy_configured else true end | not)
+          or .init_memory_policy_verified)
+     and ((if has("init_memory_policy_configured")
+           then .init_memory_policy_configured else true end)
+          or (.init_memory_policy_verified | not))
      and .init_capabilities_verified
      and .init_no_new_privileges_verified
      and .processes_verified

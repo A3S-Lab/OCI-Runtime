@@ -293,7 +293,10 @@ async fn checkpoint_dispatches_after_cached_capability_catalog_drift() {
     let adapter = RuntimeAdapter::from_client_with_extensions(
         a3s_oci_sdk::RuntimeClient::new(runtime),
         IsolationRequest::SharedHostKernel,
-        extensions(artifact, &[RuntimeOperation::Restore]),
+        extensions(
+            artifact,
+            &[RuntimeOperation::Restore, RuntimeOperation::Create],
+        ),
     );
     let checkpoint_directory = temporary.path().join("checkpoint");
     tokio::fs::create_dir(&checkpoint_directory)
@@ -370,7 +373,10 @@ async fn restore_create_exposes_created_until_one_durable_start_resume_barrier()
     let adapter = RuntimeAdapter::from_client_with_extensions(
         a3s_oci_sdk::RuntimeClient::new(runtime),
         IsolationRequest::SharedHostKernel,
-        extensions(artifact, &[RuntimeOperation::Restore]),
+        extensions(
+            artifact,
+            &[RuntimeOperation::Restore, RuntimeOperation::Create],
+        ),
     );
     let service = recovery_service_instance(&bundle_path, adapter);
     let mut create = api::CreateTaskRequest::new();
@@ -467,7 +473,10 @@ async fn rehydration_adopts_a_restore_resume_committed_before_metadata_advance()
     let adapter = RuntimeAdapter::from_client_with_extensions(
         a3s_oci_sdk::RuntimeClient::new(runtime),
         IsolationRequest::SharedHostKernel,
-        extensions(artifact, &[RuntimeOperation::Restore]),
+        extensions(
+            artifact,
+            &[RuntimeOperation::Restore, RuntimeOperation::Create],
+        ),
     );
     let service = recovery_service_instance(temporary.path(), adapter);
 

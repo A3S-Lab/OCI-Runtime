@@ -108,9 +108,9 @@ pub(super) async fn verify_first_signal_marker(
         match crate::marker::exact_marker_state(&contents, expected) {
             crate::marker::ExactMarkerState::Complete
             | crate::marker::ExactMarkerState::InProgress => Ok(()),
-            crate::marker::ExactMarkerState::Mismatch => Err(
-                "first-owner KVM SignalProcess produced unexpected marker contents".to_string(),
-            ),
+            crate::marker::ExactMarkerState::Mismatch => {
+                Err("first-owner KVM SignalProcess produced unexpected marker contents".to_string())
+            }
         }
     } else {
         Ok(())

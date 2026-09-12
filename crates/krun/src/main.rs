@@ -8,7 +8,7 @@ use std::io;
     )
 ))]
 use std::num::NonZeroU32;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -1343,7 +1343,9 @@ fn extract_shim_socket_path(shim_argv: &[std::ffi::OsString]) -> Result<PathBuf,
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-fn bind_private_unix_listener(path: &Path) -> Result<std::os::unix::net::UnixListener, String> {
+fn bind_private_unix_listener(
+    path: &std::path::Path,
+) -> Result<std::os::unix::net::UnixListener, String> {
     use std::fs;
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     use std::os::unix::net::UnixListener;
@@ -1477,10 +1479,7 @@ fn run_session_owner_bridge_echo(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-fn proxy_unix_streams(
-    left: std::os::unix::net::UnixStream,
-    right: std::os::unix::net::UnixStream,
-) {
+fn proxy_unix_streams(left: std::os::unix::net::UnixStream, right: std::os::unix::net::UnixStream) {
     use std::io::{Read, Write};
     use std::thread;
 

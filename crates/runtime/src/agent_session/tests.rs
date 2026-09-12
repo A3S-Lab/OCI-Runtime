@@ -11,9 +11,10 @@ use super::{
     validate_vm_attachment_manifest_digest, BoundedOutput, ShutdownCompletion,
 };
 #[cfg(unix)]
+use super::{canonical_file, prepare_shim};
+#[cfg(target_os = "linux")]
 use super::{
-    canonical_file, durable_host_control_connect_error_is_permanent, prepare_shim,
-    remap_durable_host_control_connect_error,
+    durable_host_control_connect_error_is_permanent, remap_durable_host_control_connect_error,
 };
 
 fn valid_output(platform: &str) -> BoundedOutput {
@@ -495,7 +496,7 @@ async fn retains_the_windows_shim_entry_until_spawn_resolves_it() {
     std::fs::rename(&replacement, &shim).expect("replacement is possible after the pin drops");
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 mod durable_host_control_connect_honesty {
     use super::{
         durable_host_control_connect_error_is_permanent, remap_durable_host_control_connect_error,

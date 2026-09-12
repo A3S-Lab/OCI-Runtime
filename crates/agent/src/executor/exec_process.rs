@@ -191,7 +191,7 @@ impl ExecProcess {
                 supervisor,
                 status,
             } => {
-                if let Some(status) = status.clone() {
+                if let Some(status) = *status {
                     Some(status)
                 } else if supervised_pid_is_alive(*helper_pid) {
                     None
@@ -218,7 +218,7 @@ impl ExecProcess {
                             )
                         })?;
                     let waited = ProcessExitStatus::from_raw(raw);
-                    *status = Some(waited.clone());
+                    *status = Some(waited);
                     Some(waited)
                 }
             }
@@ -275,6 +275,7 @@ impl ExecProcess {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn spawn_host_exec(
     init_executable: &Path,
     snapshot: &Path,
@@ -327,6 +328,7 @@ async fn spawn_host_exec(
     Ok((ExecChild::Host(child), process_io))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn spawn_supervised_exec(
     init_executable: &Path,
     snapshot: &Path,
@@ -731,7 +733,7 @@ async fn wait_exec_child(child: &mut ExecChild) -> io::Result<ProcessExitStatus>
             supervisor,
             status,
         } => {
-            if let Some(status) = status.clone() {
+            if let Some(status) = *status {
                 return Ok(status);
             }
             let supervisor = Arc::clone(supervisor);
@@ -751,7 +753,7 @@ async fn wait_exec_child(child: &mut ExecChild) -> io::Result<ProcessExitStatus>
             .await
             .map_err(io::Error::other)??;
             let waited = ProcessExitStatus::from_raw(raw);
-            *status = Some(waited.clone());
+            *status = Some(waited);
             Ok(waited)
         }
     }
@@ -767,7 +769,7 @@ async fn wait_exec_child_for_ready_race(child: &mut ExecChild) -> io::Result<Pro
         ExecChild::Supervised {
             helper_pid, status, ..
         } => {
-            if let Some(status) = status.clone() {
+            if let Some(status) = *status {
                 return Ok(status);
             }
             let watched = *helper_pid;
@@ -812,6 +814,7 @@ async fn terminate_supervised_helper(supervisor: &SharedSessionSupervisor, helpe
     .await;
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_exec_arguments(
     command: &mut Command,
     snapshot: &Path,
@@ -839,6 +842,7 @@ fn append_exec_arguments(
     append_namespace_arguments(command, namespace_arguments);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_exec_os_arguments(
     args: &mut Vec<std::ffi::OsString>,
     snapshot: &Path,

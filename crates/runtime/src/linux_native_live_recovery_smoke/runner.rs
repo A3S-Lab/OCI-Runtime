@@ -48,9 +48,8 @@ pub async fn run(config: LinuxNativeLiveRecoverySmokeConfig) -> LinuxNativeLiveR
     report.recovery.session_supervisor_mode_opt_in =
         std::env::var_os(SESSION_SUPERVISOR_ENV).is_some_and(|value| value == "1");
     if !report.recovery.session_supervisor_mode_opt_in {
-        let reason = format!(
-            "{SESSION_SUPERVISOR_ENV}=1 is required for Native Live Host reopen evidence"
-        );
+        let reason =
+            format!("{SESSION_SUPERVISOR_ENV}=1 is required for Native Live Host reopen evidence");
         report.reason = Some(reason.clone());
         report.recovery.reason = Some(reason);
         return report;
@@ -83,7 +82,8 @@ pub async fn run(config: LinuxNativeLiveRecoverySmokeConfig) -> LinuxNativeLiveR
     if !report.is_success() {
         report.status = CapabilityStatus::Unavailable;
         report.case_count = 0;
-        report.reason = Some("Native Linux Live recovery report failed its final audit".to_string());
+        report.reason =
+            Some("Native Linux Live recovery report failed its final audit".to_string());
     }
     report
 }
@@ -95,9 +95,8 @@ async fn prepare(config: LinuxNativeLiveRecoverySmokeConfig) -> Result<PreparedR
     let _ = OciBundle::load(&bundle)
         .await
         .map_err(|error| format!("failed to validate source OCI bundle: {error}"))?;
-    let executable = std::env::current_exe().map_err(|error| {
-        format!("failed to resolve current Host Service executable: {error}")
-    })?;
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("failed to resolve current Host Service executable: {error}"))?;
     let executable = canonical_plain_file(&executable, "Host Service executable", true)?;
     let nonce = unique_nonce()?;
     let evidence_root = work_parent.join(format!("nlr-{nonce}"));
@@ -163,8 +162,14 @@ async fn run_live_recovery(
         &prepared.evidence_root.join("replacement.stderr.log"),
     )
     .await?;
-    let replacement_result =
-        run_replacement(prepared, &mut replacement, &target, &init_identity, evidence).await;
+    let replacement_result = run_replacement(
+        prepared,
+        &mut replacement,
+        &target,
+        &init_identity,
+        evidence,
+    )
+    .await;
     if replacement_result.is_err() {
         emergency_cleanup(&mut replacement, &target).await;
         replacement.emergency_stop().await;
@@ -538,9 +543,7 @@ async fn prove_retained_filesystem_after_reattach(
         && evidence.replacement_state_running
         && evidence.init_survived_host_sigkill;
     if !evidence.retained_filesystem_proven {
-        return Err(
-            "Live retained filesystem evidence failed its completeness audit".to_string(),
-        );
+        return Err("Live retained filesystem evidence failed its completeness audit".to_string());
     }
     Ok(())
 }

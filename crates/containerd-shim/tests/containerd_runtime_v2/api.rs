@@ -61,24 +61,6 @@ pub(crate) struct GetContainerResponse {
 }
 
 #[derive(Clone, PartialEq, Message)]
-pub(crate) struct CreateContainerRequest {
-    #[prost(message, optional, tag = "1")]
-    pub(crate) container: Option<Container>,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub(crate) struct CreateContainerResponse {
-    #[prost(message, optional, tag = "1")]
-    pub(crate) container: Option<Container>,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub(crate) struct DeleteContainerRequest {
-    #[prost(string, tag = "1")]
-    pub(crate) id: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
 pub(crate) struct MountsRequest {
     #[prost(string, tag = "1")]
     pub(crate) snapshotter: String,
@@ -391,12 +373,6 @@ impl ContainersClient {
         GetContainerRequest,
         GetContainerResponse,
         "/containerd.services.containers.v1.Containers/Get"
-    );
-    unary_method!(
-        create,
-        CreateContainerRequest,
-        CreateContainerResponse,
-        "/containerd.services.containers.v1.Containers/Create"
     );
 }
 

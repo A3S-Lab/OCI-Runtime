@@ -241,7 +241,10 @@ pub(super) fn process_still_live(identity: &NativeLinuxProcessIdentity) -> Resul
 fn create_private_log(path: &Path, label: &str) -> Result<std::fs::File, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| {
-            format!("failed to create {label} parent {}: {error}", parent.display())
+            format!(
+                "failed to create {label} parent {}: {error}",
+                parent.display()
+            )
         })?;
     }
     let mut options = std::fs::OpenOptions::new();

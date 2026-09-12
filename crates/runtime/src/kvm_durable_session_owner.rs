@@ -15,6 +15,7 @@
 use std::env;
 use std::io;
 use std::num::NonZeroU32;
+#[cfg(test)]
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -82,6 +83,7 @@ impl DurableSessionOwner {
         process_alive(self.child_pid)
     }
 
+    #[cfg(test)]
     pub fn owner_alive(&self) -> bool {
         process_alive(self.owner_pid)
     }
@@ -128,6 +130,7 @@ impl DurableSessionOwner {
 ///
 /// `shim_argv` is the trailing shim argv (for example `agent-vm-smoke ...`) and
 /// must not include `--owner-pid`. The helper injects its own PID.
+#[cfg(test)]
 pub fn spawn_via_session_owner_helper(
     krun_shim: &std::path::Path,
     shim_argv: &[std::ffi::OsString],
@@ -178,7 +181,10 @@ pub fn spawn_via_session_owner_helper_with_env(
         .open(&stderr_log)?;
 
     let mut owner = Command::new(krun_shim);
-    owner.arg("session-owner").arg("--ready-file").arg(ready_file);
+    owner
+        .arg("session-owner")
+        .arg("--ready-file")
+        .arg(ready_file);
     if let Some(path) = host_control {
         owner.arg("--host-control").arg(path);
     }
@@ -248,6 +254,7 @@ pub fn spawn_via_session_owner_helper_with_env(
 ///
 /// Prefer [`spawn_via_session_owner_helper`] from Tokio Host paths. This fork
 /// helper is for isolated single-threaded tests only.
+#[cfg(test)]
 pub fn spawn_holding_child(child: Command) -> io::Result<DurableSessionOwner> {
     let (owner_ready_reader, owner_ready_writer) = anonymous_pipe()?;
     let (child_ready_reader, child_ready_writer) = anonymous_pipe()?;
@@ -282,6 +289,7 @@ pub fn spawn_holding_child(child: Command) -> io::Result<DurableSessionOwner> {
     })
 }
 
+#[cfg(test)]
 fn run_owner_child(
     mut child: Command,
     owner_ready_writer: OwnedWritePipe,
@@ -319,9 +327,12 @@ fn run_owner_child(
     }
 }
 
+#[cfg(test)]
 struct OwnedWritePipe(i32);
+#[cfg(test)]
 struct OwnedReadPipe(i32);
 
+#[cfg(test)]
 impl Drop for OwnedWritePipe {
     fn drop(&mut self) {
         unsafe {
@@ -330,6 +341,7 @@ impl Drop for OwnedWritePipe {
     }
 }
 
+#[cfg(test)]
 impl Drop for OwnedReadPipe {
     fn drop(&mut self) {
         unsafe {
@@ -338,6 +350,7 @@ impl Drop for OwnedReadPipe {
     }
 }
 
+#[cfg(test)]
 fn anonymous_pipe() -> io::Result<(OwnedReadPipe, OwnedWritePipe)> {
     let mut fds = [0; 2];
     let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
@@ -347,6 +360,7 @@ fn anonymous_pipe() -> io::Result<(OwnedReadPipe, OwnedWritePipe)> {
     Ok((OwnedReadPipe(fds[0]), OwnedWritePipe(fds[1])))
 }
 
+#[cfg(test)]
 fn write_pipe_byte(pipe: &OwnedWritePipe) -> io::Result<()> {
     loop {
         let n = unsafe { libc::write(pipe.0, b"R".as_ptr().cast(), 1) };
@@ -363,6 +377,7 @@ fn write_pipe_byte(pipe: &OwnedWritePipe) -> io::Result<()> {
     }
 }
 
+#[cfg(test)]
 fn wait_pipe_byte(pipe: OwnedReadPipe) -> io::Result<()> {
     let mut buf = [0u8; 1];
     loop {
@@ -384,6 +399,7 @@ fn wait_pipe_byte(pipe: OwnedReadPipe) -> io::Result<()> {
     }
 }
 
+#[cfg(test)]
 fn write_pid_to_pipe(pipe: &OwnedWritePipe, pid: NonZeroU32) -> io::Result<()> {
     let bytes = pid.get().to_ne_bytes();
     let mut offset = 0;
@@ -407,6 +423,7 @@ fn write_pid_to_pipe(pipe: &OwnedWritePipe, pid: NonZeroU32) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn read_pid_from_pipe(pipe: OwnedReadPipe) -> io::Result<NonZeroU32> {
     let mut bytes = [0u8; 4];
     let mut offset = 0;
@@ -463,14 +480,26 @@ mod tests {
         assert_eq!(owner_mode_from_value(None), KvmOwnerMode::HostBound);
         assert_eq!(owner_mode_from_value(Some("")), KvmOwnerMode::HostBound);
         assert_eq!(owner_mode_from_value(Some("0")), KvmOwnerMode::HostBound);
-        assert_eq!(owner_mode_from_value(Some("false")), KvmOwnerMode::HostBound);
+        assert_eq!(
+            owner_mode_from_value(Some("false")),
+            KvmOwnerMode::HostBound
+        );
     }
 
     #[test]
     fn owner_mode_opt_in_is_durable() {
-        assert_eq!(owner_mode_from_value(Some("1")), KvmOwnerMode::DurableSession);
-        assert_eq!(owner_mode_from_value(Some("true")), KvmOwnerMode::DurableSession);
-        assert_eq!(owner_mode_from_value(Some("YES")), KvmOwnerMode::DurableSession);
+        assert_eq!(
+            owner_mode_from_value(Some("1")),
+            KvmOwnerMode::DurableSession
+        );
+        assert_eq!(
+            owner_mode_from_value(Some("true")),
+            KvmOwnerMode::DurableSession
+        );
+        assert_eq!(
+            owner_mode_from_value(Some("YES")),
+            KvmOwnerMode::DurableSession
+        );
     }
 
     #[test]

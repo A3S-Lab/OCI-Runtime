@@ -45,7 +45,7 @@ impl LauncherChild {
                 supervisor,
                 status,
             } => {
-                if let Some(status) = status.clone() {
+                if let Some(status) = *status {
                     return Ok(Some(status));
                 }
                 if supervised_pid_is_alive(*pid) {
@@ -67,7 +67,7 @@ impl LauncherChild {
                     .wait_launcher(pid)
                     .map_err(|error| std::io::Error::other(error.to_string()))?;
                 let waited = ProcessExitStatus::from_raw(raw);
-                *status = Some(waited.clone());
+                *status = Some(waited);
                 Ok(Some(waited))
             }
         }
@@ -81,7 +81,7 @@ impl LauncherChild {
                 supervisor,
                 status,
             } => {
-                if let Some(status) = status.clone() {
+                if let Some(status) = *status {
                     return Ok(status);
                 }
                 let supervisor = Arc::clone(supervisor);
@@ -101,7 +101,7 @@ impl LauncherChild {
                 .await
                 .map_err(std::io::Error::other)??;
                 let waited = ProcessExitStatus::from_raw(raw);
-                *status = Some(waited.clone());
+                *status = Some(waited);
                 Ok(waited)
             }
         }
@@ -117,7 +117,7 @@ impl LauncherChild {
         match self {
             Self::Local(_) => self.wait().await,
             Self::Supervised { pid, status, .. } => {
-                if let Some(status) = status.clone() {
+                if let Some(status) = *status {
                     return Ok(status);
                 }
                 let watched = *pid;
@@ -156,36 +156,6 @@ fn parse_proc_stat_state(contents: &str) -> Option<u8> {
 
 const fn is_terminal_proc_state(state: u8) -> bool {
     matches!(state, b'Z' | b'X' | b'x')
-}
-
-#[cfg(test)]
-mod supervised_liveness_tests {
-    use super::{is_terminal_proc_state, parse_proc_stat_state, supervised_pid_is_alive};
-
-    #[test]
-    fn parse_proc_stat_state_reads_field_after_comm() {
-        assert_eq!(parse_proc_stat_state("42 (sleep) S 1 1"), Some(b'S'));
-        assert_eq!(parse_proc_stat_state("99 (a) Z 1 1"), Some(b'Z'));
-        // Comm may contain spaces / parentheses before the final ") ".
-        assert_eq!(parse_proc_stat_state("7 (weird ) name) R 1 1"), Some(b'R'));
-        assert_eq!(parse_proc_stat_state("broken"), None);
-    }
-
-    #[test]
-    fn terminal_proc_states_match_recovery_observation() {
-        for state in *b"ZXx" {
-            assert!(is_terminal_proc_state(state));
-        }
-        for state in *b"RSDTtI" {
-            assert!(!is_terminal_proc_state(state));
-        }
-    }
-
-    #[test]
-    fn current_process_is_alive_and_missing_pid_is_not() {
-        assert!(supervised_pid_is_alive(std::process::id()));
-        assert!(!supervised_pid_is_alive(u32::MAX));
-    }
 }
 
 /// Host-retained stdio pipe ends for a supervised launcher.
@@ -520,4 +490,34 @@ pub(super) async fn cleanup_uncommitted_create(
         }
     }
     primary
+}
+
+#[cfg(test)]
+mod supervised_liveness_tests {
+    use super::{is_terminal_proc_state, parse_proc_stat_state, supervised_pid_is_alive};
+
+    #[test]
+    fn parse_proc_stat_state_reads_field_after_comm() {
+        assert_eq!(parse_proc_stat_state("42 (sleep) S 1 1"), Some(b'S'));
+        assert_eq!(parse_proc_stat_state("99 (a) Z 1 1"), Some(b'Z'));
+        // Comm may contain spaces / parentheses before the final ") ".
+        assert_eq!(parse_proc_stat_state("7 (weird ) name) R 1 1"), Some(b'R'));
+        assert_eq!(parse_proc_stat_state("broken"), None);
+    }
+
+    #[test]
+    fn terminal_proc_states_match_recovery_observation() {
+        for state in *b"ZXx" {
+            assert!(is_terminal_proc_state(state));
+        }
+        for state in *b"RSDTtI" {
+            assert!(!is_terminal_proc_state(state));
+        }
+    }
+
+    #[test]
+    fn current_process_is_alive_and_missing_pid_is_not() {
+        assert!(supervised_pid_is_alive(std::process::id()));
+        assert!(!supervised_pid_is_alive(u32::MAX));
+    }
 }

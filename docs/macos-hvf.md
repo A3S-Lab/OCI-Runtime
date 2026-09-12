@@ -512,7 +512,7 @@ independent private-endpoint baseline comparison to pass.
 
 `oci-vm-smoke` reuses the Windows lifecycle harness without introducing a
 macOS-specific OCI profile. The checked-in
-`fixtures/utility-vm/config.json` requests an explicit cgroup v2 leaf plus new
+`fixtures/utility-vm/config.macos.json` requests an explicit cgroup v2 leaf plus new
 UTS, mount, IPC, network, cgroup, PID, user, and time namespaces. The
 parent-authenticated user mapping
 handshake installs exact rootful UID/GID maps before the remaining namespaces
@@ -531,7 +531,7 @@ runtime_share="$asset_dir/runtime-share"
 bundle="$runtime_share/var/lib/a3s-oci-smoke/bundle"
 scripts/prepare-utility-vm-bundle.sh \
   --alpine-archive "$archive" \
-  --config fixtures/utility-vm/config.json \
+  --config fixtures/utility-vm/config.macos.json \
   --bundle "$bundle"
 
 target/debug/a3s-oci oci-vm-smoke \
@@ -1216,6 +1216,31 @@ respectively
 `06988d538670fa3ae71de77485be921379b4c8a7f938d1998c244597b3967c50`,
 `67a5f2d4e968b639fb271250599259a9c19a052c390c1960ded9883b52d60bd5`,
 and `5b9ebc175e78b4a28584fd8328800fa5ac42971b7c121e6733b0d8361803e2e7`.
+
+On September 12, 2026, tip `fb390b69a2d61b5fd1f7ecdcd79724dc94c876ca` retained an
+Apple Silicon HVF tip-source observation on this Mac (HVF supported). The run
+used `fixtures/utility-vm/config.macos.json` (LINUX personality, no
+`MPOL_BIND`, capability ceiling for shared exec I/O), a portable process I/O
+scheduler probe that reads `/proc/self/stat` when `/proc/self/sched` is absent,
+and Guest Agent durable-owner matching that accepts either the virtiofs
+share-root Host UID or Guest `geteuid()` under `/run/a3s-oci-runtime` (macOS
+libkrun preserves Guest-visible UIDs via `user.containers.override_stat` while
+remapping Host-side ownership). Public `macos-hvf-host-service-smoke` returned
+`status=available` with lifecycle delete replay, owner-death replacement, and
+soak `25/25`. Report SHA-256
+`72c86839d29a62779f544b17e174126d44d2e922f6ea492ea0caa2c55a2f3d99`;
+signed Host Service SHA-256
+`cfc5358e8ed0e133bf15c424e7588f3d0bcc89827023d3abd190fa6d14c76f14`;
+signed shim SHA-256
+`9607f41f60b4264de5847b5d852b17a12012770633547254c71f864fdda31301`;
+system-image manifest SHA-256
+`9c06e782e6e804b13a659fc5783665c78b10db341ab9cc245d17e94e8a09bee2`;
+immutable image SHA-256
+`e3caedfc2298ec921666bb3968a46a18a9bedc34da24d2d9f2715c1e77a2c766`;
+Guest Agent SHA-256
+`c95044d48b29f7f8a614fb698e69402f01438fc981f7710d5abb11b781b7d7ce`.
+This is tip refresh / observation only: readiness remains `experimental`,
+`promotes_readiness` stays false, and W4 Box cutover remains closed.
 
 After building and signing both executables as described above, reproduce the
 complete gate with:

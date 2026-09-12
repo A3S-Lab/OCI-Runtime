@@ -155,10 +155,43 @@ impl RuntimeAdapter {
 
     #[cfg(test)]
     pub(crate) fn from_client(client: RuntimeClient, isolation: IsolationRequest) -> Self {
+        use a3s_oci_sdk::{
+            AttachmentCapabilities, DriverKind, IsolationClass, RuntimeArtifact,
+            RuntimeDriverCapabilities, RuntimeOperationCapability,
+        };
+
+        let class = isolation.class();
+        let driver = match class {
+            IsolationClass::SharedHostKernel => DriverKind::NativeLinux,
+            IsolationClass::DedicatedVm | IsolationClass::SharedGuestKernel => {
+                DriverKind::LibkrunKvm
+            }
+        };
+        let artifact = RuntimeArtifact::new(
+            "a3s-oci-runtime",
+            "0.2.0",
+            format!("sha256:{}", "b".repeat(64)),
+            Some("containerd-test-adapter".to_string()),
+        )
+        .expect("test runtime artifact");
+        let extensions = RuntimeExtensions::new(
+            artifact,
+            vec![RuntimeDriverCapabilities::new(
+                driver,
+                vec![class],
+                [RuntimeOperation::Create]
+                    .into_iter()
+                    .map(RuntimeOperationCapability::v1)
+                    .collect(),
+                AttachmentCapabilities::base_v1(),
+            )
+            .expect("test runtime driver capabilities")],
+        )
+        .expect("test runtime extensions");
         Self {
             client,
             isolation,
-            extensions: RuntimeExtensions::default(),
+            extensions,
         }
     }
 

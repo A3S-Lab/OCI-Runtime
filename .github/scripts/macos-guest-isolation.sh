@@ -40,7 +40,7 @@ mkdir "$runtime_share/run"
 chmod 0700 "$bootstrap" "$runtime_share" "$runtime_share/run"
 scripts/prepare-utility-vm-bundle.sh \
   --alpine-archive "$rootfs_archive" \
-  --config fixtures/utility-vm/config.json \
+  --config fixtures/utility-vm/config.macos.json \
   --bundle "$bundle" \
   --cgroups-path a3s-oci-macos-guest-isolation
 
