@@ -1120,7 +1120,7 @@ impl LinuxExecutor {
     /// live init (Null/Capture/Pipe; terminal/inherit remain Unsupported).
     /// Generations that share
     /// one `sessionSupervisor` identity reuse one control connection through
-    /// [`SessionSupervisorReattachCache`].
+    /// `SessionSupervisorReattachCache`.
     pub async fn recover_stale_generation(
         &self,
         target: &a3s_oci_sdk::ContainerTarget,
