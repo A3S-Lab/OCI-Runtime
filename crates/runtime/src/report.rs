@@ -353,6 +353,20 @@ impl AgentVmSmokeReport {
     /// without requiring `shim_exit_code == 0`). Requiring
     /// [`Self::session_is_success`] there falsely fails delete cleanup and
     /// surfaces as `authenticated KVM utility VM did not satisfy its contract`.
+    ///
+    /// Call sites are Linux KVM / macOS HVF product owners; keep the helper on
+    /// other hosts for unit tests without `-D dead-code` noise.
+    #[cfg_attr(
+        not(any(
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ),
+            all(target_os = "macos", target_arch = "aarch64"),
+            test
+        )),
+        allow(dead_code)
+    )]
     pub(crate) fn product_owner_shutdown_succeeded(&self) -> bool {
         self.session_is_success()
             || (matches!(self.status, CapabilityStatus::Available) && self.reason.is_none())
