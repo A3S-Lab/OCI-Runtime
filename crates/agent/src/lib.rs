@@ -35,6 +35,7 @@ mod executor;
 #[cfg(target_os = "linux")]
 mod handoff_fs;
 mod linux_device;
+mod operator_setuid;
 mod transport_qualification;
 #[cfg(any(target_os = "linux", test))]
 mod vm_attachment;

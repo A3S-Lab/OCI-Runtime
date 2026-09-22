@@ -51,6 +51,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+- Operator setuid `a3s-oci` adopts the rootless device-policy identity before
+  bootstrap: effective gid 0, supplementary groups cleared, and self-migration
+  into `A3S_BOX_OWNER_CGROUP` only when that directory is a lexical child of
+  `--delegated-cgroup-root`. The setpriv shape (egid 0, no supplementary
+  groups, no owner-cgroup env) is unchanged. Tip-built launcher on Ubuntu Orb
+  (mode 4755) returned Sandbox `--rm` exit 0/1/3 for a non-root caller without
+  CI setpriv. Does not close Box B2 or claim Enterprise GA.
+
 - Documented the current feature and evidence layers in
   `docs/feature-coverage.md`. The inventory does not add line-coverage
   percentages and does not promote readiness. The latest published workspace

@@ -124,6 +124,13 @@ impl RootlessDevicePolicyBootstrap {
     /// Retain one exact cgroup delegation, fork its bounded device helper, and
     /// permanently drop the owner process to its non-root real identity.
     pub fn start(delegated_cgroup_root: impl AsRef<Path>) -> Result<Self> {
+        let delegated_cgroup_root = delegated_cgroup_root.as_ref();
+        // Operator setuid (mode 4755) is euid 0 with the caller's egid and
+        // groups, and the parent cannot write the cgroup v2 ancestor. Adopt
+        // the bootstrap identity and migrate while still effective root.
+        // setpriv CI is already that identity and skips both steps.
+        crate::operator_setuid::prepare_operator_setuid_owner(delegated_cgroup_root)
+            .map_err(|message| executor_error(ErrorCode::PermissionDenied, message))?;
         let (uid, gid) = device_policy::DevicePolicyAuthority::bootstrap_identity()?;
         let mut delegation = RootlessCgroupDelegation::open(delegated_cgroup_root, uid, gid)?;
         let authority =
