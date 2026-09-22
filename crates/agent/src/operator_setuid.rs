@@ -46,7 +46,10 @@ pub fn operator_setuid_credential_fix(
 /// `owner_cgroup` must be a lexical child of `delegated_root`, with no `..`.
 #[must_use]
 pub fn owner_cgroup_within_delegated_root(delegated_root: &Path, owner_cgroup: &Path) -> bool {
-    if !delegated_root.is_absolute() || !owner_cgroup.is_absolute() {
+    // Cgroup v2 destinations are Linux pathname-absolute (`/...`). Host
+    // `Path::is_absolute` rejects that shape on Windows, which only matters
+    // when unit-testing these helpers outside Linux.
+    if !is_linux_pathname_absolute(delegated_root) || !is_linux_pathname_absolute(owner_cgroup) {
         return false;
     }
     if has_parent_dir(delegated_root) || has_parent_dir(owner_cgroup) {
@@ -56,6 +59,10 @@ pub fn owner_cgroup_within_delegated_root(delegated_root: &Path, owner_cgroup: &
         return false;
     };
     relative.components().next().is_some()
+}
+
+fn is_linux_pathname_absolute(path: &Path) -> bool {
+    path.as_os_str().as_encoded_bytes().starts_with(b"/")
 }
 
 fn has_parent_dir(path: &Path) -> bool {

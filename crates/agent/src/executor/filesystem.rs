@@ -380,6 +380,34 @@ fn filesystem_in_view(view: &RootView, request: &FilesystemRequest) -> Result<Fi
     })
 }
 
+fn ownership_denied_by_backing_store(error: &io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(libc::EPERM) | Some(libc::EACCES))
+}
+
+/// Apply ownership after creating an inode.
+///
+/// Host-backed virtiofs/rootfs shares often reject `fchown` when the host
+/// process is unprivileged (KVM DedicatedVm with a non-root operator). The
+/// inode was just created by this agent, so creator ownership is the durable
+/// contract — fail closed only for unexpected errno values.
+fn apply_created_inode_ownership(
+    fd: RawFd,
+    uid: u32,
+    gid: u32,
+    operation: &'static str,
+    path_display: &str,
+) -> Result<()> {
+    let result = unsafe { libc::fchown(fd, uid, gid) };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if ownership_denied_by_backing_store(&error) {
+        return Ok(());
+    }
+    Err(io_error(operation, path_display, error))
+}
+
 fn upload(
     view: &RootView,
     path: &ResolvedPath,
@@ -430,14 +458,13 @@ fn upload(
     file.sync_data()
         .map_err(|error| io_error("sync upload target", &path.display, error))?;
     if let Some((uid, gid)) = owner.ids {
-        let result = unsafe { libc::fchown(file.as_raw_fd(), uid, gid) };
-        if result != 0 {
-            return Err(io_error(
-                "set upload ownership",
-                &path.display,
-                io::Error::last_os_error(),
-            ));
-        }
+        apply_created_inode_ownership(
+            file.as_raw_fd(),
+            uid,
+            gid,
+            "set upload ownership",
+            &path.display,
+        )?;
     }
     Ok(FileResponse {
         target: request.target.clone(),
@@ -644,14 +671,13 @@ impl RootView {
             })?;
             if created == 0 {
                 if let Some((uid, gid)) = owner {
-                    let result = unsafe { libc::fchown(directory.as_raw_fd(), uid, gid) };
-                    if result != 0 {
-                        return Err(io_error(
-                            "set container directory ownership",
-                            &absolute_display(&prefix),
-                            io::Error::last_os_error(),
-                        ));
-                    }
+                    apply_created_inode_ownership(
+                        directory.as_raw_fd(),
+                        uid,
+                        gid,
+                        "set container directory ownership",
+                        &absolute_display(&prefix),
+                    )?;
                 }
             }
         }
@@ -1235,5 +1261,15 @@ mod tests {
     #[test]
     fn named_other_user_expansion_is_rejected() {
         assert!(resolve_path("~root/file", Path::new("/root")).is_err());
+    }
+
+    #[test]
+    fn virtiofs_style_ownership_denials_are_optional() {
+        let eperm = std::io::Error::from_raw_os_error(libc::EPERM);
+        let eacces = std::io::Error::from_raw_os_error(libc::EACCES);
+        let other = std::io::Error::from_raw_os_error(libc::EIO);
+        assert!(super::ownership_denied_by_backing_store(&eperm));
+        assert!(super::ownership_denied_by_backing_store(&eacces));
+        assert!(!super::ownership_denied_by_backing_store(&other));
     }
 }
