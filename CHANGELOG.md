@@ -62,6 +62,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ## [Unreleased]
 
+- Product KVM/HVF Host owners treat durable Live session-owner shutdown as
+  success when `finish_inner` returns `Available` with no reason, even if
+  intentional terminate leaves a non-zero / signal shim status. Requiring
+  `session_is_success()` there falsely failed utility-VM delete cleanup
+  (`authenticated KVM utility VM did not satisfy its contract`) and blocked
+  Box packaged opt-in stop/delete (#644). Qualification still uses
+  `session_is_success` / `is_success`. Does not claim KVM production cutover
+  or Enterprise GA.
+
 - Operator setuid `a3s-oci` adopts the rootless device-policy identity before
   bootstrap: effective gid 0, supplementary groups cleared, and self-migration
   into `A3S_BOX_OWNER_CGROUP` only when that directory is a lexical child of
