@@ -307,12 +307,11 @@ impl AgentVmSmokeReport {
 
     /// Return whether the owned VM session completed its authenticated contract.
     ///
-    /// A long-lived Host Service can own multiple concurrent macOS sessions, so
-    /// one session cannot compare the process-wide descriptor inventory against
-    /// a baseline captured before every other session. Product owners use this
-    /// narrower result after reaping their exact shim and worker. Standalone
-    /// qualification must continue to use [`Self::is_success`], which also
-    /// requires endpoint, process, and descriptor cleanup evidence.
+    /// Standalone qualification and non-durable host-bound sessions must use
+    /// this check (and often [`Self::is_success`] for full host cleanup).
+    /// Product Host owners shutting down a **durable** Live session-owner must
+    /// use [`Self::product_owner_shutdown_succeeded`] instead: intentional
+    /// terminate leaves a non-zero / signal shim status that fails this gate.
     pub(crate) fn session_is_success(&self) -> bool {
         let process_identity_matches =
             match (self.platform, self.shim_process_id, self.bridge_process_id) {
@@ -345,6 +344,18 @@ impl AgentVmSmokeReport {
             && self.shim_exit_code == Some(0)
             && self.console_created
             && self.shim_report.is_some()
+    }
+
+    /// Return whether a product Host owner may treat session shutdown as success.
+    ///
+    /// Durable Live session-owner shutdown intentionally terminates the shim
+    /// (`finish_inner` clears `reason` and sets [`CapabilityStatus::Available`]
+    /// without requiring `shim_exit_code == 0`). Requiring
+    /// [`Self::session_is_success`] there falsely fails delete cleanup and
+    /// surfaces as `authenticated KVM utility VM did not satisfy its contract`.
+    pub(crate) fn product_owner_shutdown_succeeded(&self) -> bool {
+        self.session_is_success()
+            || (matches!(self.status, CapabilityStatus::Available) && self.reason.is_none())
     }
 }
 
@@ -1103,10 +1114,29 @@ mod tests {
     fn macos_session_success_does_not_impersonate_full_cleanup_qualification() {
         let mut report = complete_macos_session();
         assert!(report.session_is_success());
+        assert!(report.product_owner_shutdown_succeeded());
         assert!(!report.is_success());
 
         report.macos_cleanup = Some(complete_macos_cleanup());
         assert!(report.is_success());
+    }
+
+    #[test]
+    fn durable_live_terminate_shutdown_succeeds_without_shim_exit_zero() {
+        // Mirrors finish_inner durable Live terminate: Available, reason cleared,
+        // shim status from SIGKILL (no exit code).
+        let mut report = complete_macos_session();
+        report.shim_exit_code = None;
+        report.shim_report_verified = false;
+        report.shim_report = None;
+        report.console_created = false;
+        report.reason = None;
+        report.status = CapabilityStatus::Available;
+        assert!(!report.session_is_success());
+        assert!(report.product_owner_shutdown_succeeded());
+
+        report.reason = Some("authenticated KVM utility VM did not satisfy its contract".into());
+        assert!(!report.product_owner_shutdown_succeeded());
     }
 
     #[test]
