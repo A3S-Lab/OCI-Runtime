@@ -17,10 +17,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
-- MakeDir/upload after create treat virtiofs chown EPERM/EACCES as
+- MakeDir/upload after create treat virtiofs fchown EPERM/EACCES as
   optional when the host operator is unprivileged. Creator ownership on the
   host-backed share is the DurableVm contract; fail closed on other errno.
   Unblocks non-root WSL KVM Live keyed MakeDir.
+
+- Gate `operator_setuid` behind `linux|test` so Windows/macOS lib builds no
+  longer fail `-D dead-code` on setuid helpers that only the Linux executor
+  and unit tests exercise.
 
 - Durable KVM first-bring-up host-control connect fails closed with
   `PermissionDenied` on EACCES/EPERM (mode-0600 pathname socket), matching
