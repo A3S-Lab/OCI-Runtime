@@ -8,10 +8,19 @@ use a3s_oci_sdk::ErrorCode;
 use super::mount::verify_prepared_device_mounts;
 use super::protocol::{send_device_mounts, DEVICE_MOUNT_FRAME_MARKER};
 use super::{
-    apply_request, read_message, validate_hello, validate_key, validate_relative_cgroup,
-    write_message, DevicePolicyAuthority, DevicePolicyRequest, DevicePolicyResponse,
-    DEVICE_POLICY_SCHEMA_VERSION, MAX_DEVICE_POLICY_MESSAGE_BYTES,
+    apply_request, operator_setuid_needs_effective_gid, read_message, validate_hello, validate_key,
+    validate_relative_cgroup, write_message, DevicePolicyAuthority, DevicePolicyRequest,
+    DevicePolicyResponse, DEVICE_POLICY_SCHEMA_VERSION, MAX_DEVICE_POLICY_MESSAGE_BYTES,
 };
+
+#[test]
+fn operator_setuid_elevates_only_incomplete_effective_gid() {
+    assert!(operator_setuid_needs_effective_gid(1001, 0, 1001, 1001, 3));
+    assert!(operator_setuid_needs_effective_gid(1001, 0, 1001, 0, 2));
+    assert!(!operator_setuid_needs_effective_gid(1001, 0, 1001, 0, 0));
+    assert!(!operator_setuid_needs_effective_gid(0, 0, 0, 0, 0));
+    assert!(!operator_setuid_needs_effective_gid(1001, 1001, 1001, 1001, 3));
+}
 
 #[test]
 fn helper_rejects_absolute_parent_and_non_normal_cgroup_paths() {

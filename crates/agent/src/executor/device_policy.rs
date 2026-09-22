@@ -131,7 +131,7 @@ impl DevicePolicyAuthority {
 
     pub(super) fn bootstrap_identity() -> Result<(u32, u32)> {
         // SAFETY: credential queries have no pointer arguments or failure result.
-        let (uid, euid, gid, egid) = unsafe {
+        let (mut uid, mut euid, mut gid, mut egid) = unsafe {
             (
                 libc::getuid(),
                 libc::geteuid(),
@@ -139,21 +139,54 @@ impl DevicePolicyAuthority {
                 libc::getegid(),
             )
         };
+        // SAFETY: a zero-sized query accepts a null pointer and returns the
+        // number of supplementary groups attached to this single thread.
+        let mut supplementary_groups = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
+        if supplementary_groups < 0 {
+            return Err(last_policy_error(
+                ErrorCode::FailedPrecondition,
+                "inspect rootless device-policy bootstrap supplementary groups",
+            ));
+        }
+        // A 4755 setuid exec has effective uid 0 but keeps the operator gid and
+        // login groups. Raise only the effective gid, once, before the check.
+        // Already-correct credentials (CI setpriv) take no extra syscalls.
+        if operator_setuid_needs_effective_gid(uid, euid, gid, egid, supplementary_groups) {
+            if supplementary_groups > 0 && unsafe { libc::setgroups(0, std::ptr::null()) } != 0 {
+                return Err(last_policy_error(
+                    ErrorCode::PermissionDenied,
+                    "clear rootless device-policy bootstrap supplementary groups",
+                ));
+            }
+            if egid != 0 && unsafe { libc::setresgid(gid, 0, 0) } != 0 {
+                return Err(last_policy_error(
+                    ErrorCode::PermissionDenied,
+                    "set rootless device-policy bootstrap effective gid",
+                ));
+            }
+            // SAFETY: see the credential query above.
+            (uid, euid, gid, egid) = unsafe {
+                (
+                    libc::getuid(),
+                    libc::geteuid(),
+                    libc::getgid(),
+                    libc::getegid(),
+                )
+            };
+            supplementary_groups = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
+            if supplementary_groups < 0 {
+                return Err(last_policy_error(
+                    ErrorCode::FailedPrecondition,
+                    "inspect rootless device-policy bootstrap supplementary groups",
+                ));
+            }
+        }
         if uid == 0 || gid == 0 || euid != 0 || egid != 0 {
             return Err(policy_error(
                 ErrorCode::InvalidArgument,
                 format!(
                     "rootless device-policy bootstrap requires non-root real UID/GID with effective root; observed UID {uid}/{euid}, GID {gid}/{egid}"
                 ),
-            ));
-        }
-        // SAFETY: a zero-sized query accepts a null pointer and returns the
-        // number of supplementary groups attached to this single thread.
-        let supplementary_groups = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
-        if supplementary_groups < 0 {
-            return Err(last_policy_error(
-                ErrorCode::FailedPrecondition,
-                "inspect rootless device-policy bootstrap supplementary groups",
             ));
         }
         if supplementary_groups != 0 {
@@ -955,6 +988,19 @@ fn verify_cgroup2_descriptor(descriptor: &OwnedFd) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Operator setuid (`4755`) has effective uid 0 while the real gid and login
+/// groups are still the caller's. CI `setpriv` already has effective gid 0 and
+/// no supplementary groups, so it must not enter this path.
+fn operator_setuid_needs_effective_gid(
+    uid: u32,
+    euid: u32,
+    gid: u32,
+    egid: u32,
+    supplementary_groups: i32,
+) -> bool {
+    uid != 0 && gid != 0 && euid == 0 && (egid != 0 || supplementary_groups > 0)
 }
 
 fn verify_privileged_helper_identity() -> Result<()> {
