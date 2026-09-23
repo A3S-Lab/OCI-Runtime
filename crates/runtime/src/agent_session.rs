@@ -2989,6 +2989,7 @@ fn publish_durable_live_binding(
 }
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+#[allow(clippy::too_many_arguments)]
 fn spawn_durable_windows_agent_vm(
     krun_shim: &Path,
     rootfs: &Path,

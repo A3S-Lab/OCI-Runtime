@@ -17,6 +17,7 @@ pub(crate) struct RunningShim {
 }
 
 /// Host-bound or opt-in durable session ownership for one shim.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ManagedShim {
     HostBound(RunningShim),
     #[cfg(all(
