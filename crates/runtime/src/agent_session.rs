@@ -3119,7 +3119,13 @@ fn spawn_durable_windows_agent_vm(
         argv.push(path.as_os_str().to_owned());
     }
 
-    let mut envs = vec![(AGENT_SESSION_TOKEN_ENV, session_token)];
+    let mut envs = vec![
+        (AGENT_SESSION_TOKEN_ENV, session_token),
+        (
+            crate::whpx_live_session_binding::GUEST_HOST_RECONNECT_ENV,
+            "1",
+        ),
+    ];
     if let Some(encoded) = transport_qualification {
         envs.push((AGENT_TRANSPORT_QUALIFICATION_ENV, encoded));
     }

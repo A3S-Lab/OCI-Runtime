@@ -29,6 +29,12 @@ pub const WHPX_LIVE_SESSION_BINDING_SCHEMA: &str = "a3s.oci.whpx-live-session-bi
 /// Filename under the runtime share for the Live reattach binding.
 pub const WHPX_LIVE_SESSION_BINDING_FILE: &str = ".a3s-oci-whpx-live-session-binding.json";
 
+/// Guest agent env: after a clean Host EOF, reconnect vsock (same as KVM Live).
+///
+/// Forwarded into the Linux guest by the Windows WHPX agent-vm smoke path when
+/// durable session-owner mode is enabled.
+pub const GUEST_HOST_RECONNECT_ENV: &str = "A3S_OCI_GUEST_HOST_RECONNECT";
+
 const MAX_BINDING_BYTES: u64 = 16 * 1024;
 
 /// Authenticated Windows process identity (PID + `GetProcessTimes` creation).
