@@ -159,13 +159,18 @@ enum Command {
     /// Opt-in durable WHPX session owner: become the shim `--owner-pid` so Host
     /// taskkill does not tear down the Guest (Windows Live reopen substrate).
     ///
-    /// Holds a Job Object with `KILL_ON_JOB_CLOSE`. Host-control named-pipe
-    /// proxy for Live reattach is a later slice.
+    /// Holds a Job Object with `KILL_ON_JOB_CLOSE`. When `--host-control` is set,
+    /// this process also owns the guest agent named pipe (from shim
+    /// `--pipe-name`) and proxies Host↔shim so a replacement Host can reconnect.
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     SessionOwner {
         /// Host path that receives one line `<shim_pid>\n` after spawn.
         #[arg(long, value_name = "FILE")]
         ready_file: PathBuf,
+        /// Optional Host-facing control named pipe for Live reattach proxying
+        /// (for example `\\.\pipe\a3s-oci-whpx-live-control-...`).
+        #[arg(long, value_name = "PIPE")]
+        host_control: Option<String>,
         /// Shim argv (for example `agent-vm-smoke ...`). Must not include
         /// `--owner-pid`; this process injects it.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -180,6 +185,17 @@ enum Command {
         /// How long to sleep after the owner-open check succeeds.
         #[arg(long, default_value_t = 3_600_000, value_name = "MS")]
         sleep_ms: u64,
+    },
+    /// Qualification-only child: connect to the guest agent named pipe and echo
+    /// until EOF, then reconnect (simulates Guest Host-reconnect without WHPX).
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    SessionOwnerBridgeEcho {
+        /// Injected by `session-owner`; must be openable with PROCESS_SYNCHRONIZE.
+        #[arg(long, value_name = "PID")]
+        owner_pid: NonZeroU32,
+        /// Guest agent named-pipe basename (or `\\.\pipe\...`) bound by bridge mode.
+        #[arg(long, value_name = "PIPE")]
+        pipe_name: String,
     },
     /// Boot the Linux agent at its fixed guest path and bridge its control vsock.
     AgentVmSmoke {
@@ -493,8 +509,9 @@ fn main() -> ExitCode {
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         Command::SessionOwner {
             ready_file,
+            host_control,
             shim_argv,
-        } => match windows_session_owner::run_session_owner(ready_file, shim_argv) {
+        } => match windows_session_owner::run_session_owner(ready_file, host_control, shim_argv) {
             Ok(code) => code,
             Err(error) => {
                 eprintln!("a3s-oci-krun-shim: session-owner failed: {error}");
@@ -509,6 +526,17 @@ fn main() -> ExitCode {
             Ok(code) => code,
             Err(error) => {
                 eprintln!("a3s-oci-krun-shim: session-owner-probe failed: {error}");
+                ExitCode::FAILURE
+            }
+        },
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        Command::SessionOwnerBridgeEcho {
+            owner_pid,
+            pipe_name,
+        } => match windows_session_owner::run_session_owner_bridge_echo(owner_pid, pipe_name) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("a3s-oci-krun-shim: session-owner-bridge-echo failed: {error}");
                 ExitCode::FAILURE
             }
         },

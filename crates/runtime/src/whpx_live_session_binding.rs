@@ -1,14 +1,15 @@
 //! Opt-in durable WHPX Live session binding for Host reopen reattach.
 //!
-//! When `A3S_OCI_WHPX_SESSION_OWNER=1` and a durable session-owner spawn path
-//! exists, the first Host will publish authenticated process identities into
-//! the runtime share. A replacement Host loads that binding, re-authenticates
-//! PID + `GetProcessTimes` creation ticks, and reconnects to the surviving
-//! session-owner bridge without launching a second Guest.
+//! When `A3S_OCI_WHPX_SESSION_OWNER=1`, the first Host publishes authenticated
+//! process identities into the runtime share after the session-owner owns the
+//! host-control named pipe. A replacement Host loads that binding,
+//! re-authenticates PID + `GetProcessTimes` creation ticks, and reconnects to
+//! the surviving session-owner bridge without launching a second Guest.
 //!
-//! Default Host-bound ownership never writes this artifact. This module is
-//! the binding/identity substrate only; durable spawn + Live reattach land in
-//! follow-up slices. Does **not** claim Box Enterprise GA or flip B2.
+//! Default Host-bound ownership never writes this artifact. Full utility-VM
+//! Live reattach (`whpx_live_reattach`) is a thin follow-up on top of this
+//! binding + host-control connect path. Does **not** claim Box Enterprise GA
+//! or flip B2.
 
 #![cfg(all(target_os = "windows", target_arch = "x86_64"))]
 
@@ -86,8 +87,8 @@ impl WhpxLiveSessionBinding {
 
     /// Reserved host-control pipe name for a product service pipe (Live reopen).
     ///
-    /// Session-owner pipe ownership lands in a follow-up; the name is stable so
-    /// first-Host publish and replacement-Host authenticate share one contract.
+    /// The durable session-owner binds this pipe and proxies Host↔shim so Host
+    /// death does not destroy the guest agent pipe.
     pub fn host_control_pipe_for_service(service_pipe: &str) -> String {
         let leaf = service_pipe
             .rsplit('\\')
@@ -261,6 +262,18 @@ mod tests {
         assert!(identity.pid > 0);
         assert!(identity.start_time_ticks > 0);
         assert!(identity.is_live().expect("self must stay live"));
+    }
+
+    #[test]
+    fn host_control_pipe_derives_stable_leaf_from_service_pipe() {
+        assert_eq!(
+            WhpxLiveSessionBinding::host_control_pipe_for_service(r"\\.\pipe\a3s-oci-agent-abc"),
+            r"\\.\pipe\a3s-oci-whpx-live-control-a3s-oci-agent-abc"
+        );
+        assert_eq!(
+            WhpxLiveSessionBinding::host_control_pipe_for_service("a3s-oci-agent-abc"),
+            r"\\.\pipe\a3s-oci-whpx-live-control-a3s-oci-agent-abc"
+        );
     }
 
     #[test]
