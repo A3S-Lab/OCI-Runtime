@@ -2,6 +2,18 @@
 
 All notable changes to A3S OCI Runtime are documented in this file.
 
+## Rust SDK crates 0.3.2 — 2026-09-23
+
+### Fixed
+
+- Republish `a3s-oci-core` and `a3s-oci-sdk` as `0.3.2` so crates.io matches
+  the Box-pinned source revision that exposes Network/Storage attachment
+  types (`NetworkAttachmentIdentity`, `attach_linux_network_interface`,
+  `attach_storage_mount`, and related APIs). crates.io `0.3.1` was cut from
+  an earlier tip and cannot be overwritten. Tag namespace:
+  `sdk/rust/v0.3.2`. Does not claim Box Enterprise GA or MicroVM production
+  cutover beyond the existing Box pin.
+
 ## Rust SDK crates 0.3.1 — 2026-08-25
 
 ### Added
