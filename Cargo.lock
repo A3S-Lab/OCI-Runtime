@@ -95,7 +95,7 @@ dependencies = [
 
 [[package]]
 name = "a3s-oci-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "serde",
  "thiserror 2.0.19",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "a3s-oci-sdk"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "a3s-oci-core",
  "async-trait",

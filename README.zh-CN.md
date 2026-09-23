@@ -44,7 +44,7 @@
 bundle、隔离要求和带版本的附件清单。
 
 不依赖具体提供方的 Rust 契约也可独立使用，包版本为
-`a3s-oci-core = "=0.3.1"` 和 `a3s-oci-sdk = "=0.3.1"`。其
+`a3s-oci-core = "=0.3.2"` 和 `a3s-oci-sdk = "=0.3.2"`。其
 `sdk/rust/v*` 源码标签与完整 Runtime 二进制发行版相互独立。
 
 > [!WARNING]
