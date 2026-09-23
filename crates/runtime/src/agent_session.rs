@@ -83,9 +83,12 @@ pub(crate) struct AgentVmSession {
     runtime_share_required: bool,
     expected_system_image_manifest_sha256: Option<String>,
     /// Runtime share that holds the opt-in Live binding; cleared on intentional shutdown.
-    #[cfg(all(
-        target_os = "linux",
-        any(target_arch = "x86_64", target_arch = "aarch64")
+    #[cfg(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     ))]
     live_binding_share: Option<PathBuf>,
 }
@@ -1059,9 +1062,15 @@ impl AgentVmSession {
         ))]
         let durable_owner = crate::kvm_durable_session_owner::owner_mode_from_env()
             == crate::kvm_durable_session_owner::KvmOwnerMode::DurableSession;
-        #[cfg(not(all(
-            target_os = "linux",
-            any(target_arch = "x86_64", target_arch = "aarch64")
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        let durable_owner = crate::whpx_durable_session_owner::owner_mode_from_env()
+            == crate::whpx_durable_session_owner::WhpxOwnerMode::DurableSession;
+        #[cfg(not(any(
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         )))]
         let durable_owner = false;
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -1204,10 +1213,13 @@ impl AgentVmSession {
                 .arg("--system-image-manifest")
                 .arg(system_image_manifest_path)
                 .arg("--runtime-share")
-                .arg(runtime_share_path)
-                .arg("--owner-pid")
-                .arg(std::process::id().to_string());
-            if let Some(path) = recovery_report {
+                .arg(runtime_share_path);
+            if !durable_owner {
+                command
+                    .arg("--owner-pid")
+                    .arg(std::process::id().to_string());
+            }
+            if let Some(ref path) = recovery_report {
                 command.arg("--recovery-report").arg(path);
             }
         }
@@ -1262,14 +1274,42 @@ impl AgentVmSession {
                     }
                 }
             }
-            #[cfg(not(all(
-                target_os = "linux",
-                any(target_arch = "x86_64", target_arch = "aarch64")
+            #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+            {
+                match spawn_durable_windows_agent_vm(
+                    prepared_shim.command_path(),
+                    &rootfs,
+                    &console,
+                    endpoint.pipe_name(),
+                    system_image_manifest_path,
+                    runtime_share_path,
+                    recovery_report.as_deref(),
+                    encoded_token.as_str(),
+                    encoded_qualification.as_deref(),
+                ) {
+                    Ok(owner) => ManagedShim::Durable(owner),
+                    Err(error) => {
+                        return Err(failed(
+                            report,
+                            format!(
+                                "failed to start durable WHPX session-owner for {}: {error}",
+                                prepared_shim.display_path().display()
+                            ),
+                        ));
+                    }
+                }
+            }
+            #[cfg(not(any(
+                all(target_os = "windows", target_arch = "x86_64"),
+                all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )
             )))]
             {
                 return Err(failed(
                     report,
-                    "durable KVM session ownership is only supported on Linux",
+                    "durable session ownership is not supported on this platform",
                 ));
             }
         } else {
@@ -1291,9 +1331,12 @@ impl AgentVmSession {
         // returns. Releasing the host copy avoids retaining an otherwise
         // unrelated pin for the lifetime of the VM session.
         drop(prepared_shim);
-        #[cfg(all(
-            target_os = "linux",
-            any(target_arch = "x86_64", target_arch = "aarch64")
+        #[cfg(any(
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         ))]
         let durable_token_hex = durable_owner.then(|| encoded_token.as_str().to_string());
         drop(encoded_token);
@@ -1491,6 +1534,32 @@ impl AgentVmSession {
                 }
             }
         }
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        if durable_owner {
+            if let (ManagedShim::Durable(owner), Some(token_hex)) =
+                (&running, durable_token_hex.as_deref())
+            {
+                match publish_durable_whpx_live_binding(
+                    runtime_share_path,
+                    owner,
+                    shim_process_id,
+                    endpoint.pipe_name(),
+                    token_hex,
+                ) {
+                    Ok(()) => {}
+                    Err(error) => {
+                        drop(client);
+                        let completed = running.terminate_and_collect().await;
+                        apply_completed(&mut report, &completed);
+                        return Err(failed_with_output(
+                            report,
+                            &format!("failed to publish durable WHPX Live binding: {error}"),
+                            &completed,
+                        ));
+                    }
+                }
+            }
+        }
 
         let session = Self {
             report,
@@ -1522,9 +1591,12 @@ impl AgentVmSession {
                 }
             },
             expected_system_image_manifest_sha256,
-            #[cfg(all(
-                target_os = "linux",
-                any(target_arch = "x86_64", target_arch = "aarch64")
+            #[cfg(any(
+                all(target_os = "windows", target_arch = "x86_64"),
+                all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )
             ))]
             live_binding_share: durable_owner.then(|| runtime_share_path.to_path_buf()),
         };
@@ -1576,9 +1648,12 @@ impl AgentVmSession {
             console,
             runtime_share_required,
             expected_system_image_manifest_sha256,
-            #[cfg(all(
-                target_os = "linux",
-                any(target_arch = "x86_64", target_arch = "aarch64")
+            #[cfg(any(
+                all(target_os = "windows", target_arch = "x86_64"),
+                all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )
             ))]
             live_binding_share,
         } = self;
@@ -1589,22 +1664,32 @@ impl AgentVmSession {
         if let Some(share) = live_binding_share.as_ref() {
             let _ = crate::kvm_live_session_binding::remove_binding(share);
         }
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        if let Some(share) = live_binding_share.as_ref() {
+            let _ = crate::whpx_live_session_binding::remove_binding(share);
+        }
         let close_error = client.close().await.err();
         drop(client);
         // Durable Live reconnect keeps the Guest after Host EOF; intentional
         // shutdown must kill the session-owner instead of waiting forever.
-        #[cfg(all(
-            target_os = "linux",
-            any(target_arch = "x86_64", target_arch = "aarch64")
+        #[cfg(any(
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         ))]
         let completed = if live_binding_share.is_some() {
             running.terminate_and_collect().await
         } else {
             running.wait_and_collect().await
         };
-        #[cfg(not(all(
-            target_os = "linux",
-            any(target_arch = "x86_64", target_arch = "aarch64")
+        #[cfg(not(any(
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         )))]
         let completed = running.wait_and_collect().await;
         apply_completed(&mut report, &completed);
@@ -1615,14 +1700,20 @@ impl AgentVmSession {
                 &completed,
             );
         }
-        #[cfg(all(
-            target_os = "linux",
-            any(target_arch = "x86_64", target_arch = "aarch64")
+        #[cfg(any(
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         ))]
         let durable_terminated = live_binding_share.is_some();
-        #[cfg(not(all(
-            target_os = "linux",
-            any(target_arch = "x86_64", target_arch = "aarch64")
+        #[cfg(not(any(
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         )))]
         let durable_terminated = false;
         if !durable_terminated && !completed.status.as_ref().is_some_and(ExitStatus::success) {
@@ -2891,6 +2982,81 @@ fn publish_durable_live_binding(
         shim,
         host_control_socket: host_control.display().to_string(),
         pipe_name: pipe_name.to_string(),
+        session_token_hex: session_token_hex.to_string(),
+    };
+    binding.publish(runtime_share)?;
+    Ok(())
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+fn spawn_durable_windows_agent_vm(
+    krun_shim: &Path,
+    rootfs: &Path,
+    console: &Path,
+    pipe_name: &str,
+    system_image_manifest: &Path,
+    runtime_share: &Path,
+    recovery_report: Option<&Path>,
+    session_token: &str,
+    transport_qualification: Option<&str>,
+) -> io::Result<crate::whpx_durable_session_owner::DurableSessionOwner> {
+    use std::ffi::OsString;
+
+    let ready_file = runtime_share.join(".a3s-oci-whpx-session-owner.ready");
+    let mut argv = vec![
+        OsString::from("agent-vm-smoke"),
+        OsString::from("--rootfs"),
+        rootfs.as_os_str().to_owned(),
+        OsString::from("--console"),
+        console.as_os_str().to_owned(),
+        OsString::from("--pipe-name"),
+        OsString::from(pipe_name),
+        OsString::from("--system-image-manifest"),
+        system_image_manifest.as_os_str().to_owned(),
+        OsString::from("--runtime-share"),
+        runtime_share.as_os_str().to_owned(),
+    ];
+    if let Some(path) = recovery_report {
+        argv.push(OsString::from("--recovery-report"));
+        argv.push(path.as_os_str().to_owned());
+    }
+
+    let mut envs = vec![(AGENT_SESSION_TOKEN_ENV, session_token)];
+    if let Some(encoded) = transport_qualification {
+        envs.push((AGENT_TRANSPORT_QUALIFICATION_ENV, encoded));
+    }
+    crate::whpx_durable_session_owner::spawn_via_session_owner_helper_with_env(
+        krun_shim,
+        &argv,
+        &ready_file,
+        &envs,
+    )
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+fn publish_durable_whpx_live_binding(
+    runtime_share: &Path,
+    owner: &crate::whpx_durable_session_owner::DurableSessionOwner,
+    shim_process_id: u32,
+    service_pipe: &str,
+    session_token_hex: &str,
+) -> io::Result<()> {
+    use crate::whpx_live_session_binding::{
+        WhpxLiveSessionBinding, WhpxProcessIdentity, WHPX_LIVE_SESSION_BINDING_SCHEMA,
+    };
+
+    let session_owner =
+        WhpxProcessIdentity::capture(owner.owner_pid().get(), "durable session-owner")?;
+    let shim = WhpxProcessIdentity::capture(shim_process_id, "durable shim")?;
+    let binding = WhpxLiveSessionBinding {
+        schema_version: WHPX_LIVE_SESSION_BINDING_SCHEMA.to_string(),
+        container_id: None,
+        generation: None,
+        config_digest: None,
+        session_owner,
+        shim,
+        host_control_pipe: WhpxLiveSessionBinding::host_control_pipe_for_service(service_pipe),
+        service_pipe: service_pipe.to_string(),
         session_token_hex: session_token_hex.to_string(),
     };
     binding.publish(runtime_share)?;

@@ -84,6 +84,19 @@ impl WhpxLiveSessionBinding {
         runtime_share.join(WHPX_LIVE_SESSION_BINDING_FILE)
     }
 
+    /// Reserved host-control pipe name for a product service pipe (Live reopen).
+    ///
+    /// Session-owner pipe ownership lands in a follow-up; the name is stable so
+    /// first-Host publish and replacement-Host authenticate share one contract.
+    pub fn host_control_pipe_for_service(service_pipe: &str) -> String {
+        let leaf = service_pipe
+            .rsplit('\\')
+            .next()
+            .filter(|part| !part.is_empty())
+            .unwrap_or(service_pipe);
+        format!(r"\\.\pipe\a3s-oci-whpx-live-control-{leaf}")
+    }
+
     /// Persist the binding under the runtime share (create-new, fail closed).
     pub fn publish(&self, runtime_share: &Path) -> io::Result<PathBuf> {
         if self.schema_version != WHPX_LIVE_SESSION_BINDING_SCHEMA {

@@ -1,8 +1,9 @@
 # Windows/WHPX mid-run Live session ownership
 
-Status: **scaffolding** (binding + fail-closed env). Durable spawn and Host
-reattach are **not** tip-proven. Does **not** claim Box Enterprise GA or flip
-`b2_process_session_recovery_closed`.
+Status: **AgentVmSession wired** for durable Guest survival across Host death
+(`A3S_OCI_WHPX_SESSION_OWNER=1` → `session-owner` Job Object spawn + binding
+publish). Host-control named-pipe ownership / Live reattach remain **open**.
+Does **not** claim Box Enterprise GA or flip `b2_process_session_recovery_closed`.
 
 ## Why this exists
 
@@ -28,22 +29,21 @@ why Created-state Host re-ensure (Box WHPX cutover gate 4) is not mid-run Live.
 
 ## Landed in this slice
 
-- `whpx_durable_session_owner`: env parse, **fail-closed** DurableSession gate
-  until AgentVmSession wiring, and Tokio-safe
-  `spawn_via_session_owner_helper` (`CREATE_BREAKAWAY_FROM_JOB` + Job Object
-  via `a3s-oci-krun-shim session-owner`).
+- `whpx_durable_session_owner`: env parse, `spawn_via_session_owner_helper`
+  (breakaway + Job Object via `a3s-oci-krun-shim session-owner`), and
+  `require_durable_spawn_ready` Ok once the helper is productized.
 - `whpx_live_session_binding`: schema, publish/load/authenticate/remove, Windows
   process identity via `GetProcessTimes`.
 - `a3s-oci-krun-shim session-owner` / `session-owner-probe` on Windows
   (`KILL_ON_JOB_CLOSE` Job Object).
+- AgentVmSession Windows path: DurableSession omits Host `--owner-pid`, spawns
+  through the helper, publishes binding after hello. First Host still binds the
+  product service pipe (Live stream reattach needs session-owner pipe ownership).
 
 ## Next slices (ordered)
 
-1. Wire AgentVmSession / Host Service to spawn through the helper when
-   `A3S_OCI_WHPX_SESSION_OWNER=1`; flip `require_durable_spawn_ready` to Ok.
-2. Session-owner-owned host-control named pipe + Live reattach (Unavailable → Ready).
-3. Publish binding at create/start under DurableSession.
-4. Box tip-prove `a3s.box.windows-whpx-live-session.v1` on real WHPX; keep
+1. Session-owner-owned host-control named pipe + Live reattach (Unavailable → Ready).
+2. Box tip-prove `a3s.box.windows-whpx-live-session.v1` on real WHPX; keep
    `b2_process_session_recovery_closed=false` until multi-driver B2 exit criteria.
 
 ## Refuse

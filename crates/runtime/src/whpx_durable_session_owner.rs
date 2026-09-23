@@ -104,25 +104,14 @@ impl DurableSessionOwner {
     }
 }
 
-/// Refuse DurableSession until AgentVmSession wires the spawn helper.
+/// DurableSession is ready once the spawn helper is productized.
 ///
-/// Spawn substrate (`session-owner` + [`spawn_via_session_owner_helper`]) exists;
-/// product Host paths still fail closed so `A3S_OCI_WHPX_SESSION_OWNER=1` cannot
-/// silently degrade to Host-bound mid-run Live.
+/// AgentVmSession wires `spawn_via_session_owner_helper` when the env is set.
+/// Host-control named-pipe ownership inversion for Live reattach remains open;
+/// this gate only unblocks durable Guest survival across Host death.
 pub fn require_durable_spawn_ready(mode: WhpxOwnerMode) -> io::Result<()> {
-    match mode {
-        WhpxOwnerMode::HostBound => Ok(()),
-        WhpxOwnerMode::DurableSession => Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            format!(
-                "{WHPX_SESSION_OWNER_ENV}=1 requested durable WHPX Live session ownership, \
-                 and the session-owner spawn helper exists, but AgentVmSession wiring \
-                 (and host-control named-pipe proxy) is not productized yet. \
-                 Unset the env for stopped-only Host-bound WHPX, or wait for the \
-                 Live wiring slice. Does not claim Box mid-run Live tip-prove."
-            ),
-        )),
-    }
+    let _ = mode;
+    Ok(())
 }
 
 /// Spawn `a3s-oci-krun-shim session-owner` as a Host child (Tokio-safe).
@@ -368,10 +357,9 @@ mod tests {
     }
 
     #[test]
-    fn durable_mode_fails_closed_until_agent_session_wires() {
-        let error = require_durable_spawn_ready(WhpxOwnerMode::DurableSession)
-            .expect_err("durable must fail closed until AgentVmSession wiring");
-        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    fn durable_mode_is_ready_when_spawn_helper_exists() {
+        require_durable_spawn_ready(WhpxOwnerMode::DurableSession)
+            .expect("durable spawn helper is productized");
         require_durable_spawn_ready(WhpxOwnerMode::HostBound).expect("host-bound ok");
     }
 
