@@ -10,9 +10,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
   gate, `a3s.oci.whpx-live-session-binding.v1` publish/authenticate helpers
   (`GetProcessTimes` process identity), and design note
   [`docs/windows-whpx-live-session.md`](docs/windows-whpx-live-session.md).
-  Durable Job Object / intermediate-owner spawn and Host Live reattach remain
-  open. `box-whpx-qualification-service` refuses start when the env requests
-  DurableSession before that spawn lands. Does **not** tip-prove Box WHPX
+- Windows `a3s-oci-krun-shim session-owner` / `session-owner-probe` with Job
+  Object `KILL_ON_JOB_CLOSE`, plus Tokio-safe
+  `spawn_via_session_owner_helper` (breakaway from Host job). AgentVmSession
+  wiring and host-control named-pipe Live reattach remain open; DurableSession
+  still fail-closed at Host Service start. Does **not** tip-prove Box WHPX
   binder gate 9, flip B2, or claim Enterprise GA.
 
 ## Rust SDK crates 0.3.2 — 2026-09-23

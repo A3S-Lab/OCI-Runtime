@@ -419,8 +419,9 @@ pub use whpx_driver_smoke::{
 };
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 pub use whpx_durable_session_owner::{
-    owner_mode_from_env, owner_mode_from_value, require_durable_spawn_ready, WhpxOwnerMode,
-    WHPX_SESSION_OWNER_ENV,
+    owner_mode_from_env, owner_mode_from_value, require_durable_spawn_ready,
+    spawn_via_session_owner_helper, spawn_via_session_owner_helper_with_env, DurableSessionOwner,
+    WhpxOwnerMode, WHPX_SESSION_OWNER_ENV,
 };
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 pub use whpx_live_session_binding::{
