@@ -6,8 +6,9 @@
 //!
 //! When `--host-control` is set, this process also owns the guest agent named
 //! pipe (from shim `--pipe-name`) and a Host-facing control pipe, byte-bridging
-//! Host↔shim so Host death does not destroy the agent pipe (Live reattach
-//! substrate).
+//! Host↔shim. Host-control EOF only drops the Host side — the guest pipe stays
+//! connected so the WHPX shim / Guest survive Host taskkill (Live reattach
+//! substrate). Guest EOF still ends the owner.
 //!
 //! Pipe security honesty: servers use `PIPE_REJECT_REMOTE_CLIENTS` with the
 //! default same-user DACL (`lpSecurityAttributes = null`). A private DACL like
@@ -119,7 +120,8 @@ pub(crate) fn run_session_owner_bridge_echo(
 /// Spawn trailing shim argv with `--owner-pid` = this process; publish ready file.
 ///
 /// When `host_control` is set, bind the guest agent pipe and host-control pipe,
-/// then byte-proxy Host↔shim until either side EOF; loop for the next Host.
+/// then byte-proxy Host↔shim. Host-control EOF keeps the guest pipe and waits
+/// for the next Host (Live reattach). Guest EOF ends the owner.
 pub(crate) fn run_session_owner(
     ready_file: PathBuf,
     host_control: Option<String>,
@@ -197,6 +199,8 @@ pub(crate) fn run_session_owner(
         };
     };
     let mut first_host = true;
+    // Keep one connected guest pipe across Host taskkill → reopen cycles.
+    let mut guest_file: Option<File> = None;
 
     loop {
         if let Some(status) = spawned
@@ -204,6 +208,7 @@ pub(crate) fn run_session_owner(
             .map_err(|error| format!("poll session-owner shim: {error}"))?
         {
             let _ = fs::remove_file(&ready_file);
+            drop(guest_file);
             drop(next_guest);
             drop(job);
             return if status.success() {
@@ -213,22 +218,26 @@ pub(crate) fn run_session_owner(
             };
         }
 
-        let guest = match next_guest.take() {
-            Some(handle) => handle,
-            None => create_named_pipe_server(&guest_path, false)?,
-        };
-        match wait_for_pipe_client(&guest, Some(shim_pid), &mut spawned)? {
-            PipeAccept::ShimExited(status) => {
-                let _ = fs::remove_file(&ready_file);
-                drop(guest);
-                drop(job);
-                return if status.success() {
-                    Ok(ExitCode::SUCCESS)
-                } else {
-                    Ok(ExitCode::from(OWNER_EXIT_CODE as u8))
-                };
+        if guest_file.is_none() {
+            let guest = match next_guest.take() {
+                Some(handle) => handle,
+                None => create_named_pipe_server(&guest_path, false)?,
+            };
+            match wait_for_pipe_client(&guest, Some(shim_pid), &mut spawned)? {
+                PipeAccept::ShimExited(status) => {
+                    let _ = fs::remove_file(&ready_file);
+                    drop(guest);
+                    drop(job);
+                    return if status.success() {
+                        Ok(ExitCode::SUCCESS)
+                    } else {
+                        Ok(ExitCode::from(OWNER_EXIT_CODE as u8))
+                    };
+                }
+                PipeAccept::Connected => {
+                    guest_file = Some(owned_handle_into_file(guest));
+                }
             }
-            PipeAccept::Connected => {}
         }
 
         let host = create_named_pipe_server(&host_path, first_host)?;
@@ -236,7 +245,7 @@ pub(crate) fn run_session_owner(
         match wait_for_pipe_client(&host, None, &mut spawned)? {
             PipeAccept::ShimExited(status) => {
                 let _ = fs::remove_file(&ready_file);
-                drop(guest);
+                drop(guest_file);
                 drop(host);
                 drop(job);
                 return if status.success() {
@@ -248,10 +257,21 @@ pub(crate) fn run_session_owner(
             PipeAccept::Connected => {}
         }
 
-        // Move connected handles into Files for the byte proxy; closing them
-        // ends the cycle so the next CreateNamedPipe can bind the same names.
-        proxy_pipe_files(owned_handle_into_file(guest), owned_handle_into_file(host));
-        next_guest = Some(create_named_pipe_server(&guest_path, false)?);
+        let guest = guest_file
+            .as_ref()
+            .expect("guest pipe connected before Host accept");
+        let guest_handle = guest.as_raw_handle() as HANDLE;
+        let host_file = owned_handle_into_file(host);
+        match proxy_pipe_keep_guest(guest_handle, host_file) {
+            ProxyEnd::HostClosed => {
+                // Guest stays connected; next Host reuses the same shim pipe.
+            }
+            ProxyEnd::GuestClosed => {
+                // Shim dropped the agent pipe — require a fresh guest accept.
+                drop(guest_file.take());
+                next_guest = Some(create_named_pipe_server(&guest_path, false)?);
+            }
+        }
     }
 }
 
@@ -405,26 +425,33 @@ fn set_pipe_wait_mode(server: &OwnedHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn proxy_pipe_files(left: File, right: File) {
-    // Synchronous duplex named-pipe handles cannot safely Read+Write concurrently
-    // from two threads (one blocking Read owns the pipe object). Poll both sides
-    // with PeekNamedPipe on one thread instead.
-    let left_handle = left.as_raw_handle() as HANDLE;
-    let right_handle = right.as_raw_handle() as HANDLE;
-    let mut left_buf = [0u8; 8192];
-    let mut right_buf = [0u8; 8192];
+enum ProxyEnd {
+    HostClosed,
+    GuestClosed,
+}
+
+/// Byte-proxy Host↔guest until one side EOF.
+///
+/// Host EOF keeps `guest` open (Live Host reopen). Guest EOF ends the cycle so
+/// the caller can re-accept the shim.
+fn proxy_pipe_keep_guest(guest: HANDLE, host: File) -> ProxyEnd {
+    let host_handle = host.as_raw_handle() as HANDLE;
+    let mut guest_buf = [0u8; 8192];
+    let mut host_buf = [0u8; 8192];
     loop {
-        let left_closed =
-            pump_pipe_if_readable(left_handle, right_handle, &mut left_buf).unwrap_or(true);
-        let right_closed =
-            pump_pipe_if_readable(right_handle, left_handle, &mut right_buf).unwrap_or(true);
-        if left_closed || right_closed {
-            break;
+        let guest_closed =
+            pump_pipe_if_readable(guest, host_handle, &mut guest_buf).unwrap_or(true);
+        let host_closed = pump_pipe_if_readable(host_handle, guest, &mut host_buf).unwrap_or(true);
+        if host_closed {
+            drop(host);
+            return ProxyEnd::HostClosed;
+        }
+        if guest_closed {
+            drop(host);
+            return ProxyEnd::GuestClosed;
         }
         thread::sleep(Duration::from_millis(1));
     }
-    drop(left);
-    drop(right);
 }
 
 fn pump_pipe_if_readable(from: HANDLE, to: HANDLE, buffer: &mut [u8]) -> io::Result<bool> {

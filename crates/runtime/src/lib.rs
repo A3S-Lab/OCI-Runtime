@@ -430,8 +430,8 @@ pub use whpx_durable_session_owner::{
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 pub use whpx_live_session_binding::{
     load_binding as load_whpx_live_binding, remove_binding as remove_whpx_live_binding,
-    WhpxLiveSessionBinding, WhpxProcessIdentity, WHPX_LIVE_SESSION_BINDING_FILE,
-    WHPX_LIVE_SESSION_BINDING_SCHEMA,
+    WhpxLiveSessionBinding, WhpxProcessIdentity, GUEST_HOST_RECONNECT_ENV,
+    WHPX_LIVE_SESSION_BINDING_FILE, WHPX_LIVE_SESSION_BINDING_SCHEMA,
 };
 pub use whpx_recovery_smoke::{
     whpx_recovery_owner, whpx_recovery_resume, WhpxRecoveryOwnerConfig, WhpxRecoveryOwnerReady,

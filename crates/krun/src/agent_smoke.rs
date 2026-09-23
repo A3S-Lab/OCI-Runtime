@@ -450,6 +450,14 @@ fn agent_vm_smoke_windows(
             encoded,
         ));
     }
+    // Durable Live: Host-control EOF must not shut down the Guest (same contract
+    // as linux_agent_smoke). Session-owner keeps the host-side pipe; guest
+    // reconnect covers any transient vsock reset.
+    if let Ok(value) = std::env::var("A3S_OCI_GUEST_HOST_RECONNECT") {
+        if !value.is_empty() {
+            environment.push(("A3S_OCI_GUEST_HOST_RECONNECT".to_string(), value));
+        }
+    }
     if let Err(error) = context.set_exec("/usr/bin/a3s-oci-agent", &[], &environment) {
         report.reason = Some(error.to_string());
         return report;
