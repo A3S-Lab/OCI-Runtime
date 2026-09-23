@@ -18,13 +18,25 @@ libkrunfw.dll
 system-image/
   system-image.json          # a3s.oci.windows-system-image.v1
   <ext4 image + companions>  # as bound by the manifest
-bootstrap-vm-rootfs/         # empty or minimal init.krun bootstrap directory
+bootstrap-vm-rootfs/         # empty seed; Box materializes the live copy
 ```
 
 `box-whpx-qualification-service` requires both `--vm-rootfs` (bootstrap) and
 `--system-image-manifest`. The guest agent is embedded in the system image;
 do not require a loose `usr\bin\a3s-oci-agent` under the bootstrap root for
 Box-owned ensure.
+
+### Mutable service root (disjoint from system-image)
+
+OCI WHPX requires:
+
+1. Live `--vm-rootfs` is a **strict descendant** of the mutable `--runtime-root`
+2. Immutable `system-image/` is **disjoint** from that mutable runtime root
+
+Do **not** point `A3S_BOX_OCI_HOST_ROOT` / `A3S_BOX_WHPX_OCI_SERVICE_ROOT` at
+the install root that contains `system-image/`. Box packaged opt-in defaults
+the mutable service root under the A3S home (`run/oci-host`) and materializes
+`bootstrap-vm-rootfs/` there from the packaged seed.
 
 ## Staging from CI (operator / packager)
 
