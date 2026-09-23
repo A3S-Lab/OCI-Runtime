@@ -15,8 +15,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
   `--host-control` duplex named-pipe Host↔shim proxy. Tokio-safe
   `spawn_via_session_owner_helper` (breakaway from Host job) passes
   `--host-control`. AgentVmSession DurableSession omits Host pipe bind, connects
-  as NamedPipeClient to host-control, and publishes the Live binding. Utility-VM
-  `whpx_live_reattach` remains open. Does **not** tip-prove Box WHPX binder
+  as NamedPipeClient to host-control, and publishes the Live binding.
+- `whpx_live_reattach` (path-loaded on Windows) authenticates a durable Live
+  binding and reconnects host-control; `WhpxRuntimeDriver::recover` tries it
+  before inventing `RecoveredStopped`. Does **not** tip-prove Box WHPX binder
   gate 9, flip B2, or claim Enterprise GA.
 
 ## Rust SDK crates 0.3.2 — 2026-09-23

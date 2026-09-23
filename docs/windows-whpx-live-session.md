@@ -3,9 +3,11 @@
 Status: **AgentVmSession durable Live path** owns the guest agent named pipe and
 host-control named pipe inside `a3s-oci-krun-shim session-owner` when
 `A3S_OCI_WHPX_SESSION_OWNER=1`. First Host connects as a NamedPipeClient to
-host-control (Host death does not destroy the agent pipe). Full utility-VM
-Live reattach module (`whpx_live_reattach`) remains a thin follow-up.
-Does **not** claim Box Enterprise GA or flip `b2_process_session_recovery_closed`.
+host-control (Host death does not destroy the agent pipe).
+`WhpxRuntimeDriver::recover` calls `whpx_live_reattach::try_reattach_live`
+before inventing `RecoveredStopped` (same honesty as KVM). Does **not** claim
+Box Enterprise GA, tip-prove binder gate 9, or flip
+`b2_process_session_recovery_closed`.
 
 ## Why this exists
 
@@ -45,14 +47,17 @@ why Created-state Host re-ensure (Box WHPX cutover gate 4) is not mid-run Live.
   bind `WindowsAgentPipeListener` on the product agent pipe, spawns through the
   helper with host-control, connects as `NamedPipeClient`, publishes binding
   after hello.
+- `utility_vm_driver/whpx_live_reattach.rs` (pulled via `#[path]` from the
+  runtime crate root on Windows): authenticate binding → host-control connect →
+  agent hello → `ReattachedLive` for the driver. Wired into
+  `WhpxRuntimeDriver::recover` before stopped-only recovery; dead/drifted
+  identities fall through to stopped; permanent hello rejects stay non-retryable.
 
 ## Next slices (ordered)
 
-1. Utility-VM Live reattach helper (`utility_vm_driver/whpx_live_reattach.rs`)
-   mirroring `kvm_live_reattach` (authenticate binding → host-control connect →
-   agent hello → register without inventing exit).
-2. Box tip-prove `a3s.box.windows-whpx-live-session.v1` on real WHPX; keep
-   `b2_process_session_recovery_closed=false` until multi-driver B2 exit criteria.
+1. Box tip-prove `a3s.box.windows-whpx-live-session.v1` on real WHPX (binder
+   gate 9); keep `b2_process_session_recovery_closed=false` until multi-driver
+   B2 exit criteria.
 
 ## Refuse
 
