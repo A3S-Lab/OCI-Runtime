@@ -61,7 +61,7 @@ pub(crate) async fn try_reattach_live(
     if !binding_path.exists() {
         return Ok(None);
     }
-    let binding = load_binding(&runtime_share).map_err(|error| {
+    let binding = load_binding(runtime_share).map_err(|error| {
         Error::new(
             ErrorCode::FailedPrecondition,
             format!(

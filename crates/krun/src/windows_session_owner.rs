@@ -414,14 +414,10 @@ fn proxy_pipe_files(left: File, right: File) {
     let mut left_buf = [0u8; 8192];
     let mut right_buf = [0u8; 8192];
     loop {
-        let left_closed = match pump_pipe_if_readable(left_handle, right_handle, &mut left_buf) {
-            Ok(closed) => closed,
-            Err(_) => true,
-        };
-        let right_closed = match pump_pipe_if_readable(right_handle, left_handle, &mut right_buf) {
-            Ok(closed) => closed,
-            Err(_) => true,
-        };
+        let left_closed =
+            pump_pipe_if_readable(left_handle, right_handle, &mut left_buf).unwrap_or(true);
+        let right_closed =
+            pump_pipe_if_readable(right_handle, left_handle, &mut right_buf).unwrap_or(true);
         if left_closed || right_closed {
             break;
         }
