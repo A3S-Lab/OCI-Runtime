@@ -282,8 +282,7 @@ fn wait_for_pipe_client(
                              {client_pid} (expected shim PID {})",
                             expected.get()
                         );
-                        let _ =
-                            unsafe { DisconnectNamedPipe(server.as_raw_handle() as HANDLE) };
+                        let _ = unsafe { DisconnectNamedPipe(server.as_raw_handle() as HANDLE) };
                         thread::sleep(Duration::from_millis(20));
                         continue;
                     }
@@ -327,8 +326,7 @@ fn create_named_pipe_server(path: &str, first_instance: bool) -> Result<OwnedHan
     if first_instance {
         open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
     }
-    let pipe_mode =
-        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS;
+    let pipe_mode = PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS;
     // SAFETY: CreateNamedPipeW with a null-terminated path and null security
     // attributes returns an owned handle or INVALID_HANDLE_VALUE.
     let raw = unsafe {
@@ -376,9 +374,8 @@ fn try_connect_named_pipe(server: &OwnedHandle) -> Result<bool, String> {
 fn named_pipe_client_pid(server: &OwnedHandle) -> Result<u32, String> {
     let mut client_pid = 0u32;
     // SAFETY: connected pipe handle; output pointer is valid for one u32.
-    let ok = unsafe {
-        GetNamedPipeClientProcessId(server.as_raw_handle() as HANDLE, &mut client_pid)
-    };
+    let ok =
+        unsafe { GetNamedPipeClientProcessId(server.as_raw_handle() as HANDLE, &mut client_pid) };
     if ok == 0 {
         return Err(format!(
             "GetNamedPipeClientProcessId failed: {}",
@@ -421,8 +418,7 @@ fn proxy_pipe_files(left: File, right: File) {
             Ok(closed) => closed,
             Err(_) => true,
         };
-        let right_closed = match pump_pipe_if_readable(right_handle, left_handle, &mut right_buf)
-        {
+        let right_closed = match pump_pipe_if_readable(right_handle, left_handle, &mut right_buf) {
             Ok(closed) => closed,
             Err(_) => true,
         };
@@ -435,11 +431,7 @@ fn proxy_pipe_files(left: File, right: File) {
     drop(right);
 }
 
-fn pump_pipe_if_readable(
-    from: HANDLE,
-    to: HANDLE,
-    buffer: &mut [u8],
-) -> io::Result<bool> {
+fn pump_pipe_if_readable(from: HANDLE, to: HANDLE, buffer: &mut [u8]) -> io::Result<bool> {
     let mut avail = 0u32;
     let mut bytes_left = 0u32;
     // SAFETY: live pipe handles; output pointers are valid locals.
@@ -468,7 +460,15 @@ fn pump_pipe_if_readable(
     }
     let to_read = (avail as usize).min(buffer.len()) as u32;
     let mut read = 0u32;
-    let ok = unsafe { ReadFile(from, buffer.as_mut_ptr(), to_read, &mut read, ptr::null_mut()) };
+    let ok = unsafe {
+        ReadFile(
+            from,
+            buffer.as_mut_ptr(),
+            to_read,
+            &mut read,
+            ptr::null_mut(),
+        )
+    };
     if ok == 0 {
         let err = io::Error::last_os_error();
         if err.kind() == io::ErrorKind::BrokenPipe
