@@ -16,7 +16,8 @@ pub(crate) struct RunningShim {
     stderr: JoinHandle<io::Result<BoundedOutput>>,
 }
 
-/// Host-bound or opt-in durable KVM session ownership for one shim.
+/// Host-bound or opt-in durable session ownership for one shim.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ManagedShim {
     HostBound(RunningShim),
     #[cfg(all(
@@ -24,6 +25,8 @@ pub(crate) enum ManagedShim {
         any(target_arch = "x86_64", target_arch = "aarch64")
     ))]
     Durable(crate::kvm_durable_session_owner::DurableSessionOwner),
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    Durable(crate::whpx_durable_session_owner::DurableSessionOwner),
 }
 
 impl ManagedShim {
@@ -34,6 +37,8 @@ impl ManagedShim {
                 target_os = "linux",
                 any(target_arch = "x86_64", target_arch = "aarch64")
             ))]
+            Self::Durable(owner) => Some(owner.child_pid().get()),
+            #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
             Self::Durable(owner) => Some(owner.child_pid().get()),
         }
     }
@@ -46,6 +51,8 @@ impl ManagedShim {
                 any(target_arch = "x86_64", target_arch = "aarch64")
             ))]
             Self::Durable(_) => None,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+            Self::Durable(_) => None,
         }
     }
 
@@ -56,7 +63,9 @@ impl ManagedShim {
                 target_os = "linux",
                 any(target_arch = "x86_64", target_arch = "aarch64")
             ))]
-            Self::Durable(owner) => durable_wait_and_collect(owner, false).await,
+            Self::Durable(owner) => linux_durable_wait_and_collect(owner, false).await,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+            Self::Durable(owner) => windows_durable_wait_and_collect(owner, false).await,
         }
     }
 
@@ -67,7 +76,9 @@ impl ManagedShim {
                 target_os = "linux",
                 any(target_arch = "x86_64", target_arch = "aarch64")
             ))]
-            Self::Durable(owner) => durable_wait_and_collect(owner, true).await,
+            Self::Durable(owner) => linux_durable_wait_and_collect(owner, true).await,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+            Self::Durable(owner) => windows_durable_wait_and_collect(owner, true).await,
         }
     }
 
@@ -80,7 +91,12 @@ impl ManagedShim {
             ))]
             Self::Durable(owner) => {
                 let _ = status;
-                durable_wait_and_collect(owner, true).await
+                linux_durable_wait_and_collect(owner, true).await
+            }
+            #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+            Self::Durable(owner) => {
+                let _ = status;
+                windows_durable_wait_and_collect(owner, true).await
             }
         }
     }
@@ -90,7 +106,7 @@ impl ManagedShim {
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-async fn durable_wait_and_collect(
+async fn linux_durable_wait_and_collect(
     owner: crate::kvm_durable_session_owner::DurableSessionOwner,
     force_kill: bool,
 ) -> CompletedShim {
@@ -125,6 +141,49 @@ async fn durable_wait_and_collect(
     let _ = owner.shutdown();
     CompletedShim {
         status: Some(ExitStatus::from_raw(9 << 8)),
+        stdout: BoundedOutput::default(),
+        stderr: BoundedOutput::default(),
+        timed_out: true,
+        collection_errors: Vec::new(),
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+async fn windows_durable_wait_and_collect(
+    owner: crate::whpx_durable_session_owner::DurableSessionOwner,
+    force_kill: bool,
+) -> CompletedShim {
+    use std::os::windows::process::ExitStatusExt;
+    use std::time::Instant;
+
+    if force_kill {
+        let _ = owner.shutdown();
+        return CompletedShim {
+            status: Some(ExitStatus::from_raw(1)),
+            stdout: BoundedOutput::default(),
+            stderr: BoundedOutput::default(),
+            timed_out: false,
+            collection_errors: Vec::new(),
+        };
+    }
+
+    let deadline = Instant::now() + SHIM_EXIT_TIMEOUT;
+    while Instant::now() < deadline {
+        if !owner.child_alive() {
+            let _ = owner.shutdown();
+            return CompletedShim {
+                status: Some(ExitStatus::from_raw(0)),
+                stdout: BoundedOutput::default(),
+                stderr: BoundedOutput::default(),
+                timed_out: false,
+                collection_errors: Vec::new(),
+            };
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let _ = owner.shutdown();
+    CompletedShim {
+        status: Some(ExitStatus::from_raw(1)),
         stdout: BoundedOutput::default(),
         stderr: BoundedOutput::default(),
         timed_out: true,

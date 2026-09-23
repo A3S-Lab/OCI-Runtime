@@ -42,6 +42,8 @@ mod owner_process;
     )
 ))]
 mod recovery_report;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+mod windows_session_owner;
 
 #[derive(Debug, Parser)]
 #[command(name = "a3s-oci-krun-shim", version, about)]
@@ -153,6 +155,31 @@ enum Command {
         /// Guest agent Unix socket bound by `session-owner` bridge mode.
         #[arg(long, value_name = "FILE")]
         socket_path: PathBuf,
+    },
+    /// Opt-in durable WHPX session owner: become the shim `--owner-pid` so Host
+    /// taskkill does not tear down the Guest (Windows Live reopen substrate).
+    ///
+    /// Holds a Job Object with `KILL_ON_JOB_CLOSE`. Host-control named-pipe
+    /// proxy for Live reattach is a later slice.
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    SessionOwner {
+        /// Host path that receives one line `<shim_pid>\n` after spawn.
+        #[arg(long, value_name = "FILE")]
+        ready_file: PathBuf,
+        /// Shim argv (for example `agent-vm-smoke ...`). Must not include
+        /// `--owner-pid`; this process injects it.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        shim_argv: Vec<std::ffi::OsString>,
+    },
+    /// Qualification-only child used under Windows `session-owner`.
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    SessionOwnerProbe {
+        /// Injected by `session-owner`; must be openable with PROCESS_SYNCHRONIZE.
+        #[arg(long, value_name = "PID")]
+        owner_pid: NonZeroU32,
+        /// How long to sleep after the owner-open check succeeds.
+        #[arg(long, default_value_t = 3_600_000, value_name = "MS")]
+        sleep_ms: u64,
     },
     /// Boot the Linux agent at its fixed guest path and bridge its control vsock.
     AgentVmSmoke {
@@ -460,6 +487,28 @@ fn main() -> ExitCode {
             Ok(code) => code,
             Err(error) => {
                 eprintln!("a3s-oci-krun-shim: session-owner-bridge-echo failed: {error}");
+                ExitCode::FAILURE
+            }
+        },
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        Command::SessionOwner {
+            ready_file,
+            shim_argv,
+        } => match windows_session_owner::run_session_owner(ready_file, shim_argv) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("a3s-oci-krun-shim: session-owner failed: {error}");
+                ExitCode::FAILURE
+            }
+        },
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        Command::SessionOwnerProbe {
+            owner_pid,
+            sleep_ms,
+        } => match windows_session_owner::run_session_owner_probe(owner_pid, sleep_ms) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("a3s-oci-krun-shim: session-owner-probe failed: {error}");
                 ExitCode::FAILURE
             }
         },
