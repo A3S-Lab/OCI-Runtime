@@ -19,9 +19,15 @@ use std::os::unix::process::ExitStatusExt;
 use std::os::windows::fs::MetadataExt;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+use std::os::windows::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+use std::pin::Pin;
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+use std::task::{Context, Poll};
 use std::time::Duration;
 #[cfg(unix)]
 use std::{fs::File, fs::OpenOptions};
@@ -36,7 +42,9 @@ use a3s_oci_agent_protocol::{AGENT_SESSION_TOKEN_DIRECTORY_PREFIX, AGENT_SESSION
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use serde_json::Value;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-use tokio::net::windows::named_pipe::NamedPipeServer;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+use tokio::net::windows::named_pipe::{NamedPipeClient, NamedPipeServer};
 #[cfg(unix)]
 use tokio::net::UnixStream;
 use tokio::process::Command;
@@ -70,8 +78,55 @@ const SHIM_TRUE_FIELDS: &[&str] = &[
     "console_created",
 ];
 
+/// Windows agent bridge stream: Host-bound pipe server or durable host-control client.
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-type PlatformAgentStream = NamedPipeServer;
+pub(crate) enum PlatformAgentStream {
+    HostBound(NamedPipeServer),
+    DurableControl(NamedPipeClient),
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+impl AsyncRead for PlatformAgentStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match &mut *self {
+            Self::HostBound(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::DurableControl(stream) => Pin::new(stream).poll_read(cx, buf),
+        }
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+impl AsyncWrite for PlatformAgentStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match &mut *self {
+            Self::HostBound(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::DurableControl(stream) => Pin::new(stream).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut *self {
+            Self::HostBound(stream) => Pin::new(stream).poll_flush(cx),
+            Self::DurableControl(stream) => Pin::new(stream).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut *self {
+            Self::HostBound(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::DurableControl(stream) => Pin::new(stream).poll_shutdown(cx),
+        }
+    }
+}
+
 #[cfg(unix)]
 type PlatformAgentStream = UnixStream;
 
@@ -1074,12 +1129,30 @@ impl AgentVmSession {
         )))]
         let durable_owner = false;
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-        let listener = match WindowsAgentPipeListener::bind(endpoint.clone()) {
-            Ok(listener) => {
-                report.endpoint_bound = true;
-                listener
+        let (listener, durable_host_control): (
+            Option<WindowsAgentPipeListener>,
+            Option<String>,
+        ) = if durable_owner {
+            if let Err(error) = crate::whpx_durable_session_owner::require_durable_spawn_ready(
+                crate::whpx_durable_session_owner::WhpxOwnerMode::DurableSession,
+            ) {
+                return Err(failed(report, error.to_string()));
             }
-            Err(error) => return Err(failed(report, error.to_string())),
+            // Session-owner owns the product agent pipe; Host must not bind it.
+            report.endpoint_bound = true;
+            let host_control =
+                    crate::whpx_live_session_binding::WhpxLiveSessionBinding::host_control_pipe_for_service(
+                        &endpoint.windows_pipe_path(),
+                    );
+            (None, Some(host_control))
+        } else {
+            match WindowsAgentPipeListener::bind(endpoint.clone()) {
+                Ok(listener) => {
+                    report.endpoint_bound = true;
+                    (Some(listener), None)
+                }
+                Err(error) => return Err(failed(report, error.to_string())),
+            }
         };
         #[cfg(unix)]
         #[cfg_attr(
@@ -1276,6 +1349,9 @@ impl AgentVmSession {
             }
             #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
             {
+                let host_control = durable_host_control
+                    .as_deref()
+                    .expect("durable WHPX host-control pipe");
                 match spawn_durable_windows_agent_vm(
                     prepared_shim.command_path(),
                     &rootfs,
@@ -1283,6 +1359,7 @@ impl AgentVmSession {
                     endpoint.pipe_name(),
                     system_image_manifest_path,
                     runtime_share_path,
+                    host_control,
                     recovery_report.as_deref(),
                     encoded_token.as_str(),
                     encoded_qualification.as_deref(),
@@ -1421,7 +1498,26 @@ impl AgentVmSession {
             .await
         };
         #[cfg(not(unix))]
-        let bridge_outcome = {
+        let bridge_outcome = if let Some(host_control) = durable_host_control.clone() {
+            timeout(BRIDGE_TIMEOUT, async {
+                loop {
+                    if let ManagedShim::Durable(owner) = &running {
+                        if !owner.child_alive() {
+                            return BridgeOutcome::ShimExited(Ok(ExitStatus::from_raw(1)));
+                        }
+                    }
+                    match connect_durable_host_control(&host_control, shim_process_id).await {
+                        Ok(connected) => return BridgeOutcome::Connected(Ok(connected)),
+                        Err(error) if error.retryable => {
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                        Err(error) => return BridgeOutcome::Connected(Err(error)),
+                    }
+                }
+            })
+            .await
+        } else {
+            let listener = listener.expect("host-bound windows agent pipe listener");
             let accept = accept_bridge(listener, shim_process_id);
             tokio::pin!(accept);
             timeout(BRIDGE_TIMEOUT, async {
@@ -2997,6 +3093,7 @@ fn spawn_durable_windows_agent_vm(
     pipe_name: &str,
     system_image_manifest: &Path,
     runtime_share: &Path,
+    host_control: &str,
     recovery_report: Option<&Path>,
     session_token: &str,
     transport_qualification: Option<&str>,
@@ -3030,6 +3127,7 @@ fn spawn_durable_windows_agent_vm(
         krun_shim,
         &argv,
         &ready_file,
+        Some(host_control),
         &envs,
     )
 }
@@ -3140,12 +3238,55 @@ fn remap_durable_host_control_connect_error(
 }
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+async fn connect_durable_host_control(
+    host_control: &str,
+    shim_process_id: u32,
+) -> a3s_oci_sdk::Result<(PlatformAgentStream, u32)> {
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    match ClientOptions::new().open(host_control) {
+        Ok(stream) => Ok((PlatformAgentStream::DurableControl(stream), shim_process_id)),
+        Err(error) if durable_host_control_connect_error_is_permanent(&error) => Err(
+            remap_durable_host_control_connect_error(host_control, error),
+        ),
+        Err(error) => Err(a3s_oci_sdk::Error::new(
+            a3s_oci_sdk::ErrorCode::Unavailable,
+            format!("failed to connect durable WHPX host-control {host_control}: {error}"),
+        )
+        .for_operation("connect-durable-whpx-host-control")
+        .retryable(true)),
+    }
+}
+
+/// Host-control named pipes reject remote clients. Access-denied for this Host
+/// identity is permanent (same honesty class as KVM pathname mode 0600).
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+fn durable_host_control_connect_error_is_permanent(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::PermissionDenied
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+fn remap_durable_host_control_connect_error(
+    host_control: &str,
+    error: std::io::Error,
+) -> a3s_oci_sdk::Error {
+    a3s_oci_sdk::Error::new(
+        a3s_oci_sdk::ErrorCode::PermissionDenied,
+        format!(
+            "permission denied connecting to durable WHPX host-control {host_control}: {error}"
+        ),
+    )
+    .for_operation("connect-durable-whpx-host-control")
+    .retryable(false)
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 async fn accept_bridge(
     listener: WindowsAgentPipeListener,
     shim_process_id: u32,
 ) -> a3s_oci_sdk::Result<(PlatformAgentStream, u32)> {
     let stream = listener.accept_from_process(shim_process_id).await?;
-    Ok((stream, shim_process_id))
+    Ok((PlatformAgentStream::HostBound(stream), shim_process_id))
 }
 
 #[cfg(unix)]

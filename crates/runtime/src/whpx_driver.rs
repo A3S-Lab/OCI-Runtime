@@ -836,27 +836,120 @@ impl RuntimeDriver for WhpxRuntimeDriver {
             ContainerTarget::exact(ContainerId::new(record.state.id())?, record.generation);
         let can_commit_stopped =
             *record.state.status() != a3s_oci_sdk::oci_spec::runtime::ContainerState::Creating;
-        let attachment = self.sessions.lock().await.get(&target.id).cloned();
-        let attachment = match attachment {
-            Some(attachment) => attachment,
-            None => {
-                let init_exit_status = if can_commit_stopped {
-                    self.load_recovery_exit(&target, &record.config_digest)
-                        .await?
-                } else {
-                    None
-                };
-                let recovered = WhpxAttachment::RecoveredStopped {
-                    target: target.clone(),
-                    init_exit_status,
-                };
-                let mut sessions = self.sessions.lock().await;
-                sessions
-                    .entry(target.id.clone())
-                    .or_insert_with(|| recovered.clone())
-                    .clone()
+
+        {
+            let sessions = self.sessions.lock().await;
+            if let Some(attachment) = sessions.get(&target.id) {
+                if attachment.target() != &target {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        format!(
+                            "container {} is attached at generation {:?}, not durable generation {:?}",
+                            target.id,
+                            attachment.target().generation,
+                            target.generation
+                        ),
+                    )
+                    .for_operation("whpx-recover"));
+                }
+                match attachment {
+                    WhpxAttachment::Live(session) => {
+                        let session = Arc::clone(session);
+                        drop(sessions);
+                        let observed = session
+                            .client
+                            .state_with_digest(target, Some(&record.config_digest))
+                            .await?;
+                        return Ok(if can_commit_stopped {
+                            crate::DriverRecovery::observed(observed)
+                        } else {
+                            crate::DriverRecovery::none()
+                        });
+                    }
+                    WhpxAttachment::RecoveredStopped {
+                        init_exit_status, ..
+                    } => {
+                        let init_exit_status = init_exit_status.clone();
+                        drop(sessions);
+                        return recovery_result(can_commit_stopped, init_exit_status);
+                    }
+                }
             }
+        }
+
+        // Live reattach before inventing RecoveredStopped (same honesty as KVM).
+        if can_commit_stopped {
+            if let Some(runtime_share) =
+                existing_exact_runtime_share_path(&self.runtime_share_root, &target, "whpx-recover")
+                    .await?
+            {
+                if let Some(reattached) =
+                    crate::whpx_live_reattach::try_reattach_live(&runtime_share, &target, record)
+                        .await?
+                {
+                    {
+                        let sessions = self.sessions.lock().await;
+                        if let Some(attachment) = sessions.get(&target.id) {
+                            if attachment.target() != &target {
+                                return Err(Error::new(
+                                    ErrorCode::Conflict,
+                                    format!(
+                                        "container {} is attached at generation {:?}, not durable generation {:?}",
+                                        target.id,
+                                        attachment.target().generation,
+                                        target.generation
+                                    ),
+                                )
+                                .for_operation("whpx-recover"));
+                            }
+                            if let WhpxAttachment::Live(session) = attachment {
+                                let session = Arc::clone(session);
+                                drop(sessions);
+                                let observed = session
+                                    .client
+                                    .state_with_digest(target, Some(&record.config_digest))
+                                    .await?;
+                                return Ok(crate::DriverRecovery::observed(observed));
+                            }
+                        }
+                    }
+                    let client = reattached.client.clone();
+                    let session = Arc::new(WhpxContainer {
+                        target: target.clone(),
+                        client: reattached.client,
+                        owner: Arc::new(ReattachedWhpxOwner {
+                            durable: std::sync::Mutex::new(Some(reattached.durable)),
+                            runtime_share: reattached.runtime_share,
+                            _host_control_pipe: reattached.host_control_pipe,
+                        }),
+                    });
+                    self.sessions.lock().await.insert(
+                        target.id.clone(),
+                        WhpxAttachment::Live(Arc::clone(&session)),
+                    );
+                    let observed = client
+                        .state_with_digest(target, Some(&record.config_digest))
+                        .await?;
+                    return Ok(crate::DriverRecovery::observed(observed));
+                }
+            }
+        }
+
+        let init_exit_status = if can_commit_stopped {
+            self.load_recovery_exit(&target, &record.config_digest)
+                .await?
+        } else {
+            None
         };
+        let recovered = WhpxAttachment::RecoveredStopped {
+            target: target.clone(),
+            init_exit_status,
+        };
+        let mut sessions = self.sessions.lock().await;
+        let attachment = sessions
+            .entry(target.id.clone())
+            .or_insert_with(|| recovered.clone())
+            .clone();
         if attachment.target() != &target {
             return Err(Error::new(
                 ErrorCode::Conflict,
@@ -871,6 +964,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
         }
         match attachment {
             WhpxAttachment::Live(session) => {
+                drop(sessions);
                 let observed = session
                     .client
                     .state_with_digest(target, Some(&record.config_digest))
@@ -1272,6 +1366,35 @@ impl UtilityVmOwner for LiveUtilityVmOwner {
         } else {
             Err(vm_report_error("shutdown-whpx-utility-vm", report))
         }
+    }
+}
+
+/// Session-owner handle reconstructed from an authenticated Live binding.
+struct ReattachedWhpxOwner {
+    durable: std::sync::Mutex<Option<crate::whpx_durable_session_owner::DurableSessionOwner>>,
+    runtime_share: PathBuf,
+    _host_control_pipe: String,
+}
+
+#[async_trait]
+impl UtilityVmOwner for ReattachedWhpxOwner {
+    async fn shutdown(&self) -> Result<()> {
+        let _ = crate::whpx_live_session_binding::remove_binding(&self.runtime_share);
+        let owner = self
+            .durable
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(owner) = owner {
+            owner.shutdown().map_err(|error| {
+                Error::new(
+                    ErrorCode::Internal,
+                    format!("failed to shut down reattached WHPX session-owner: {error}"),
+                )
+                .for_operation("shutdown-reattached-whpx-utility-vm")
+            })?;
+        }
+        Ok(())
     }
 }
 

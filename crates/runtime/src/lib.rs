@@ -164,6 +164,10 @@ mod whpx_driver_smoke;
 mod whpx_durable_session_owner;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod whpx_live_session_binding;
+// utility_vm_driver is not compiled on Windows; pull Live reattach via path.
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+#[path = "utility_vm_driver/whpx_live_reattach.rs"]
+mod whpx_live_reattach;
 mod whpx_recovery_smoke;
 #[cfg(windows)]
 #[doc(hidden)]
