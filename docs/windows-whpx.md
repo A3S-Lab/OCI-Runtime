@@ -930,6 +930,12 @@ B2 self-certify still forbidden) live in
 
 ## Next Windows gate
 
+**Mid-run Live (Box Axis A / WHPX binder gate 9):** scaffolding for durable
+session ownership is documented in
+[`windows-whpx-live-session.md`](windows-whpx-live-session.md). Until the Job
+Object / intermediate-owner spawn and Host reattach land, Host taskkill remains
+stopped-only (`whpx_recovery_smoke`). Does not claim Box mid-run Live tip-prove.
+
 The version-pinned image, read-only root attachment, source/digest manifest,
 pre-entry drift checks, separate runtime-share path, NUMA-capable firmware, and
 one focused real-host lifecycle are implemented. The release gate remains open
