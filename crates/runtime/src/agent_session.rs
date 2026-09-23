@@ -1129,29 +1129,31 @@ impl AgentVmSession {
         )))]
         let durable_owner = false;
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-        let (listener, durable_host_control): (Option<WindowsAgentPipeListener>, Option<String>) =
-            if durable_owner {
-                if let Err(error) = crate::whpx_durable_session_owner::require_durable_spawn_ready(
-                    crate::whpx_durable_session_owner::WhpxOwnerMode::DurableSession,
-                ) {
-                    return Err(failed(report, error.to_string()));
-                }
-                // Session-owner owns the product agent pipe; Host must not bind it.
-                report.endpoint_bound = true;
-                let host_control =
+        let (listener, durable_host_control): (
+            Option<WindowsAgentPipeListener>,
+            Option<String>,
+        ) = if durable_owner {
+            if let Err(error) = crate::whpx_durable_session_owner::require_durable_spawn_ready(
+                crate::whpx_durable_session_owner::WhpxOwnerMode::DurableSession,
+            ) {
+                return Err(failed(report, error.to_string()));
+            }
+            // Session-owner owns the product agent pipe; Host must not bind it.
+            report.endpoint_bound = true;
+            let host_control =
                     crate::whpx_live_session_binding::WhpxLiveSessionBinding::host_control_pipe_for_service(
                         &endpoint.windows_pipe_path(),
                     );
-                (None, Some(host_control))
-            } else {
-                match WindowsAgentPipeListener::bind(endpoint.clone()) {
-                    Ok(listener) => {
-                        report.endpoint_bound = true;
-                        (Some(listener), None)
-                    }
-                    Err(error) => return Err(failed(report, error.to_string())),
+            (None, Some(host_control))
+        } else {
+            match WindowsAgentPipeListener::bind(endpoint.clone()) {
+                Ok(listener) => {
+                    report.endpoint_bound = true;
+                    (Some(listener), None)
                 }
-            };
+                Err(error) => return Err(failed(report, error.to_string())),
+            }
+        };
         #[cfg(unix)]
         #[cfg_attr(
             not(all(
@@ -3243,10 +3245,7 @@ async fn connect_durable_host_control(
     use tokio::net::windows::named_pipe::ClientOptions;
 
     match ClientOptions::new().open(host_control) {
-        Ok(stream) => Ok((
-            PlatformAgentStream::DurableControl(stream),
-            shim_process_id,
-        )),
+        Ok(stream) => Ok((PlatformAgentStream::DurableControl(stream), shim_process_id)),
         Err(error) if durable_host_control_connect_error_is_permanent(&error) => Err(
             remap_durable_host_control_connect_error(host_control, error),
         ),

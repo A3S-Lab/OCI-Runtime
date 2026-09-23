@@ -527,10 +527,7 @@ mod tests {
             return;
         };
 
-        let leaf = format!(
-            "a3s-oci-whpx-bridge-{}",
-            std::process::id()
-        );
+        let leaf = format!("a3s-oci-whpx-bridge-{}", std::process::id());
         let guest_pipe_name = format!("a3s-oci-agent-{leaf}");
         let host_control = format!(r"\\.\pipe\a3s-oci-whpx-live-control-{leaf}");
         let temporary = tempfile::tempdir().expect("tempdir");
@@ -568,11 +565,10 @@ mod tests {
     }
 
     fn connect_host_control_client(path: &str) -> io::Result<std::fs::File> {
-        let wide: Vec<u16> = std::os::windows::ffi::OsStrExt::encode_wide(std::ffi::OsStr::new(
-            path,
-        ))
-        .chain(std::iter::once(0))
-        .collect();
+        let wide: Vec<u16> =
+            std::os::windows::ffi::OsStrExt::encode_wide(std::ffi::OsStr::new(path))
+                .chain(std::iter::once(0))
+                .collect();
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let _ = unsafe { WaitNamedPipeW(wide.as_ptr(), 100) };
