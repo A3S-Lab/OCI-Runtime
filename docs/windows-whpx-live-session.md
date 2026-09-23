@@ -3,9 +3,9 @@
 Status: **AgentVmSession durable Live path** owns the guest agent named pipe and
 host-control named pipe inside `a3s-oci-krun-shim session-owner` when
 `A3S_OCI_WHPX_SESSION_OWNER=1`. First Host connects as a NamedPipeClient to
-host-control; Host-control EOF keeps the guest pipe connected so the WHPX shim
-survives Host taskkill. Guest also receives `A3S_OCI_GUEST_HOST_RECONNECT=1`
-(parity with KVM). `WhpxRuntimeDriver::recover` calls
+host-control. Host-control EOF closes the guest pipe so the Linux guest can
+Host-EOF reconnect (`A3S_OCI_GUEST_HOST_RECONNECT=1`, KVM parity) before the
+replacement Host's Live HostHello. `WhpxRuntimeDriver::recover` calls
 `whpx_live_reattach::try_reattach_live` before inventing `RecoveredStopped`.
 Does **not** claim Box Enterprise GA, tip-prove binder gate 9, or flip
 `b2_process_session_recovery_closed`.
@@ -44,7 +44,7 @@ why Created-state Host re-ensure (Box WHPX cutover gate 4) is not mid-run Live.
 - `a3s-oci-krun-shim session-owner` / `session-owner-probe` /
   `session-owner-bridge-echo` on Windows (`KILL_ON_JOB_CLOSE` Job Object +
   duplex named-pipe Host↔shim byte bridge when `--host-control` is set;
-  Host-control EOF keeps the guest pipe for Live reopen).
+  Host-control EOF re-accepts guest then Host for Live reopen).
 - AgentVmSession Windows durable path: omits Host `--owner-pid`, does **not**
   bind `WindowsAgentPipeListener` on the product agent pipe, spawns through the
   helper with host-control + `A3S_OCI_GUEST_HOST_RECONNECT=1`, connects as

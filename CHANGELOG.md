@@ -6,12 +6,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
-- Windows/WHPX durable session-owner host-control bridge keeps the guest agent
-  named pipe connected across Host-control EOF (Host taskkill → Live reopen).
-  Previously both sides were dropped, which tore down the WHPX shim and defeated
-  reattach. Durable AgentVmSession also sets `A3S_OCI_GUEST_HOST_RECONNECT=1`
-  and the Windows agent-vm smoke path forwards it into the Linux guest (parity
-  with KVM). Does **not** tip-prove Box binder gate 9 or claim Enterprise GA.
+- Windows/WHPX durable AgentVmSession sets `A3S_OCI_GUEST_HOST_RECONNECT=1` and
+  the Windows agent-vm smoke path forwards it into the Linux guest (KVM parity)
+  so Host-control EOF can reset the Guest for Live HostHello reattach. Does
+  **not** tip-prove Box binder gate 9 or claim Enterprise GA.
 
 ### Added
 
