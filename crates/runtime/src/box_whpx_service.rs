@@ -73,9 +73,16 @@ where
     use a3s_oci_sdk::LocalIpcEndpoint;
 
     use crate::{
-        HostRuntimeService, RuntimeDriver as _, WhpxRuntimeDriver, WhpxRuntimeDriverConfig,
-        WindowsHostService,
+        owner_mode_from_env, require_durable_spawn_ready, HostRuntimeService, RuntimeDriver as _,
+        WhpxRuntimeDriver, WhpxRuntimeDriverConfig, WindowsHostService,
     };
+
+    require_durable_spawn_ready(owner_mode_from_env()).map_err(|error| {
+        service_error(
+            ErrorCode::FailedPrecondition,
+            format!("WHPX durable Live session-owner gate: {error}"),
+        )
+    })?;
 
     let driver = Arc::new(
         WhpxRuntimeDriver::open_box_qualification(WhpxRuntimeDriverConfig::new(

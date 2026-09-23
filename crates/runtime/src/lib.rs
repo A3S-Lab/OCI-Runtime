@@ -160,6 +160,10 @@ mod whpx_bootstrap;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod whpx_driver;
 mod whpx_driver_smoke;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+mod whpx_durable_session_owner;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+mod whpx_live_session_binding;
 mod whpx_recovery_smoke;
 #[cfg(windows)]
 #[doc(hidden)]
@@ -412,6 +416,17 @@ pub use utility_vm_soak_report::{
 pub use whpx_driver::{WhpxRuntimeDriver, WhpxRuntimeDriverConfig};
 pub use whpx_driver_smoke::{
     whpx_driver_smoke, WhpxDriverSmokeReport, WHPX_DRIVER_SMOKE_SCHEMA_VERSION,
+};
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+pub use whpx_durable_session_owner::{
+    owner_mode_from_env, owner_mode_from_value, require_durable_spawn_ready, WhpxOwnerMode,
+    WHPX_SESSION_OWNER_ENV,
+};
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+pub use whpx_live_session_binding::{
+    load_binding as load_whpx_live_binding, remove_binding as remove_whpx_live_binding,
+    WhpxLiveSessionBinding, WhpxProcessIdentity, WHPX_LIVE_SESSION_BINDING_FILE,
+    WHPX_LIVE_SESSION_BINDING_SCHEMA,
 };
 pub use whpx_recovery_smoke::{
     whpx_recovery_owner, whpx_recovery_resume, WhpxRecoveryOwnerConfig, WhpxRecoveryOwnerReady,
